@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: eval-runner
+  labels:
+    # Pod Security Standards — Argo Workflow pods need write-back to the
+    # in-cluster API (suite status updates) but should not require any
+    # capability beyond standard "restricted" allowances.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

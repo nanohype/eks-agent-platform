@@ -1,0 +1,16 @@
+# Dev override: aggressive time-slicing (8 replicas) to maximize eval throughput
+# on smaller fleets.
+devicePlugin:
+  config:
+    data:
+      any: |
+        version: v1
+        flags:
+          migStrategy: none
+        sharing:
+          timeSlicing:
+            renameByDefault: false
+            failRequestsGreaterThanOne: false
+            resources:
+              - name: nvidia.com/gpu
+                replicas: 8

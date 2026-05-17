@@ -1,0 +1,99 @@
+misconfigurations:
+  # ----------------------------------------------------------------------------
+  # Access-logs buckets — must use SSE-S3 (AES256), not SSE-KMS
+  # ----------------------------------------------------------------------------
+  # S3 server access logging does NOT support SSE-KMS on the destination
+  # bucket; the trivy AWS-0132 rule description acknowledges this. AES256
+  # is the correct configuration for log-destination buckets.
+
+  - id: AVD-AWS-0132
+    paths:
+      - "terraform/components/bedrock/main.tf"
+      - "terraform/components/cost-pipeline/main.tf"
+      - "terraform/components/model-artifacts/main.tf"
+    statement: "S3 server access logging destination buckets cannot use SSE-KMS (per AWS docs + the rule description itself). AES256 is the correct config."
+
+  # ----------------------------------------------------------------------------
+  # AWS Neuron device plugin — inherent privilege requirements
+  # ----------------------------------------------------------------------------
+  # Device plugins legitimately require root, hostPath, and a public image
+  # registry. We harden what we can (RuntimeDefault seccomp, capabilities
+  # dropped, readOnlyRootFilesystem, allowPrivilegeEscalation: false, dedicated
+  # namespace with privileged PSS rather than kube-system) and accept the rest.
+
+  - id: KSV012 # runAsNonRoot must be true
+    paths:
+      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
+    statement: "Neuron plugin must run as uid 0 to read /sys/class/neuron_device; runAsNonRoot=true blocks startup."
+
+  - id: KSV020 # runAsUser > 10000
+    paths:
+      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
+    statement: "Neuron plugin requires uid 0; high-uid recommendation does not apply to device plugins."
+
+  - id: KSV021 # runAsGroup > 10000
+    paths:
+      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
+    statement: "Neuron plugin requires gid 0; high-gid recommendation does not apply to device plugins."
+
+  - id: KSV105 # runAsUser must not be 0
+    paths:
+      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
+    statement: "Neuron plugin requires uid 0 (see KSV012)."
+
+  - id: KSV116 # supplementary GID 0
+    paths:
+      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
+    statement: "Neuron plugin requires gid 0 (see KSV021)."
+
+  - id: KSV023 # hostPath volumes
+    paths:
+      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
+    statement: "Device plugins must mount the kubelet's /var/lib/kubelet/device-plugins socket dir and /run; this is the device-plugin contract."
+
+  - id: KSV-0125 # untrusted image registry
+    paths:
+      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
+    statement: "public.ecr.aws/neuron is the official AWS Neuron registry; trivy has no allow-list config for trusted ECR Public registries."
+
+  # ----------------------------------------------------------------------------
+  # Access-logs buckets — versioning + self-logging do not apply
+  # ----------------------------------------------------------------------------
+  # The access-logs destination buckets exist to receive logs from other
+  # buckets. Versioning + logging on a log-destination bucket adds noise
+  # without value: retention is handled by the lifecycle expiration rule,
+  # and S3 log-delivery does not log itself.
+
+  - id: AVD-AWS-0089 # S3 bucket logging
+    paths:
+      - "terraform/components/bedrock/main.tf"
+      - "terraform/components/cost-pipeline/main.tf"
+      - "terraform/components/model-artifacts/main.tf"
+    statement: "Access-logs destination buckets do not log themselves; retention is handled by the lifecycle expiration rule."
+
+  - id: AVD-AWS-0090 # S3 versioning
+    paths:
+      - "terraform/components/bedrock/main.tf"
+      - "terraform/components/cost-pipeline/main.tf"
+      - "terraform/components/model-artifacts/main.tf"
+    statement: "Versioning on access-logs destination buckets adds storage without forensic value; logs are append-only and lifecycle-expired."
+
+  # ----------------------------------------------------------------------------
+  # Operator ClusterRole — manages tenant workloads by design
+  # ----------------------------------------------------------------------------
+  # The operator's reason to exist is to reconcile per-tenant Deployments,
+  # NetworkPolicies, ServiceAccounts, etc. KSV-0048 + KSV-0056 flag any
+  # ClusterRole with write access to workload kinds; we accept this because
+  # the threat model + blast-radius are documented in docs/adr/0003-threat-model.md.
+
+  - id: KSV048
+    paths:
+      - "operators/config/rbac/role.yaml"
+      - "charts/operator/templates/rbac.yaml"
+    statement: "Operator owns per-tenant Deployments (kagent runtime hosts) and StatefulSets where applicable. See docs/adr/0003-threat-model.md for the blast-radius analysis."
+
+  - id: KSV056
+    paths:
+      - "operators/config/rbac/role.yaml"
+      - "charts/operator/templates/rbac.yaml"
+    statement: "Operator owns per-tenant NetworkPolicies (egress isolation to agentgateway + OTel only). See docs/adr/0003-threat-model.md."

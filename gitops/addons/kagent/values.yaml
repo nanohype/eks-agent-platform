@@ -1,0 +1,49 @@
+# kagent — base values.
+#
+# Upstream agent runtime substrate. eks-agent-platform AgentFleet CRs
+# reconcile into kagent Agent + ModelConfig + ToolServer CRs.
+
+controller:
+  replicaCount: 2
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  serviceAccount:
+    create: true
+    name: kagent-controller
+
+ui:
+  enabled: true
+  replicaCount: 1
+  ingress:
+    enabled: false # Backstage / agentctl is the canonical UI; kagent UI is dev-only
+
+webhook:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+
+# Default model config — every kagent Agent references one; the
+# eks-agent-platform operator generates per-Platform ModelConfig CRs that
+# point at the local agentgateway (which fronts Bedrock).
+defaultModelConfig:
+  enabled: false
+
+networkPolicy:
+  enabled: true
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault

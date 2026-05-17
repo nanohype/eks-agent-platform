@@ -1,0 +1,25 @@
+{{- if not .Values.platform.name -}}{{ fail "platform.name is required" }}{{- end -}}
+{{- if not .Values.platform.tenant -}}{{ fail "platform.tenant is required" }}{{- end -}}
+{{- if not .Values.platform.persona -}}{{ fail "platform.persona is required (one of: sales-ops, support, finance, ops, founder, eng, marketing, legal, generic)" }}{{- end -}}
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: Platform
+metadata:
+  name: {{ .Values.platform.name }}
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+    eks-agent-platform/persona: {{ .Values.platform.persona }}
+    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+spec:
+  displayName: {{ .Values.platform.displayName | default .Values.platform.name | quote }}
+  persona: {{ .Values.platform.persona }}
+  tenant: {{ .Values.platform.tenant }}
+  isolation: {{ .Values.platform.isolation }}
+  budget:
+    name: {{ .Values.platform.name }}-budget
+  identity:
+    allowedModelFamilies: {{- toYaml .Values.identity.allowedModelFamilies | nindent 6 }}
+    allowedModels: {{- toYaml .Values.identity.allowedModels | nindent 6 }}
+    extraPolicyArns: {{- toYaml .Values.identity.extraPolicyArns | nindent 6 }}
+  compliance:
+    hipaa: {{ .Values.platform.compliance.hipaa }}
+    soc2: {{ .Values.platform.compliance.soc2 }}

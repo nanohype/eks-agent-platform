@@ -1,0 +1,254 @@
+# eval-runner WorkflowTemplate
+#
+# Reference contract (consumed by operators/internal/controller/eval_reconcile.go):
+#   workflowTemplateRef:
+#     name: eval-runner
+#   arguments.parameters:
+#     - name: platform
+#     - name: tenant
+#     - name: fleet
+#     - name: pass-threshold       (decimal-string 0..1, e.g. "0.85")
+#     - name: cases-inline  OR  cases-manifest   (mutually exclusive)
+#
+# Pipeline:
+#   1. resolve-cases  — emit the case list as JSON to /tmp/cases.json
+#      (inline branch reads from parameter directly; manifest branch
+#      pulls from s3://<eval-reports>/<platform>/manifests/<name>.json)
+#   2. run-cases      — iterate cases, invoke the agent under test via
+#      the Platform's ModelGateway, capture latency + output. Emits
+#      per-case JSON results to /tmp/results.json.
+#   3. score          — compute pass rate against thresholds, render
+#      HTML + junit.xml, upload artifacts to
+#      s3://<eval-reports>/<platform>/runs/<suite>/<runId>/.
+#   4. writeback      — patch EvalSuite.status with lastScore, lastRunAt,
+#      lastReportUrl, phase (Passed/Failed).
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: eval-runner
+  namespace: eval-runner
+spec:
+  serviceAccountName: eval-runner
+
+  arguments:
+    parameters:
+      - name: platform
+      - name: tenant
+      - name: fleet
+      # suite-name is the bare EvalSuite resource name (workflow.name
+      # is platform-prefixed; recovering the suite name with shell
+      # parameter expansion breaks on hyphenated platform names).
+      - name: suite-name
+      - name: pass-threshold
+      - name: cases-inline
+        value: ""
+      - name: cases-manifest
+        value: ""
+      # Resolved by ApplicationSet patch per-env from
+      # /eks-agent-platform/<env>/eval-runtime/eval_reports_bucket
+      - name: eval-reports-bucket
+        value: REPLACE_BY_APPLICATIONSET
+      # ModelGateway endpoint — every fleet routes through agentgateway.
+      - name: gateway-url
+        value: http://agentgateway.agentgateway.svc.cluster.local:8080
+
+  entrypoint: pipeline
+
+  templates:
+    # ─────────────── orchestration ───────────────
+    - name: pipeline
+      dag:
+        tasks:
+          - name: resolve
+            template: resolve-cases
+            arguments:
+              parameters:
+                - { name: cases-inline, value: "{{workflow.parameters.cases-inline}}" }
+                - { name: cases-manifest, value: "{{workflow.parameters.cases-manifest}}" }
+                - { name: platform, value: "{{workflow.parameters.platform}}" }
+                - { name: bucket, value: "{{workflow.parameters.eval-reports-bucket}}" }
+          - name: run
+            template: run-cases
+            depends: resolve
+            arguments:
+              parameters:
+                - { name: cases-json, value: "{{tasks.resolve.outputs.parameters.cases}}" }
+                - { name: platform, value: "{{workflow.parameters.platform}}" }
+                - { name: fleet, value: "{{workflow.parameters.fleet}}" }
+                - { name: gateway, value: "{{workflow.parameters.gateway-url}}" }
+          - name: score
+            template: score
+            depends: run
+            arguments:
+              parameters:
+                - { name: results-json, value: "{{tasks.run.outputs.parameters.results}}" }
+                - { name: pass-threshold, value: "{{workflow.parameters.pass-threshold}}" }
+                - { name: platform, value: "{{workflow.parameters.platform}}" }
+                - { name: suite, value: "{{workflow.name}}" }
+                - { name: bucket, value: "{{workflow.parameters.eval-reports-bucket}}" }
+          - name: writeback
+            template: writeback
+            depends: score
+            arguments:
+              parameters:
+                - { name: score-json, value: "{{tasks.score.outputs.parameters.score}}" }
+                - { name: suite-name, value: "{{workflow.parameters.suite-name}}" }
+                - { name: tenant, value: "{{workflow.parameters.tenant}}" }
+
+    # ─────────────── 1. resolve-cases ───────────────
+    # Emits the case list to outputs.parameters.cases. One of the two
+    # input parameters is empty; the script picks whichever is set.
+    - name: resolve-cases
+      inputs:
+        parameters:
+          - name: cases-inline
+          - name: cases-manifest
+          - name: platform
+          - name: bucket
+      script:
+        image: amazon/aws-cli:2.17.0
+        command: ["/bin/sh", "-c"]
+        source: |
+          set -eu
+          inline='{{inputs.parameters.cases-inline}}'
+          manifest='{{inputs.parameters.cases-manifest}}'
+          if [ -n "$inline" ] && [ "$inline" != "[]" ]; then
+            printf '%s' "$inline" > /tmp/cases.json
+          elif [ -n "$manifest" ]; then
+            # manifest is an s3:// URI or a bare key under
+            # <platform>/manifests/<name>.json
+            case "$manifest" in
+              s3://*) aws s3 cp "$manifest" /tmp/cases.json ;;
+              *)      aws s3 cp "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/manifests/$manifest" /tmp/cases.json ;;
+            esac
+          else
+            echo "no cases supplied (inline empty + manifest empty)" >&2
+            exit 1
+          fi
+          # Compact so the outputs.parameter doesn't blow past the 256KiB
+          # Argo parameter-value cap on big suites.
+          jq -c '.' /tmp/cases.json > /tmp/cases.compact.json
+          mv /tmp/cases.compact.json /tmp/cases.json
+        resources:
+          requests: { cpu: 100m, memory: 128Mi }
+          limits: { cpu: 500m, memory: 256Mi }
+      outputs:
+        parameters:
+          - name: cases
+            valueFrom: { path: /tmp/cases.json }
+
+    # ─────────────── 2. run-cases ───────────────
+    # For each case: POST to the agentgateway HTTP endpoint with the input
+    # prompt, capture the response + latency. Emits results.json with one
+    # record per case.
+    - name: run-cases
+      inputs:
+        parameters:
+          - name: cases-json
+          - name: platform
+          - name: fleet
+          - name: gateway
+      script:
+        image: ghcr.io/stxkxs/eks-agent-platform/eval-runner:0.1.0
+        command: ["/bin/sh", "-c"]
+        source: |
+          set -eu
+          echo '{{inputs.parameters.cases-json}}' > /tmp/cases.json
+          # eval-runner is a small Python image that ships with httpx +
+          # jq + bash. The 'evaluate' script reads /tmp/cases.json,
+          # POSTs each one to {gateway}/v1/agents/{platform}-{fleet}/messages,
+          # and writes /tmp/results.json with shape:
+          #   [{name, input, output, latency_ms, cost_usd, error?}]
+          evaluate \
+            --cases /tmp/cases.json \
+            --platform '{{inputs.parameters.platform}}' \
+            --fleet '{{inputs.parameters.fleet}}' \
+            --gateway '{{inputs.parameters.gateway}}' \
+            --output /tmp/results.json
+        resources:
+          requests: { cpu: 500m, memory: 512Mi }
+          limits: { cpu: 2000m, memory: 2Gi }
+      outputs:
+        parameters:
+          - name: results
+            valueFrom: { path: /tmp/results.json }
+
+    # ─────────────── 3. score ───────────────
+    # Compute the mean score + per-case pass/fail against
+    # expectContains, maxLatencyMs, maxCostUsd. Render HTML report and
+    # junit.xml, upload to S3.
+    - name: score
+      inputs:
+        parameters:
+          - name: results-json
+          - name: pass-threshold
+          - name: platform
+          - name: suite
+          - name: bucket
+      script:
+        image: ghcr.io/stxkxs/eks-agent-platform/eval-runner:0.1.0
+        command: ["/bin/sh", "-c"]
+        source: |
+          set -eu
+          echo '{{inputs.parameters.results-json}}' > /tmp/results.json
+          run_id="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+          score \
+            --results /tmp/results.json \
+            --pass-threshold '{{inputs.parameters.pass-threshold}}' \
+            --report /tmp/report.html \
+            --junit /tmp/junit.xml \
+            --score-out /tmp/score.json
+          aws s3 cp /tmp/report.html "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/runs/{{inputs.parameters.suite}}/$run_id/report.html"
+          aws s3 cp /tmp/junit.xml   "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/runs/{{inputs.parameters.suite}}/$run_id/junit.xml"
+          # Inject the report URL into score.json so writeback can copy
+          # it into EvalSuite.status.lastReportUrl.
+          jq --arg url "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/runs/{{inputs.parameters.suite}}/$run_id/report.html" \
+             '. + {reportUrl: $url}' /tmp/score.json > /tmp/score.with-url.json
+          mv /tmp/score.with-url.json /tmp/score.json
+        resources:
+          requests: { cpu: 200m, memory: 256Mi }
+          limits: { cpu: 1000m, memory: 1Gi }
+      outputs:
+        parameters:
+          - name: score
+            valueFrom: { path: /tmp/score.json }
+        artifacts:
+          - name: report
+            path: /tmp/report.html
+          - name: junit
+            path: /tmp/junit.xml
+
+    # ─────────────── 4. writeback ───────────────
+    # PATCH EvalSuite.status with the computed mean score + phase. Uses
+    # kubectl which is in the eval-runner image and the SA's RBAC permits
+    # patching evalsuites/status.
+    - name: writeback
+      inputs:
+        parameters:
+          - name: score-json
+          - name: suite-name
+          - name: tenant
+      script:
+        image: ghcr.io/stxkxs/eks-agent-platform/eval-runner:0.1.0
+        command: ["/bin/sh", "-c"]
+        source: |
+          set -eu
+          # score-json shape (one line):
+          #   {"meanScore":"0.92","passed":true,"reportUrl":"s3://…"}
+          score='{{inputs.parameters.score-json}}'
+          mean="$(echo "$score" | jq -r '.meanScore')"
+          phase="$(echo "$score" | jq -r 'if .passed then "Passed" else "Failed" end')"
+          url="$(echo "$score" | jq -r '.reportUrl')"
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # suite-name is the bare EvalSuite resource name; passed in by
+          # the operator directly so we don't have to reconstruct it
+          # from workflow.name (platform-prefixed; shell-strip breaks
+          # on hyphenated platform names like 'acme-corp').
+          kubectl patch evalsuite '{{inputs.parameters.suite-name}}' \
+            --namespace '{{inputs.parameters.tenant}}' \
+            --subresource status \
+            --type merge \
+            --patch "$(jq -nc --arg ls "$mean" --arg lu "$url" --arg t "$now" --arg p "$phase" '{status:{lastScore:$ls,lastReportUrl:$lu,lastRunAt:$t,phase:$p}}')"
+        resources:
+          requests: { cpu: 100m, memory: 128Mi }
+          limits: { cpu: 500m, memory: 256Mi }

@@ -1,0 +1,62 @@
+# Operator chart overlay for the kx (kind) cluster.
+#
+# Trims to a single-replica dev shape and turns on --disable-aws so the
+# operator does k8s-side reconciliation only (no IAM mint, no KMS grant,
+# no S3 bucket policy, no Athena/CloudWatch/EventBridge). The
+# scripts/local-kx/install.sh script applies this on top of the
+# operator chart in eks-agent-platform/charts/operator.
+#
+# For real-Bedrock mode the operator stays --disable-aws (no OIDC on
+# kind); ./scripts/local-kx/aws-creds-secret.sh mounts a Secret onto
+# the agentgateway pod so it can call Bedrock with static creds.
+
+replicaCount: 1
+
+image:
+  pullPolicy: IfNotPresent
+
+leaderElection:
+  enabled: false # single replica, no lease contention
+
+config:
+  environment: local
+  region: us-west-2
+  ssmPathPrefix: /eks-agent-platform # preserved for shape parity; unused with --disable-aws
+  oidc:
+    providerArn: "" # no OIDC on kind
+    issuerHost: ""
+
+serviceAccount:
+  create: true
+  annotations: {} # no IRSA on kind
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+webhooks:
+  enabled: false # kx has cert-manager but skipping the webhook drops a moving part
+
+metrics:
+  enabled: true
+  port: 8080
+  service:
+    type: ClusterIP
+  serviceMonitor:
+    enabled: false # prom-stack lives in the observability slice and is opt-in
+
+networkPolicy:
+  enabled: false # kx uses cilium with permissive defaults
+
+podDisruptionBudget:
+  enabled: false
+
+# Drops priority class — system-cluster-critical isn't installed on kind.
+priorityClassName: ""
+
+extraArgs:
+  - --disable-aws

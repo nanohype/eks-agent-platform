@@ -1,0 +1,187 @@
+# PrometheusRule for the eks-agent-platform operator.
+#
+# Three groups:
+#   1. recordings — useful pre-computed aggregates dashboards consume
+#   2. operator-health — reconcile latency / error / leadership alerts
+#   3. domain-events — Platform/Tenant/Budget/EvalSuite-level alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: eks-agent-platform
+  namespace: eks-agent-platform-monitoring
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+spec:
+  groups:
+    - name: agents.recordings
+      interval: 30s
+      rules:
+        # P99 reconcile latency per controller.
+        - record: agents:reconcile_duration:p99_5m
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le, controller) (
+                rate(controller_runtime_reconcile_time_seconds_bucket{namespace="eks-agent-platform"}[5m])
+              )
+            )
+        - record: agents:reconcile_duration:p50_5m
+          expr: |
+            histogram_quantile(0.50,
+              sum by (le, controller) (
+                rate(controller_runtime_reconcile_time_seconds_bucket{namespace="eks-agent-platform"}[5m])
+              )
+            )
+
+        # Error rate per controller (errors / total reconciles).
+        - record: agents:reconcile_error_rate:5m
+          expr: |
+            sum by (controller) (rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[5m]))
+            /
+            clamp_min(
+              sum by (controller) (rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[5m])),
+              0.001
+            )
+
+        # Platform readiness ratio across the cluster.
+        - record: agents:platforms:ready_ratio
+          expr: |
+            count(kube_customresource_status_phase{customresource_kind="Platform",customresource_phase="Ready"} == 1)
+            /
+            clamp_min(
+              count(kube_customresource_status_phase{customresource_kind="Platform"}),
+              1
+            )
+
+    - name: agents.operator-health
+      rules:
+        # Reconcile p99 over the SLO ceiling (1s) for 10m sustained.
+        # SLO target: 99% of reconciles complete in <1s averaged over 30d.
+        - alert: ReconcileLatencyHigh
+          expr: agents:reconcile_duration:p99_5m > 1
+          for: 10m
+          labels:
+            severity: warning
+            component: operator
+            persona: ops
+          annotations:
+            summary: "{{ $labels.controller }} reconcile p99 above 1s for 10m"
+            description: "Sustained p99 = {{ $value | humanizeDuration }}. SLO is 1s; investigate the controller's downstream calls (IAM / KMS / Athena / EventBridge)."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/reconcile-latency.md
+
+        # Error rate over 5% for 15m → page ops.
+        - alert: ReconcileErrorRateHigh
+          expr: agents:reconcile_error_rate:5m > 0.05
+          for: 15m
+          labels:
+            severity: critical
+            component: operator
+            persona: ops
+          annotations:
+            summary: "{{ $labels.controller }} error rate above 5% for 15m"
+            description: "{{ $value | humanizePercentage }} of reconciles erroring. Probable cause: AWS-side outage or operator IAM regression. Check CloudTrail for the operator role."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
+
+        # Operator leader lost; pages ops.
+        - alert: OperatorLeaderMissing
+          expr: |
+            absent(workqueue_depth{namespace="eks-agent-platform"}) == 1
+          for: 5m
+          labels:
+            severity: critical
+            component: operator
+            persona: ops
+          annotations:
+            summary: "operator workqueue metrics absent — no active leader"
+            description: "No replica is reporting workqueue depth. Either the deployment is down or leader election is wedged."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/operator-down.md
+
+    - name: agents.domain-events
+      rules:
+        # Budget reconcile hasn't ticked in 2h (default tick is 1h, so 2x
+        # the period). Stale spend reading.
+        - alert: BudgetReconcileLag
+          expr: |
+            time() - kube_customresource_status_field{customresource_kind="BudgetPolicy",field="lastReconciled"} > 7200
+          for: 5m
+          labels:
+            severity: warning
+            component: budget
+            persona: finance
+          annotations:
+            summary: "BudgetPolicy {{ $labels.name }} stale > 2h"
+            description: "Last reconcile {{ $value | humanizeDuration }} ago. Athena or CloudWatch may be erroring; check operator logs for the budget reconciler."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
+
+        # Any Platform suspended — kill-switch fired. Page persona owner.
+        - alert: PlatformSuspended
+          expr: |
+            kube_customresource_status_phase{customresource_kind="Platform",customresource_phase="Suspended"} == 1
+          for: 1m
+          labels:
+            severity: critical
+            component: kill-switch
+          annotations:
+            summary: "Platform {{ $labels.name }} suspended by kill-switch"
+            description: "Tenant IRSA role has been detached. Check BudgetPolicy + invoke spend. Operator will keep the platform suspended until the agents.stxkxs.io/suspended IAM tag is removed."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/platform-suspended.md
+
+        # Tenant aggregate spend over its soft cap.
+        - alert: TenantBudgetExceeded
+          expr: |
+            kube_customresource_condition{customresource_kind="Tenant",condition_type="TenantBudgetExceeded",condition_status="True"} == 1
+          for: 5m
+          labels:
+            severity: warning
+            component: budget
+            persona: finance
+          annotations:
+            summary: "Tenant {{ $labels.name }} aggregate spend over tenant cap"
+            description: "Per-Platform kill-switches still enforce individually; this is a tenant-wide aggregate signal for the finance dashboard."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
+
+        # AgentFleet reports Ready phase but zero ready agents — drift
+        # between status phase and readyAgents count.
+        - alert: AgentFleetReadyButEmpty
+          expr: |
+            (kube_customresource_status_phase{customresource_kind="AgentFleet",customresource_phase="Ready"} == 1)
+            and
+            (kube_customresource_status_field{customresource_kind="AgentFleet",field="readyAgents"} == 0)
+          for: 10m
+          labels:
+            severity: warning
+            component: agentfleet
+            persona: ops
+          annotations:
+            summary: "AgentFleet {{ $labels.name }} Ready but readyAgents=0"
+            description: "Reconciler reports Ready but no downstream agents are alive. Probable cause: kagent CRDs missing or ModelGateway routing misconfigured."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md
+
+        # EvalSuite last run failed.
+        - alert: EvalSuiteFailed
+          expr: |
+            kube_customresource_status_phase{customresource_kind="EvalSuite",customresource_phase="Failed"} == 1
+          for: 5m
+          labels:
+            severity: warning
+            component: eval
+            persona: eng
+          annotations:
+            summary: "EvalSuite {{ $labels.name }} last run failed"
+            description: "Pass-threshold not met on the last scheduled run. Argo Rollouts AnalysisTemplate will gate downstream promotions; check the eval report for the failed cases."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/README.md#scenario-triggered-no-automated-page
+
+        # KEDA SQS trigger emits an error metric when GetQueueAttributes
+        # fails (queue missing, IAM denied). Per-platform IAM regression
+        # signal.
+        - alert: KEDASQSTriggerError
+          expr: |
+            sum by (scaledObject) (rate(keda_scaler_errors{namespace=~"tenants-.*"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            component: keda
+            persona: ops
+          annotations:
+            summary: "KEDA SQS trigger errors on {{ $labels.scaledObject }}"
+            description: "Either the queue URL is wrong or the tenant role lost sqs:GetQueueAttributes. Check agent-iam baseline + the AgentFleet.spec.scaling.queueUrl."
+            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md

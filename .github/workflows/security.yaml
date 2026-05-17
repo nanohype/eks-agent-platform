@@ -1,0 +1,128 @@
+name: security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly Tuesday 06:00 UTC — catches new CVEs even when no PRs land.
+    - cron: "0 6 * * 2"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  trivy-config:
+    name: trivy (terraform + dockerfile misconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          # Inherent privilege requirements (device plugins, operator
+          # ClusterRole) are suppressed with file-scoped justifications
+          # in .trivyignore.yaml. Anything not in that file IS expected
+          # to fail the build.
+          trivyignores: ".trivyignore.yaml"
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-config.sarif
+          # Helm scanning is covered by the ci workflow's helm lint +
+          # template job. trivy's helm scanner uses a default k8s 1.20
+          # client which can't render our kubeVersion-pinned chart, and
+          # falls over on required values without overrides — those
+          # errors aren't security findings.
+          skip-dirs: "charts"
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+  trivy-fs:
+    name: trivy (filesystem vuln scan — go + npm deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+          skip-dirs: "node_modules,**/.terraform"
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - run: tflint --init --config .tflint.hcl
+      # --chdir changes CWD so .tflint.hcl resolution must be absolute.
+      - run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --chdir=terraform/components --minimum-failure-severity=warning
+
+  gosec:
+    name: gosec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - uses: securego/gosec@master
+        with:
+          args: -severity medium -fmt sarif -out gosec.sarif ./operators/...
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+
+  golangci:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          working-directory: operators
+          version: v2.11.4

@@ -1,0 +1,98 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "operator-v*"
+      - "charts-v*"
+      - "sdk-v*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  operator-image:
+    name: build + sign operator image
+    if: startsWith(github.ref, 'refs/tags/operator-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+      - uses: sigstore/cosign-installer@v3
+      - uses: anchore/sbom-action/download-syft@v0
+      - name: derive version
+        id: ver
+        run: echo "version=${GITHUB_REF#refs/tags/operator-v}" >> "$GITHUB_OUTPUT"
+      - name: docker login (ghcr.io)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: build + push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: operators/
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
+            ghcr.io/${{ github.repository }}/operator:latest
+      - name: sign (keyless, OIDC)
+        run: |
+          cosign sign --yes ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
+      - name: sbom
+        run: |
+          syft "ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-operator-${{ steps.ver.outputs.version }}
+          path: sbom.spdx.json
+
+  charts-oci:
+    name: package + push charts to OCI
+    if: startsWith(github.ref, 'refs/tags/charts-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: package + push
+        run: |
+          # Per-chart output dir so the glob expansion in helm push has
+          # exactly one match — sharing /tmp/charts/ across charts would
+          # let helm push see multiple .tgz files and fail with
+          # "exactly one positional argument expected".
+          for d in charts/*/; do
+            name=$(basename "$d")
+            mkdir -p "/tmp/charts/${name}"
+            helm package "$d" -d "/tmp/charts/${name}"
+            tgz="$(ls "/tmp/charts/${name}/${name}"-*.tgz | head -1)"
+            helm push "$tgz" "oci://ghcr.io/${{ github.repository }}/charts"
+          done
+
+  sdk-npm:
+    name: publish @eks-agent/* to npm
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm changeset publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

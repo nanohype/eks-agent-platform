@@ -1,0 +1,48 @@
+{
+  "name": "@eks-agent/sdk",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Bedrock-first ProviderAdapter family for the eks-agent-platform — uniform call shape across Anthropic, Meta, Mistral, Cohere, Titan, Nova, Stability.",
+  "license": "Apache-2.0",
+  "author": "stxkxs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stxkxs/eks-agent-platform.git",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1048.0",
+    "@aws-sdk/credential-providers": "^3.1048.0",
+    "@eks-agent/core": "workspace:*",
+    "@eks-agent/pricing": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

@@ -1,0 +1,158 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - limitranges
+      - namespaces
+      - resourcequotas
+      - serviceaccounts
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - agentgateway.dev
+    resources:
+      - listeners
+      - routes
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - agents.stxkxs.io
+    resources:
+      - agentfleets
+      - budgetpolicies
+      - evalsuites
+      - modelgateways
+      - platforms
+      - tenants
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - agents.stxkxs.io
+    resources:
+      - agentfleets/finalizers
+      - evalsuites/finalizers
+      - modelgateways/finalizers
+      - platforms/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - agents.stxkxs.io
+    resources:
+      - agentfleets/status
+      - budgetpolicies/status
+      - evalsuites/status
+      - modelgateways/status
+      - platforms/status
+      - tenants/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - analysisruns
+      - analysistemplates
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - appprojects
+      - cronworkflows
+      - workflows
+      - workflowtemplates
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - kagent.dev
+    resources:
+      - agents
+      - modelconfigs
+      - toolservers
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - keda.sh
+    resources:
+      - scaledobjects
+      - triggerauthentications
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - resource.k8s.io
+    resources:
+      - resourceclaimtemplates
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch

@@ -1,0 +1,36 @@
+{{- if .Values.evalSuite.enabled -}}
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: EvalSuite
+metadata:
+  name: {{ .Values.platform.name }}-eval
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+spec:
+  platformRef:
+    name: {{ .Values.platform.name }}
+  agentFleetRef:
+    name: {{ .Values.platform.name }}-fleet
+  {{- with .Values.evalSuite.schedule }}
+  schedule: {{ . | quote }}
+  {{- end }}
+  passThreshold: {{ .Values.evalSuite.passThreshold | quote }}
+  {{- with .Values.evalSuite.casesFromManifest }}
+  casesFromManifest: {{ . | quote }}
+  {{- else }}
+  cases:
+    {{- range .Values.evalSuite.cases }}
+    - name: {{ .name }}
+      input: {{ .input | quote }}
+      {{- with .expectContains }}
+      expectContains: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .maxLatencyMs }}
+      maxLatencyMs: {{ . }}
+      {{- end }}
+      {{- with .maxCostUsd }}
+      maxCostUsd: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}

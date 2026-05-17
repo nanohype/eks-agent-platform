@@ -1,0 +1,53 @@
+{{- if .Values.networkPolicy.enabled -}}
+# Stored as ConfigMap; the operator reads this template and applies a
+# customized NetworkPolicy per tenant namespace at Platform reconcile time.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-tenant-networkpolicy-template
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: eks-agent-platform
+data:
+  networkpolicy.yaml: |
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: tenant-egress
+      labels:
+        eks-agent-platform/tenant: "true"
+    spec:
+      podSelector: {}
+      policyTypes:
+        - Egress
+      egress:
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: kube-system
+              podSelector:
+                matchLabels:
+                  k8s-app: kube-dns
+          ports:
+            - port: 53
+              protocol: UDP
+            - port: 53
+              protocol: TCP
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: {{ .Values.networkPolicy.agentgatewayNamespace }}
+          ports:
+            - port: 8080
+              protocol: TCP
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: {{ .Values.networkPolicy.observabilityNamespace }}
+          ports:
+            - port: 4317
+              protocol: TCP
+            - port: 4318
+              protocol: TCP
+{{- end }}

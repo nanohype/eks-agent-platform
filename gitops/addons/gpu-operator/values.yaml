@@ -1,0 +1,62 @@
+# NVIDIA GPU Operator — base values. Per-env override in values-<env>.yaml.
+#
+# Installs the toolkit + device plugin + driver-validator on nodes labeled
+# nvidia.com/gpu.present=true. On EKS we use the bundled NVIDIA driver image
+# from EKS-optimized GPU AMIs; do NOT install the GPU Operator's own driver.
+driver:
+  enabled: false
+
+toolkit:
+  enabled: true
+
+devicePlugin:
+  enabled: true
+  env:
+    - name: PASS_DEVICE_SPECS
+      value: "true"
+    - name: FAIL_ON_INIT_ERROR
+      value: "true"
+    - name: DEVICE_LIST_STRATEGY
+      value: envvar
+    - name: DEVICE_ID_STRATEGY
+      value: uuid
+  # Time-slicing for shared GPU workloads (eval runners, small inference).
+  # Per-env overrides in values-dev.yaml / values-staging.yaml / values-production.yaml
+  # tune the `replicas` count (8 in dev, 4 in staging, 1 in production).
+  config:
+    name: time-slicing-config
+    default: any
+    data:
+      any: |
+        version: v1
+        flags:
+          migStrategy: none
+        sharing:
+          timeSlicing:
+            renameByDefault: false
+            failRequestsGreaterThanOne: false
+            resources:
+              - name: nvidia.com/gpu
+                replicas: 4
+
+dcgmExporter:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+
+migManager:
+  enabled: false
+
+nodeStatusExporter:
+  enabled: true
+
+operator:
+  defaultRuntime: containerd
+
+# Pod scheduling: only run on actual GPU nodes
+node-feature-discovery:
+  worker:
+    tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Exists

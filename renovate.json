@@ -1,0 +1,159 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(deps)",
+    ":dependencyDashboard",
+    ":automergeMinor",
+    "schedule:weekly",
+    "group:allNonMajor"
+  ],
+  "timezone": "America/Los_Angeles",
+  "labels": ["deps"],
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 8,
+  "rebaseWhen": "behind-base-branch",
+  "semanticCommitScope": "deps",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "Auto-merge patch + minor when CI passes. The vulnerability-alert override at the end of this array re-disables automerge for CVE-triggered PRs (Renovate evaluates packageRules in order; later rules win).",
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Major upgrades always need review",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["deps", "major"]
+    },
+    {
+      "description": "Group AWS SDK v2 (go) — they release together",
+      "matchManagers": ["gomod"],
+      "matchPackagePatterns": ["^github.com/aws/aws-sdk-go-v2"],
+      "groupName": "aws-sdk-go-v2"
+    },
+    {
+      "description": "Group @aws-sdk/* (npm) — they release together",
+      "matchManagers": ["npm"],
+      "matchPackagePatterns": ["^@aws-sdk/"],
+      "groupName": "aws-sdk-js"
+    },
+    {
+      "description": "Group k8s.io/* — they must move together",
+      "matchManagers": ["gomod"],
+      "matchPackagePatterns": ["^k8s.io/"],
+      "groupName": "k8s-io"
+    },
+    {
+      "description": "Group sigs.k8s.io/* — controller-runtime + tooling",
+      "matchManagers": ["gomod"],
+      "matchPackagePatterns": ["^sigs.k8s.io/"],
+      "groupName": "sigs-k8s"
+    },
+    {
+      "description": "Group typescript-eslint plugins",
+      "matchManagers": ["npm"],
+      "matchPackagePatterns": ["^@typescript-eslint/", "^typescript-eslint$", "^eslint-plugin-"],
+      "groupName": "eslint-stack"
+    },
+    {
+      "description": "Group vitest core + coverage",
+      "matchManagers": ["npm"],
+      "matchPackagePatterns": ["^vitest$", "^@vitest/"],
+      "groupName": "vitest"
+    },
+    {
+      "description": "@eks-agent/pricing dep refresh — fast pickup on its small dep surface (@eks-agent/core via workspace:* + the standard devDeps). The PRICES table itself is NOT Renovate-managed; scripts/refresh-pricing.mjs (Phase 2) handles that via a separate AWS Pricing API workflow on its own cron schedule. The accelerated schedule here is for the package.json deps, not the PRICES content.",
+      "matchFileNames": ["packages/pricing/package.json"],
+      "schedule": ["before 6am every weekday"],
+      "groupName": "pricing-deps"
+    },
+    {
+      "description": "GitHub Actions — group minor + patch into one PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Helm chart versions in gitops/applicationsets/*.yaml",
+      "matchManagers": ["argocd", "helm-values", "helmv3"],
+      "groupName": "helm-charts",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Docker base images (operator Dockerfile)",
+      "matchManagers": ["dockerfile"],
+      "groupName": "docker-base",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "OpenTofu provider versions",
+      "matchManagers": ["terraform"],
+      "groupName": "terraform-providers",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Pin GitHub Actions to commit SHAs (supply-chain hardening)",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Security/CVE updates: ALWAYS human review. This rule is intentionally LAST in packageRules — Renovate evaluates rules in order with later rules winning, so without this entry the earlier 'auto-merge patch + minor' rule would silently auto-merge CVE-triggered patches. The vulnerabilityAlerts top-level block ALSO sets automerge: false, but per-package rules override top-level settings — hence the explicit packageRule here.",
+      "matchUpdateTypes": ["patch", "minor", "major"],
+      "isVulnerabilityAlert": true,
+      "automerge": false,
+      "labels": ["security", "deps", "needs-review"]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security", "deps"],
+    "automerge": false,
+    "schedule": ["at any time"]
+  },
+  "osvVulnerabilityAlerts": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track kagent chart version in ApplicationSet matrix list (OCI Helm)",
+      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
+      "matchStrings": ["chart: kagent\\s+chartVersion: \"(?<currentValue>[^\"]+)\""],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "ghcr.io/kagent-dev/kagent/helm/kagent",
+      "versioningTemplate": "helm"
+    },
+    {
+      "customType": "regex",
+      "description": "Track agentgateway chart version (OCI Helm)",
+      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
+      "matchStrings": ["chart: agentgateway\\s+chartVersion: \"(?<currentValue>[^\"]+)\""],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "ghcr.io/agentgateway/agentgateway/charts/agentgateway",
+      "versioningTemplate": "helm"
+    },
+    {
+      "customType": "regex",
+      "description": "Track NVIDIA DRA driver chart version (OCI Helm)",
+      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
+      "matchStrings": ["chart: k8s-dra-driver-gpu\\s+chartVersion: \"(?<currentValue>[^\"]+)\""],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "nvcr.io/nvidia/k8s/k8s-dra-driver-gpu",
+      "versioningTemplate": "helm"
+    },
+    {
+      "customType": "regex",
+      "description": "Track NVIDIA gpu-operator chart version (HTTP Helm repo)",
+      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
+      "matchStrings": ["chart: gpu-operator\\s+chartVersion: (?<currentValue>v[0-9.]+)"],
+      "datasourceTemplate": "helm",
+      "depNameTemplate": "gpu-operator",
+      "registryUrlTemplate": "https://helm.ngc.nvidia.com/nvidia",
+      "versioningTemplate": "semver"
+    }
+  ]
+}

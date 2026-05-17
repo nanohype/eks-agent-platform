@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: eks-agent-platform
+  namespace: argocd
+spec:
+  description: AppProject for eks-agent-platform addons + per-tenant applications.
+  sourceRepos:
+    - https://github.com/stxkxs/eks-agent-platform.git
+    - https://helm.ngc.nvidia.com/nvidia
+    - oci://ghcr.io/kagent-dev/kagent/helm
+    - oci://ghcr.io/agentgateway/agentgateway/charts
+    - oci://ghcr.io/stxkxs/eks-agent-platform/charts
+    - oci://nvcr.io/nvidia/k8s
+  destinations:
+    - namespace: "eks-agent-platform"
+      server: "*"
+    - namespace: "kagent"
+      server: "*"
+    - namespace: "agentgateway"
+      server: "*"
+    - namespace: "gpu-operator"
+      server: "*"
+    - namespace: "nvidia-dra-driver"
+      server: "*"
+    - namespace: "kube-system"
+      server: "*"
+    - namespace: "tenants-*"
+      server: "*"
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  orphanedResources:
+    warn: true

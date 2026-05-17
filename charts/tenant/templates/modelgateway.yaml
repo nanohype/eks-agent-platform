@@ -1,0 +1,20 @@
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: ModelGateway
+metadata:
+  name: {{ .Values.platform.name }}-gateway
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+spec:
+  platformRef:
+    name: {{ .Values.platform.name }}
+  routes:
+    - name: {{ .Values.modelGateway.defaultRoute.name }}
+      modelFamily: {{ .Values.modelGateway.defaultRoute.modelFamily }}
+      modelId: {{ .Values.modelGateway.defaultRoute.modelId }}
+      {{- with .Values.modelGateway.defaultRoute.crossRegionProfile }}
+      crossRegionProfile: {{ . }}
+      {{- end }}
+      {{- with .Values.modelGateway.defaultRoute.rateLimit }}
+      rateLimit: {{ . }}
+      {{- end }}

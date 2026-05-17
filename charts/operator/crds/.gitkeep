@@ -1,0 +1,2 @@
+# CRDs are populated by `make manifests` from operators/config/crd/bases/.
+# Do not hand-edit the YAML files here — regenerate via the operator Makefile.

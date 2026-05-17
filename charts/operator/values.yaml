@@ -1,0 +1,127 @@
+# Default values for the eks-agent-platform operator chart.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/stxkxs/eks-agent-platform/operator
+  tag: "" # defaults to .Chart.AppVersion if empty
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: operator
+  annotations: {} # eks.amazonaws.com/role-arn injected per-env
+
+leaderElection:
+  enabled: true
+  id: eks-agent-platform.agents.stxkxs.io
+
+# Extra args appended verbatim to the operator container's command line.
+# Useful for local-dev (`--disable-aws`), debug flags, or env-specific
+# overrides not captured by the structured config block above. Each
+# entry is rendered as-is into args:.
+extraArgs: []
+
+reconcilers:
+  tenant:
+    concurrent: 1
+    requeueInterval: 5m
+  platform:
+    concurrent: 3
+  gateway:
+    concurrent: 3
+  runtime:
+    concurrent: 5
+  budget:
+    concurrent: 1
+    requeueInterval: 1h
+  eval:
+    concurrent: 2
+
+config:
+  ssmPathPrefix: /eks-agent-platform
+  environment: ""
+  region: us-west-2
+  # EKS OIDC wiring — required by PlatformReconciler.ensureIamRole to mint
+  # tenant IRSA trust policies. Set per-env values; the ApplicationSet
+  # passes them in via the values-<env>.yaml file resolved from the
+  # eks-gitops 'values' source.
+  oidc:
+    providerArn: "" # arn:aws:iam::ACCOUNT:oidc-provider/oidc.eks.<region>.amazonaws.com/id/<id>
+    issuerHost: "" # oidc.eks.<region>.amazonaws.com/id/<id>  (no scheme)
+  killSwitch:
+    eventBusName: ""
+  bedrock:
+    baselineGuardrailId: ""
+  cost:
+    athenaWorkgroup: ""
+    athenaDatabase: ""
+
+webhooks:
+  enabled: true
+  port: 9443
+  failurePolicy: Fail
+  # CA bundle is injected automatically by cert-manager via the
+  # cert-manager.io/inject-ca-from annotation on the kubebuilder-generated
+  # ValidatingWebhookConfiguration / MutatingWebhookConfiguration.
+  caBundle: ""
+  certManager:
+    enabled: true
+    # When true, this chart provisions a self-signed ClusterIssuer named
+    # below. Leave false in production and reference your real issuer
+    # (Vault, ACM Private CA, etc.).
+    installSelfSignedIssuer: false
+    issuerRef:
+      kind: ClusterIssuer
+      name: selfsigned-cluster-issuer
+
+metrics:
+  enabled: true
+  port: 8080
+  service:
+    type: ClusterIP
+  serviceMonitor:
+    enabled: true
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+priorityClassName: system-cluster-critical
+
+networkPolicy:
+  enabled: true
+  # CIDR of the kube-apiserver service. EKS default is 172.20.0.1/32; legacy
+  # clusters or self-managed clusters may use a different service IP (e.g.
+  # 10.100.0.1/32). Override per-environment if your cluster's service CIDR
+  # differs from the default.
+  kubernetesServiceCIDR: "172.20.0.1/32"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

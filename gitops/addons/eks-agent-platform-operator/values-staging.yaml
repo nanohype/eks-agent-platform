@@ -1,0 +1,32 @@
+replicaCount: 2
+
+leaderElection:
+  enabled: true
+
+config:
+  environment: staging
+  region: us-west-2
+  # OIDC wiring filled in per-cluster via ApplicationSet parameters or by
+  # editing this file at cluster-onboarding time. Pull both from
+  # landing-zone outputs / the eks cluster you provisioned.
+  oidc:
+    providerArn: ""
+    issuerHost: ""
+
+reconcilers:
+  budget:
+    requeueInterval: 30m
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# IRSA — fill in the per-env operator role ARN from
+# /eks-agent-platform/staging/agent-iam/operator_role_arn. The
+# ApplicationSet can also patch this via cluster-label substitution.
+serviceAccount:
+  annotations: {}

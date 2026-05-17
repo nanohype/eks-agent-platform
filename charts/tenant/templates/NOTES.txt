@@ -1,0 +1,39 @@
+eks-agent-platform tenant '{{ .Values.platform.name }}' rendered.
+
+──────────────────────────────────────────────────────────────────────────────
+ What this chart created
+──────────────────────────────────────────────────────────────────────────────
+
+  Platform         {{ .Values.platform.name }}              (persona: {{ .Values.platform.persona }})
+  BudgetPolicy     {{ .Values.platform.name }}-budget       (${{ .Values.budget.monthlyUsd }}/month, kill-switch: {{ .Values.budget.killSwitchEnabled }})
+  ModelGateway     {{ .Values.platform.name }}-gateway      (route: {{ .Values.modelGateway.defaultRoute.name }} → {{ .Values.modelGateway.defaultRoute.modelId }})
+  AgentFleet       {{ .Values.platform.name }}-fleet        ({{ len .Values.agentFleet.agents }} agent(s), scaling: {{ .Values.agentFleet.scaling.min }}..{{ .Values.agentFleet.scaling.max }})
+{{- if .Values.evalSuite.enabled }}
+  EvalSuite        {{ .Values.platform.name }}-eval         (schedule: {{ .Values.evalSuite.schedule | default "manual" }})
+{{- end }}
+
+──────────────────────────────────────────────────────────────────────────────
+ What happens next
+──────────────────────────────────────────────────────────────────────────────
+
+The eks-agent-platform operator picks up the Platform CR and reconciles
+five things in order (see ADR 0004 + docs/architecture.md):
+
+  1. Tenant workload namespace        tenants-{{ .Values.platform.name }}
+  2. IRSA role + Bedrock-access policy   /eks-agent-platform/tenants/{{ .Values.platform.name }}/
+  3. KMS grant on cmk-data               (per-Platform encryption boundary)
+  4. agentgateway routes                 (one per ModelRoute)
+  5. kagent Agent + ToolServer CRs       (one per Fleet agent)
+
+──────────────────────────────────────────────────────────────────────────────
+ Verify
+──────────────────────────────────────────────────────────────────────────────
+
+  kubectl get platform/{{ .Values.platform.name }} -n {{ .Release.Namespace }}
+  kubectl wait --for=condition=Ready platform/{{ .Values.platform.name }} -n {{ .Release.Namespace }} --timeout=5m
+
+──────────────────────────────────────────────────────────────────────────────
+ Persona-specific guide
+──────────────────────────────────────────────────────────────────────────────
+
+  https://github.com/stxkxs/eks-agent-platform/blob/main/docs/personas/{{ .Values.platform.persona }}.md

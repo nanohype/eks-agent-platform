@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+
+# lint-staged: format + lint touched files
+pnpm exec lint-staged
+
+# tofu fmt check on any staged .tf
+staged_tf=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.tf$' || true)
+if [ -n "$staged_tf" ]; then
+  if ! command -v tofu >/dev/null 2>&1; then
+    echo "warn: tofu not on PATH; skipping tofu fmt check"
+  else
+    if ! tofu fmt -check $staged_tf >/dev/null; then
+      echo "error: staged tofu files are not formatted. Run: tofu fmt -recursive terraform/"
+      exit 1
+    fi
+  fi
+fi
+
+# gitleaks: scan staged content for secrets if gitleaks is installed.
+# Don't block commits when gitleaks is missing — the CI workflow has the
+# authoritative scan. Local enforcement is a fast-feedback courtesy.
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact --no-banner --config .gitleaks.toml
+fi

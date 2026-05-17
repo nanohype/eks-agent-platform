@@ -1,0 +1,88 @@
+{
+  "title": "eks-agent-platform — Finance",
+  "uid": "agents-finance",
+  "tags": ["eks-agent-platform", "finance", "persona"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5m",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Spend MTD (USD)",
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/Bedrock",
+          "metricName": "InvocationCost",
+          "statistic": "Sum",
+          "period": 86400
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Daily spend by Platform",
+      "datasource": "athena-cur",
+      "targets": [
+        {
+          "rawSql": "SELECT line_item_usage_start_date AS time, resource_tags['aws:resourceTag/PlatformId'] AS platform, SUM(line_item_unblended_cost) AS cost FROM ${cost_database}.cur WHERE line_item_usage_start_date >= date_add('day', -30, current_date) GROUP BY 1, 2 ORDER BY 1"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 18, "x": 6, "y": 0 }
+    },
+    {
+      "type": "table",
+      "title": "Top-N models (last 7d)",
+      "datasource": "athena-cur",
+      "targets": [
+        {
+          "rawSql": "SELECT product['model_id'] AS model, SUM(line_item_unblended_cost) AS cost_usd FROM ${cost_database}.cur WHERE line_item_usage_start_date >= date_add('day', -7, current_date) AND line_item_product_code = 'AmazonBedrock' GROUP BY 1 ORDER BY 2 DESC LIMIT 20"
+        }
+      ],
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 4 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Spend vs. BudgetPolicy threshold",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "sum by (platform_id) (agents_spend_report_current_usd)",
+          "legendFormat": "{{platform_id}} spend"
+        },
+        {
+          "expr": "sum by (platform_id) (agents_budget_policy_threshold_usd)",
+          "legendFormat": "{{platform_id}} threshold"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 }
+    },
+    {
+      "type": "stat",
+      "title": "BudgetPolicy reconcile staleness (max lag)",
+      "description": "Seconds since the oldest BudgetPolicy.status.lastReconciled. Default budget tick is 1h in production; >7200s indicates the Budget reconciler is unhealthy (Athena down, IAM regression, etc.). Matches the BudgetReconcileLag alert threshold.",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "max(time() - kube_customresource_status_field{customresource_kind=\"BudgetPolicy\",field=\"lastReconciled\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": 0 },
+              { "color": "yellow", "value": 3600 },
+              { "color": "red", "value": 7200 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+    }
+  ]
+}

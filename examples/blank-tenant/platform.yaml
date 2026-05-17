@@ -1,0 +1,87 @@
+# The CRs all live in a single management namespace (eks-agent-platform).
+# The operator creates the tenant *workload* namespace (tenants-blank)
+# separately at reconcile time — that's where agent pods land.
+---
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: Platform
+metadata:
+  name: blank
+  namespace: eks-agent-platform
+  labels:
+    eks-agent-platform/persona: generic
+    eks-agent-platform/tenant: example
+spec:
+  displayName: Blank tenant
+  persona: generic
+  tenant: example
+  isolation: namespace
+  budget:
+    name: blank-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+  compliance:
+    soc2: true
+    hipaa: false
+---
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: BudgetPolicy
+metadata:
+  name: blank-budget
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: blank
+  monthlyUsd: "100"
+  alertThresholdsPercent: [50, 80, 100]
+  killSwitchEnabled: true
+---
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: ModelGateway
+metadata:
+  name: blank-gateway
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: blank
+  routes:
+    - name: primary
+      modelFamily: anthropic
+      modelId: us.anthropic.claude-3-5-sonnet-20241022-v2:0
+      rateLimit: 30
+---
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: AgentFleet
+metadata:
+  name: blank-fleet
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: blank
+  scaling:
+    enabled: true
+    min: 1
+    max: 2
+    queueDepthTrigger: 10
+  agents:
+    - name: assistant
+      systemPrompt: "You are a helpful assistant."
+      modelRoute: primary
+---
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: EvalSuite
+metadata:
+  name: blank-eval
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: blank
+  agentFleetRef:
+    name: blank-fleet
+  schedule: "0 6 * * *"
+  passThreshold: "0.85"
+  cases:
+    - name: smoke-test
+      input: "Reply with the single word 'pong'."
+      expectContains: ["pong"]
+      maxLatencyMs: 5000

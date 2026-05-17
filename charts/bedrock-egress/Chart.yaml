@@ -1,0 +1,13 @@
+apiVersion: v2
+name: bedrock-egress
+description: agentgateway routes targeting Bedrock + NetworkPolicy locking down model-plane egress.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/stxkxs/eks-agent-platform
+maintainers:
+  - name: stxkxs
+keywords:
+  - bedrock
+  - agentgateway
+  - egress

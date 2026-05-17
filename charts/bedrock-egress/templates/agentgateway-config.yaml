@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: eks-agent-platform
+data:
+  bedrock-region: {{ .Values.region | quote }}
+  bedrock-endpoint: {{ .Values.gateway.bedrock.endpoint | quote }}
+  bedrock-timeout-seconds: {{ .Values.gateway.bedrock.timeoutSeconds | quote }}
+  bedrock-max-retries: {{ .Values.gateway.bedrock.maxRetries | quote }}
+  bedrock-retry-mode: {{ .Values.gateway.bedrock.retryMode | quote }}
+  otel-endpoint: {{ .Values.gateway.observability.otel.endpoint | quote }}
+  routes.yaml: |
+{{ toYaml .Values.gateway.routes | indent 4 }}

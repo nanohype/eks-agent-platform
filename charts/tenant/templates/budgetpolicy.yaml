@@ -1,0 +1,13 @@
+apiVersion: agents.stxkxs.io/v1alpha1
+kind: BudgetPolicy
+metadata:
+  name: {{ .Values.platform.name }}-budget
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+spec:
+  platformRef:
+    name: {{ .Values.platform.name }}
+  monthlyUsd: {{ .Values.budget.monthlyUsd | quote }}
+  alertThresholdsPercent: {{- toYaml .Values.budget.alertThresholdsPercent | nindent 4 }}
+  killSwitchEnabled: {{ .Values.budget.killSwitchEnabled }}

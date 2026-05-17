@@ -1,0 +1,57 @@
+domain: stxkxs.io
+layout:
+  - go.kubebuilder.io/v4
+projectName: eks-agent-platform
+repo: github.com/stxkxs/eks-agent-platform/operators
+multigroup: false
+resources:
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: stxkxs.io
+    group: agents
+    kind: Platform
+    path: github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1
+    version: v1alpha1
+    webhooks:
+      defaulting: true
+      validation: true
+      webhookVersion: v1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: stxkxs.io
+    group: agents
+    kind: ModelGateway
+    path: github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1
+    version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: stxkxs.io
+    group: agents
+    kind: AgentFleet
+    path: github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1
+    version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: stxkxs.io
+    group: agents
+    kind: BudgetPolicy
+    path: github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1
+    version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: stxkxs.io
+    group: agents
+    kind: EvalSuite
+    path: github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1
+    version: v1alpha1
+version: "3"

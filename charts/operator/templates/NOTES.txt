@@ -1,0 +1,55 @@
+eks-agent-platform operator installed.
+
+──────────────────────────────────────────────────────────────────────────────
+ Image
+──────────────────────────────────────────────────────────────────────────────
+
+  {{ include "operator.image" . }}
+
+──────────────────────────────────────────────────────────────────────────────
+ Required next steps
+──────────────────────────────────────────────────────────────────────────────
+
+{{- if not .Values.serviceAccount.annotations }}
+
+  ⚠ serviceAccount.annotations is empty. The operator pod needs an IRSA role
+    to talk to AWS. Set the annotation:
+
+      serviceAccount:
+        annotations:
+          eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<env>-<cluster>-eap-operator
+
+    Read the role ARN from SSM (provisioned by terraform/components/agent-iam):
+
+      aws ssm get-parameter \
+        --name /eks-agent-platform/<env>/agent-iam/operator_role_arn \
+        --query Parameter.Value --output text
+{{- end }}
+
+{{- if not .Values.config.environment }}
+
+  ⚠ config.environment is empty. Set --set config.environment=dev|staging|production
+    so the operator reads the right SSM tree.
+{{- end }}
+
+──────────────────────────────────────────────────────────────────────────────
+ Verify
+──────────────────────────────────────────────────────────────────────────────
+
+  kubectl rollout status -n {{ .Release.Namespace }} deployment/{{ include "operator.fullname" . }}
+  kubectl logs    -n {{ .Release.Namespace }} -l app.kubernetes.io/name=operator -f
+
+──────────────────────────────────────────────────────────────────────────────
+ Create your first tenant
+──────────────────────────────────────────────────────────────────────────────
+
+  agentctl platform new --name marketing-team --tenant acme --persona marketing --monthly-usd 2500
+  kubectl apply -f marketing-team/platform.yaml -n {{ .Release.Namespace }}
+
+──────────────────────────────────────────────────────────────────────────────
+ Reference
+──────────────────────────────────────────────────────────────────────────────
+
+  Docs:    https://github.com/stxkxs/eks-agent-platform/blob/main/README.md
+  CRDs:    https://github.com/stxkxs/eks-agent-platform/tree/main/docs/crd-reference
+  Threat model: ADR 0004 in docs/adr/

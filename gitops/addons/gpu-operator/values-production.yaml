@@ -1,0 +1,18 @@
+# Production — no time-slicing on H100/L40S pools (latency-critical).
+# Time-slicing only applied to L4 pool via a NodePool taint + a separate
+# device-plugin config (see addons/gpu-operator/values-production-override.yaml
+# if you need per-pool config).
+devicePlugin:
+  config:
+    data:
+      any: |
+        version: v1
+        flags:
+          migStrategy: none
+        sharing:
+          timeSlicing:
+            renameByDefault: false
+            failRequestsGreaterThanOne: true
+            resources:
+              - name: nvidia.com/gpu
+                replicas: 1

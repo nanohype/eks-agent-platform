@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aws-neuron
+
+resources:
+  - namespace.yaml
+  - daemonset.yaml
+  - rbac.yaml
+
+commonLabels:
+  app.kubernetes.io/managed-by: eks-agent-platform
+  app.kubernetes.io/part-of: eks-agent-platform
+
+# IRSA annotation patched in by ApplicationSet values per-env if needed.

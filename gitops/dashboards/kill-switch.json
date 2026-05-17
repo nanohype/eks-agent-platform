@@ -1,0 +1,148 @@
+{
+  "title": "eks-agent-platform — Kill-switch",
+  "uid": "agents-killswitch",
+  "tags": ["eks-agent-platform", "kill-switch", "incident"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Currently suspended platforms",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "count(kube_customresource_status_phase{customresource_kind=\"Platform\",customresource_phase=\"Suspended\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": 0 },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Kill-switch SFN executions (last 24h)",
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/States",
+          "metricName": "ExecutionsStarted",
+          "statistic": "Sum",
+          "dimensions": { "StateMachineArn": "*killswitch*" },
+          "period": "86400"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "SFN failure rate (last 24h)",
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/States",
+          "metricName": "ExecutionsFailed",
+          "statistic": "Sum",
+          "dimensions": { "StateMachineArn": "*killswitch*" },
+          "period": "86400"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": 0 },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "BudgetPolicies w/ KillSwitchFiredAt set (lifetime)",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "count(kube_customresource_status_field{customresource_kind=\"BudgetPolicy\",field=\"killSwitchFiredAt\"} != 0)"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "BudgetBreach events on the kill-switch bus",
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/Events",
+          "metricName": "MatchedEvents",
+          "statistic": "Sum",
+          "dimensions": {
+            "EventBusName": "*killswitch*",
+            "RuleName": "*breach*"
+          },
+          "period": "300"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 4 }
+    },
+    {
+      "type": "table",
+      "title": "Currently suspended platforms",
+      "description": "Joined view: phase + suspendedAt timestamp from the CR-state metrics. suspendedReason isn't exposed as a metric label (it'd be high-cardinality); drill into the platform CR for the reason string.",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kube_customresource_status_phase{customresource_kind=\"Platform\",customresource_phase=\"Suspended\"}",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "kube_customresource_status_field{customresource_kind=\"Platform\",field=\"suspendedAt\"}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "name", "mode": "outer" } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "Time 1": true,
+              "Time 2": true,
+              "customresource_kind 1": true,
+              "customresource_kind 2": true,
+              "field 2": true,
+              "Value #A": true
+            },
+            "renameByName": {
+              "name": "platform",
+              "namespace 1": "namespace",
+              "customresource_phase 1": "phase",
+              "Value #B": "suspendedAt (unix)"
+            }
+          }
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 14 }
+    }
+  ]
+}

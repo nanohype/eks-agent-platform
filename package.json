@@ -1,0 +1,67 @@
+{
+  "name": "eks-agent-platform",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Kubernetes-native AWS-native platform-of-platforms. Bedrock + kagent + agentgateway + DRA. Hosts agent workloads as declarative tenants via CRDs and operators.",
+  "homepage": "https://github.com/stxkxs/eks-agent-platform",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stxkxs/eks-agent-platform.git"
+  },
+  "license": "Apache-2.0",
+  "author": "stxkxs",
+  "packageManager": "pnpm@11.1.1",
+  "engines": {
+    "node": ">=24.14.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint -- --fix",
+    "test": "turbo run lint typecheck test",
+    "test:unit": "turbo run test",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
+    "tofu:fmt": "tofu fmt -recursive terraform/",
+    "tofu:fmt:check": "tofu fmt -check -recursive terraform/",
+    "tofu:validate": "for d in terraform/components/*/; do (cd \"$d\" && tofu init -backend=false -input=false >/dev/null && tofu validate) || exit 1; done",
+    "helm:lint": "find charts -mindepth 1 -maxdepth 1 -type d -exec helm lint {} \\;",
+    "gitops:validate": "find gitops/applicationsets -name '*.yaml' -exec sh -c 'kubectl apply --dry-run=client -f \"$1\" -o yaml >/dev/null' _ {} \\;",
+    "clean": "turbo run clean && rm -rf node_modules .turbo",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "turbo run build && changeset publish",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.31.0",
+    "@commitlint/cli": "^21.0.1",
+    "@commitlint/config-conventional": "^21.0.1",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.8.0",
+    "@vitest/coverage-v8": "^4.1.6",
+    "esbuild": "^0.28.0",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import-x": "^4.16.2",
+    "eslint-plugin-security": "^4.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.4",
+    "prettier": "^3.8.3",
+    "tsx": "^4.22.0",
+    "turbo": "^2.9.14",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.3",
+    "vitest": "^4.1.6"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "typescript": "^6.0.0"
+      }
+    }
+  }
+}

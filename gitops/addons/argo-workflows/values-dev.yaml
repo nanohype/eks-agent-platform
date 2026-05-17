@@ -1,0 +1,17 @@
+# dev — leaner footprint, no archive persistence.
+controller:
+  replicas: 1
+  persistence:
+    archive: false
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+server:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+postgresql:
+  enabled: false

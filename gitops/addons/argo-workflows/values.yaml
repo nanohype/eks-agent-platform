@@ -1,0 +1,65 @@
+# argo-workflows — base values.
+#
+# Runtime for EvalSuite reconciliation. The operator emits Workflow /
+# CronWorkflow CRs into the eval-runner namespace referencing the
+# eval-runner WorkflowTemplate (gitops/addons/eval-runtime).
+
+controller:
+  replicas: 2
+  serviceAccount:
+    create: true
+    name: argo-workflows-controller
+
+  # The workflow-controller needs to manage Workflows + their pods in the
+  # eval-runner namespace. By default the chart installs cluster-wide;
+  # we keep that but lock the namespace allow-list down so the controller
+  # only touches eval-runner (not random tenant namespaces).
+  workflowNamespaces:
+    - eval-runner
+
+  metricsConfig:
+    enabled: true
+    servicePort: 9090
+
+  # Persist completed workflows to the workflow-archive for the
+  # AnalysisTemplate to query history. Backed by the in-cluster Postgres
+  # the workflow chart ships in dev; production should point at RDS.
+  persistence:
+    archive: true
+    archiveTTL: 30d
+
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits: { cpu: 1000m, memory: 1Gi }
+
+  # Standard production-ready security context for the controller.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    fsGroup: 65532
+    seccompProfile: { type: RuntimeDefault }
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities: { drop: ["ALL"] }
+    readOnlyRootFilesystem: true
+
+server:
+  # Argo Server (the read-only UI / API) is opt-in. Developers can port-
+  # forward locally; we don't expose it via ingress.
+  enabled: true
+  replicas: 1
+  serviceAccount:
+    create: true
+    name: argo-workflows-server
+  authMode: server
+  ingress:
+    enabled: false
+
+executor:
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+# Disable the in-chart Postgres in environments that bring their own.
+postgresql:
+  enabled: true

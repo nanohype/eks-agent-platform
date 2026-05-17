@@ -1,0 +1,17 @@
+/** @type {import('prettier').Config} */
+export default {
+  printWidth: 120,
+  tabWidth: 2,
+  useTabs: false,
+  semi: true,
+  singleQuote: true,
+  quoteProps: 'as-needed',
+  trailingComma: 'all',
+  bracketSpacing: true,
+  arrowParens: 'always',
+  endOfLine: 'lf',
+  overrides: [
+    { files: ['*.yml', '*.yaml'], options: { singleQuote: false } },
+    { files: ['*.md'], options: { proseWrap: 'preserve' } },
+  ],
+};

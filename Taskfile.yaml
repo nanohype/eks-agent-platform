@@ -1,0 +1,214 @@
+version: "3"
+
+vars:
+  ENVIRONMENT: '{{.ENVIRONMENT | default "dev"}}'
+  REGION: '{{.REGION | default "us-west-2"}}'
+  COMPONENT: '{{.COMPONENT | default "all"}}'
+  GO_VERSION: '{{.GO_VERSION | default "1.23"}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # === Composite ===
+
+  ci:
+    desc: "Full local CI: fmt:check, lint, validate, typecheck, test across all workspaces"
+    cmds:
+      - task: fmt:check
+      - task: tofu:validate
+      - task: helm:lint
+      - task: gitops:validate
+      - task: ts:test
+      - task: operator:test
+      - task: security:scan
+
+  security:scan:
+    desc: "Run security scanners (gitleaks + trivy config) if available locally"
+    cmds:
+      - |
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks detect --no-banner --redact --config .gitleaks.toml
+        else
+          echo "gitleaks not installed — install via 'brew install gitleaks' to run locally"
+        fi
+      - |
+        if command -v trivy >/dev/null 2>&1; then
+          trivy config . --severity HIGH,CRITICAL --exit-code 1
+        else
+          echo "trivy not installed — install via 'brew install trivy' to run locally"
+        fi
+
+  security:fix:
+    desc: "Open the SARIF reports from the latest CI run in Code Scanning"
+    cmds:
+      - echo "Open https://github.com/stxkxs/eks-agent-platform/security/code-scanning"
+
+  install:
+    desc: Install all toolchain deps (pnpm + go mod download)
+    cmds:
+      - pnpm install
+      - cd operators && go mod download
+
+  # === Format ===
+
+  fmt:
+    desc: Format all files (tofu fmt + prettier + go fmt)
+    cmds:
+      - tofu fmt -recursive terraform/
+      - pnpm format
+      - cd operators && go fmt ./...
+
+  fmt:check:
+    desc: Verify formatting without modifying files
+    cmds:
+      - tofu fmt -check -recursive terraform/
+      - pnpm format:check
+      - cd operators && test -z "$(gofmt -l .)"
+
+  # === OpenTofu ===
+
+  tofu:validate:
+    desc: Validate all OpenTofu components
+    cmds:
+      - |
+        for d in terraform/components/*/; do
+          name=$(basename "$d")
+          echo "Validating components/$name..."
+          (cd "$d" && tofu init -backend=false -input=false >/dev/null 2>&1 && tofu validate) || exit 1
+        done
+        echo "All components valid."
+
+  tofu:plan:
+    desc: "Plan a component (vars: ENVIRONMENT, REGION, COMPONENT)"
+    cmds:
+      - |
+        if [ "{{.COMPONENT}}" = "all" ]; then
+          cd terraform/live/{{.ENVIRONMENT}} && terragrunt run-all plan
+        else
+          cd terraform/live/{{.ENVIRONMENT}}/{{.COMPONENT}} && terragrunt plan
+        fi
+
+  tofu:apply:
+    desc: "Apply a component (vars: ENVIRONMENT, REGION, COMPONENT)"
+    cmds:
+      - |
+        if [ "{{.COMPONENT}}" = "all" ]; then
+          cd terraform/live/{{.ENVIRONMENT}} && terragrunt run-all apply
+        else
+          cd terraform/live/{{.ENVIRONMENT}}/{{.COMPONENT}} && terragrunt apply
+        fi
+
+  tofu:destroy:
+    desc: "Destroy a component (vars: ENVIRONMENT, REGION, COMPONENT)"
+    cmds:
+      - |
+        if [ "{{.COMPONENT}}" = "all" ]; then
+          cd terraform/live/{{.ENVIRONMENT}} && terragrunt run-all destroy
+        else
+          cd terraform/live/{{.ENVIRONMENT}}/{{.COMPONENT}} && terragrunt destroy
+        fi
+
+  # === Helm ===
+
+  helm:lint:
+    desc: Lint every Helm chart in charts/
+    cmds:
+      - |
+        for d in charts/*/; do
+          name=$(basename "$d")
+          echo "Linting $name..."
+          helm lint "$d" || exit 1
+        done
+
+  helm:template:
+    desc: Render every Helm chart against default values to catch template errors
+    cmds:
+      - |
+        for d in charts/*/; do
+          name=$(basename "$d")
+          echo "Rendering $name..."
+          helm template "$name" "$d" >/dev/null || exit 1
+        done
+
+  # === GitOps ===
+
+  gitops:validate:
+    desc: Dry-run apply every ApplicationSet to confirm YAML and schema
+    cmds:
+      - |
+        for f in gitops/applicationsets/*.yaml; do
+          echo "Validating $f..."
+          kubectl apply --dry-run=client -f "$f" -o yaml >/dev/null || exit 1
+        done
+
+  # === Operator ===
+
+  operator:gen:
+    desc: Generate CRD manifests + deepcopy + RBAC from kubebuilder markers
+    dir: operators
+    cmds:
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+      - mkdir -p ../charts/operator/crds && cp config/crd/bases/*.yaml ../charts/operator/crds/
+
+  operator:build:
+    desc: Build the operator binary
+    dir: operators
+    cmds:
+      - go build -o bin/manager ./cmd
+
+  operator:test:
+    desc: Run operator unit + conformance tests via envtest
+    dir: operators
+    cmds:
+      - make test
+
+  operator:test:conformance:
+    desc: Just the envtest conformance suite (no unit tests, no race detector)
+    dir: operators
+    cmds:
+      - make test-conformance
+
+  operator:image:
+    desc: Build the operator container image
+    dir: operators
+    cmds:
+      - docker build -t ghcr.io/stxkxs/eks-agent-platform/operator:dev .
+
+  # === TypeScript ===
+
+  ts:build:
+    desc: Build all TS packages
+    cmds:
+      - pnpm build
+
+  ts:test:
+    desc: Test all TS packages (lint + typecheck + unit)
+    cmds:
+      - pnpm test
+
+  client:gen:
+    desc: "Generate TS client types from CRD OpenAPI v3 schemas (script not wired yet)"
+    cmds:
+      - |
+        echo "client:gen is not wired yet. Until scripts/gen-client.mjs exists"
+        echo "(planned: run kubernetes-fluent-client or kubernetes-models-ts against"
+        echo "operators/config/crd/bases/*.yaml and emit TS types into"
+        echo "packages/client/src/generated/), use the hand-written types in"
+        echo "packages/client/src/index.ts."
+        exit 1
+
+  # === Help ===
+
+  help:
+    desc: Show usage
+    cmds:
+      - |
+        echo ""
+        echo "Usage:"
+        echo "  task <target> [ENVIRONMENT=dev|staging|production] [REGION=us-west-2] [COMPONENT=bedrock|all]"
+        echo ""
+        task --list

@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "operator.selectorLabels" . | nindent 8 }}
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+    spec:
+      serviceAccountName: {{ include "operator.serviceAccountName" . }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: manager
+          image: {{ include "operator.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --leader-elect={{ .Values.leaderElection.enabled }}
+            - --leader-election-id={{ .Values.leaderElection.id }}
+            - --metrics-bind-address=:{{ .Values.metrics.port }}
+            - --health-probe-bind-address=:8081
+            - --tenant-requeue-interval={{ .Values.reconcilers.tenant.requeueInterval }}
+            - --budget-requeue-interval={{ .Values.reconcilers.budget.requeueInterval }}
+            - --tenant-workers={{ .Values.reconcilers.tenant.concurrent }}
+            - --platform-workers={{ .Values.reconcilers.platform.concurrent }}
+            - --gateway-workers={{ .Values.reconcilers.gateway.concurrent }}
+            - --runtime-workers={{ .Values.reconcilers.runtime.concurrent }}
+            - --budget-workers={{ .Values.reconcilers.budget.concurrent }}
+            - --eval-workers={{ .Values.reconcilers.eval.concurrent }}
+            - --environment={{ .Values.config.environment }}
+            - --region={{ .Values.config.region }}
+            {{- with .Values.config.oidc.providerArn }}
+            - --oidc-provider-arn={{ . }}
+            {{- end }}
+            {{- with .Values.config.oidc.issuerHost }}
+            - --oidc-issuer-host={{ . }}
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AGENTS_ENVIRONMENT
+              value: {{ .Values.config.environment | quote }}
+            - name: AGENTS_REGION
+              value: {{ .Values.config.region | quote }}
+            - name: AGENTS_SSM_PATH_PREFIX
+              value: {{ .Values.config.ssmPathPrefix | quote }}
+            {{- with .Values.config.oidc.providerArn }}
+            - name: AGENTS_OIDC_PROVIDER_ARN
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.oidc.issuerHost }}
+            - name: AGENTS_OIDC_ISSUER_HOST
+              value: {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            - name: probe
+              containerPort: 8081
+              protocol: TCP
+            {{- if .Values.webhooks.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhooks.port }}
+              protocol: TCP
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probe
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probe
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if .Values.webhooks.enabled }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          {{- end }}
+      {{- if .Values.webhooks.enabled }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "operator.fullname" . }}-webhook-cert
+            defaultMode: 420
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

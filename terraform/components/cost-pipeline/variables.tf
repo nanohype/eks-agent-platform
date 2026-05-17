@@ -1,0 +1,79 @@
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+
+variable "region" {
+  description = "AWS region"
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "EKS cluster name"
+  type        = string
+}
+
+variable "data_kms_key_arn" {
+  description = "cmk-data for CUR report bucket encryption"
+  type        = string
+}
+
+variable "operator_role_arn" {
+  description = "Operator IRSA role ARN — used in CUR bucket policy"
+  type        = string
+}
+
+variable "operator_role_name" {
+  description = "Operator IRSA role name — used to attach the cost policy"
+  type        = string
+}
+
+variable "cur_report_name" {
+  description = "Name of the Cost & Usage Report. Must be unique across the account."
+  type        = string
+  default     = "eks-agent-platform"
+}
+
+variable "athena_results_retention_days" {
+  description = "How long to retain saved query outputs in the Athena results bucket. Default 30 is fine for dev (throwaway queries); production should bump to match the audit cycle — set to 90 or 365 depending on regulator requirements."
+  type        = number
+  default     = 30
+  validation {
+    condition     = var.athena_results_retention_days >= 1 && var.athena_results_retention_days <= 3650
+    error_message = "athena_results_retention_days must be between 1 and 3650 (10 years)."
+  }
+}
+
+variable "cur_crawler_schedule" {
+  description = "Cron expression for the CUR Glue Crawler. AWS publishes CUR partitions hourly with the rest of the previous hour catching up over a ~6h window; daily 06:00 UTC picks up yesterday's full day plus the prior-day backfills."
+  type        = string
+  default     = "cron(0 6 * * ? *)"
+}
+
+variable "bedrock_invocation_log_group" {
+  description = "Bedrock invocation log group name (from terraform/components/bedrock outputs). The invocation-cost-publisher Lambda subscribes here."
+  type        = string
+}
+
+variable "logs_kms_key_arn" {
+  description = "cmk-logs ARN — the invocation-cost-publisher Lambda's own log group is encrypted here."
+  type        = string
+}
+
+variable "invocation_cost_publisher_log_retention_days" {
+  description = "How long to retain the invocation-cost-publisher Lambda's own CloudWatch logs"
+  type        = number
+  default     = 30
+}
+
+variable "access_logs_retention_days" {
+  description = "Retention for S3 server-access logs in the access-logs bucket"
+  type        = number
+  default     = 365
+}
+
+variable "tags" {
+  description = "Common tags"
+  type        = map(string)
+  default     = {}
+}

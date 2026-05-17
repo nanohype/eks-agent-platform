@@ -1,0 +1,55 @@
+# Argo Rollouts AnalysisTemplate for gating canary/blue-green promotions
+# on the most recent EvalSuite score.
+#
+# Usage: a Rollout's analysis.templates references this template and passes
+# the EvalSuite name + tenant ns as parameters. Argo Rollouts polls
+# EvalSuite.status.lastScore on the cadence below; if the score is below
+# pass-threshold for failureLimit consecutive measurements, the rollout
+# aborts and rolls back.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: eval-suite-gate
+  namespace: eval-runner
+spec:
+  args:
+    - name: eval-suite
+    - name: tenant-namespace
+    - name: pass-threshold
+      value: "0.85"
+
+  metrics:
+    - name: eval-suite-score
+      # Re-check every 30s. EvalSuite reconciles run on a cron schedule
+      # (typically every 6h or daily) so the gate is really polling a
+      # value that doesn't move during the analysis run — that's fine,
+      # the point is to fail-fast if the most-recent run failed.
+      interval: 30s
+      # Wait up to 30m for the first measurement so the analysis doesn't
+      # immediately abort when a fresh suite hasn't run yet.
+      initialDelay: 30s
+      count: 60 # ≈30 min total
+      failureLimit: 3
+      successCondition: "result.passed == 1 && result.score >= {{args.pass-threshold}}"
+      failureCondition: "result.passed == 0"
+      provider:
+        kubernetes:
+          # The KubernetesProvider reads .status.lastScore + .status.phase
+          # off the named EvalSuite. result.score and result.passed are
+          # available to successCondition / failureCondition.
+          group: agents.stxkxs.io
+          version: v1alpha1
+          resource: evalsuites
+          name: "{{args.eval-suite}}"
+          namespace: "{{args.tenant-namespace}}"
+          # Convert the decimal-string lastScore to a float and emit a
+          # passed bit derived from status.phase.
+          fields:
+            - key: result.score
+              jsonPath: "{.status.lastScore}"
+              type: number
+            - key: result.passed
+              jsonPath: "{.status.phase}"
+              type: string
+              transform: |
+                value == "Passed" ? 1 : 0

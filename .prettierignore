@@ -1,0 +1,13 @@
+# Helm templates contain Go template syntax that's not valid YAML pre-render.
+charts/*/templates/**/*.yaml
+charts/*/templates/**/*.yml
+charts/*/templates/**/*.tpl
+
+# Auto-generated
+**/dist/**
+**/node_modules/**
+**/.turbo/**
+**/generated/**
+pnpm-lock.yaml
+operators/go.sum
+operators/api/v1alpha1/zz_generated.deepcopy.go

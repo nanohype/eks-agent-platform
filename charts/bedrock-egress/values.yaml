@@ -1,0 +1,43 @@
+# bedrock-egress — agentgateway routes + NetworkPolicy for Bedrock model plane.
+#
+# Sits in front of the operator-managed ModelGateway CRs. This chart provides
+# cluster-wide default agentgateway Listener config + a default NetworkPolicy
+# template that the operator clones into each tenant namespace.
+
+region: us-west-2
+
+gateway:
+  listener:
+    name: bedrock
+    port: 8080
+    protocol: HTTP
+
+  # Default route is generated per ModelGateway CR by the operator. This
+  # static fallback exists for clusters running before the operator is up.
+  routes:
+    - name: bedrock-fallback
+      modelFamily: anthropic
+      modelId: us.anthropic.claude-3-5-sonnet-20241022-v2:0
+      rateLimit: 100
+
+  observability:
+    otel:
+      enabled: true
+      endpoint: http://otel-collector.observability.svc.cluster.local:4317
+
+  # Bedrock client config — endpoint discovered via VPC endpoint DNS
+  bedrock:
+    endpoint: "" # blank = use default Bedrock endpoint in the region
+    timeoutSeconds: 60
+    maxRetries: 3
+    retryMode: adaptive
+
+networkPolicy:
+  enabled: true
+  # default-deny on every tenant namespace, with allow rules generated for:
+  #   - egress to agentgateway service
+  #   - egress to OTel collector
+  #   - egress DNS
+  tenantNamespaceLabel: "eks-agent-platform/tenant"
+  agentgatewayNamespace: agentgateway
+  observabilityNamespace: observability

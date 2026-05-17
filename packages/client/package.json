@@ -1,0 +1,40 @@
+{
+  "name": "@eks-agent/client",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Typed Kubernetes client for the agents.stxkxs.io CRDs.",
+  "license": "Apache-2.0",
+  "author": "stxkxs",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@eks-agent/core": "workspace:*",
+    "@kubernetes/client-node": "^1.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

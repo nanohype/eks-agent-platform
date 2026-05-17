@@ -1,0 +1,54 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.24"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - gocritic
+    - misspell
+    - revive
+    - bodyclose
+    - dupl
+    - goconst
+    - prealloc
+    - unconvert
+    - unparam
+  settings:
+    gosec:
+      excludes:
+        - G104 # Errors unhandled (errcheck covers this)
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    revive:
+      rules:
+        - name: exported
+        - name: var-naming
+        - name: error-strings
+        - name: error-return
+        - name: package-comments
+          disabled: true
+  exclusions:
+    rules:
+      - path: zz_generated\.deepcopy\.go
+        linters: [revive, unused, dupl]
+      - path: _test\.go
+        linters: [dupl, gosec, errcheck]
+      # Reconciler stubs are intentionally similar in Phase 1; they diverge
+      # in Phase 2 when reconciliation bodies land.
+      - path: internal/controller/.*_controller\.go
+        linters: [dupl]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

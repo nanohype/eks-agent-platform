@@ -1,0 +1,11 @@
+{
+  "name": "@eks-agent-example/blank-tenant",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal example: a Platform CR with one agent against Bedrock Claude.",
+  "scripts": {
+    "apply": "kubectl apply -f platform.yaml",
+    "destroy": "kubectl delete -f platform.yaml"
+  }
+}

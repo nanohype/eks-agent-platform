@@ -1,0 +1,75 @@
+{
+  "title": "eks-agent-platform — Ops",
+  "uid": "agents-ops",
+  "tags": ["eks-agent-platform", "ops", "persona"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active AgentRuntimes",
+      "datasource": "prometheus",
+      "targets": [{ "expr": "count(agents_agent_runtime_replicas)" }],
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "SQS depth per AgentRuntime",
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/SQS",
+          "metricName": "ApproximateNumberOfMessagesVisible",
+          "statistic": "Average",
+          "dimensions": { "QueueName": "*" }
+        }
+      ],
+      "gridPos": { "h": 10, "w": 18, "x": 6, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Bedrock InvokeModel p50 / p95 / p99 latency",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, model_id) (rate(agentgateway_invocation_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{model_id}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, model_id) (rate(agentgateway_invocation_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{model_id}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, model_id) (rate(agentgateway_invocation_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{model_id}}"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 10 }
+    },
+    {
+      "type": "table",
+      "title": "Latest EvalRun scores",
+      "datasource": "prometheus",
+      "targets": [{ "expr": "topk(50, agents_eval_run_score{phase=\"completed\"})" }],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 20 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Error budget burn — Bedrock 4xx/5xx rate",
+      "datasource": "prometheus",
+      "targets": [
+        {
+          "expr": "sum by (model_id) (rate(agentgateway_invocations_total{status=~\"4..\"}[5m]))",
+          "legendFormat": "4xx {{model_id}}"
+        },
+        {
+          "expr": "sum by (model_id) (rate(agentgateway_invocations_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "5xx {{model_id}}"
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 30 }
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+# gitleaks configuration for eks-agent-platform.
+#
+# Strategy: extend the default ruleset with project-specific allowlists for
+# placeholder strings we intentionally commit (REPLACE_WITH_*, mock ARNs,
+# example IAM ARNs in docs). False-positive suppression is path- and
+# stopword-scoped, never global.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Project-wide allowlist for placeholders + example strings"
+paths = [
+  # Generated outputs that never contain real secrets
+  '''pnpm-lock\.yaml$''',
+  '''operators/go\.sum$''',
+  '''operators/api/v1alpha1/zz_generated\.deepcopy\.go$''',
+  # ADRs / docs that reference example ARNs in prose
+  '''docs/adr/.*\.md$''',
+]
+regexes = [
+  # Placeholder ARNs in terragrunt scaffolding
+  '''arn:aws:[a-z0-9-]+:[a-z0-9-]+:REPLACE:[a-z0-9/_-]+''',
+  '''REPLACE_WITH_[A-Z_]+''',
+  # Example ARNs in docs (account IDs all-zeroes or REPLACE)
+  '''arn:aws:iam::000000000000:[a-z0-9/_-]+''',
+  # Demo OIDC issuer placeholders
+  '''oidc\.eks\.[a-z0-9-]+\.amazonaws\.com/id/REPLACE''',
+]
+stopwords = [
+  "REPLACE",
+  "REPLACE_WITH",
+  "mock-operator",
+  "mock-artifacts-bucket",
+  "mock-baseline",
+]
+
+# Custom rule: AWS account IDs in IAM ARN context. Earlier we matched bare
+# 12-digit sequences, which flagged Unix timestamps, port-number sequences,
+# and any other 12-digit numerics — high false-positive rate caused
+# developer fatigue. Narrowed to require the IAM ARN prefix so we only flag
+# what's plausibly an account ID rather than every dozen-digit number.
+[[rules]]
+id = "aws-account-id-in-arn"
+description = "12-digit AWS account ID embedded in an IAM ARN"
+regex = '''arn:aws:[a-z0-9-]*:[a-z0-9-]*:([0-9]{12}):'''
+keywords = ["arn:aws"]
+[[rules.allowlists]]
+description = "Allow zeroes (mock), example account IDs in docs + terragrunt placeholders"
+regexes = [
+  '''000000000000''',
+  '''123456789012''',
+  '''REPLACE''',
+]
+paths = [
+  '''docs/.*\.md$''',
+  '''README\.md$''',
+  '''terraform/live/.*\.hcl$''',
+]

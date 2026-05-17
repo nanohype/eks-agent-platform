@@ -1,0 +1,64 @@
+# Kustomize-only addons that ship pure-YAML manifests (no Helm chart).
+# Currently: AWS Neuron device plugin DaemonSet.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: agent-platform-kustomize
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "9"
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels:
+                  argocd.argoproj.io/secret-type: cluster
+                  eks-agent-platform/enabled: "true"
+          - list:
+              elements:
+                - appName: aws-neuron-device-plugin
+                  namespace: kube-system
+                  path: addons/aws-neuron-device-plugin
+                  syncWave: "10"
+                # Eval runner — Namespace + ServiceAccount + ClusterRole +
+                # WorkflowTemplate + AnalysisTemplate. Argo Workflows
+                # itself is installed via the Helm ApplicationSet
+                # (syncWave 25); this lands after (syncWave 30) so the
+                # WorkflowTemplate has a CRD to bind to.
+                - appName: eval-runtime
+                  namespace: eval-runner
+                  path: addons/eval-runtime
+                  syncWave: "30"
+                # SLO + paging — depends on kube-prometheus-stack CRDs
+                # (PrometheusRule, AlertmanagerConfig). Lands at wave 40
+                # so the monitoring stack is in place first.
+                - appName: operator-slo
+                  namespace: eks-agent-platform-monitoring
+                  path: addons/operator-slo
+                  syncWave: "40"
+  template:
+    metadata:
+      # Cluster-prefixed for multi-cluster hub safety; see agent-platform.yaml.
+      name: '{{ index .metadata.labels "cluster_name" }}-{{ .appName }}'
+      annotations:
+        argocd.argoproj.io/sync-wave: "{{ .syncWave }}"
+    spec:
+      project: eks-agent-platform
+      source:
+        repoURL: https://github.com/stxkxs/eks-agent-platform.git
+        targetRevision: main
+        path: "gitops/{{ .path }}"
+      destination:
+        server: "{{ .server }}"
+        namespace: "{{ .namespace }}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

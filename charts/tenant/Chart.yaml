@@ -1,0 +1,12 @@
+apiVersion: v2
+name: tenant
+description: Opinionated tenant scaffold — a Platform CR + ModelGateway + AgentFleet + BudgetPolicy + EvalSuite, parameterized by persona.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: stxkxs
+keywords:
+  - tenant
+  - persona
+  - eks-agent-platform

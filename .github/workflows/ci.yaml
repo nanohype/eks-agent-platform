@@ -1,0 +1,160 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.11.0"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - run: pnpm install --frozen-lockfile
+      - run: tofu fmt -check -recursive terraform/
+      - run: pnpm format:check
+      - run: cd operators && test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+  tofu:
+    name: tofu validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.11.0"
+      - name: validate every component
+        run: |
+          for d in terraform/components/*/; do
+            name=$(basename "$d")
+            echo "::group::$name"
+            (cd "$d" && tofu init -backend=false -input=false && tofu validate)
+            echo "::endgroup::"
+          done
+
+  helm:
+    name: helm lint + template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: |
+          for d in charts/*/; do
+            name=$(basename "$d")
+            echo "::group::$name lint"
+            helm lint "$d"
+            echo "::endgroup::"
+            echo "::group::$name template"
+            # tenant chart requires platform.name + platform.tenant; pass
+            # placeholders so template-rendering succeeds in CI.
+            if [[ "$name" == "tenant" ]]; then
+              helm template "$name" "$d" \
+                --set platform.name=ci-smoke \
+                --set platform.tenant=ci-smoke >/dev/null
+            else
+              helm template "$name" "$d" >/dev/null
+            fi
+            echo "::endgroup::"
+          done
+
+  gitops:
+    name: gitops dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: kubeconform applicationsets
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -ignore-missing-schemas -schema-location default -schema-location 'https://raw.githubusercontent.com/argoproj/argo-cd/master/manifests/crds/{{ .ResourceKind }}.yaml' gitops/applicationsets/
+
+  ts:
+    name: pnpm test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  operator:
+    name: go test (envtest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - name: go test with envtest
+        run: cd operators && make test
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          working-directory: operators
+          version: v2.11.4
+
+  conventional-pr:
+    name: conventional PR title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+            harden
+          scopes: |
+            operators
+            charts
+            gitops
+            terraform
+            core
+            sdk
+            pricing
+            client
+            cli
+            examples
+            docs
+            ci
+            release
+            deps
+            security
+          requireScope: false
+          subjectPattern: ^[a-z].+$

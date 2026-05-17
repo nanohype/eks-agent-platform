@@ -1,0 +1,65 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "operator.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Prometheus scrape
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: metrics
+          protocol: TCP
+    # Webhook traffic from kube-apiserver — IPs vary; allow all egress sources
+    # for the webhook port specifically.
+    {{- if .Values.webhooks.enabled }}
+    - from: []
+      ports:
+        - port: webhook
+          protocol: TCP
+    {{- end }}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # AWS APIs via interface VPC endpoints (any IP — TLS-only enforced by AWS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    # kube-apiserver — scoped to the cluster service IP, not a wildcard
+    # namespaceSelector (which would allow egress to every pod in every
+    # namespace on those ports). The default `kubernetesServiceCIDR` covers
+    # the EKS-default 172.20.0.1/32; override per-environment if your cluster
+    # uses a different service CIDR (e.g. 10.100.0.1/32 on legacy EKS).
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.kubernetesServiceCIDR | default "172.20.0.1/32" }}
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+{{- end }}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/@changesets/[email protected]/schema.json",
+  "changelog": "@changesets/changelog-git",
+  "commit": false,
+  "fixed": [],
+  "linked": [["@eks-agent/core", "@eks-agent/sdk", "@eks-agent/pricing", "@eks-agent/client", "@eks-agent/cli"]],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": ["@eks-agent-example/blank-tenant"]
+}

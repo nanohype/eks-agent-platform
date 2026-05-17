@@ -1,0 +1,23 @@
+apiVersion: v2
+name: operator
+description: eks-agent-platform — Kubernetes operator (CRDs + Deployment + RBAC).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.32.0"
+home: https://github.com/stxkxs/eks-agent-platform
+sources:
+  - https://github.com/stxkxs/eks-agent-platform
+maintainers:
+  - name: stxkxs
+    email: rackctl@gmail.com
+keywords:
+  - bedrock
+  - kagent
+  - agentgateway
+  - agents
+  - dra
+  - operator
+annotations:
+  artifacthub.io/category: integration-delivery
+  artifacthub.io/license: Apache-2.0
