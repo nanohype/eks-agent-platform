@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
 )
 
 // ScaffoldOptions captures the inputs to ScaffoldTenant. All required;

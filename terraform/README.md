@@ -1,6 +1,6 @@
 # terraform/
 
-OpenTofu + Terragrunt for the platform's AWS-side substrate. Sits on top of [`landing-zone`](https://github.com/stxkxs/landing-zone) (which provisions the EKS cluster, VPC, baseline IAM, and CMKs).
+OpenTofu + Terragrunt for the platform's AWS-side substrate. Sits on top of [`landing-zone`](https://github.com/nanohype/landing-zone) (which provisions the EKS cluster, VPC, baseline IAM, and CMKs).
 
 ## Components
 

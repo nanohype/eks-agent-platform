@@ -18,7 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
 )
 
 // PlatformAWSConfig is the slice of operatorconfig.Config the KMS + S3

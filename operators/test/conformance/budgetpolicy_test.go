@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
 )
 
 func TestBudgetPolicy_CreateGetDelete(t *testing.T) {

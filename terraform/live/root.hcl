@@ -22,7 +22,7 @@ provider "aws" {
       Project      = "eks-agent-platform"
       CostCenter   = "${local.cost_center}"
       BusinessUnit = "${local.business_unit}"
-      Repository   = "stxkxs/eks-agent-platform"
+      Repository   = "nanohype/eks-agent-platform"
     }
   }
 }

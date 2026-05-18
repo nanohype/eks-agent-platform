@@ -1,6 +1,6 @@
 # Onboarding — Local kx cluster
 
-Land the eks-agent-platform operator + a smoke-test tenant on the [`kx`](https://github.com/stxkxs/kx) kind cluster. Two modes:
+Land the eks-agent-platform operator + a smoke-test tenant on the [`kx`](https://github.com/nanohype/kx) kind cluster. Two modes:
 
 - **k8s-only** — operator runs `--disable-aws`; validates the CR-emission paths (Platform → tenant ns + agentgateway Route + kagent Agent + KEDA ScaledObject) without touching AWS. Useful when you're iterating on the operator binary or debugging upstream CRD version drift.
 - **bedrock** — also mounts your laptop's AWS creds onto the agentgateway pod so the full loop works end-to-end (tenant pod → agentgateway → Bedrock → response). Real model calls, real cost.
@@ -119,4 +119,4 @@ Removes the operator, the blank tenant, the tenant workload namespace, the opera
 
 - [`docs/onboarding/eng.md`](./eng.md) — once the kx install proves out, the production onboarding is the same flow against a real EKS cluster.
 - [`docs/architecture/overview.md`](../architecture/overview.md) — what the operator does once it's running.
-- [kx README](https://github.com/stxkxs/kx) — slice convention + cluster bootstrap.
+- [kx README](https://github.com/nanohype/kx) — slice convention + cluster bootstrap.

@@ -1,6 +1,6 @@
 # Integrating with eks-gitops
 
-`eks-agent-platform/gitops/` is an _overlay_ on top of [`eks-gitops`](https://github.com/stxkxs/eks-gitops). It does not replace `eks-gitops` and does not stand alone.
+`eks-agent-platform/gitops/` is an _overlay_ on top of [`eks-gitops`](https://github.com/nanohype/eks-gitops). It does not replace `eks-gitops` and does not stand alone.
 
 ## What eks-gitops provides
 

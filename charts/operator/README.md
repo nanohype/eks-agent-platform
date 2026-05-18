@@ -6,7 +6,7 @@ Helm chart for the eks-agent-platform operator: CRDs + Deployment + RBAC + Servi
 
 ```bash
 # OCI (once published)
-helm install operator oci://ghcr.io/stxkxs/eks-agent-platform/charts/operator \
+helm install operator oci://ghcr.io/nanohype/eks-agent-platform/charts/operator \
   --version 0.1.0 \
   --namespace eks-agent-platform --create-namespace \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::<acct>:role/<env>-<cluster>-eap-operator" \

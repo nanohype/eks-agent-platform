@@ -11,7 +11,7 @@ A Kubernetes-native, AWS-native **platform-of-platforms**. Each team's agent wor
 
 Bedrock for model access, [kagent](https://www.cncf.io/projects/kagent/) for the agent runtime, [agentgateway](https://agentgateway.dev/) for the model/tool data plane, [DRA](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/) for accelerator scheduling.
 
-Sits on top of [landing-zone](https://github.com/stxkxs/landing-zone) (Terragrunt org/account/cluster scaffolding) and [eks-gitops](https://github.com/stxkxs/eks-gitops) (general-purpose ArgoCD addons).
+Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragrunt org/account/cluster scaffolding) and [eks-gitops](https://github.com/nanohype/eks-gitops) (general-purpose ArgoCD addons).
 
 ## 60 seconds — what's here
 
@@ -52,7 +52,7 @@ All under `agents.stxkxs.io/v1alpha1`. Composed on top of kagent's `Agent`/`Mode
 
 ```bash
 # Prereqs: tofu >=1.11, terragrunt, kubectl, helm, argocd CLI, pnpm >=11, go >=1.24
-git clone git@github.com:stxkxs/eks-agent-platform.git
+git clone git@github.com:nanohype/eks-agent-platform.git
 cd eks-agent-platform
 pnpm install
 task --list
@@ -79,7 +79,7 @@ agentctl tenant get my-team
 
 ### Bootstrap note (first-time setup)
 
-The operator chart is pulled from `oci://ghcr.io/stxkxs/eks-agent-platform/charts/operator`. On a fresh fork the OCI registry is empty until you cut the first `charts-v*` release tag. Until then:
+The operator chart is pulled from `oci://ghcr.io/nanohype/eks-agent-platform/charts/operator`. On a fresh fork the OCI registry is empty until you cut the first `charts-v*` release tag. Until then:
 
 ```bash
 helm install operator ./charts/operator \
@@ -105,8 +105,8 @@ Full sequence + recovery in [`docs/runbooks/platform-suspended.md`](./docs/runbo
 
 This repo deliberately does **not** own:
 
-- Org, account, network, EKS cluster, baseline IAM → [`landing-zone`](https://github.com/stxkxs/landing-zone)
-- General-purpose cluster addons (cert-manager, cilium, kyverno, observability stack) → [`eks-gitops`](https://github.com/stxkxs/eks-gitops)
+- Org, account, network, EKS cluster, baseline IAM → [`landing-zone`](https://github.com/nanohype/landing-zone)
+- General-purpose cluster addons (cert-manager, cilium, kyverno, observability stack) → [`eks-gitops`](https://github.com/nanohype/eks-gitops)
 - Cluster bootstrap (ArgoCD install, app-of-apps wiring) → `aws-eks` (CDK)
 
 This repo **does** own everything between "an empty EKS cluster with ArgoCD running" and "non-technical teams can onboard a tenant with `agentctl tenant init`".

@@ -43,7 +43,7 @@ spec:
                   syncWave: "20"
                 - appName: eks-agent-platform-operator
                   namespace: eks-agent-platform
-                  chartRepo: oci://ghcr.io/stxkxs/eks-agent-platform/charts
+                  chartRepo: oci://ghcr.io/nanohype/eks-agent-platform/charts
                   chart: operator
                   chartVersion: "0.1.0"
                   path: addons/eks-agent-platform-operator
@@ -98,7 +98,7 @@ spec:
             valueFiles:
               - $values/{{ .path }}/values.yaml
               - $values/{{ .path }}/values-{{ index .metadata.labels "environment" }}.yaml
-        - repoURL: https://github.com/stxkxs/eks-agent-platform.git
+        - repoURL: https://github.com/nanohype/eks-agent-platform.git
           targetRevision: main
           ref: values
       destination:
