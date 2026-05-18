@@ -36,4 +36,4 @@ five things in order (see ADR 0004 + docs/architecture.md):
  Persona-specific guide
 ──────────────────────────────────────────────────────────────────────────────
 
-  https://github.com/stxkxs/eks-agent-platform/blob/main/docs/personas/{{ .Values.platform.persona }}.md
+  https://github.com/nanohype/eks-agent-platform/blob/main/docs/personas/{{ .Values.platform.persona }}.md

@@ -50,6 +50,6 @@ eks-agent-platform operator installed.
  Reference
 ──────────────────────────────────────────────────────────────────────────────
 
-  Docs:    https://github.com/stxkxs/eks-agent-platform/blob/main/README.md
-  CRDs:    https://github.com/stxkxs/eks-agent-platform/tree/main/docs/crd-reference
+  Docs:    https://github.com/nanohype/eks-agent-platform/blob/main/README.md
+  CRDs:    https://github.com/nanohype/eks-agent-platform/tree/main/docs/crd-reference
   Threat model: ADR 0004 in docs/adr/
