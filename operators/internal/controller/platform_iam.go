@@ -171,7 +171,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *agentsv1alpha
 			// keep invoking Bedrock until the next SFN execution.
 			return platformSuspension{RoleARN: arn, Suspended: true, Reason: reason}, nil
 		}
-		if err := r.attachBaselineIfMissing(ctx, name, cfg.TenantBaselinePolicyARN); err != nil {
+		if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
 		return platformSuspension{RoleARN: arn}, nil
@@ -199,20 +199,37 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *agentsv1alpha
 	arn := aws.ToString(createOut.Role.Arn)
 
 	// Fresh role can't be suspended yet — go straight to attach.
-	if err := r.attachBaselineIfMissing(ctx, name, cfg.TenantBaselinePolicyARN); err != nil {
+	if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
 		return platformSuspension{RoleARN: arn}, err
 	}
 	return platformSuspension{RoleARN: arn}, nil
 }
 
-// attachBaselineIfMissing is idempotent: lists attached policies and only
-// calls AttachRolePolicy if the baseline isn't already there. Paginates so
-// that roles approaching the IAM attach-policy soft-limit still scan their
-// full attachment set.
-func (r *PlatformReconciler) attachBaselineIfMissing(ctx context.Context, roleName, baselineARN string) error {
-	if baselineARN == "" {
-		return nil // dev/test mode without a baseline configured
+// reconcileManagedPolicies makes the set of attached managed policies on
+// the tenant role match {baselineARN} ∪ extraPolicyArns. Idempotent: lists
+// what's attached, attaches anything in the desired set that's missing.
+// Does NOT detach attachments that aren't in the desired set — IAM has no
+// per-attachment tag to mark "operator-owned", so blind detachment would
+// fight any external policy the operator team attaches out-of-band.
+// Spec-driven cleanup of removed ExtraPolicyArns is tracked separately.
+//
+// Paginates the list so roles approaching IAM's attach-policy soft-limit
+// (≈20 by default, raisable to 50) still scan their full attachment set.
+func (r *PlatformReconciler) reconcileManagedPolicies(ctx context.Context, roleName, baselineARN string, extraPolicyArns []string) error {
+	desired := make(map[string]struct{}, 1+len(extraPolicyArns))
+	if baselineARN != "" {
+		desired[baselineARN] = struct{}{}
 	}
+	for _, arn := range extraPolicyArns {
+		if arn != "" {
+			desired[arn] = struct{}{}
+		}
+	}
+	if len(desired) == 0 {
+		return nil // dev/test mode with neither baseline nor extras configured
+	}
+
+	attached := make(map[string]struct{}, len(desired))
 	var marker *string
 	for {
 		listOut, err := r.IAM.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
@@ -223,20 +240,24 @@ func (r *PlatformReconciler) attachBaselineIfMissing(ctx context.Context, roleNa
 			return fmt.Errorf("iam ListAttachedRolePolicies: %w", err)
 		}
 		for _, p := range listOut.AttachedPolicies {
-			if aws.ToString(p.PolicyArn) == baselineARN {
-				return nil
-			}
+			attached[aws.ToString(p.PolicyArn)] = struct{}{}
 		}
 		if !listOut.IsTruncated || listOut.Marker == nil {
 			break
 		}
 		marker = listOut.Marker
 	}
-	if _, err := r.IAM.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
-		RoleName:  aws.String(roleName),
-		PolicyArn: aws.String(baselineARN),
-	}); err != nil {
-		return fmt.Errorf("iam AttachRolePolicy: %w", err)
+
+	for arn := range desired {
+		if _, ok := attached[arn]; ok {
+			continue
+		}
+		if _, err := r.IAM.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
+			RoleName:  aws.String(roleName),
+			PolicyArn: aws.String(arn),
+		}); err != nil {
+			return fmt.Errorf("iam AttachRolePolicy %s: %w", arn, err)
+		}
 	}
 	return nil
 }
