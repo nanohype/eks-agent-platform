@@ -1,17 +1,17 @@
 # gitops/
 
-ArgoCD overlay that adds the agent-platform layer on top of [`eks-gitops`](https://github.com/stxkxs/eks-gitops). Everything here installs into clusters labeled `eks-agent-platform/enabled=true`.
+ArgoCD overlay that adds the agent-platform layer on top of [`eks-gitops`](https://github.com/nanohype/eks-gitops). Everything here installs into clusters labeled `eks-agent-platform/enabled=true`.
 
 ## What it ships
 
-| Addon                      | Source                                                                                  | Sync wave |
-| -------------------------- | --------------------------------------------------------------------------------------- | --------- |
-| `gpu-operator`             | Helm — `nvidia/gpu-operator@v26.3.1`                                                    | 10        |
-| `aws-neuron-device-plugin` | Kustomize — DaemonSet + ServiceAccount + ClusterRoleBinding                             | 10        |
-| `nvidia-dra-driver`        | Helm — `oci://nvcr.io/nvidia/k8s/k8s-dra-driver-gpu@25.8.0`                             | 11        |
-| `agentgateway`             | Helm — `oci://ghcr.io/agentgateway/agentgateway/charts/agentgateway@1.0.1`              | 20        |
-| `operator`                 | Helm — `oci://ghcr.io/stxkxs/eks-agent-platform/charts/operator@0.1.0` (from this repo) | 21        |
-| `kagent`                   | Helm — `oci://ghcr.io/kagent-dev/kagent/helm/kagent@0.9.4`                              | 30        |
+| Addon                      | Source                                                                                    | Sync wave |
+| -------------------------- | ----------------------------------------------------------------------------------------- | --------- |
+| `gpu-operator`             | Helm — `nvidia/gpu-operator@v26.3.1`                                                      | 10        |
+| `aws-neuron-device-plugin` | Kustomize — DaemonSet + ServiceAccount + ClusterRoleBinding                               | 10        |
+| `nvidia-dra-driver`        | Helm — `oci://nvcr.io/nvidia/k8s/k8s-dra-driver-gpu@25.8.0`                               | 11        |
+| `agentgateway`             | Helm — `oci://ghcr.io/agentgateway/agentgateway/charts/agentgateway@1.0.1`                | 20        |
+| `operator`                 | Helm — `oci://ghcr.io/nanohype/eks-agent-platform/charts/operator@0.1.0` (from this repo) | 21        |
+| `kagent`                   | Helm — `oci://ghcr.io/kagent-dev/kagent/helm/kagent@0.9.4`                                | 30        |
 
 Sync-wave ordering: device plugins first (cluster-level), then the data plane (agentgateway + operator + CRDs), then the agent runtime (kagent).
 
@@ -31,7 +31,7 @@ metadata:
 spec:
   generators:
     - git:
-        repoURL: https://github.com/stxkxs/eks-agent-platform.git
+        repoURL: https://github.com/nanohype/eks-agent-platform.git
         revision: main
         directories:
           - path: gitops/applicationsets/*
@@ -39,7 +39,7 @@ spec:
     spec:
       project: eks-agent-platform
       source:
-        repoURL: https://github.com/stxkxs/eks-agent-platform.git
+        repoURL: https://github.com/nanohype/eks-agent-platform.git
         targetRevision: main
         path: '{{path}}'
       destination:

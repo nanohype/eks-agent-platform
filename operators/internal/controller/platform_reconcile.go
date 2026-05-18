@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
 )
 
 const (
@@ -263,8 +263,8 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *agentsv1al
 		spec := map[string]interface{}{
 			"description": fmt.Sprintf("AppProject for Platform %s (tenant %s)", p.Name, p.Spec.Tenant),
 			"sourceRepos": []interface{}{
-				"https://github.com/stxkxs/eks-agent-platform.git",
-				"oci://ghcr.io/stxkxs/eks-agent-platform/charts/*",
+				"https://github.com/nanohype/eks-agent-platform.git",
+				"oci://ghcr.io/nanohype/eks-agent-platform/charts/*",
 			},
 			"destinations": []interface{}{
 				map[string]interface{}{

@@ -60,7 +60,7 @@ See [README.md](./README.md#what-you-get) and [ARCHITECTURE.md](./ARCHITECTURE.m
 
 - Each component publishes independently with conventional-commit-driven version bumps via Changesets.
 - Operator images signed with cosign + SBOM via syft on every tagged release.
-- Helm charts published to OCI registry under `oci://ghcr.io/stxkxs/eks-agent-platform/charts/`.
+- Helm charts published to OCI registry under `oci://ghcr.io/nanohype/eks-agent-platform/charts/`.
 
 ## Code of Conduct
 

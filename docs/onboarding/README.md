@@ -20,4 +20,4 @@ If your role isn't here, start from [eng.md](./eng.md) — it's the most general
 
 ## Local development
 
-- [local-kx.md](./local-kx.md) — land the operator + a smoke-test tenant on the [`kx`](https://github.com/stxkxs/kx) kind cluster. Two modes: k8s-only (validates CR emission against real upstream CRDs) + bedrock (mounts laptop AWS creds onto agentgateway for end-to-end real Bedrock calls).
+- [local-kx.md](./local-kx.md) — land the operator + a smoke-test tenant on the [`kx`](https://github.com/nanohype/kx) kind cluster. Two modes: k8s-only (validates CR emission against real upstream CRDs) + bedrock (mounts laptop AWS creds onto agentgateway for end-to-end real Bedrock calls).

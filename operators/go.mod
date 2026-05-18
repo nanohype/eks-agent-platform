@@ -1,4 +1,4 @@
-module github.com/stxkxs/eks-agent-platform/operators
+module github.com/nanohype/eks-agent-platform/operators
 
 go 1.26.0
 

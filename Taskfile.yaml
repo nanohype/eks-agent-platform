@@ -44,7 +44,7 @@ tasks:
   security:fix:
     desc: "Open the SARIF reports from the latest CI run in Code Scanning"
     cmds:
-      - echo "Open https://github.com/stxkxs/eks-agent-platform/security/code-scanning"
+      - echo "Open https://github.com/nanohype/eks-agent-platform/security/code-scanning"
 
   install:
     desc: Install all toolchain deps (pnpm + go mod download)
@@ -176,7 +176,7 @@ tasks:
     desc: Build the operator container image
     dir: operators
     cmds:
-      - docker build -t ghcr.io/stxkxs/eks-agent-platform/operator:dev .
+      - docker build -t ghcr.io/nanohype/eks-agent-platform/operator:dev .
 
   # === TypeScript ===
 

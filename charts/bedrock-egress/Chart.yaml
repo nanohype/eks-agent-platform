@@ -4,7 +4,7 @@ description: agentgateway routes targeting Bedrock + NetworkPolicy locking down 
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/stxkxs/eks-agent-platform
+home: https://github.com/nanohype/eks-agent-platform
 maintainers:
   - name: stxkxs
 keywords:

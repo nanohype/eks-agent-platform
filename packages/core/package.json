@@ -7,7 +7,7 @@
   "author": "stxkxs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/stxkxs/eks-agent-platform.git",
+    "url": "https://github.com/nanohype/eks-agent-platform.git",
     "directory": "packages/core"
   },
   "publishConfig": {

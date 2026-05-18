@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
 )
 
 func TestBuildInlineCasesParam_EmitsValidJSON(t *testing.T) {

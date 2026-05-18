@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 VERSION ?= dev
-IMG ?= ghcr.io/stxkxs/eks-agent-platform/operator:$(VERSION)
+IMG ?= ghcr.io/nanohype/eks-agent-platform/operator:$(VERSION)
 
 CONTROLLER_GEN ?= go tool controller-gen
 ENVTEST ?= go tool setup-envtest

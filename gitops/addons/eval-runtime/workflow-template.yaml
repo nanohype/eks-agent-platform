@@ -149,7 +149,7 @@ spec:
           - name: fleet
           - name: gateway
       script:
-        image: ghcr.io/stxkxs/eks-agent-platform/eval-runner:0.1.0
+        image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
         source: |
           set -eu
@@ -186,7 +186,7 @@ spec:
           - name: suite
           - name: bucket
       script:
-        image: ghcr.io/stxkxs/eks-agent-platform/eval-runner:0.1.0
+        image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
         source: |
           set -eu
@@ -229,7 +229,7 @@ spec:
           - name: suite-name
           - name: tenant
       script:
-        image: ghcr.io/stxkxs/eks-agent-platform/eval-runner:0.1.0
+        image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
         source: |
           set -eu
