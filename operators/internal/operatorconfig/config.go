@@ -17,7 +17,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	"github.com/stxkxs/eks-agent-platform/operators/internal/awsclients"
+	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
 
 // Config is the resolved set of cross-component values the operator needs

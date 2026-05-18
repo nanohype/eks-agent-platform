@@ -6,11 +6,11 @@ metadata:
 spec:
   description: AppProject for eks-agent-platform addons + per-tenant applications.
   sourceRepos:
-    - https://github.com/stxkxs/eks-agent-platform.git
+    - https://github.com/nanohype/eks-agent-platform.git
     - https://helm.ngc.nvidia.com/nvidia
     - oci://ghcr.io/kagent-dev/kagent/helm
     - oci://ghcr.io/agentgateway/agentgateway/charts
-    - oci://ghcr.io/stxkxs/eks-agent-platform/charts
+    - oci://ghcr.io/nanohype/eks-agent-platform/charts
     - oci://nvcr.io/nvidia/k8s
   destinations:
     - namespace: "eks-agent-platform"

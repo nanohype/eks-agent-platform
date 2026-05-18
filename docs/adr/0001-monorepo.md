@@ -28,5 +28,5 @@ One monorepo with polyglot workspaces:
 ## Consequences
 
 - CI matrix is larger but cacheable (turbo + go build cache + tofu validate).
-- The Go module under `operators/` is the canonical Go path for the CRD types; downstream Go consumers import `github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1`.
+- The Go module under `operators/` is the canonical Go path for the CRD types; downstream Go consumers import `github.com/nanohype/eks-agent-platform/operators/api/v1alpha1`.
 - Doc cross-references resolve to relative paths, which keeps them stable across forks.

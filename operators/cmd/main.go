@@ -21,10 +21,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
-	"github.com/stxkxs/eks-agent-platform/operators/internal/awsclients"
-	"github.com/stxkxs/eks-agent-platform/operators/internal/controller"
-	"github.com/stxkxs/eks-agent-platform/operators/internal/operatorconfig"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
+	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
+	"github.com/nanohype/eks-agent-platform/operators/internal/operatorconfig"
 )
 
 var (

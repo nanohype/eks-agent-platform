@@ -5,9 +5,9 @@ type: application
 version: 0.1.0
 appVersion: "0.1.0"
 kubeVersion: ">=1.32.0"
-home: https://github.com/stxkxs/eks-agent-platform
+home: https://github.com/nanohype/eks-agent-platform
 sources:
-  - https://github.com/stxkxs/eks-agent-platform
+  - https://github.com/nanohype/eks-agent-platform
 maintainers:
   - name: stxkxs
     email: rackctl@gmail.com

@@ -18,7 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/stxkxs/eks-agent-platform/operators/internal/agentctl"
+	"github.com/nanohype/eks-agent-platform/operators/internal/agentctl"
 )
 
 func main() {

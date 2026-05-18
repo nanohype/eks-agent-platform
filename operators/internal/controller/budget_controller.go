@@ -17,8 +17,8 @@ import (
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
-	"github.com/stxkxs/eks-agent-platform/operators/internal/awsclients"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
 
 // AthenaConfig carries the SSM-resolved cost-pipeline outputs the

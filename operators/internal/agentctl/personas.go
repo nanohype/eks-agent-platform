@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
 )
 
 // PersonaDefaults describes the persona-flexed defaults the

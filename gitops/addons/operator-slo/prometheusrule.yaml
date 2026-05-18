@@ -66,7 +66,7 @@ spec:
           annotations:
             summary: "{{ $labels.controller }} reconcile p99 above 1s for 10m"
             description: "Sustained p99 = {{ $value | humanizeDuration }}. SLO is 1s; investigate the controller's downstream calls (IAM / KMS / Athena / EventBridge)."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/reconcile-latency.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-latency.md
 
         # Error rate over 5% for 15m → page ops.
         - alert: ReconcileErrorRateHigh
@@ -79,7 +79,7 @@ spec:
           annotations:
             summary: "{{ $labels.controller }} error rate above 5% for 15m"
             description: "{{ $value | humanizePercentage }} of reconciles erroring. Probable cause: AWS-side outage or operator IAM regression. Check CloudTrail for the operator role."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
 
         # Operator leader lost; pages ops.
         - alert: OperatorLeaderMissing
@@ -93,7 +93,7 @@ spec:
           annotations:
             summary: "operator workqueue metrics absent — no active leader"
             description: "No replica is reporting workqueue depth. Either the deployment is down or leader election is wedged."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/operator-down.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/operator-down.md
 
     - name: agents.domain-events
       rules:
@@ -110,7 +110,7 @@ spec:
           annotations:
             summary: "BudgetPolicy {{ $labels.name }} stale > 2h"
             description: "Last reconcile {{ $value | humanizeDuration }} ago. Athena or CloudWatch may be erroring; check operator logs for the budget reconciler."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
 
         # Any Platform suspended — kill-switch fired. Page persona owner.
         - alert: PlatformSuspended
@@ -123,7 +123,7 @@ spec:
           annotations:
             summary: "Platform {{ $labels.name }} suspended by kill-switch"
             description: "Tenant IRSA role has been detached. Check BudgetPolicy + invoke spend. Operator will keep the platform suspended until the agents.stxkxs.io/suspended IAM tag is removed."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/platform-suspended.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/platform-suspended.md
 
         # Tenant aggregate spend over its soft cap.
         - alert: TenantBudgetExceeded
@@ -137,7 +137,7 @@ spec:
           annotations:
             summary: "Tenant {{ $labels.name }} aggregate spend over tenant cap"
             description: "Per-Platform kill-switches still enforce individually; this is a tenant-wide aggregate signal for the finance dashboard."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
 
         # AgentFleet reports Ready phase but zero ready agents — drift
         # between status phase and readyAgents count.
@@ -154,7 +154,7 @@ spec:
           annotations:
             summary: "AgentFleet {{ $labels.name }} Ready but readyAgents=0"
             description: "Reconciler reports Ready but no downstream agents are alive. Probable cause: kagent CRDs missing or ModelGateway routing misconfigured."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md
 
         # EvalSuite last run failed.
         - alert: EvalSuiteFailed
@@ -168,7 +168,7 @@ spec:
           annotations:
             summary: "EvalSuite {{ $labels.name }} last run failed"
             description: "Pass-threshold not met on the last scheduled run. Argo Rollouts AnalysisTemplate will gate downstream promotions; check the eval report for the failed cases."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/README.md#scenario-triggered-no-automated-page
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/README.md#scenario-triggered-no-automated-page
 
         # KEDA SQS trigger emits an error metric when GetQueueAttributes
         # fails (queue missing, IAM denied). Per-platform IAM regression
@@ -184,4 +184,4 @@ spec:
           annotations:
             summary: "KEDA SQS trigger errors on {{ $labels.scaledObject }}"
             description: "Either the queue URL is wrong or the tenant role lost sqs:GetQueueAttributes. Check agent-iam baseline + the AgentFleet.spec.scaling.queueUrl."
-            runbook_url: https://github.com/stxkxs/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md

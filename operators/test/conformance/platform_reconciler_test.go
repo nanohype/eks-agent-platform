@@ -17,8 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/stxkxs/eks-agent-platform/operators/api/v1alpha1"
-	"github.com/stxkxs/eks-agent-platform/operators/internal/controller"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
 // newPlatformReconciler returns a reconciler wired to the envtest client.
