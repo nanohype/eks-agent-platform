@@ -9,6 +9,8 @@
 
 A Kubernetes-native, AWS-native **platform-of-platforms**. Each team's agent workloads are declared as a `Tenant` CR; the operator provisions the per-tenant IRSA, KMS grants, S3 prefixes, agentgateway routes, kagent runtime, KEDA scaling, budget kill-switch, and Argo-Workflows eval pipeline. Eight personas (sales-ops, support, finance, ops, founder, eng, marketing, legal) are first-class users with their own onboarding playbooks + agentctl scaffolding.
 
+**AI clients / agents start here:** [`AGENTS.md`](AGENTS.md). For the stack-wide view, see the [Platform Reference](https://github.com/nanohype/nanohype/blob/main/docs/platform-reference.md).
+
 Bedrock for model access, [kagent](https://www.cncf.io/projects/kagent/) for the agent runtime, [agentgateway](https://agentgateway.dev/) for the model/tool data plane, [DRA](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/) for accelerator scheduling.
 
 Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragrunt org/account/cluster scaffolding) and [eks-gitops](https://github.com/nanohype/eks-gitops) (general-purpose ArgoCD addons).
