@@ -66,7 +66,7 @@ func (f *fakeIAM) seedRole(name, arn string, tags ...iamtypes.Tag) {
 	}
 }
 
-func (f *fakeIAM) seedAttachment(roleName, policyARN string) {
+func (f *fakeIAM) seedAttachment(roleName, policyARN string) { //nolint:unparam // test fake seed helper
 	if _, ok := f.attached[roleName]; !ok {
 		f.attached[roleName] = map[string]struct{}{}
 	}
@@ -74,7 +74,7 @@ func (f *fakeIAM) seedAttachment(roleName, policyARN string) {
 }
 
 func (f *fakeIAM) attachmentsFor(roleName string) []string {
-	out := []string{}
+	out := make([]string, 0, len(f.attached[roleName]))
 	for arn := range f.attached[roleName] {
 		out = append(out, arn)
 	}
