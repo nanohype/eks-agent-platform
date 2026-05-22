@@ -15,6 +15,7 @@ Package v1alpha1 contains API Schema definitions for the agents v1alpha1 API gro
 - [EvalSuite](#evalsuite)
 - [ModelGateway](#modelgateway)
 - [Platform](#platform)
+- [SandboxPool](#sandboxpool)
 - [Tenant](#tenant)
 
 #### AgentFleet
@@ -265,6 +266,7 @@ _Appears in:_
 - [EvalSuiteSpec](#evalsuitespec)
 - [ModelGatewaySpec](#modelgatewayspec)
 - [ModelRouteSpec](#modelroutespec)
+- [SandboxPoolSpec](#sandboxpoolspec)
 
 | Field           | Description | Default | Validation |
 | --------------- | ----------- | ------- | ---------- |
@@ -383,6 +385,71 @@ _Appears in:_
 | `suspendedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_                | SuspendedAt is the timestamp at which the kill-switch fired. When<br />non-nil the operator stops reattaching the baseline IAM policy and<br />the AgentFleetReconciler scales fleets to zero. Resets to nil only<br />when ops clears the iam:TagRole 'agents.stxkxs.io/suspended'<br />marker on the tenant IRSA role. |         | Optional: \{\} <br /> |
 | `suspendedReason` _string_                                                                                               | SuspendedReason carries the kill-switch's reason (e.g.<br />'budget-exceeded'). Same lifecycle as SuspendedAt.                                                                                                                                                                                                           |         | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions follows the standard kubernetes pattern.                                                                                                                                                                                                                                                                      |         | Optional: \{\} <br /> |
+
+#### SandboxPool
+
+SandboxPool is a Platform-scoped pool of Managed Agents self-hosted
+sandbox workers. The reconciler runs them as a Deployment on the
+dedicated, tainted sandbox node pool, locked down by a default-deny
+NetworkPolicy.
+
+| Field                                                                                                              | Description                                                     | Default | Validation |
+| ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | ------- | ---------- |
+| `apiVersion` _string_                                                                                              | `agents.stxkxs.io/v1alpha1`                                     |         |            |
+| `kind` _string_                                                                                                    | `SandboxPool`                                                   |         |            |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |         |            |
+| `spec` _[SandboxPoolSpec](#sandboxpoolspec)_                                                                       |                                                                 |         |            |
+| `status` _[SandboxPoolStatus](#sandboxpoolstatus)_                                                                 |                                                                 |         |            |
+
+#### SandboxPoolSpec
+
+SandboxPoolSpec declares a pool of Managed Agents self-hosted sandbox
+workers for a `self_hosted` environment. The workers run Anthropic's
+`ant beta:worker`, claiming sessions from the environment's work queue
+and executing agent tool calls inside the cluster.
+
+_Appears in:_
+
+- [SandboxPool](#sandboxpool)
+
+| Field                                                                                                                                        | Description                                                                                                                                                                                                      | Default | Validation            |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------- |
+| `platformRef` _[LocalRef](#localref)_                                                                                                        | PlatformRef is the owning Platform. The pool's workers run in that<br />Platform's tenant namespace and the pool gates on Platform readiness.                                                                    |         |                       |
+| `environmentId` _string_                                                                                                                     | EnvironmentID is the Managed Agents self*hosted environment whose<br />work queue these workers drain (an `env*...` id).                                                                                         |         |                       |
+| `environmentKeySecret` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#secretkeyselector-v1-core)_ | EnvironmentKeySecret holds ANTHROPIC_ENVIRONMENT_KEY — the worker's<br />auth token, mounted into every worker pod.                                                                                              |         |                       |
+| `apiKeySecret` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#secretkeyselector-v1-core)_         | APIKeySecret holds the organization API key. It is consumed only by<br />the work-queue autoscaler, never mounted into worker pods — Anthropic<br />warns the org key must not be reachable by agent tool calls. |         | Optional: \{\} <br /> |
+| `image` _string_                                                                                                                             | Image overrides the sandbox worker image. Defaults to the platform's<br />published sandbox-worker image when empty.                                                                                             |         | Optional: \{\} <br /> |
+| `scaling` _[SandboxScalingSpec](#sandboxscalingspec)_                                                                                        | Scaling bounds the worker count.                                                                                                                                                                                 |         | Optional: \{\} <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#resourcerequirements-v1-core)_      | Resources are the per-worker-pod resource requests and limits.                                                                                                                                                   |         | Optional: \{\} <br /> |
+
+#### SandboxPoolStatus
+
+SandboxPoolStatus reports the pool's reconciled state.
+
+_Appears in:_
+
+- [SandboxPool](#sandboxpool)
+
+| Field                                                                                                                    | Description                                                  | Default | Validation            |
+| ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ | ------- | --------------------- |
+| `phase` _string_                                                                                                         | Phase: Pending, Ready, Suspended, Failed.                    |         | Optional: \{\} <br /> |
+| `readyWorkers` _integer_                                                                                                 | ReadyWorkers is the worker Deployment's ready replica count. |         | Optional: \{\} <br /> |
+| `observedGeneration` _integer_                                                                                           | ObservedGeneration is the last spec.generation reconciled.   |         | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |                                                              |         | Optional: \{\} <br /> |
+
+#### SandboxScalingSpec
+
+SandboxScalingSpec bounds the worker Deployment's replica count.
+
+_Appears in:_
+
+- [SandboxPoolSpec](#sandboxpoolspec)
+
+| Field                        | Description                                                                                                                                 | Default | Validation                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------- | -------------------------------------- |
+| `minReplicas` _integer_      | MinReplicas is the worker-count floor. A pointer so 0 (scale to zero,<br />for the autoscaled path) is distinguishable from "field absent". | 1       | Minimum: 0 <br />Optional: \{\} <br /> |
+| `maxReplicas` _integer_      | MaxReplicas is the worker-count ceiling for the autoscaler.                                                                                 | 10      | Minimum: 1 <br />Optional: \{\} <br /> |
+| `queueDepthTarget` _integer_ | QueueDepthTarget is the work-queue depth per worker the autoscaler<br />aims for before adding workers.                                     | 5       | Minimum: 1 <br />Optional: \{\} <br /> |
 
 #### ScalingSpec
 
