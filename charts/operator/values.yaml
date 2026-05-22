@@ -36,6 +36,8 @@ reconcilers:
     concurrent: 3
   runtime:
     concurrent: 5
+  sandbox:
+    concurrent: 3
   budget:
     concurrent: 1
     requeueInterval: 1h
