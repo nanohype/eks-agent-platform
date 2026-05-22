@@ -9,6 +9,7 @@ rules:
     resources:
       - limitranges
       - namespaces
+      - pods
       - resourcequotas
       - serviceaccounts
       - services
@@ -53,6 +54,7 @@ rules:
       - agents.stxkxs.io
     resources:
       - agentfleets/finalizers
+      - agentsandboxes/finalizers
       - evalsuites/finalizers
       - modelgateways/finalizers
       - platforms/finalizers
@@ -63,6 +65,7 @@ rules:
       - agents.stxkxs.io
     resources:
       - agentfleets/status
+      - agentsandboxes/status
       - budgetpolicies/status
       - evalsuites/status
       - modelgateways/status
@@ -73,6 +76,17 @@ rules:
       - get
       - patch
       - update
+  - apiGroups:
+      - agents.stxkxs.io
+    resources:
+      - agentsandboxes
+    verbs:
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
   - apiGroups:
       - apps
     resources:

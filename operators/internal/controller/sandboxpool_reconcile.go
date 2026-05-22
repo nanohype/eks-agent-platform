@@ -573,11 +573,11 @@ func (r *SandboxPoolReconciler) applySandboxPoolStatus(ctx context.Context, pool
 		// healthy — condition stays True
 	case phaseSuspended:
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = "PlatformSuspended"
+		cond.Reason = reasonPlatformSuspended
 		cond.Message = "Platform kill-switch fired; sandbox workers torn down"
 	default:
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = "Pending"
+		cond.Reason = phasePending
 		cond.Message = "waiting on Platform readiness"
 	}
 	upsertCondition(&pool.Status.Conditions, cond)
