@@ -11,6 +11,7 @@ rules:
       - namespaces
       - resourcequotas
       - serviceaccounts
+      - services
     verbs:
       - create
       - delete

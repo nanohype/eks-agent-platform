@@ -36,6 +36,7 @@ spec:
             - --gateway-workers={{ .Values.reconcilers.gateway.concurrent }}
             - --runtime-workers={{ .Values.reconcilers.runtime.concurrent }}
             - --sandbox-workers={{ .Values.reconcilers.sandbox.concurrent }}
+            - --shim-image={{ include "operator.image" . }}
             - --budget-workers={{ .Values.reconcilers.budget.concurrent }}
             - --eval-workers={{ .Values.reconcilers.eval.concurrent }}
             - --environment={{ .Values.config.environment }}

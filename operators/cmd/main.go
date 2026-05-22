@@ -56,6 +56,11 @@ func main() {
 	var tenantWorkers int
 	var tenantRequeueInterval time.Duration
 
+	// shimImage is the operator image; the SandboxPool reconciler runs it
+	// as the KEDA metrics bridge (the /metrics-shim binary) for queue-depth
+	// autoscaling. Empty disables autoscaling.
+	var shimImage string
+
 	// AWS substrate config — these resolve to operatorconfig.Config and the
 	// AWS SDK clients at startup. environment + region come from flags or
 	// AGENTS_ENVIRONMENT / AGENTS_REGION env vars; everything else flows
@@ -79,6 +84,7 @@ func main() {
 	flag.IntVar(&evalWorkers, "eval-workers", 2, "MaxConcurrentReconciles for the EvalSuite reconciler.")
 	flag.IntVar(&tenantWorkers, "tenant-workers", 1, "MaxConcurrentReconciles for the Tenant reconciler.")
 	flag.DurationVar(&tenantRequeueInterval, "tenant-requeue-interval", 5*time.Minute, "How often the Tenant reconciler re-aggregates owned Platforms.")
+	flag.StringVar(&shimImage, "shim-image", os.Getenv("AGENTS_SHIM_IMAGE"), "Operator image used for the SandboxPool KEDA metrics bridge. Empty disables queue-depth autoscaling.")
 	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (dev/staging/production). Drives SSM-config path.")
 	flag.StringVar(&region, "region", os.Getenv("AGENTS_REGION"), "AWS region. Defaults to credential-chain region if empty.")
 	flag.StringVar(&oidcProviderARN, "oidc-provider-arn", os.Getenv("AGENTS_OIDC_PROVIDER_ARN"), "EKS cluster OIDC provider ARN; used in tenant IRSA trust policies.")
@@ -184,6 +190,7 @@ func main() {
 		Client:      mgr.GetClient(),
 		Scheme:      mgr.GetScheme(),
 		Concurrency: sandboxWorkers,
+		ShimImage:   shimImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "SandboxPool")
 		os.Exit(1)
