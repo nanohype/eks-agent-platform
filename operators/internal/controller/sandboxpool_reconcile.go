@@ -31,16 +31,6 @@ const sandboxPoolFinalizer = "agents.stxkxs.io/sandboxpool-finalizer"
 // defaultSandboxWorkerImage is used when SandboxPool.spec.image is empty.
 const defaultSandboxWorkerImage = "ghcr.io/nanohype/eks-agent-platform/sandbox-worker:latest"
 
-// sandboxNodeLabel keys both the label and the NoSchedule taint on the
-// dedicated Karpenter sandbox node pool (eks-gitops karpenter-resources).
-// Worker pods carry the matching nodeSelector + toleration.
-const sandboxNodeLabel = "agents.stxkxs.io/sandbox"
-
-// metadataServiceCIDR is the cloud instance-metadata endpoint. Agent tool
-// calls must never reach it, so the worker NetworkPolicy excludes it from
-// the egress allow range.
-const metadataServiceCIDR = "169.254.169.254/32"
-
 // metricsShimPort is the port the metrics-shim binary listens on; the KEDA
 // bridge Deployment, Service, and NetworkPolicy all reference it.
 const metricsShimPort = 8080
@@ -149,17 +139,9 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 			Spec: corev1.PodSpec{
 				AutomountServiceAccountToken: ptrTo(false),
 				RuntimeClassName:             pool.Spec.RuntimeClassName,
-				NodeSelector:                 map[string]string{sandboxNodeLabel: "true"},
-				Tolerations: []corev1.Toleration{{
-					Key:      sandboxNodeLabel,
-					Operator: corev1.TolerationOpEqual,
-					Value:    "true",
-					Effect:   corev1.TaintEffectNoSchedule,
-				}},
-				SecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot:   ptrTo(true),
-					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				},
+				NodeSelector:                 sandboxNodeSelector(),
+				Tolerations:                  sandboxTolerations(),
+				SecurityContext:              restrictedPodSecurityContext(),
 				Containers: []corev1.Container{{
 					Name:  "worker",
 					Image: workerImage(pool),
@@ -169,12 +151,9 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 							SecretKeyRef: &envKeyRef,
 						}},
 					},
-					Resources: pool.Spec.Resources,
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: ptrTo(false),
-						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-					},
-					VolumeMounts: []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+					Resources:       pool.Spec.Resources,
+					SecurityContext: restrictedContainerSecurityContext(),
+					VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
 				}},
 				Volumes: []corev1.Volume{{
 					Name:         "workspace",
@@ -200,10 +179,6 @@ func (r *SandboxPoolReconciler) ensureSandboxNetworkPolicy(ctx context.Context, 
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: sandboxResourceName(pool), Namespace: PlatformNamespace(p)},
 	}
-	tcp := corev1.ProtocolTCP
-	udp := corev1.ProtocolUDP
-	dnsPort := intstr.FromInt(53)
-	httpsPort := intstr.FromInt(443)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = sandboxPodLabels(pool, p)
 		np.Spec = networkingv1.NetworkPolicySpec{
@@ -211,21 +186,7 @@ func (r *SandboxPoolReconciler) ensureSandboxNetworkPolicy(ctx context.Context, 
 				MatchLabels: map[string]string{"eks-agent-platform/sandboxpool": pool.Name},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress, networkingv1.PolicyTypeIngress},
-			Egress: []networkingv1.NetworkPolicyEgressRule{
-				{
-					To: []networkingv1.NetworkPolicyPeer{{
-						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
-						PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
-					}},
-					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dnsPort}, {Protocol: &tcp, Port: &dnsPort}},
-				},
-				{
-					To: []networkingv1.NetworkPolicyPeer{{
-						IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{metadataServiceCIDR}},
-					}},
-					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &httpsPort}},
-				},
-			},
+			Egress:      sandboxEgressRules(),
 			// Ingress nil with PolicyTypes including Ingress = deny-all.
 			Ingress: nil,
 		}
@@ -306,10 +267,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
 				AutomountServiceAccountToken: ptrTo(false),
-				SecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot:   ptrTo(true),
-					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				},
+				SecurityContext:              restrictedPodSecurityContext(),
 				Containers: []corev1.Container{{
 					Name:    "metrics-shim",
 					Image:   r.ShimImage,
@@ -347,10 +305,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 							corev1.ResourceMemory: resource.MustParse("64Mi"),
 						},
 					},
-					SecurityContext: &corev1.SecurityContext{
-						AllowPrivilegeEscalation: ptrTo(false),
-						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-					},
+					SecurityContext: restrictedContainerSecurityContext(),
 				}},
 			},
 		}
@@ -396,9 +351,6 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeNetworkPolicy(ctx context.Con
 		ObjectMeta: metav1.ObjectMeta{Name: metricsBridgeName(pool), Namespace: PlatformNamespace(p)},
 	}
 	tcp := corev1.ProtocolTCP
-	udp := corev1.ProtocolUDP
-	dnsPort := intstr.FromInt(53)
-	httpsPort := intstr.FromInt(443)
 	shimPort := intstr.FromInt(metricsShimPort)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = metricsBridgeLabels(pool, p)
@@ -413,21 +365,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeNetworkPolicy(ctx context.Con
 				}},
 				Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &shimPort}},
 			}},
-			Egress: []networkingv1.NetworkPolicyEgressRule{
-				{
-					To: []networkingv1.NetworkPolicyPeer{{
-						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
-						PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
-					}},
-					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dnsPort}, {Protocol: &tcp, Port: &dnsPort}},
-				},
-				{
-					To: []networkingv1.NetworkPolicyPeer{{
-						IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{metadataServiceCIDR}},
-					}},
-					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &httpsPort}},
-				},
-			},
+			Egress: sandboxEgressRules(),
 		}
 		return nil
 	})
