@@ -30,6 +30,10 @@ type SandboxPoolReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
 	Concurrency int
+	// ShimImage is the operator image run as the KEDA metrics bridge for
+	// queue-depth autoscaling. Empty disables autoscaling — workers run at
+	// a static replica count.
+	ShimImage string
 }
 
 // +kubebuilder:rbac:groups=agents.stxkxs.io,resources=sandboxpools,verbs=get;list;watch;update;patch
@@ -37,6 +41,8 @@ type SandboxPoolReconciler struct {
 // +kubebuilder:rbac:groups=agents.stxkxs.io,resources=sandboxpools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives a SandboxPool CR toward its desired state.
 func (r *SandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
