@@ -148,6 +148,7 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
 				AutomountServiceAccountToken: ptrTo(false),
+				RuntimeClassName:             pool.Spec.RuntimeClassName,
 				NodeSelector:                 map[string]string{sandboxNodeLabel: "true"},
 				Tolerations: []corev1.Toleration{{
 					Key:      sandboxNodeLabel,
