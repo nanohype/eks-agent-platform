@@ -4,20 +4,22 @@ You're an AI client (or the author of one) about to declare a tenant on an EKS c
 
 ## What this repo gives you
 
-A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, IRSA, KMS grants, network policies, and runtime resources. Six CRDs under `agents.stxkxs.io/v1alpha1`:
+A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, IRSA, KMS grants, network policies, and runtime resources. Eight CRDs under `agents.stxkxs.io/v1alpha1`:
 
-| CRD            | What it owns                                                                                                                                               |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Tenant`       | Cluster-scoped aggregate of a team's Platforms. Rolls up readiness, spend, and suspension state                                                            |
-| `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IRSA role + KMS grant + S3 bucket policy          |
-| `ModelGateway` | agentgateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                             |
-| `AgentFleet`   | kagent Agent + ModelConfig per agent, KEDA ScaledObject, per-fleet NetworkPolicy, tenant ServiceAccount with IRSA, optional DRA AcceleratorClaim           |
-| `BudgetPolicy` | Hourly Athena rollup of CUR + CloudWatch in-flight estimate. Writes spend / percent / conditions to status. Publishes BudgetBreach to EventBridge at ≥120% |
-| `EvalSuite`    | Argo CronWorkflow per suite. Gates Argo Rollouts via AnalysisTemplate on `status.lastScore`                                                                |
+| CRD            | What it owns                                                                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Tenant`       | Cluster-scoped aggregate of a team's Platforms. Rolls up readiness, spend, and suspension state                                                                               |
+| `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IRSA role + KMS grant + S3 bucket policy                             |
+| `ModelGateway` | agentgateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                                                |
+| `AgentFleet`   | kagent Agent + ModelConfig per agent, KEDA ScaledObject, per-fleet NetworkPolicy, tenant ServiceAccount with IRSA, optional DRA AcceleratorClaim                              |
+| `SandboxPool`  | Pull-based pool of always-on Managed Agents sandbox workers — a worker Deployment, default-deny NetworkPolicy, and a KEDA-autoscaled metrics bridge keyed on work-queue depth |
+| `AgentSandbox` | Single-use hardened pod for one agent role-session — push-dispatched, Platform-gated, default-deny networked, garbage-collected after a TTL                                   |
+| `BudgetPolicy` | Hourly Athena rollup of CUR + CloudWatch in-flight estimate. Writes spend / percent / conditions to status. Publishes BudgetBreach to EventBridge at ≥120%                    |
+| `EvalSuite`    | Argo CronWorkflow per suite. Gates Argo Rollouts via AnalysisTemplate on `status.lastScore`                                                                                   |
 
 Plus:
 
-- **`operators/`** — Go operator binary registering six reconcilers (one binary, six leader-election leases)
+- **`operators/`** — Go operator binary registering eight reconcilers (one binary, one leader-election lease)
 - **`charts/`** — Helm charts for installing the operator + the `tenant` chart consumers use
 - **`gitops/`** — ApplicationSets the gitops repos reference to install the operator
 - **`examples/`** — minimal end-to-end CR sets (Tenant + Platform + ModelGateway + AgentFleet + BudgetPolicy) you can copy

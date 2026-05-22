@@ -89,15 +89,16 @@ sequenceDiagram
 
 ## Reconciler responsibilities
 
-| Reconciler | Watches                                               | Emits / mutates                                                                                                 | Re-queue cadence                                                 |
-| ---------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `tenant`   | Tenant + Platform + BudgetPolicy events (via Watches) | Tenant.status aggregate                                                                                         | 5m fallback                                                      |
-| `platform` | Platform                                              | tenant ns, quotas, NetworkPolicy, AppProject, IAM role, KMS grant, S3 bucket policy statements                  | 60s when IAM wired (drift detection for kill-switch tag)         |
-| `gateway`  | ModelGateway                                          | agentgateway Route per ModelRoute                                                                               | 30s when Pending (waiting on agentgateway CRDs / Platform Ready) |
-| `runtime`  | AgentFleet                                            | tenant SA, fleet NetworkPolicy, kagent Agent + ModelConfig per agent, KEDA ScaledObject + TriggerAuthentication | 30s when Pending                                                 |
-| `sandbox`  | SandboxPool                                           | worker Deployment, default-deny NetworkPolicy, metrics bridge + KEDA ScaledObject (when `apiKeySecret` set)     | 30s when Pending                                                 |
-| `budget`   | BudgetPolicy                                          | status.{currentSpend, percentOfBudget, lastReconciled}, EventBridge breach event at 120%                        | configurable (1h prod, 5m dev)                                   |
-| `eval`     | EvalSuite                                             | Argo Workflow / CronWorkflow with workflowTemplateRef=eval-runner                                               | 30s when Pending                                                 |
+| Reconciler     | Watches                                               | Emits / mutates                                                                                                 | Re-queue cadence                                                 |
+| -------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `tenant`       | Tenant + Platform + BudgetPolicy events (via Watches) | Tenant.status aggregate                                                                                         | 5m fallback                                                      |
+| `platform`     | Platform                                              | tenant ns, quotas, NetworkPolicy, AppProject, IAM role, KMS grant, S3 bucket policy statements                  | 60s when IAM wired (drift detection for kill-switch tag)         |
+| `gateway`      | ModelGateway                                          | agentgateway Route per ModelRoute                                                                               | 30s when Pending (waiting on agentgateway CRDs / Platform Ready) |
+| `runtime`      | AgentFleet                                            | tenant SA, fleet NetworkPolicy, kagent Agent + ModelConfig per agent, KEDA ScaledObject + TriggerAuthentication | 30s when Pending                                                 |
+| `sandbox`      | SandboxPool                                           | worker Deployment, default-deny NetworkPolicy, metrics bridge + KEDA ScaledObject (when `apiKeySecret` set)     | 30s when Pending                                                 |
+| `agentsandbox` | AgentSandbox                                          | hardened single-use session Pod + default-deny NetworkPolicy in the tenant namespace; TTL garbage-collection    | 15s while Pending/Running                                        |
+| `budget`       | BudgetPolicy                                          | status.{currentSpend, percentOfBudget, lastReconciled}, EventBridge breach event at 120%                        | configurable (1h prod, 5m dev)                                   |
+| `eval`         | EvalSuite                                             | Argo Workflow / CronWorkflow with workflowTemplateRef=eval-runner                                               | 30s when Pending                                                 |
 
 ## Where state lives
 
