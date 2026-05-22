@@ -451,6 +451,7 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	return phaseReady, safeAgentCount(fleet), nil
 }
 
+//nolint:dupl // status writeback mirrors the other reconcilers by design
 func (r *AgentFleetReconciler) applyFleetStatus(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, phase string, readyAgents int32) error {
 	fleet.Status.Phase = phase
 	fleet.Status.ReadyAgents = readyAgents

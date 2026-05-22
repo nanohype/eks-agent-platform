@@ -35,6 +35,7 @@ spec:
             - --platform-workers={{ .Values.reconcilers.platform.concurrent }}
             - --gateway-workers={{ .Values.reconcilers.gateway.concurrent }}
             - --runtime-workers={{ .Values.reconcilers.runtime.concurrent }}
+            - --sandbox-workers={{ .Values.reconcilers.sandbox.concurrent }}
             - --budget-workers={{ .Values.reconcilers.budget.concurrent }}
             - --eval-workers={{ .Values.reconcilers.eval.concurrent }}
             - --environment={{ .Values.config.environment }}

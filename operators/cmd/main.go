@@ -50,6 +50,7 @@ func main() {
 	var platformWorkers int
 	var gatewayWorkers int
 	var runtimeWorkers int
+	var sandboxWorkers int
 	var budgetWorkers int
 	var evalWorkers int
 	var tenantWorkers int
@@ -73,6 +74,7 @@ func main() {
 	flag.IntVar(&platformWorkers, "platform-workers", 3, "MaxConcurrentReconciles for the Platform reconciler.")
 	flag.IntVar(&gatewayWorkers, "gateway-workers", 3, "MaxConcurrentReconciles for the ModelGateway reconciler.")
 	flag.IntVar(&runtimeWorkers, "runtime-workers", 5, "MaxConcurrentReconciles for the AgentFleet (runtime) reconciler.")
+	flag.IntVar(&sandboxWorkers, "sandbox-workers", 3, "MaxConcurrentReconciles for the SandboxPool reconciler.")
 	flag.IntVar(&budgetWorkers, "budget-workers", 1, "MaxConcurrentReconciles for the Budget reconciler.")
 	flag.IntVar(&evalWorkers, "eval-workers", 2, "MaxConcurrentReconciles for the EvalSuite reconciler.")
 	flag.IntVar(&tenantWorkers, "tenant-workers", 1, "MaxConcurrentReconciles for the Tenant reconciler.")
@@ -176,6 +178,14 @@ func main() {
 		Concurrency: runtimeWorkers,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "AgentFleet")
+		os.Exit(1)
+	}
+	if err := (&controller.SandboxPoolReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		Concurrency: sandboxWorkers,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to register reconciler", "controller", "SandboxPool")
 		os.Exit(1)
 	}
 	budgetReconciler := &controller.BudgetReconciler{

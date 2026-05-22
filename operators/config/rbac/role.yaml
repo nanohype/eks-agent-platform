@@ -40,6 +40,7 @@ rules:
       - evalsuites
       - modelgateways
       - platforms
+      - sandboxpools
       - tenants
     verbs:
       - get
@@ -54,6 +55,7 @@ rules:
       - evalsuites/finalizers
       - modelgateways/finalizers
       - platforms/finalizers
+      - sandboxpools/finalizers
     verbs:
       - update
   - apiGroups:
@@ -64,6 +66,7 @@ rules:
       - evalsuites/status
       - modelgateways/status
       - platforms/status
+      - sandboxpools/status
       - tenants/status
     verbs:
       - get
