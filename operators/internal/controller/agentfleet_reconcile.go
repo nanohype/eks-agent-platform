@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
@@ -54,16 +55,17 @@ func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agent
 }
 
 // ensureTenantServiceAccount creates the IRSA-annotated ServiceAccount
-// every fleet pod assumes. SA name + namespace match the trust policy in
-// platform_iam.go: system:serviceaccount:tenants-<platform>:tenant-runtime.
-func (r *AgentFleetReconciler) ensureTenantServiceAccount(ctx context.Context, p *agentsv1alpha1.Platform) error {
+// tenant pods assume — both AgentFleet agent pods and AgentSandbox session
+// pods. SA name + namespace match the trust policy in platform_iam.go:
+// system:serviceaccount:tenants-<platform>:tenant-runtime.
+func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *agentsv1alpha1.Platform) error {
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tenantSAName,
 			Namespace: PlatformNamespace(p),
 		},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, c, sa, func() error {
 		if sa.Annotations == nil {
 			sa.Annotations = map[string]string{}
 		}
@@ -428,7 +430,7 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 		return phasePending, 0, nil
 	}
 
-	if err := r.ensureTenantServiceAccount(ctx, platform); err != nil {
+	if err := ensureTenantServiceAccount(ctx, r.Client, platform); err != nil {
 		return "", 0, fmt.Errorf("ensure ServiceAccount: %w", err)
 	}
 	if err := r.ensureFleetNetworkPolicy(ctx, fleet, platform); err != nil {
@@ -469,11 +471,11 @@ func (r *AgentFleetReconciler) applyFleetStatus(ctx context.Context, fleet *agen
 		// healthy — condition stays True
 	case phaseSuspended:
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = "PlatformSuspended"
+		cond.Reason = reasonPlatformSuspended
 		cond.Message = "Platform kill-switch fired; fleet scaled to zero"
 	default:
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = "Pending"
+		cond.Reason = phasePending
 		cond.Message = "waiting on Platform readiness or kagent CRDs"
 	}
 	upsertCondition(&fleet.Status.Conditions, cond)

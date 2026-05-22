@@ -38,6 +38,8 @@ reconcilers:
     concurrent: 5
   sandbox:
     concurrent: 3
+  agentsandbox:
+    concurrent: 5
   budget:
     concurrent: 1
     requeueInterval: 1h

@@ -11,6 +11,7 @@ Package v1alpha1 contains API Schema definitions for the agents v1alpha1 API gro
 ### Resource Types
 
 - [AgentFleet](#agentfleet)
+- [AgentSandbox](#agentsandbox)
 - [BudgetPolicy](#budgetpolicy)
 - [EvalSuite](#evalsuite)
 - [ModelGateway](#modelgateway)
@@ -64,6 +65,62 @@ _Appears in:_
 | `readyAgents` _integer_                                                                                                  | ReadyAgents counts agents whose downstream Deployment is ready. |         | Optional: \{\} <br /> |
 | `observedGeneration` _integer_                                                                                           | ObservedGeneration is the last spec.generation reconciled.      |         | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |                                                                 |         | Optional: \{\} <br /> |
+
+#### AgentSandbox
+
+AgentSandbox is a Platform-scoped, single-use isolated pod for one agent
+role-session. It shares SandboxPool's hardening — Pod Security
+"restricted", default-deny networked, on the dedicated tainted node pool —
+but is push-dispatched (one session, run-once) rather than a pull-based
+pool of always-on workers.
+
+| Field                                                                                                              | Description                                                     | Default | Validation |
+| ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | ------- | ---------- |
+| `apiVersion` _string_                                                                                              | `agents.stxkxs.io/v1alpha1`                                     |         |            |
+| `kind` _string_                                                                                                    | `AgentSandbox`                                                  |         |            |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |         |            |
+| `spec` _[AgentSandboxSpec](#agentsandboxspec)_                                                                     |                                                                 |         |            |
+| `status` _[AgentSandboxStatus](#agentsandboxstatus)_                                                               |                                                                 |         |            |
+
+#### AgentSandboxSpec
+
+AgentSandboxSpec declares one ephemeral, hardened pod that runs a single
+agent role-session — fab's `sdk` role-loop dispatched per session. The
+reconciler builds the pod on the dedicated, tainted sandbox node pool,
+locked down by a default-deny NetworkPolicy, under the Platform's tenant
+IRSA ServiceAccount.
+
+_Appears in:_
+
+- [AgentSandbox](#agentsandbox)
+
+| Field                                                                                                                                   | Description                                                                                                                                                                                                                                             | Default | Validation                             |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | -------------------------------------- |
+| `platformRef` _[LocalRef](#localref)_                                                                                                   | PlatformRef is the owning Platform. The session pod runs in that<br />Platform's tenant namespace and the sandbox gates on Platform<br />readiness.                                                                                                     |         |                                        |
+| `image` _string_                                                                                                                        | Image is the container image the session pod runs.                                                                                                                                                                                                      |         |                                        |
+| `command` _string array_                                                                                                                | Command overrides the image entrypoint.                                                                                                                                                                                                                 |         | Optional: \{\} <br />                  |
+| `args` _string array_                                                                                                                   | Args are the container arguments.                                                                                                                                                                                                                       |         | Optional: \{\} <br />                  |
+| `env` _[EnvVar](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#envvar-v1-core) array_                             | Env is the session pod's environment. The dispatcher (fab) passes the<br />role, the role message, and any backend config through here.                                                                                                                 |         | Optional: \{\} <br />                  |
+| `runtimeClassName` _string_                                                                                                             | RuntimeClassName selects a Kubernetes RuntimeClass for the session<br />pod — "gvisor" or "kata" for kernel-level isolation of the untrusted<br />agent code. The named RuntimeClass must already exist. Empty uses the<br />cluster's default runtime. |         | Optional: \{\} <br />                  |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#resourcerequirements-v1-core)_ | Resources are the session pod's resource requests and limits.                                                                                                                                                                                           |         | Optional: \{\} <br />                  |
+| `ttlSecondsAfterFinished` _integer_                                                                                                     | TTLSecondsAfterFinished is how long the AgentSandbox is kept after its<br />session pod terminates before the operator garbage-collects it.                                                                                                             | 3600    | Minimum: 0 <br />Optional: \{\} <br /> |
+
+#### AgentSandboxStatus
+
+AgentSandboxStatus reports the sandbox's reconciled state.
+
+_Appears in:_
+
+- [AgentSandbox](#agentsandbox)
+
+| Field                                                                                                                    | Description                                                                                               | Default | Validation            |
+| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | ------- | --------------------- |
+| `phase` _string_                                                                                                         | Phase: Pending, Running, Succeeded, Failed, Suspended.                                                    |         | Optional: \{\} <br /> |
+| `podName` _string_                                                                                                       | PodName is the session pod's name in the tenant namespace.                                                |         | Optional: \{\} <br /> |
+| `podPhase` _string_                                                                                                      | PodPhase mirrors the session pod's status.phase.                                                          |         | Optional: \{\} <br /> |
+| `completedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_                | CompletedAt is when the session pod first reached a terminal phase —<br />the start of the TTL countdown. |         | Optional: \{\} <br /> |
+| `observedGeneration` _integer_                                                                                           | ObservedGeneration is the last spec.generation reconciled.                                                |         | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |                                                                                                           |         | Optional: \{\} <br /> |
 
 #### AgentSpec
 
@@ -261,6 +318,7 @@ LocalRef references a CR by name in the same namespace.
 _Appears in:_
 
 - [AgentFleetSpec](#agentfleetspec)
+- [AgentSandboxSpec](#agentsandboxspec)
 - [BudgetPolicySpec](#budgetpolicyspec)
 - [ComputeSpec](#computespec)
 - [EvalSuiteSpec](#evalsuitespec)
