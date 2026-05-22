@@ -46,6 +46,13 @@ type SandboxPoolSpec struct {
 	// Resources are the per-worker-pod resource requests and limits.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// RuntimeClassName selects a Kubernetes RuntimeClass for the worker
+	// pods — typically "gvisor" or "kata" for kernel-level isolation of
+	// the untrusted agent tool code. The named RuntimeClass must already
+	// exist in the cluster. Empty uses the cluster's default runtime.
+	// +optional
+	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
 }
 
 // SandboxScalingSpec bounds the worker Deployment's replica count.
