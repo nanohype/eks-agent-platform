@@ -14,6 +14,7 @@ flowchart TD
       Budget["<b>BudgetPolicy</b><br/>monthlyUsd=1500"]
       Gateway["<b>ModelGateway</b><br/>routes: triage, escalation"]
       Fleet["<b>AgentFleet</b><br/>scaling: SQS depth"]
+      Sandbox["<b>SandboxPool</b><br/>self-hosted sandbox"]
       Eval["<b>EvalSuite</b><br/>schedule: 0 6 * * *"]
     end
 
@@ -42,6 +43,7 @@ flowchart TD
   Gateway -- "emits per route" --> Route
   Fleet -- "spec.platformRef" --> Platform
   Fleet -- "emits per agent" --> AgentCR
+  Sandbox -- "spec.platformRef" --> Platform
   AgentCR --> Pods
   Eval -- "spec.platformRef + agentFleetRef" --> Fleet
   Eval -- "emits CronWorkflow ref" --> WT
@@ -93,6 +95,7 @@ sequenceDiagram
 | `platform` | Platform                                              | tenant ns, quotas, NetworkPolicy, AppProject, IAM role, KMS grant, S3 bucket policy statements                  | 60s when IAM wired (drift detection for kill-switch tag)         |
 | `gateway`  | ModelGateway                                          | agentgateway Route per ModelRoute                                                                               | 30s when Pending (waiting on agentgateway CRDs / Platform Ready) |
 | `runtime`  | AgentFleet                                            | tenant SA, fleet NetworkPolicy, kagent Agent + ModelConfig per agent, KEDA ScaledObject + TriggerAuthentication | 30s when Pending                                                 |
+| `sandbox`  | SandboxPool                                           | worker Deployment, default-deny NetworkPolicy, metrics bridge + KEDA ScaledObject (when `apiKeySecret` set)     | 30s when Pending                                                 |
 | `budget`   | BudgetPolicy                                          | status.{currentSpend, percentOfBudget, lastReconciled}, EventBridge breach event at 120%                        | configurable (1h prod, 5m dev)                                   |
 | `eval`     | EvalSuite                                             | Argo Workflow / CronWorkflow with workflowTemplateRef=eval-runner                                               | 30s when Pending                                                 |
 

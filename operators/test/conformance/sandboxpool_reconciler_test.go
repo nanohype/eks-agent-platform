@@ -109,12 +109,14 @@ func TestSandboxPoolReconciler_ReadyWhenPlatformReady(t *testing.T) {
 	ensureNs(ctx, t)
 	p := readySandboxPlatform(ctx, t)
 
+	runtimeClass := "gvisor"
 	pool := &agentsv1alpha1.SandboxPool{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "pool"), Namespace: testNs},
 		Spec: agentsv1alpha1.SandboxPoolSpec{
 			PlatformRef:          agentsv1alpha1.LocalRef{Name: p.Name},
 			EnvironmentID:        "env_test",
 			EnvironmentKeySecret: sandboxEnvKeyRef(),
+			RuntimeClassName:     &runtimeClass,
 		},
 	}
 	mustCreate(ctx, t, pool)
@@ -132,6 +134,10 @@ func TestSandboxPoolReconciler_ReadyWhenPlatformReady(t *testing.T) {
 	depKey := types.NamespacedName{Namespace: p.Status.Namespace, Name: "sandbox-" + pool.Name}
 	if err := k8sClient.Get(ctx, depKey, &dep); err != nil {
 		t.Fatalf("worker Deployment not created: %v", err)
+	}
+	// The runtimeClassName hardening dial must reach the worker pod spec.
+	if rc := dep.Spec.Template.Spec.RuntimeClassName; rc == nil || *rc != runtimeClass {
+		t.Errorf("worker RuntimeClassName: got %v want %q", rc, runtimeClass)
 	}
 }
 
