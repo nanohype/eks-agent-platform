@@ -11,7 +11,13 @@ package controller
 const (
 	phasePending      = "Pending"
 	phaseProvisioning = "Provisioning"
+	phaseRunning      = "Running"
 	phaseReady        = "Ready"
+	phaseSucceeded    = "Succeeded"
 	phaseSuspended    = "Suspended"
 	phaseFailed       = "Failed"
 )
+
+// reasonPlatformSuspended is the status-condition reason set on tenant
+// workloads when the Platform kill-switch has fired.
+const reasonPlatformSuspended = "PlatformSuspended"
