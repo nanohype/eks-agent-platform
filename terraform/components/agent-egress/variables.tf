@@ -39,6 +39,12 @@ variable "enable_waf" {
   default     = false
 }
 
+variable "create_vpc_endpoints" {
+  description = "Create VPC interface + gateway endpoints. Set false when landing-zone already provisions them for this VPC (the typical case when running on top of lz-network with enable_vpc_endpoints = true)."
+  type        = bool
+  default     = true
+}
+
 variable "agentgateway_alb_arn" {
   description = "ALB ARN for the agentgateway public listener (only when enable_waf=true)"
   type        = string

@@ -1,10 +1,9 @@
-# production environment — replace REPLACE_* placeholders before apply
 include "root" {
   path = find_in_parent_folders("root.hcl")
 }
 
 terraform {
-  source = "${get_repo_root()}/terraform/components/kill-switch"
+  source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/kill-switch"
 }
 
 dependency "agent_iam" {
@@ -18,9 +17,11 @@ dependency "agent_iam" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
 }
 
+# Required inputs sourced from the orchestrator (tofui workspace
+# variables for the production deploy):
+#   - logs_kms_key_arn  (from lz-secrets)
 inputs = {
   tenant_iam_path            = dependency.agent_iam.outputs.tenant_iam_path
   tenant_baseline_policy_arn = dependency.agent_iam.outputs.tenant_baseline_policy_arn
   operator_role_arn          = dependency.agent_iam.outputs.operator_role_arn
-  logs_kms_key_arn           = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-logs"
 }

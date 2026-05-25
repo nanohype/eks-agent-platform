@@ -138,6 +138,37 @@ resource "aws_s3_bucket_lifecycle_configuration" "invocations" {
   }
 }
 
+# Bedrock's PutModelInvocationLoggingConfiguration validates that the
+# target bucket has a policy authorizing bedrock.amazonaws.com to write.
+# Without this policy the API call fails with
+# "ValidationException: Failed to validate permissions for bucket".
+# The aws:SourceAccount + aws:SourceArn conditions scope the trust to
+# Bedrock acting on behalf of this account/log-config only.
+resource "aws_s3_bucket_policy" "invocations" {
+  bucket = aws_s3_bucket.invocations.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowBedrockWriteInvocationLogs"
+        Effect    = "Allow"
+        Principal = { Service = "bedrock.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.invocations.arn}/*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "invocations" {
   name              = "/aws/bedrock/${local.prefix}/invocations"
   retention_in_days = var.log_retention_days
@@ -200,6 +231,11 @@ resource "aws_iam_role_policy" "bedrock_logging" {
 }
 
 resource "aws_bedrock_model_invocation_logging_configuration" "this" {
+  # Bedrock validates the bucket policy synchronously, so the policy must
+  # be in place before this resource is created. Without the explicit
+  # depends_on tofu races the two and validation can fail.
+  depends_on = [aws_s3_bucket_policy.invocations]
+
   logging_config {
     embedding_data_delivery_enabled = true
     image_data_delivery_enabled     = true

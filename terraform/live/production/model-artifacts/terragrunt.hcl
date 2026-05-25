@@ -1,13 +1,14 @@
-# production environment — replace REPLACE_* placeholders before apply
 include "root" {
   path = find_in_parent_folders("root.hcl")
 }
 
 terraform {
-  source = "${get_repo_root()}/terraform/components/model-artifacts"
+  source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/model-artifacts"
 }
 
+# Required inputs sourced from the orchestrator (tofui workspace
+# variables for the production deploy):
+#   - data_kms_key_arn  (from lz-secrets)
 inputs = {
-  data_kms_key_arn                     = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-data"
   lifecycle_noncurrent_expiration_days = 90
 }
