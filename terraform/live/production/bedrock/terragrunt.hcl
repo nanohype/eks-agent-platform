@@ -1,18 +1,15 @@
-# production environment — replace REPLACE_* placeholders before apply
 include "root" {
   path = find_in_parent_folders("root.hcl")
 }
 
 terraform {
-  source = "${get_repo_root()}/terraform/components/bedrock"
+  source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/bedrock"
 }
 
+# Required inputs sourced from the orchestrator (tofui workspace
+# variables for the production deploy):
+#   - logs_kms_key_arn  (from lz-secrets)
 inputs = {
-  # Wire to landing-zone outputs (SSM Parameter or remote state).
-  # Replace with `dependency "landing_zone_secrets"` block once landing-zone
-  # publishes a stable output contract for this environment.
-  logs_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-logs"
-
   log_retention_days = 365
   # COMPLIANCE mode in production: even root cannot shorten the retention
   # once an object is locked. GOVERNANCE allows a bypass with the

@@ -1,10 +1,9 @@
-# production environment — replace REPLACE_* placeholders before apply
 include "root" {
   path = find_in_parent_folders("root.hcl")
 }
 
 terraform {
-  source = "${get_repo_root()}/terraform/components/cost-pipeline"
+  source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/cost-pipeline"
 }
 
 dependency "agent_iam" {
@@ -26,10 +25,10 @@ dependency "bedrock" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
 }
 
+# Required inputs sourced from the orchestrator (tofui workspace
+# variables for the production deploy):
+#   - data_kms_key_arn, logs_kms_key_arn  (from lz-secrets)
 inputs = {
-  data_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-data"
-  logs_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-logs"
-
   operator_role_arn  = dependency.agent_iam.outputs.operator_role_arn
   operator_role_name = dependency.agent_iam.outputs.operator_role_name
 
