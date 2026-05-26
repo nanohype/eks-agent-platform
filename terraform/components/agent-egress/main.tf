@@ -52,7 +52,7 @@ resource "aws_vpc_security_group_ingress_rule" "from_cluster" {
 ################################################################################
 
 resource "aws_vpc_endpoint" "interface" {
-  for_each = toset(local.interface_services)
+  for_each = var.create_vpc_endpoints ? toset(local.interface_services) : toset([])
 
   vpc_id              = var.vpc_id
   service_name        = "com.amazonaws.${var.region}.${each.key}"
@@ -69,7 +69,7 @@ resource "aws_vpc_endpoint" "interface" {
 ################################################################################
 
 resource "aws_vpc_endpoint" "gateway" {
-  for_each = toset(local.gateway_services)
+  for_each = var.create_vpc_endpoints ? toset(local.gateway_services) : toset([])
 
   vpc_id            = var.vpc_id
   service_name      = "com.amazonaws.${var.region}.${each.key}"

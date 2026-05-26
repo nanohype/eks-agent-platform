@@ -176,11 +176,12 @@ resource "aws_cur_report_definition" "this" {
   compression                = "Parquet"
   additional_schema_elements = ["RESOURCES", "SPLIT_COST_ALLOCATION_DATA"]
   s3_bucket                  = aws_s3_bucket.cur.id
-  s3_prefix                  = "cur/"
-  s3_region                  = var.region
-  additional_artifacts       = ["ATHENA"]
-  refresh_closed_reports     = true
-  report_versioning          = "OVERWRITE_REPORT"
+  # AWS validation requires this NOT end with `/` or `.` — `^.+[^/|.]$`.
+  s3_prefix              = "cur"
+  s3_region              = var.region
+  additional_artifacts   = ["ATHENA"]
+  refresh_closed_reports = true
+  report_versioning      = "OVERWRITE_REPORT"
 
   depends_on = [aws_s3_bucket_policy.cur]
 }

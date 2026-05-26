@@ -1,10 +1,9 @@
-# production environment — replace REPLACE_* placeholders before apply
 include "root" {
   path = find_in_parent_folders("root.hcl")
 }
 
 terraform {
-  source = "${get_repo_root()}/terraform/components/agent-iam"
+  source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/agent-iam"
 }
 
 dependency "model_artifacts" {
@@ -16,11 +15,11 @@ dependency "model_artifacts" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
 }
 
+# Required inputs sourced from the orchestrator (tofui workspace
+# variables for the production deploy):
+#   - oidc_provider_arn, oidc_issuer  (from lz-cluster)
+#   - data_kms_key_arn                (from lz-secrets)
 inputs = {
-  oidc_provider_arn = "arn:aws:iam::REPLACE:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/REPLACE"
-  oidc_issuer       = "https://oidc.eks.us-west-2.amazonaws.com/id/REPLACE"
-  data_kms_key_arn  = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-data"
-
   artifacts_bucket_arn = dependency.model_artifacts.outputs.artifacts_bucket_arn
 
   operator_namespace       = "eks-agent-platform"

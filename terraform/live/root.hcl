@@ -29,22 +29,12 @@ provider "aws" {
 EOF
 }
 
-generate "backend" {
-  path      = "backend.tf"
-  if_exists = "overwrite_terragrunt"
-  contents  = <<EOF
-terraform {
-  backend "s3" {}
-}
-EOF
-}
-
 remote_state {
   backend = "s3"
 
   generate = {
-    path      = "backend_generated.tf"
-    if_exists = "skip"
+    path      = "backend.tf"
+    if_exists = "overwrite_terragrunt"
   }
 
   config = {
