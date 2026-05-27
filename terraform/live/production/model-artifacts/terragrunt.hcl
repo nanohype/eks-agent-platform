@@ -6,7 +6,7 @@ terraform {
   source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/model-artifacts"
 }
 
-# Required inputs sourced from the orchestrator (tofui workspace
+# Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
 #   - data_kms_key_arn  (from lz-secrets)
 inputs = {
