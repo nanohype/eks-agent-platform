@@ -6,7 +6,7 @@ terraform {
   source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/agent-egress"
 }
 
-# Required inputs sourced from the orchestrator (tofui workspace
+# Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
 #   - vpc_id, private_subnet_ids, route_table_ids  (from lz-network)
 #   - cluster_security_group_id                    (from lz-cluster)

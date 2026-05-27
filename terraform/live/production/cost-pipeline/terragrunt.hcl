@@ -25,7 +25,7 @@ dependency "bedrock" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
 }
 
-# Required inputs sourced from the orchestrator (tofui workspace
+# Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
 #   - data_kms_key_arn, logs_kms_key_arn  (from lz-secrets)
 inputs = {

@@ -6,7 +6,7 @@ terraform {
   source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/accelerator-pools"
 }
 
-# Required inputs sourced from the orchestrator (tofui workspace
+# Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
 #   - oidc_provider_arn, oidc_issuer  (from lz-cluster)
 #   - node_role_name                  (from lz-cluster.karpenter_node_role_name;

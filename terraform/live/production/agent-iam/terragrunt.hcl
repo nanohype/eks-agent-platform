@@ -15,7 +15,7 @@ dependency "model_artifacts" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
 }
 
-# Required inputs sourced from the orchestrator (tofui workspace
+# Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
 #   - oidc_provider_arn, oidc_issuer  (from lz-cluster)
 #   - data_kms_key_arn                (from lz-secrets)
