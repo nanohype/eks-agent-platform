@@ -10,9 +10,9 @@ locals {
   # parse time, so the backend bucket name needs it before any AWS API
   # is reachable. All other infrastructure identifiers (OIDC issuer,
   # VPC/subnet IDs, KMS key ARN, route tables, security group, Karpenter
-  # node-role name) come in as `TF_VAR_*` from the orchestrator (tofui
+  # node-role name) come in as `TF_VAR_*` from the orchestrator (portal
   # workspace variables for the production deploy). Leaves declare the
-  # variables in `variables.tf`; if a leaf is run outside tofui, set the
+  # variables in `variables.tf`; if a leaf is run outside portal, set the
   # corresponding TF_VAR_ in the shell.
   account_id = "351619759866"
 }

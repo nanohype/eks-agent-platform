@@ -17,7 +17,7 @@ dependency "agent_iam" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
 }
 
-# Required inputs sourced from the orchestrator (tofui workspace
+# Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
 #   - logs_kms_key_arn  (from lz-secrets)
 inputs = {
