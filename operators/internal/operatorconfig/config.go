@@ -62,6 +62,9 @@ type Config struct {
 	EvalRunnerNamespace      string
 	EvalRunnerServiceAccount string
 	EvalReportsBucket        string
+
+	// batch-runtime outputs
+	BatchServiceRoleARN string
 }
 
 // Load fetches every parameter under /eks-agent-platform/<environment>/
@@ -150,6 +153,8 @@ func (c *Config) assign(suffix, value string) {
 		c.EvalRunnerServiceAccount = value
 	case "eval-runtime/eval_reports_bucket":
 		c.EvalReportsBucket = value
+	case "batch-runtime/service_role_arn":
+		c.BatchServiceRoleARN = value
 	}
 }
 

@@ -158,6 +158,49 @@ resource "aws_iam_role_policy" "operator_bedrock_introspection" {
   })
 }
 
+# Bedrock batch — the operator's BatchJob reconciler submits + polls + stops
+# Bedrock batch model-invocation jobs, and passes the batch-runtime service
+# role as the job's RoleArn. PassRole is gated to bedrock.amazonaws.com and
+# scoped to the eks-agent-platform role path so the operator can only pass
+# roles minted for this platform.
+resource "aws_iam_role_policy" "operator_batch" {
+  name = "bedrock-batch"
+  role = aws_iam_role.operator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ManageBatchJobs"
+        Effect = "Allow"
+        Action = [
+          "bedrock:CreateModelInvocationJob",
+          "bedrock:GetModelInvocationJob",
+          "bedrock:StopModelInvocationJob",
+          "bedrock:ListModelInvocationJobs"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = var.allowed_regions
+          }
+        }
+      },
+      {
+        Sid      = "PassBatchServiceRole"
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
+        Resource = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/eks-agent-platform/*"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "bedrock.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
 ################################################################################
 # Tenant role template — the operator stamps these out per Platform CR.
 # We export the assume-role-policy template + the policy-template ARNs as SSM
