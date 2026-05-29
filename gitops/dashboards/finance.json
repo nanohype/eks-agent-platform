@@ -27,7 +27,7 @@
       "datasource": "athena-cur",
       "targets": [
         {
-          "rawSql": "SELECT line_item_usage_start_date AS time, resource_tags['aws:resourceTag/PlatformId'] AS platform, SUM(line_item_unblended_cost) AS cost FROM ${cost_database}.cur WHERE line_item_usage_start_date >= date_add('day', -30, current_date) GROUP BY 1, 2 ORDER BY 1"
+          "rawSql": "SELECT line_item_usage_start_date AS time, resource_tags_user_platformid AS platform, SUM(line_item_unblended_cost) AS cost FROM ${cost_database}.cur WHERE line_item_usage_start_date >= date_add('day', -30, current_date) GROUP BY 1, 2 ORDER BY 1"
         }
       ],
       "gridPos": { "h": 10, "w": 18, "x": 6, "y": 0 }
@@ -83,6 +83,70 @@
         }
       },
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Estimate vs CUR truth (daily, by platform)",
+      "description": "EstimatedInvocationCostUsd export overlaid on CUR-derived truth via invocation_cost_reconciliation. A persistent delta beyond a few percent suggests the Lambda pricing table has drifted from real Bedrock pricing. The estimate runs ahead of truth by the ~24h CUR lag.",
+      "datasource": "athena-cur",
+      "targets": [
+        {
+          "refId": "TRUTH",
+          "rawSql": "SELECT date_parse(day, '%Y-%m-%d') AS time, platform_id, cur_truth_usd AS cost FROM ${cost_database}.invocation_cost_reconciliation WHERE cur_truth_usd IS NOT NULL ORDER BY 1"
+        },
+        {
+          "refId": "ESTIMATE",
+          "rawSql": "SELECT date_parse(day, '%Y-%m-%d') AS time, platform_id, estimate_usd AS cost FROM ${cost_database}.invocation_cost_reconciliation ORDER BY 1"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 26 }
+    },
+    {
+      "type": "table",
+      "title": "Estimate drift vs CUR (reconciled days)",
+      "datasource": "athena-cur",
+      "targets": [
+        {
+          "rawSql": "SELECT platform_id, day, estimate_usd, cur_truth_usd, delta_usd, delta_pct FROM ${cost_database}.invocation_cost_reconciliation WHERE cur_truth_usd IS NOT NULL ORDER BY abs(delta_pct) DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "delta_pct" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 36 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens in/out by model",
+      "description": "agents/Bedrock TokensIn / TokensOut, summed per model, from the invocation-cost-publisher Lambda.",
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "agents/Bedrock",
+          "metricName": "TokensIn",
+          "statistic": "Sum",
+          "period": 86400,
+          "dimensions": { "ModelId": "*" },
+          "label": "in {{ModelId}}"
+        },
+        {
+          "namespace": "agents/Bedrock",
+          "metricName": "TokensOut",
+          "statistic": "Sum",
+          "period": 86400,
+          "dimensions": { "ModelId": "*" },
+          "label": "out {{ModelId}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 44 }
     }
   ]
 }
