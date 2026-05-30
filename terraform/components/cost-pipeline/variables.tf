@@ -72,6 +72,16 @@ variable "access_logs_retention_days" {
   default     = 365
 }
 
+variable "estimate_retention_days" {
+  description = "How long to retain per-batch invocation-cost estimate NDJSON objects under the CUR bucket's estimates/ prefix. The reconciliation view only needs recent days (estimate-vs-CUR drift), so the default bounds object accumulation without losing useful history."
+  type        = number
+  default     = 90
+  validation {
+    condition     = var.estimate_retention_days >= 1 && var.estimate_retention_days <= 3650
+    error_message = "estimate_retention_days must be between 1 and 3650 (10 years)."
+  }
+}
+
 variable "tags" {
   description = "Common tags"
   type        = map(string)

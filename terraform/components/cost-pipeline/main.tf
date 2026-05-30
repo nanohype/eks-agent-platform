@@ -169,6 +169,28 @@ resource "aws_s3_bucket_policy" "cur" {
   })
 }
 
+# Estimate export retention — the invocation-cost-publisher writes small NDJSON
+# objects under estimates/ on every log batch; bound their accumulation so the
+# Athena scan stays cheap. The CUR Parquet under cur/ is untouched (the rule is
+# prefix-scoped to estimates/).
+resource "aws_s3_bucket_lifecycle_configuration" "cur" {
+  bucket = aws_s3_bucket.cur.id
+
+  rule {
+    id     = "expire-estimates"
+    status = "Enabled"
+    filter {
+      prefix = "${local.estimate_prefix}/"
+    }
+    expiration {
+      days = var.estimate_retention_days
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+}
+
 resource "aws_cur_report_definition" "this" {
   report_name                = var.cur_report_name
   time_unit                  = "HOURLY"
@@ -423,7 +445,120 @@ resource "aws_glue_crawler" "cur" {
 # CUR report name to underscores. Published to SSM so the operator can
 # discover it without hard-coding.
 locals {
-  cur_table_name = replace(var.cur_report_name, "-", "_")
+  cur_table_name      = replace(var.cur_report_name, "-", "_")
+  estimate_prefix     = "estimates"
+  estimate_table_name = "invocation_cost_estimates"
+  reconciliation_view = "invocation_cost_reconciliation"
+}
+
+################################################################################
+# Estimate export + reconciliation
+#
+# The invocation-cost-publisher Lambda (below) also writes per-(platform, model)
+# daily estimate records as Hive-partitioned NDJSON under <cur-bucket>/estimates/
+# usage_date=<d>/. This Glue table reads that prefix via partition projection
+# (date on usage_date; platform_id is a data column, not a partition, so the
+# reconciliation view can aggregate across all platforms without a per-partition
+# predicate). The reconciliation view LEFT JOINs the daily estimate against the
+# CUR truth so finance can watch estimate-vs-billed drift.
+################################################################################
+
+resource "aws_glue_catalog_table" "estimates" {
+  database_name = aws_glue_catalog_database.cost.name
+  name          = local.estimate_table_name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    classification                        = "json"
+    "projection.enabled"                  = "true"
+    "projection.usage_date.type"          = "date"
+    "projection.usage_date.format"        = "yyyy-MM-dd"
+    "projection.usage_date.range"         = "2025-01-01,NOW"
+    "projection.usage_date.interval"      = "1"
+    "projection.usage_date.interval.unit" = "DAYS"
+    "storage.location.template"           = "s3://${aws_s3_bucket.cur.id}/${local.estimate_prefix}/usage_date=$${usage_date}"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.cur.id}/${local.estimate_prefix}/"
+    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.openx.data.jsonserde.JsonSerDe"
+    }
+
+    columns {
+      name = "platform_id"
+      type = "string"
+    }
+    columns {
+      name = "model_id"
+      type = "string"
+    }
+    columns {
+      name = "estimate_usd"
+      type = "double"
+    }
+    columns {
+      name = "input_tokens"
+      type = "bigint"
+    }
+    columns {
+      name = "output_tokens"
+      type = "bigint"
+    }
+    columns {
+      name = "invocation_count"
+      type = "bigint"
+    }
+  }
+
+  partition_keys {
+    name = "usage_date"
+    type = "string"
+  }
+}
+
+# Reconciliation view definition, version-controlled as a saved query. Athena
+# Glue VIRTUAL_VIEWs require a base64 Presto envelope whose column types must
+# match exactly; a saved `CREATE OR REPLACE VIEW` is plain, reviewable SQL that
+# the operator (or an analyst) runs once to materialize the view in the cost
+# database. The finance dashboard reads the materialized view by name.
+resource "aws_athena_named_query" "spend_reconciliation" {
+  name        = "${local.prefix}-reconciliation"
+  workgroup   = aws_athena_workgroup.cost.id
+  database    = aws_glue_catalog_database.cost.name
+  description = "Create/refresh the invocation_cost_reconciliation view (daily estimate vs CUR truth, per platform)."
+
+  query = <<-SQL
+    CREATE OR REPLACE VIEW ${local.reconciliation_view} AS
+    SELECT
+      e.platform_id,
+      e.usage_date                        AS day,
+      e.estimate_usd                      AS estimate_usd,
+      c.cur_truth_usd                     AS cur_truth_usd,
+      (e.estimate_usd - c.cur_truth_usd)  AS delta_usd,
+      CASE WHEN c.cur_truth_usd > 0
+           THEN abs(e.estimate_usd - c.cur_truth_usd) / c.cur_truth_usd
+           ELSE NULL
+      END                                 AS delta_pct
+    FROM (
+      SELECT platform_id, usage_date, SUM(estimate_usd) AS estimate_usd
+      FROM ${local.estimate_table_name}
+      GROUP BY platform_id, usage_date
+    ) e
+    LEFT JOIN (
+      SELECT resource_tags_user_platformid                      AS platform_id,
+             date_format(line_item_usage_start_date, '%Y-%m-%d') AS day,
+             SUM(line_item_unblended_cost)                       AS cur_truth_usd
+      FROM ${local.cur_table_name}
+      WHERE line_item_product_code = 'AmazonBedrock'
+        AND resource_tags_user_platformid <> ''
+      GROUP BY resource_tags_user_platformid,
+               date_format(line_item_usage_start_date, '%Y-%m-%d')
+    ) c ON e.platform_id = c.platform_id AND e.usage_date = c.day
+  SQL
 }
 
 ################################################################################
@@ -487,6 +622,23 @@ resource "aws_iam_role_policy" "invocation_cost_publisher" {
             "cloudwatch:namespace" = "agents/Bedrock"
           }
         }
+      },
+      {
+        Sid      = "WriteEstimates"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${aws_s3_bucket.cur.arn}/${local.estimate_prefix}/*"]
+      },
+      {
+        Sid      = "EncryptEstimates"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:Encrypt", "kms:DescribeKey"]
+        Resource = [var.data_kms_key_arn]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = ["s3.${var.region}.amazonaws.com"]
+          }
+        }
       }
     ]
   })
@@ -507,6 +659,19 @@ resource "aws_lambda_function" "invocation_cost_publisher" {
   # inference profiles spawn parallel writes). Cap at a reasonable
   # parallelism so a runaway tenant can't drain the account's Lambda quota.
   reserved_concurrent_executions = 25
+
+  environment {
+    variables = {
+      # The role-name → PlatformId derivation strips this prefix so the metric
+      # dimension is the bare Platform name (e.g. "acme"), matching CUR's
+      # resource_tags_user_platformid and the Budget reconciler's lookup. Absent
+      # this, the dimension stayed "<env>-acme" and in-flight cost read zero.
+      AGENTS_ENVIRONMENT  = var.environment
+      ESTIMATE_BUCKET     = aws_s3_bucket.cur.id
+      ESTIMATE_PREFIX     = local.estimate_prefix
+      ESTIMATE_KMS_KEY_ID = var.data_kms_key_arn
+    }
+  }
 
   tracing_config {
     mode = "Active"
@@ -562,5 +727,19 @@ resource "aws_ssm_parameter" "cur_table_name" {
   name  = "/eks-agent-platform/${var.environment}/cost-pipeline/cur_table_name"
   type  = "String"
   value = local.cur_table_name
+  tags  = local.tags
+}
+
+resource "aws_ssm_parameter" "estimate_table_name" {
+  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/estimate_table_name"
+  type  = "String"
+  value = local.estimate_table_name
+  tags  = local.tags
+}
+
+resource "aws_ssm_parameter" "reconciliation_view" {
+  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/reconciliation_view"
+  type  = "String"
+  value = local.reconciliation_view
   tags  = local.tags
 }
