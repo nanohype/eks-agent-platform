@@ -68,6 +68,15 @@ resources:
       namespaced: true
     controller: true
     domain: nanohype.dev
+    group: agents
+    kind: BatchJob
+    path: github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1
+    version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: nanohype.dev
     group: governance
     kind: BudgetPolicy
     path: github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1

@@ -40,6 +40,8 @@ spec:
             - --shim-image={{ include "operator.image" . }}
             - --budget-workers={{ .Values.reconcilers.budget.concurrent }}
             - --eval-workers={{ .Values.reconcilers.eval.concurrent }}
+            - --batch-workers={{ .Values.reconcilers.batch.concurrent }}
+            - --batch-poll-interval={{ .Values.reconcilers.batch.pollInterval }}
             - --environment={{ .Values.config.environment }}
             - --region={{ .Values.config.region }}
             {{- with .Values.config.oidc.providerArn }}

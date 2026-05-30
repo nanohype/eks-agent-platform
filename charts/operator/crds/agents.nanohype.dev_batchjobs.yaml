@@ -4,36 +4,36 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: evalsuites.governance.nanohype.dev
+  name: batchjobs.agents.nanohype.dev
 spec:
-  group: governance.nanohype.dev
+  group: agents.nanohype.dev
   names:
-    kind: EvalSuite
-    listKind: EvalSuiteList
-    plural: evalsuites
+    kind: BatchJob
+    listKind: BatchJobList
+    plural: batchjobs
     shortNames:
-    - eval
-    singular: evalsuite
+    - batch
+    singular: batchjob
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.agentFleetRef.name
-      name: Fleet
+    - jsonPath: .spec.platformRef.name
+      name: Platform
       type: string
-    - jsonPath: .spec.schedule
-      name: Schedule
-      type: string
-    - jsonPath: .status.lastScore
-      name: LastScore
+    - jsonPath: .spec.modelId
+      name: Model
       type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.outputLocation
+      name: Output
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: EvalSuite is a scheduled evaluation run against an AgentFleet's
-          agents.
+        description: BatchJob runs a single Amazon Bedrock batch-inference job for
+          a Platform tenant.
         properties:
           apiVersion:
             description: |-
@@ -53,57 +53,39 @@ spec:
           metadata:
             type: object
           spec:
-            description: EvalSuiteSpec defines a periodic evaluation run against an
-              AgentFleet.
+            description: |-
+              BatchJobSpec submits an Amazon Bedrock batch-inference job
+              (CreateModelInvocationJob): an S3 JSONL of records in, an S3 JSONL of
+              results out. One BatchJob maps to exactly one Bedrock job — there is no
+              schedule; create a new CR for each run (the reconciler is idempotent on
+              the spec, so re-applying the same CR never double-submits).
             properties:
-              agentFleetRef:
-                description: AgentFleetRef targets the fleet whose agents are under
-                  test.
-                properties:
-                  name:
-                    type: string
-                required:
-                - name
-                type: object
-              cases:
-                description: |-
-                  Cases is the list of test cases (input prompt + expected criteria).
-                  In production these are typically loaded from an S3 manifest; this
-                  inline list is for small / dev suites.
-                items:
-                  description: EvalCase is a single test case.
-                  properties:
-                    expectContains:
-                      items:
-                        type: string
-                      type: array
-                    input:
-                      type: string
-                    maxCostUsd:
-                      type: string
-                    maxLatencyMs:
-                      format: int32
-                      type: integer
-                    name:
-                      type: string
-                  required:
-                  - input
-                  - name
-                  type: object
-                type: array
-              casesFromManifest:
-                description: |-
-                  CasesFromManifest loads from `eval-reports/<platform>/manifests/<name>.json`
-                  in the eval-reports S3 bucket.
+              inputS3Uri:
+                description: InputS3Uri is the s3:// URI of the input JSONL (or its
+                  prefix).
+                pattern: ^s3://.+
                 type: string
-              passThreshold:
-                default: "0.85"
+              modelId:
                 description: |-
-                  PassThreshold (0..1) is the required mean score for the run to be
-                  marked passing. Argo Rollouts AnalysisTemplate consumes this signal.
-                  Modeled as a string so reviewers see decimals in `kubectl get -o yaml`
-                  without int<->float coercion surprises; pattern enforces 0.0 .. 1.0.
-                pattern: ^(0(\.[0-9]+)?|1(\.0+)?)$
+                  ModelID is the Bedrock model id or inference-profile id the batch job
+                  invokes (e.g. "anthropic.claude-3-5-sonnet-20241022-v2:0" or a
+                  cross-region "us.anthropic.…" profile). Validated server-side by
+                  Bedrock; kept a free string here like Identity.AllowedModels.
+                minLength: 1
+                type: string
+              modelInvocationType:
+                default: InvokeModel
+                description: |-
+                  ModelInvocationType selects the record schema in the input JSONL —
+                  raw InvokeModel bodies or Converse turns.
+                enum:
+                - InvokeModel
+                - Converse
+                type: string
+              outputS3Prefix:
+                description: OutputS3Prefix is the s3:// prefix Bedrock writes results
+                  under.
+                pattern: ^s3://.+
                 type: string
               platformRef:
                 description: LocalRef references a CR by name in the same namespace.
@@ -113,21 +95,33 @@ spec:
                 required:
                 - name
                 type: object
-              schedule:
-                description: Schedule (cron) — when to run the suite. Empty = manual
-                  only.
+              serviceRoleArnOverride:
+                description: |-
+                  ServiceRoleArnOverride replaces the operator-resolved Bedrock batch
+                  service role (the role Bedrock assumes to read input / write output).
+                  Normally empty — the reconciler injects the SSM-resolved role.
                 type: string
+              timeoutHours:
+                default: 24
+                description: TimeoutHours bounds the job's runtime. Bedrock requires
+                  24..168.
+                format: int32
+                maximum: 168
+                minimum: 24
+                type: integer
             required:
-            - agentFleetRef
+            - inputS3Uri
+            - modelId
+            - outputS3Prefix
             - platformRef
             type: object
-            x-kubernetes-validations:
-            - message: cases and casesFromManifest are mutually exclusive
-              rule: '!(has(self.casesFromManifest) && self.casesFromManifest != ""
-                && has(self.cases) && size(self.cases) > 0)'
           status:
-            description: EvalSuiteStatus reports the latest run.
+            description: BatchJobStatus tracks the Bedrock job the reconciler submitted
+              and polls.
             properties:
+              completedAt:
+                format: date-time
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -187,19 +181,42 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              lastReportUrl:
-                description: LastReportURL (s3:// URL to the rendered HTML report).
+              failedCount:
+                format: int64
+                type: integer
+              jobArn:
+                description: |-
+                  JobArn is the submitted job's ARN. Non-empty is the idempotency guard:
+                  once set, the reconciler polls rather than re-submitting.
                 type: string
-              lastRunAt:
-                description: LastRunAt timestamp.
-                format: date-time
+              jobName:
+                description: JobName is the deterministic, Bedrock-sanitized job name.
                 type: string
-              lastScore:
-                description: LastScore (mean across cases, 0..1).
+              message:
+                description: Message carries the last Bedrock status / failure reason.
+                type: string
+              outputLocation:
+                description: OutputLocation is the s3:// URI Bedrock reports for the
+                  results.
                 type: string
               phase:
-                description: 'Phase: Pending, Running, Passed, Failed.'
+                description: 'Phase: Pending, Provisioning, Running, Succeeded, Failed,
+                  Stopped.'
                 type: string
+              recordCount:
+                description: |-
+                  RecordCount / SucceededCount / FailedCount mirror Bedrock's
+                  ProcessedRecordCount / SuccessRecordCount / ErrorRecordCount once the
+                  job is running or terminal.
+                format: int64
+                type: integer
+              submittedAt:
+                description: SubmittedAt / CompletedAt timestamps.
+                format: date-time
+                type: string
+              succeededCount:
+                format: int64
+                type: integer
             type: object
         type: object
     served: true
