@@ -12,241 +12,241 @@ spec:
     listKind: PlatformList
     plural: platforms
     shortNames:
-      - plat
+    - plat
     singular: platform
   scope: Namespaced
   versions:
-    - additionalPrinterColumns:
-        - jsonPath: .spec.persona
-          name: Persona
-          type: string
-        - jsonPath: .spec.tenant
-          name: Tenant
-          type: string
-        - jsonPath: .status.phase
-          name: Phase
-          type: string
-        - jsonPath: .metadata.creationTimestamp
-          name: Age
-          type: date
-      name: v1alpha1
-      schema:
-        openAPIV3Schema:
-          description: |-
-            Platform is the top-level tenancy CR. Namespaced so that BudgetPolicy,
-            ModelGateway, AgentFleet, and EvalSuite references resolve in the same
-            namespace by name. The operator provisions the tenant workload namespace
-            (tenants-<platform-name>) separately at reconcile time; the Platform CR
-            itself lives in whichever namespace the cluster admin places it (typically
-            a management namespace such as eks-agent-platform).
-          properties:
-            apiVersion:
-              description: |-
-                APIVersion defines the versioned schema of this representation of an object.
-                Servers should convert recognized schemas to the latest internal value, and
-                may reject unrecognized values.
-                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-              type: string
-            kind:
-              description: |-
-                Kind is a string value representing the REST resource this object represents.
-                Servers may infer this from the endpoint the client submits requests to.
-                Cannot be updated.
-                In CamelCase.
-                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-              type: string
-            metadata:
-              type: object
-            spec:
-              description: |-
-                PlatformSpec defines the desired state of a Platform — a tenancy boundary
-                hosting one or more AgentFleets, with its own budget, identity, and
-                guardrails.
-              properties:
-                budget:
-                  description: Budget references a BudgetPolicy CR in the same namespace.
+  - additionalPrinterColumns:
+    - jsonPath: .spec.persona
+      name: Persona
+      type: string
+    - jsonPath: .spec.tenant
+      name: Tenant
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Platform is the top-level tenancy CR. Namespaced so that BudgetPolicy,
+          ModelGateway, AgentFleet, and EvalSuite references resolve in the same
+          namespace by name. The operator provisions the tenant workload namespace
+          (tenants-<platform-name>) separately at reconcile time; the Platform CR
+          itself lives in whichever namespace the cluster admin places it (typically
+          a management namespace such as eks-agent-platform).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              PlatformSpec defines the desired state of a Platform — a tenancy boundary
+              hosting one or more AgentFleets, with its own budget, identity, and
+              guardrails.
+            properties:
+              budget:
+                description: Budget references a BudgetPolicy CR in the same namespace.
+                properties:
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
+              compliance:
+                description: Compliance flags drive stricter defaults across the Platform.
+                properties:
+                  hipaa:
+                    description: |-
+                      HIPAA: object-lock compliance mode, no cross-region inference, PII detect
+                      required on Guardrails.
+                    type: boolean
+                  soc2:
+                    description: 'SOC2: invocation logging required, kill-switch enabled.'
+                    type: boolean
+                type: object
+              displayName:
+                description: DisplayName is a human-readable name for dashboards and
+                  CLI output.
+                type: string
+              identity:
+                description: |-
+                  Identity controls how the IRSA role is named + which Bedrock models are
+                  reachable.
+                properties:
+                  allowedModelFamilies:
+                    description: |-
+                      AllowedModelFamilies (e.g. ["anthropic", "meta", "amazon-nova"]) is
+                      expanded by the controller into ARNs at reconcile time.
+                    items:
+                      type: string
+                    type: array
+                  allowedModels:
+                    description: |-
+                      AllowedModels is the list of Bedrock model IDs (or inference-profile IDs)
+                      the IRSA role can invoke. Mutually exclusive with AllowedModelFamilies.
+                    items:
+                      type: string
+                    type: array
+                  extraPolicyArns:
+                    description: ExtraPolicyArns are managed IAM policies attached
+                      on top of the baseline.
+                    items:
+                      type: string
+                    type: array
+                type: object
+                x-kubernetes-validations:
+                - message: allowedModels and allowedModelFamilies are mutually exclusive
+                  rule: '!(has(self.allowedModels) && size(self.allowedModels) > 0
+                    && has(self.allowedModelFamilies) && size(self.allowedModelFamilies)
+                    > 0)'
+              isolation:
+                default: namespace
+                description: 'Isolation: namespace (default) or vCluster (hard isolation).'
+                enum:
+                - namespace
+                - vcluster
+                type: string
+              persona:
+                default: generic
+                description: |-
+                  Persona drives default values for AgentFleet, ModelGateway, and
+                  dashboards. One of: sales-ops, support, finance, ops, founder, eng,
+                  marketing, legal, generic.
+                enum:
+                - sales-ops
+                - support
+                - finance
+                - ops
+                - founder
+                - eng
+                - marketing
+                - legal
+                - generic
+                type: string
+              tenant:
+                description: Tenant is the owning Tenant CR (one Tenant can own multiple
+                  Platforms).
+                type: string
+            required:
+            - budget
+            - identity
+            - persona
+            - tenant
+            type: object
+          status:
+            description: PlatformStatus captures the controller's view of the world.
+            properties:
+              conditions:
+                description: Conditions follows the standard kubernetes pattern.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
-                    name:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string
                   required:
-                    - name
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
                   type: object
-                compliance:
-                  description: Compliance flags drive stricter defaults across the Platform.
-                  properties:
-                    hipaa:
-                      description: |-
-                        HIPAA: object-lock compliance mode, no cross-region inference, PII detect
-                        required on Guardrails.
-                      type: boolean
-                    soc2:
-                      description: "SOC2: invocation logging required, kill-switch enabled."
-                      type: boolean
-                  type: object
-                displayName:
-                  description: DisplayName is a human-readable name for dashboards and
-                    CLI output.
-                  type: string
-                identity:
-                  description: |-
-                    Identity controls how the IRSA role is named + which Bedrock models are
-                    reachable.
-                  properties:
-                    allowedModelFamilies:
-                      description: |-
-                        AllowedModelFamilies (e.g. ["anthropic", "meta", "amazon-nova"]) is
-                        expanded by the controller into ARNs at reconcile time.
-                      items:
-                        type: string
-                      type: array
-                    allowedModels:
-                      description: |-
-                        AllowedModels is the list of Bedrock model IDs (or inference-profile IDs)
-                        the IRSA role can invoke. Mutually exclusive with AllowedModelFamilies.
-                      items:
-                        type: string
-                      type: array
-                    extraPolicyArns:
-                      description: ExtraPolicyArns are managed IAM policies attached
-                        on top of the baseline.
-                      items:
-                        type: string
-                      type: array
-                  type: object
-                  x-kubernetes-validations:
-                    - message: allowedModels and allowedModelFamilies are mutually exclusive
-                      rule: "!(has(self.allowedModels) && size(self.allowedModels) > 0
-                        && has(self.allowedModelFamilies) && size(self.allowedModelFamilies)
-                        > 0)"
-                isolation:
-                  default: namespace
-                  description: "Isolation: namespace (default) or vCluster (hard isolation)."
-                  enum:
-                    - namespace
-                    - vcluster
-                  type: string
-                persona:
-                  default: generic
-                  description: |-
-                    Persona drives default values for AgentFleet, ModelGateway, and
-                    dashboards. One of: sales-ops, support, finance, ops, founder, eng,
-                    marketing, legal, generic.
-                  enum:
-                    - sales-ops
-                    - support
-                    - finance
-                    - ops
-                    - founder
-                    - eng
-                    - marketing
-                    - legal
-                    - generic
-                  type: string
-                tenant:
-                  description: Tenant is the owning Tenant CR (one Tenant can own multiple
-                    Platforms).
-                  type: string
-              required:
-                - budget
-                - identity
-                - persona
-                - tenant
-              type: object
-            status:
-              description: PlatformStatus captures the controller's view of the world.
-              properties:
-                conditions:
-                  description: Conditions follows the standard kubernetes pattern.
-                  items:
-                    description: Condition contains details for one aspect of the current
-                      state of this API Resource.
-                    properties:
-                      lastTransitionTime:
-                        description: |-
-                          lastTransitionTime is the last time the condition transitioned from one status to another.
-                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
-                        format: date-time
-                        type: string
-                      message:
-                        description: |-
-                          message is a human readable message indicating details about the transition.
-                          This may be an empty string.
-                        maxLength: 32768
-                        type: string
-                      observedGeneration:
-                        description: |-
-                          observedGeneration represents the .metadata.generation that the condition was set based upon.
-                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                          with respect to the current state of the instance.
-                        format: int64
-                        minimum: 0
-                        type: integer
-                      reason:
-                        description: |-
-                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                          Producers of specific condition types may define expected values and meanings for this field,
-                          and whether the values are considered a guaranteed API.
-                          The value should be a CamelCase string.
-                          This field may not be empty.
-                        maxLength: 1024
-                        minLength: 1
-                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
-                        type: string
-                      status:
-                        description: status of the condition, one of True, False, Unknown.
-                        enum:
-                          - "True"
-                          - "False"
-                          - Unknown
-                        type: string
-                      type:
-                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
-                        maxLength: 316
-                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
-                        type: string
-                    required:
-                      - lastTransitionTime
-                      - message
-                      - reason
-                      - status
-                      - type
-                    type: object
-                  type: array
-                  x-kubernetes-list-map-keys:
-                    - type
-                  x-kubernetes-list-type: map
-                iamRoleArn:
-                  description: IamRoleArn is the per-Platform IRSA role created by the
-                    controller.
-                  type: string
-                namespace:
-                  description: Namespace is the tenant namespace the controller provisioned.
-                  type: string
-                observedGeneration:
-                  description: ObservedGeneration is the last spec.generation the controller
-                    reconciled.
-                  format: int64
-                  type: integer
-                phase:
-                  description: "Phase: Pending, Provisioning, Ready, Suspended, Failed."
-                  type: string
-                suspendedAt:
-                  description: |-
-                    SuspendedAt is the timestamp at which the kill-switch fired. When
-                    non-nil the operator stops reattaching the baseline IAM policy and
-                    the AgentFleetReconciler scales fleets to zero. Resets to nil only
-                    when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'
-                    marker on the tenant IRSA role.
-                  format: date-time
-                  type: string
-                suspendedReason:
-                  description: |-
-                    SuspendedReason carries the kill-switch's reason (e.g.
-                    'budget-exceeded'). Same lifecycle as SuspendedAt.
-                  type: string
-              type: object
-          type: object
-      served: true
-      storage: true
-      subresources:
-        status: {}
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              iamRoleArn:
+                description: IamRoleArn is the per-Platform IRSA role created by the
+                  controller.
+                type: string
+              namespace:
+                description: Namespace is the tenant namespace the controller provisioned.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the last spec.generation the controller
+                  reconciled.
+                format: int64
+                type: integer
+              phase:
+                description: 'Phase: Pending, Provisioning, Ready, Suspended, Failed.'
+                type: string
+              suspendedAt:
+                description: |-
+                  SuspendedAt is the timestamp at which the kill-switch fired. When
+                  non-nil the operator stops reattaching the baseline IAM policy and
+                  the AgentFleetReconciler scales fleets to zero. Resets to nil only
+                  when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'
+                  marker on the tenant IRSA role.
+                format: date-time
+                type: string
+              suspendedReason:
+                description: |-
+                  SuspendedReason carries the kill-switch's reason (e.g.
+                  'budget-exceeded'). Same lifecycle as SuspendedAt.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
