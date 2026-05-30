@@ -18,10 +18,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
-const agentSandboxFinalizer = "agents.stxkxs.io/agentsandbox-finalizer"
+const agentSandboxFinalizer = "agents.nanohype.dev/agentsandbox-finalizer"
 
 // AgentSandboxReconciler reconciles AgentSandbox CRs into one hardened,
 // single-use session pod plus a default-deny NetworkPolicy in the
@@ -34,9 +34,9 @@ type AgentSandboxReconciler struct {
 	Concurrency int
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=agentsandboxes,verbs=get;list;watch;update;patch;delete
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=agentsandboxes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=agentsandboxes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentsandboxes,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentsandboxes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentsandboxes/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete

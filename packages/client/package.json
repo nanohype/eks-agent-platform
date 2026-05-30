@@ -2,7 +2,7 @@
   "name": "@eks-agent/client",
   "version": "0.0.0",
   "type": "module",
-  "description": "Typed Kubernetes client for the agents.stxkxs.io CRDs.",
+  "description": "Typed Kubernetes client for the {platform,agents,governance}.nanohype.dev CRDs.",
   "license": "Apache-2.0",
   "author": "stxkxs",
   "publishConfig": {

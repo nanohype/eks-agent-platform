@@ -18,7 +18,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
@@ -53,7 +54,7 @@ func TestAgentSandboxReconciler_PendingWhenPlatformMissing(t *testing.T) {
 	box := &agentsv1alpha1.AgentSandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "box"), Namespace: testNs},
 		Spec: agentsv1alpha1.AgentSandboxSpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "no-such-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "no-such-platform"},
 			Image:       "ghcr.io/nanohype/fab:test",
 		},
 	}
@@ -89,7 +90,7 @@ func TestAgentSandboxReconciler_SessionPodWhenPlatformReady(t *testing.T) {
 	box := &agentsv1alpha1.AgentSandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "box"), Namespace: testNs},
 		Spec: agentsv1alpha1.AgentSandboxSpec{
-			PlatformRef:      agentsv1alpha1.LocalRef{Name: p.Name},
+			PlatformRef:      commonv1alpha1.LocalRef{Name: p.Name},
 			Image:            "ghcr.io/nanohype/fab:test",
 			Command:          []string{"node", "dist/bin/fab.js", "role-session"},
 			RuntimeClassName: &runtimeClass,

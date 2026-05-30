@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
@@ -28,7 +28,7 @@ func newTenantReconciler() *controller.TenantReconciler {
 	}
 }
 
-func reconcileTenant(ctx context.Context, t *testing.T, tn *agentsv1alpha1.Tenant) {
+func reconcileTenant(ctx context.Context, t *testing.T, tn *platformv1alpha1.Tenant) {
 	t.Helper()
 	r := newTenantReconciler()
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: tn.Name}}); err != nil {
@@ -41,9 +41,9 @@ func TestTenantReconciler_AggregatesPlatformReadiness(t *testing.T) {
 	ensureNs(ctx, t)
 
 	tName := uniqueName(t, "tnt")
-	tenant := &agentsv1alpha1.Tenant{
+	tenant := &platformv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{Name: tName},
-		Spec: agentsv1alpha1.TenantSpec{
+		Spec: platformv1alpha1.TenantSpec{
 			DisplayName:    "ACME Corp",
 			PrimaryPersona: "ops",
 		},
@@ -53,13 +53,13 @@ func TestTenantReconciler_AggregatesPlatformReadiness(t *testing.T) {
 	// Two Platforms own this tenant; one Ready, one Suspended.
 	for i, phase := range []string{"Ready", "Suspended"} {
 		pName := uniqueName(t, "p") + "-" + []string{"a", "b"}[i]
-		p := &agentsv1alpha1.Platform{
+		p := &platformv1alpha1.Platform{
 			ObjectMeta: metav1.ObjectMeta{Name: pName, Namespace: testNs},
-			Spec: agentsv1alpha1.PlatformSpec{
+			Spec: platformv1alpha1.PlatformSpec{
 				Persona: "ops",
 				Tenant:  tName,
-				Budget:  agentsv1alpha1.BudgetRef{Name: "x"},
-				Identity: agentsv1alpha1.IdentitySpec{
+				Budget:  platformv1alpha1.BudgetRef{Name: "x"},
+				Identity: platformv1alpha1.IdentitySpec{
 					AllowedModelFamilies: []string{"anthropic"},
 				},
 			},
@@ -73,7 +73,7 @@ func TestTenantReconciler_AggregatesPlatformReadiness(t *testing.T) {
 
 	reconcileTenant(ctx, t, tenant)
 
-	var got agentsv1alpha1.Tenant
+	var got platformv1alpha1.Tenant
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: tName}, &got); err != nil {
 		t.Fatalf("get tenant: %v", err)
 	}
@@ -96,15 +96,15 @@ func TestTenantReconciler_PendingWhenNoPlatforms(t *testing.T) {
 	ensureNs(ctx, t)
 
 	tName := uniqueName(t, "tnt")
-	tenant := &agentsv1alpha1.Tenant{
+	tenant := &platformv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{Name: tName},
-		Spec:       agentsv1alpha1.TenantSpec{PrimaryPersona: "founder"},
+		Spec:       platformv1alpha1.TenantSpec{PrimaryPersona: "founder"},
 	}
 	mustCreate(ctx, t, tenant)
 
 	reconcileTenant(ctx, t, tenant)
 
-	var got agentsv1alpha1.Tenant
+	var got platformv1alpha1.Tenant
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: tName}, &got); err != nil {
 		t.Fatalf("get tenant: %v", err)
 	}

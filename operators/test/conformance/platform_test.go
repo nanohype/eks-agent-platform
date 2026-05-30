@@ -14,7 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 const testNs = "conformance"
@@ -30,13 +30,13 @@ func TestPlatform_CreateGetDelete(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "generic",
 			Tenant:  "conformance",
-			Budget:  agentsv1alpha1.BudgetRef{Name: "conformance-budget"},
-			Identity: agentsv1alpha1.IdentitySpec{
+			Budget:  platformv1alpha1.BudgetRef{Name: "conformance-budget"},
+			Identity: platformv1alpha1.IdentitySpec{
 				AllowedModelFamilies: []string{"anthropic"},
 			},
 		},
@@ -44,7 +44,7 @@ func TestPlatform_CreateGetDelete(t *testing.T) {
 
 	mustCreate(ctx, t, p)
 
-	var got agentsv1alpha1.Platform
+	var got platformv1alpha1.Platform
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: testNs}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -64,13 +64,13 @@ func TestPlatform_StatusSubresource(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona:  "eng",
 			Tenant:   "conformance",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 
@@ -83,7 +83,7 @@ func TestPlatform_StatusSubresource(t *testing.T) {
 		t.Fatalf("status update: %v", err)
 	}
 
-	var got agentsv1alpha1.Platform
+	var got platformv1alpha1.Platform
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: testNs}, &got); err != nil {
 		t.Fatalf("get after status update: %v", err)
 	}
@@ -99,13 +99,13 @@ func TestPlatform_InvalidPersona(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona:  "not-a-real-persona",
 			Tenant:   "x",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{},
 		},
 	}
 

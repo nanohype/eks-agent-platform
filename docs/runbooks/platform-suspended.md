@@ -41,7 +41,7 @@ Budget breach >= 120% of `BudgetPolicy.spec.monthlyUsd`. The reason tag should s
 ```bash
 # Remove the suspension tag from the IAM role
 aws iam untag-role --role-name "$ROLE_NAME" \
-  --tag-keys agents.stxkxs.io/suspended agents.stxkxs.io/suspended-reason
+  --tag-keys platform.nanohype.dev/suspended platform.nanohype.dev/suspended-reason
 
 # Wait for the operator to detect (≤60s with the production reconciler
 # requeue interval). Phase flips to Ready.

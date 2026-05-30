@@ -26,7 +26,7 @@ data:
       resources:
         # Platform
         - groupVersionKind:
-            group: agents.stxkxs.io
+            group: platform.nanohype.dev
             version: v1alpha1
             kind: Platform
           metricNamePrefix: kube_customresource
@@ -54,7 +54,7 @@ data:
 
         # Tenant
         - groupVersionKind:
-            group: agents.stxkxs.io
+            group: platform.nanohype.dev
             version: v1alpha1
             kind: Tenant
           metricNamePrefix: kube_customresource
@@ -93,7 +93,7 @@ data:
 
         # BudgetPolicy
         - groupVersionKind:
-            group: agents.stxkxs.io
+            group: governance.nanohype.dev
             version: v1alpha1
             kind: BudgetPolicy
           metricNamePrefix: kube_customresource
@@ -111,7 +111,7 @@ data:
 
         # AgentFleet
         - groupVersionKind:
-            group: agents.stxkxs.io
+            group: agents.nanohype.dev
             version: v1alpha1
             kind: AgentFleet
           metricNamePrefix: kube_customresource
@@ -138,7 +138,7 @@ data:
 
         # EvalSuite
         - groupVersionKind:
-            group: agents.stxkxs.io
+            group: governance.nanohype.dev
             version: v1alpha1
             kind: EvalSuite
           metricNamePrefix: kube_customresource

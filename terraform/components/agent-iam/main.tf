@@ -2,7 +2,7 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-eap"
+  prefix = "${var.environment}-${var.cluster_name}-eks-agent-platform"
   tags = merge(var.tags, {
     Component = "agent-iam"
     Tier      = "platform"

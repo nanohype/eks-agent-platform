@@ -14,7 +14,7 @@ This ADR captures (1) the operator's IAM blast radius — what it can do, what i
 
 ## Operator IAM blast radius
 
-The operator pod assumes the IRSA role provisioned by `terraform/components/agent-iam` (`<env>-<cluster>-eap-operator`). The full permission set is the union of policies attached by **three** Terraform components — `agent-iam` owns the role itself plus the IAM/KMS/S3/Bedrock-introspection grants; `cost-pipeline` attaches the Athena/Glue/CloudWatch policy via `aws_iam_role_policy_attachment.operator_cost`; `kill-switch` grants `events:PutEvents` on the breach bus via the bus's resource policy. The "Provisioned in" column below names the component that grants each row.
+The operator pod assumes the IRSA role provisioned by `terraform/components/agent-iam` (`<env>-<cluster>-eks-agent-platform-operator`). The full permission set is the union of policies attached by **three** Terraform components — `agent-iam` owns the role itself plus the IAM/KMS/S3/Bedrock-introspection grants; `cost-pipeline` attaches the Athena/Glue/CloudWatch policy via `aws_iam_role_policy_attachment.operator_cost`; `kill-switch` grants `events:PutEvents` on the breach bus via the bus's resource policy. The "Provisioned in" column below names the component that grants each row.
 
 | Permission                                                                                                                                                                                                               | Scope                                                      | Provisioned in                                                                                                               | Why                                                               | Risk if compromised                                                                                                                                                                                                                                                  |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -71,7 +71,7 @@ If the pattern changes, both sides must move together — the variable's descrip
 When the kill-switch fires (`BudgetPolicy` breach ≥ 120% with `KillSwitchEnabled: true`), the SFN does **two** things to the tenant IRSA role:
 
 1. `iam:DetachRolePolicy` — removes the baseline policy that grants Bedrock invoke. The tenant role can no longer call `bedrock:InvokeModel`.
-2. `iam:TagRole` — sets `agents.stxkxs.io/suspended=true` and `agents.stxkxs.io/suspended-reason=<reason>` on the role.
+2. `iam:TagRole` — sets `platform.nanohype.dev/suspended=true` and `platform.nanohype.dev/suspended-reason=<reason>` on the role.
 
 **The operator's `PlatformReconciler.ensureIamRole` MUST read these tags before reattaching the baseline policy.** Without the tag check the operator's `attachBaselineIfMissing` helper would notice the missing baseline and reattach it on next reconcile (default ~60s) — silently undoing the kill-switch.
 
@@ -81,7 +81,7 @@ When the tag is present:
 - the operator skips KMS-grant + bucket-policy reconciliation (no point granting data access while invoke is blocked),
 - `AgentFleetReconciler` tears down the fleet's kagent Agents + KEDA ScaledObject so no pods can serve traffic.
 
-Recovery: ops removes the `agents.stxkxs.io/suspended` tag (and the `-reason` tag) from the IAM role via the CLI / console. The operator's next reconcile sees the cleared tag, reattaches the baseline, and the Platform returns to `Ready`. The `SuspendedAt` field flips back to `nil`. No CR mutation is required for recovery.
+Recovery: ops removes the `platform.nanohype.dev/suspended` tag (and the `-reason` tag) from the IAM role via the CLI / console. The operator's next reconcile sees the cleared tag, reattaches the baseline, and the Platform returns to `Ready`. The `SuspendedAt` field flips back to `nil`. No CR mutation is required for recovery.
 
 If the tag keys change, both sides must move together — the SFN definition in `kill-switch/main.tf` and the `suspendedTag` constant in `operators/internal/controller/platform_iam.go` are the source of truth.
 

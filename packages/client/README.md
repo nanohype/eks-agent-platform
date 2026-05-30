@@ -1,6 +1,6 @@
 # @eks-agent/client
 
-Typed Kubernetes client for the `agents.stxkxs.io` CRDs. Wraps `@kubernetes/client-node` with explicit types pulled from `@eks-agent/core` schemas.
+Typed Kubernetes client for the `{platform,agents,governance}.nanohype.dev` CRDs. Wraps `@kubernetes/client-node` with explicit types pulled from `@eks-agent/core` schemas.
 
 ```ts
 import { EksAgentClient } from '@eks-agent/client';

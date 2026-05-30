@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
 // AgentFleetReconciler reconciles AgentFleet CRs into kagent Agent +
@@ -35,9 +35,9 @@ type AgentFleetReconciler struct {
 	Concurrency int
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=agentfleets,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=agentfleets/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=agentfleets/finalizers,verbs=update
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=kagent.dev,resources=agents;modelconfigs;toolservers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects;triggerauthentications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete

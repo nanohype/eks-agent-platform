@@ -4,7 +4,7 @@ You're an AI client (or the author of one) about to declare a tenant on an EKS c
 
 ## What this repo gives you
 
-A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, IRSA, KMS grants, network policies, and runtime resources. Eight CRDs under `agents.stxkxs.io/v1alpha1`:
+A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, IRSA, KMS grants, network policies, and runtime resources. Eight CRDs (version `v1alpha1`) split across three capability groups under the `nanohype.dev` domain — `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite):
 
 | CRD            | What it owns                                                                                                                                                                  |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -29,7 +29,7 @@ Plus:
 The Platform CR is the entry point. Minimum shape (full field reference in [`docs/crd-reference/v1alpha1.md`](docs/crd-reference/v1alpha1.md)):
 
 ```yaml
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
 metadata:
   name: my-app
@@ -51,7 +51,7 @@ spec:
 A `BudgetPolicy` CR is required (Platform.spec.budget.name references it):
 
 ```yaml
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: governance.nanohype.dev/v1alpha1
 kind: BudgetPolicy
 metadata:
   name: my-app
@@ -98,7 +98,7 @@ The app's chart annotates its SA with the landing-zone role's ARN (via `aws.plat
 When a `BudgetPolicy` hits 120% of `monthlyUsd` and `killSwitchEnabled: true`, an EventBridge rule → Step Functions state machine:
 
 1. Detaches the Bedrock-invoke baseline policy from the tenant's IRSA role
-2. Tags the role with `agents.stxkxs.io/suspended=true`
+2. Tags the role with `platform.nanohype.dev/suspended=true`
 3. The `PlatformReconciler` observes the tag and stops re-attaching the baseline on subsequent reconciles
 4. Status moves to `Suspended` with a `Suspended` condition
 
@@ -110,7 +110,7 @@ Recovery is **human-only** — an operator clears the suspension tag manually af
 - Go: `go fmt`, `go vet`, `golangci-lint` on PR
 - Tests: `go test ./internal/...`; in-memory fakes for AWS clients (see `operators/internal/controller/platform_iam_reconcile_test.go` for the pattern)
 - Generated artifacts (CRD manifests, deepcopy code) committed; `make manifests` regenerates them
-- Domain identifier stays as `stxkxs.io` (CRD API group, kubebuilder domain, label keys, leader-election ID) — even though the org is now `nanohype`
+- CRD API groups are org-aligned under the `nanohype.dev` domain: `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Finalizers, label/tag keys, and the leader-election lease ID follow the same domain. The tenant team identifier stays `protohype`
 
 ## Pointers
 

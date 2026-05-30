@@ -10,11 +10,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 )
 
 func TestBuildInlineCasesParam_EmitsValidJSON(t *testing.T) {
-	cases := []agentsv1alpha1.EvalCase{
+	cases := []governancev1alpha1.EvalCase{
 		{Name: "smoke", Input: "ping", ExpectContains: []string{"pong"}, MaxLatencyMs: 5000, MaxCostUsd: "0.01"},
 		// Pathological inputs the old %q-based renderer would emit
 		// invalid JSON for: a quote, a backslash, a control byte.

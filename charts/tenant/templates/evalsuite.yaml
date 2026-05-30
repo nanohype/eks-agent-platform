@@ -1,5 +1,5 @@
 {{- if .Values.evalSuite.enabled -}}
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite
 metadata:
   name: {{ .Values.platform.name }}-eval

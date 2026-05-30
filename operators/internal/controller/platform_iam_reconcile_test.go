@@ -16,16 +16,16 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
-func newPlatform(name, tenant string) *agentsv1alpha1.Platform {
-	return &agentsv1alpha1.Platform{
+func newPlatform(name, tenant string) *platformv1alpha1.Platform {
+	return &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "eks-agent-platform",
 		},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Tenant:  tenant,
 			Persona: "generic",
 		},

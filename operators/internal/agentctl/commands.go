@@ -18,7 +18,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // NewTenantCmd wires `agentctl tenant <subcommand>`.
@@ -89,7 +91,7 @@ func newTenantListCmd() *cobra.Command {
 				return err
 			}
 			ctx := context.Background()
-			var list agentsv1alpha1.TenantList
+			var list platformv1alpha1.TenantList
 			if err := c.List(ctx, &list); err != nil {
 				return fmt.Errorf("list tenants: %w", err)
 			}
@@ -121,7 +123,7 @@ func newTenantGetCmd() *cobra.Command {
 			ctx := context.Background()
 			name := args[0]
 
-			var t agentsv1alpha1.Tenant
+			var t platformv1alpha1.Tenant
 			if err := c.Get(ctx, types.NamespacedName{Name: name}, &t); err != nil {
 				return fmt.Errorf("get tenant %s: %w", name, err)
 			}
@@ -135,7 +137,7 @@ func newTenantGetCmd() *cobra.Command {
 				fmt.Printf("Slack:        %s\n", t.Spec.Contact.SlackChannel)
 			}
 
-			var platforms agentsv1alpha1.PlatformList
+			var platforms platformv1alpha1.PlatformList
 			if err := c.List(ctx, &platforms); err != nil {
 				return fmt.Errorf("list platforms: %w", err)
 			}
@@ -164,11 +166,11 @@ func NewStatusCmd() *cobra.Command {
 				return err
 			}
 			ctx := context.Background()
-			var tenants agentsv1alpha1.TenantList
+			var tenants platformv1alpha1.TenantList
 			if err := c.List(ctx, &tenants); err != nil {
 				return fmt.Errorf("list tenants: %w", err)
 			}
-			var platforms agentsv1alpha1.PlatformList
+			var platforms platformv1alpha1.PlatformList
 			if err := c.List(ctx, &platforms); err != nil {
 				return fmt.Errorf("list platforms: %w", err)
 			}
@@ -237,7 +239,13 @@ func newClusterClient() (client.Client, error) {
 		return nil, fmt.Errorf("kube config: %w", err)
 	}
 	scheme := runtime.NewScheme()
+	if err := platformv1alpha1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("scheme: %w", err)
+	}
 	if err := agentsv1alpha1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("scheme: %w", err)
+	}
+	if err := governancev1alpha1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("scheme: %w", err)
 	}
 	return client.New(cfg, client.Options{Scheme: scheme})

@@ -32,7 +32,7 @@ sequenceDiagram
 
   Note over SFN: NormalizeInput Pass
   SFN->>IAM: DetachRolePolicy<br/>· role: env-platform-tenant<br/>· policy: baselineARN
-  SFN->>IAM: TagRole<br/>agents.stxkxs.io/suspended=true<br/>agents.stxkxs.io/suspended-reason=$reason
+  SFN->>IAM: TagRole<br/>platform.nanohype.dev/suspended=true<br/>platform.nanohype.dev/suspended-reason=$reason
 
   Note over PR: next reconcile<br/>· within 60s in prod<br/>· RequeueAfter only when IAM client wired
   PR->>IAM: GetRole → tags
@@ -56,7 +56,7 @@ sequenceDiagram
   participant PR as PlatformReconciler
   participant AR as AgentFleetReconciler
 
-  Ops->>IAM: aws iam untag-role<br/>--tag-keys agents.stxkxs.io/suspended<br/>             agents.stxkxs.io/suspended-reason
+  Ops->>IAM: aws iam untag-role<br/>--tag-keys platform.nanohype.dev/suspended<br/>             platform.nanohype.dev/suspended-reason
   Note over PR: next reconcile<br/>· within 60s in prod<br/>· RequeueAfter only when IAM client wired
   PR->>IAM: GetRole → tags
   PR->>PR: suspended tag absent

@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
 // SandboxPoolReconciler reconciles SandboxPool CRs into a Deployment of
@@ -36,9 +36,9 @@ type SandboxPoolReconciler struct {
 	ShimImage string
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=sandboxpools,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=sandboxpools/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=sandboxpools/finalizers,verbs=update
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=sandboxpools,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=sandboxpools/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=sandboxpools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete

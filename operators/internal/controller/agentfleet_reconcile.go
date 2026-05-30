@@ -23,10 +23,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
-const agentFleetFinalizer = "agents.stxkxs.io/agentfleet-finalizer"
+const agentFleetFinalizer = "agents.nanohype.dev/agentfleet-finalizer"
 
 // External CRD groups the AgentFleet reconciler emits into. Each is
 // tolerant of missing — clusters without kagent / KEDA installed see
@@ -42,8 +43,8 @@ var (
 const tenantSAName = "tenant-runtime"
 
 // resolvePlatform fetches the AgentFleet's referenced Platform.
-func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agentsv1alpha1.AgentFleet) (*agentsv1alpha1.Platform, error) {
-	var p agentsv1alpha1.Platform
+func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agentsv1alpha1.AgentFleet) (*platformv1alpha1.Platform, error) {
+	var p platformv1alpha1.Platform
 	key := types.NamespacedName{Namespace: fleet.Namespace, Name: fleet.Spec.PlatformRef.Name}
 	if err := r.Get(ctx, key, &p); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -58,7 +59,7 @@ func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agent
 // tenant pods assume — both AgentFleet agent pods and AgentSandbox session
 // pods. SA name + namespace match the trust policy in platform_iam.go:
 // system:serviceaccount:tenants-<platform>:tenant-runtime.
-func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *agentsv1alpha1.Platform) error {
+func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platformv1alpha1.Platform) error {
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tenantSAName,
@@ -92,7 +93,7 @@ func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *agentsv
 // would obscure the per-fleet vs per-namespace semantic.
 //
 //nolint:dupl // intentionally similar to platform_reconcile.go's tenant-egress
-func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *agentsv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "fleet-" + fleet.Name,
@@ -147,7 +148,7 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 
 // ensureKagentAgents emits one kagent.dev/v1alpha1 Agent + ModelConfig
 // per AgentSpec in the fleet. Idempotent; tolerates absent kagent CRDs.
-func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *agentsv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	for _, agent := range fleet.Spec.Agents {
 		// kagent Agent CR
 		ag := &unstructured.Unstructured{}
@@ -240,7 +241,7 @@ func awsRegionFromQueueURL(url string) string {
 // TriggerAuthentication CR that points KEDA at the tenant IRSA role.
 // Without a queue URL we fall back to a CPU-utilization placeholder so
 // the fleet scales sensibly during onboarding before a queue is wired.
-func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *agentsv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	if !fleet.Spec.Scaling.Enabled {
 		return nil
 	}
@@ -332,7 +333,7 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet
 // = aws means KEDA uses the workload's existing IRSA token (the
 // tenant SA we annotated with the role ARN) instead of KEDA's own
 // operator IAM identity.
-func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *agentsv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ta := &unstructured.Unstructured{}
 	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "TriggerAuthentication"})
 	ta.SetName("fleet-" + fleet.Name + "-aws")
@@ -364,7 +365,7 @@ func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, fleet 
 // cleanupFleetResources is the finalizer counterpart: deletes the
 // kagent Agents, ModelConfigs, KEDA ScaledObject, and fleet
 // NetworkPolicy. Tenant ServiceAccount is owned by Platform finalizer.
-func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *agentsv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
 	// kagent objects
 	for _, agent := range fleet.Spec.Agents {

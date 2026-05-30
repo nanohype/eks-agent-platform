@@ -18,7 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // PlatformAWSConfig is the slice of operatorconfig.Config the KMS + S3
@@ -39,7 +39,7 @@ type PlatformAWSConfig struct {
 // The EncryptionContext is the load-bearing isolation primitive — tenant
 // role A's grant doesn't let it decrypt tenant B's data because B's
 // data is encrypted under EncryptionContext={PlatformId:B}.
-func (r *PlatformReconciler) ensureKmsGrant(ctx context.Context, p *agentsv1alpha1.Platform, roleARN string, cfg PlatformAWSConfig) error {
+func (r *PlatformReconciler) ensureKmsGrant(ctx context.Context, p *platformv1alpha1.Platform, roleARN string, cfg PlatformAWSConfig) error {
 	if r.KMS == nil || cfg.DataKMSKeyARN == "" || roleARN == "" {
 		return nil
 	}
@@ -98,7 +98,7 @@ func (r *PlatformReconciler) ensureKmsGrant(ctx context.Context, p *agentsv1alph
 
 // revokeKmsGrant is the finalizer counterpart: enumerate grants on
 // cmk-data and revoke any whose Name matches our tenant grant.
-func (r *PlatformReconciler) revokeKmsGrant(ctx context.Context, p *agentsv1alpha1.Platform, cfg PlatformAWSConfig) error {
+func (r *PlatformReconciler) revokeKmsGrant(ctx context.Context, p *platformv1alpha1.Platform, cfg PlatformAWSConfig) error {
 	if r.KMS == nil || cfg.DataKMSKeyARN == "" {
 		return nil
 	}
@@ -135,7 +135,7 @@ func (r *PlatformReconciler) revokeKmsGrant(ctx context.Context, p *agentsv1alph
 // statement granting r/w on tenants/<platform>/* to the tenant role ARN.
 // Idempotent: rewrites the full policy each pass with a deterministic
 // statement Sid per platform.
-func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *agentsv1alpha1.Platform, roleARN string, cfg PlatformAWSConfig) error {
+func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platformv1alpha1.Platform, roleARN string, cfg PlatformAWSConfig) error {
 	if r.S3 == nil || cfg.ArtifactsBucketName == "" || roleARN == "" {
 		return nil
 	}
@@ -204,7 +204,7 @@ func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *agentsv1
 
 // removeBucketPolicyStatements is the finalizer counterpart: drops the
 // tenant statements from the bucket policy. Idempotent.
-func (r *PlatformReconciler) removeBucketPolicyStatements(ctx context.Context, p *agentsv1alpha1.Platform, cfg PlatformAWSConfig) error {
+func (r *PlatformReconciler) removeBucketPolicyStatements(ctx context.Context, p *platformv1alpha1.Platform, cfg PlatformAWSConfig) error {
 	if r.S3 == nil || cfg.ArtifactsBucketName == "" {
 		return nil
 	}
