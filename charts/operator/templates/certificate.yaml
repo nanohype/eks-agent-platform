@@ -17,7 +17,7 @@ spec:
     rotationPolicy: Always
   subject:
     organizations:
-      - stxkxs.io
+      - nanohype.dev
   commonName: {{ include "operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
   dnsNames:
     - {{ include "operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc

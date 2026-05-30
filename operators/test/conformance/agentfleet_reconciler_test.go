@@ -16,7 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
@@ -51,7 +53,7 @@ func TestAgentFleetReconciler_PendingWhenPlatformMissing(t *testing.T) {
 	fleet := &agentsv1alpha1.AgentFleet{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "fleet"), Namespace: testNs},
 		Spec: agentsv1alpha1.AgentFleetSpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "no-such-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "no-such-platform"},
 			Agents: []agentsv1alpha1.AgentSpec{
 				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary"},
 			},
@@ -74,12 +76,12 @@ func TestAgentFleetReconciler_PendingWhenKagentMissing(t *testing.T) {
 	ensureNs(ctx, t)
 
 	pName := uniqueName(t, "platfo")
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: pName, Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "ops", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -100,7 +102,7 @@ func TestAgentFleetReconciler_PendingWhenKagentMissing(t *testing.T) {
 	fleet := &agentsv1alpha1.AgentFleet{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "fleet"), Namespace: testNs},
 		Spec: agentsv1alpha1.AgentFleetSpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: pName},
+			PlatformRef: commonv1alpha1.LocalRef{Name: pName},
 			Agents: []agentsv1alpha1.AgentSpec{
 				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary"},
 			},

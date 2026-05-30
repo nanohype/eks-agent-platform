@@ -13,7 +13,7 @@
 kubectl -n eks-agent-platform get pods -l app.kubernetes.io/name=operator -o wide
 
 # Who is the current leader?
-kubectl -n eks-agent-platform get lease eks-agent-platform.agents.stxkxs.io -o yaml
+kubectl -n eks-agent-platform get lease eks-agent-platform.nanohype.dev -o yaml
 
 # Recent events
 kubectl -n eks-agent-platform get events --sort-by=.lastTimestamp | tail -20
@@ -30,7 +30,7 @@ done
 1. **OOMKilled** — the operator hit its memory limit. Check `kubectl get pods` for `OOMKilled` state. Bump `resources.limits.memory` in the operator chart values.
 2. **CrashLoopBackOff** — startup failure. Read `kubectl logs <pod>` for the panic message. Most likely a malformed SSM config or missing IRSA wiring.
 3. **Webhook cert expired** — the cert-manager-managed webhook cert lapsed. `kubectl -n eks-agent-platform get certificate` — look for `Ready: False`.
-4. **Leader election lease wedged** — rare; manually delete the lease to force re-election: `kubectl -n eks-agent-platform delete lease eks-agent-platform.agents.stxkxs.io`.
+4. **Leader election lease wedged** — rare; manually delete the lease to force re-election: `kubectl -n eks-agent-platform delete lease eks-agent-platform.nanohype.dev`.
 
 ## Mitigate
 

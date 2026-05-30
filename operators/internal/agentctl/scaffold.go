@@ -13,7 +13,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // ScaffoldOptions captures the inputs to ScaffoldTenant. All required;
@@ -31,12 +34,12 @@ type ScaffoldOptions struct {
 // Returned as separate fields rather than a slice of unstructured so
 // callers (tests, CLI) can mutate before serializing.
 type ScaffoldedResources struct {
-	Tenant       *agentsv1alpha1.Tenant
-	Platform     *agentsv1alpha1.Platform
-	Budget       *agentsv1alpha1.BudgetPolicy
+	Tenant       *platformv1alpha1.Tenant
+	Platform     *platformv1alpha1.Platform
+	Budget       *governancev1alpha1.BudgetPolicy
 	ModelGateway *agentsv1alpha1.ModelGateway
 	AgentFleet   *agentsv1alpha1.AgentFleet
-	EvalSuite    *agentsv1alpha1.EvalSuite
+	EvalSuite    *governancev1alpha1.EvalSuite
 }
 
 // ScaffoldTenant produces a complete CR set for a new tenant onboarding,
@@ -64,19 +67,19 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 	evalName := opts.TenantName + "-eval"
 
 	out := &ScaffoldedResources{
-		Tenant: &agentsv1alpha1.Tenant{
-			TypeMeta:   metav1.TypeMeta{Kind: "Tenant", APIVersion: agentsv1alpha1.GroupVersion.String()},
+		Tenant: &platformv1alpha1.Tenant{
+			TypeMeta:   metav1.TypeMeta{Kind: "Tenant", APIVersion: platformv1alpha1.GroupVersion.String()},
 			ObjectMeta: metav1.ObjectMeta{Name: opts.TenantName},
-			Spec: agentsv1alpha1.TenantSpec{
+			Spec: platformv1alpha1.TenantSpec{
 				DisplayName:               opts.DisplayName,
 				PrimaryPersona:            pdefs.Name,
-				Contact:                   agentsv1alpha1.ContactSpec{SlackChannel: opts.SlackChannel},
+				Contact:                   platformv1alpha1.ContactSpec{SlackChannel: opts.SlackChannel},
 				Compliance:                pdefs.Compliance,
 				AggregateMonthlyBudgetUsd: pdefs.MonthlyBudgetUsd,
 			},
 		},
-		Platform: &agentsv1alpha1.Platform{
-			TypeMeta: metav1.TypeMeta{Kind: "Platform", APIVersion: agentsv1alpha1.GroupVersion.String()},
+		Platform: &platformv1alpha1.Platform{
+			TypeMeta: metav1.TypeMeta{Kind: "Platform", APIVersion: platformv1alpha1.GroupVersion.String()},
 			ObjectMeta: metav1.ObjectMeta{
 				Name: platformName, Namespace: opts.Namespace,
 				Labels: map[string]string{
@@ -84,21 +87,21 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 					"eks-agent-platform/tenant":  opts.TenantName,
 				},
 			},
-			Spec: agentsv1alpha1.PlatformSpec{
+			Spec: platformv1alpha1.PlatformSpec{
 				DisplayName: opts.DisplayName,
 				Persona:     pdefs.Name,
 				Tenant:      opts.TenantName,
 				Isolation:   "namespace",
-				Budget:      agentsv1alpha1.BudgetRef{Name: budgetName},
-				Identity:    agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{pdefs.PrimaryModelFamily}},
+				Budget:      platformv1alpha1.BudgetRef{Name: budgetName},
+				Identity:    platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{pdefs.PrimaryModelFamily}},
 				Compliance:  pdefs.Compliance,
 			},
 		},
-		Budget: &agentsv1alpha1.BudgetPolicy{
-			TypeMeta:   metav1.TypeMeta{Kind: "BudgetPolicy", APIVersion: agentsv1alpha1.GroupVersion.String()},
+		Budget: &governancev1alpha1.BudgetPolicy{
+			TypeMeta:   metav1.TypeMeta{Kind: "BudgetPolicy", APIVersion: governancev1alpha1.GroupVersion.String()},
 			ObjectMeta: metav1.ObjectMeta{Name: budgetName, Namespace: opts.Namespace},
-			Spec: agentsv1alpha1.BudgetPolicySpec{
-				PlatformRef:            agentsv1alpha1.LocalRef{Name: platformName},
+			Spec: governancev1alpha1.BudgetPolicySpec{
+				PlatformRef:            commonv1alpha1.LocalRef{Name: platformName},
 				MonthlyUsd:             pdefs.MonthlyBudgetUsd,
 				AlertThresholdsPercent: []int32{50, 80, 100},
 				KillSwitchEnabled:      true,
@@ -108,7 +111,7 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 			TypeMeta:   metav1.TypeMeta{Kind: "ModelGateway", APIVersion: agentsv1alpha1.GroupVersion.String()},
 			ObjectMeta: metav1.ObjectMeta{Name: gatewayName, Namespace: opts.Namespace},
 			Spec: agentsv1alpha1.ModelGatewaySpec{
-				PlatformRef: agentsv1alpha1.LocalRef{Name: platformName},
+				PlatformRef: commonv1alpha1.LocalRef{Name: platformName},
 				Routes:      routesFor(pdefs),
 			},
 		},
@@ -116,7 +119,7 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 			TypeMeta:   metav1.TypeMeta{Kind: "AgentFleet", APIVersion: agentsv1alpha1.GroupVersion.String()},
 			ObjectMeta: metav1.ObjectMeta{Name: fleetName, Namespace: opts.Namespace},
 			Spec: agentsv1alpha1.AgentFleetSpec{
-				PlatformRef: agentsv1alpha1.LocalRef{Name: platformName},
+				PlatformRef: commonv1alpha1.LocalRef{Name: platformName},
 				Scaling: agentsv1alpha1.ScalingSpec{
 					Enabled:           true,
 					Min:               int32Ptr(pdefs.FleetMin),
@@ -126,15 +129,15 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 				Agents: pdefs.DefaultAgents,
 			},
 		},
-		EvalSuite: &agentsv1alpha1.EvalSuite{
-			TypeMeta:   metav1.TypeMeta{Kind: "EvalSuite", APIVersion: agentsv1alpha1.GroupVersion.String()},
+		EvalSuite: &governancev1alpha1.EvalSuite{
+			TypeMeta:   metav1.TypeMeta{Kind: "EvalSuite", APIVersion: governancev1alpha1.GroupVersion.String()},
 			ObjectMeta: metav1.ObjectMeta{Name: evalName, Namespace: opts.Namespace},
-			Spec: agentsv1alpha1.EvalSuiteSpec{
-				PlatformRef:   agentsv1alpha1.LocalRef{Name: platformName},
-				AgentFleetRef: agentsv1alpha1.LocalRef{Name: fleetName},
+			Spec: governancev1alpha1.EvalSuiteSpec{
+				PlatformRef:   commonv1alpha1.LocalRef{Name: platformName},
+				AgentFleetRef: commonv1alpha1.LocalRef{Name: fleetName},
 				Schedule:      opts.Schedule,
 				PassThreshold: "0.85",
-				Cases: []agentsv1alpha1.EvalCase{{
+				Cases: []governancev1alpha1.EvalCase{{
 					Name:           "smoke",
 					Input:          "ping",
 					ExpectContains: []string{"pong"},

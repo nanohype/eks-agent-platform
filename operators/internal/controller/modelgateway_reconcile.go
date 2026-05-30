@@ -18,13 +18,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // modelGatewayFinalizer is set on every ModelGateway so we can reap the
 // agentgateway Route/Listener CRs before the CR is deleted. Without it,
 // rapid Create→Delete would leave orphan agentgateway resources.
-const modelGatewayFinalizer = "agents.stxkxs.io/modelgateway-finalizer"
+const modelGatewayFinalizer = "agents.nanohype.dev/modelgateway-finalizer"
 
 // agentgatewayGV is the GroupVersion the operator generates Route +
 // Listener CRs under. Lazy detect at reconcile time — clusters without
@@ -38,8 +39,8 @@ var agentgatewayGV = schema.GroupVersion{Group: "agentgateway.dev", Version: "v1
 // surface that as a status condition rather than retrying forever.
 var errPlatformNotFound = errors.New("platformRef not found")
 
-func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (*agentsv1alpha1.Platform, error) {
-	var p agentsv1alpha1.Platform
+func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (*platformv1alpha1.Platform, error) {
+	var p platformv1alpha1.Platform
 	key := types.NamespacedName{Namespace: mg.Namespace, Name: mg.Spec.PlatformRef.Name}
 	if err := r.Get(ctx, key, &p); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -55,7 +56,7 @@ func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agents
 // land in the agentgateway namespace so agentgateway itself can pick
 // them up; named with a stable Platform+route prefix to avoid collisions
 // across Platforms that happen to share route names ("primary").
-func (r *ModelGatewayReconciler) ensureAgentgatewayRoutes(ctx context.Context, mg *agentsv1alpha1.ModelGateway, _ *agentsv1alpha1.Platform, guardrailID, guardrailVersion string) error {
+func (r *ModelGatewayReconciler) ensureAgentgatewayRoutes(ctx context.Context, mg *agentsv1alpha1.ModelGateway, _ *platformv1alpha1.Platform, guardrailID, guardrailVersion string) error {
 	for _, route := range mg.Spec.Routes {
 		routeName := mg.Spec.PlatformRef.Name + "-" + route.Name
 		obj := &unstructured.Unstructured{}

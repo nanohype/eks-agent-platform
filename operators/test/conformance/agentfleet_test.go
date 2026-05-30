@@ -13,7 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 )
 
 func ptrI32(v int32) *int32 { return &v }
@@ -25,7 +26,7 @@ func TestAgentFleet_CreateGetDelete(t *testing.T) {
 	af := &agentsv1alpha1.AgentFleet{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "f"), Namespace: testNs},
 		Spec: agentsv1alpha1.AgentFleetSpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "conformance-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			Agents: []agentsv1alpha1.AgentSpec{
 				{Name: "assistant", SystemPrompt: "you help", ModelRoute: "primary"},
 			},
@@ -55,7 +56,7 @@ func TestAgentFleet_ScalingMinZeroRoundTrips(t *testing.T) {
 	af := &agentsv1alpha1.AgentFleet{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "f"), Namespace: testNs},
 		Spec: agentsv1alpha1.AgentFleetSpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "conformance-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			Scaling:     agentsv1alpha1.ScalingSpec{Enabled: false, Min: ptrI32(0), Max: ptrI32(1)},
 			Agents: []agentsv1alpha1.AgentSpec{
 				{Name: "assistant", SystemPrompt: "you help", ModelRoute: "primary"},

@@ -2,9 +2,9 @@
 
 Browsable Markdown reference, regenerated from the Go types on every `make -C operators manifests`:
 
-- [`v1alpha1.md`](./v1alpha1.md) — all six kinds, every field, every validation marker.
+- [`v1alpha1.md`](./v1alpha1.md) — all eight kinds, every field, every validation marker.
 
-The **source of truth** is the Go types in `operators/api/v1alpha1/` plus the generated manifests in `operators/config/crd/bases/`; this Markdown is a rendered view of them.
+The **source of truth** is the Go types in `operators/api/{platform,agents,governance}/v1alpha1/` plus the generated manifests in `operators/config/crd/bases/`; this Markdown is a rendered view of them.
 
 Each Go type carries:
 
@@ -16,14 +16,16 @@ The generated YAML manifests are the operational truth — they're what gets app
 
 ## Kinds
 
-| Kind                                    | Scope      | Go type                                                                       | Generated CRD manifest                                                                                          |
-| --------------------------------------- | ---------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `Tenant`                                | Cluster    | [`tenant_types.go`](../../operators/api/v1alpha1/tenant_types.go)             | [`agents.stxkxs.io_tenants.yaml`](../../operators/config/crd/bases/agents.stxkxs.io_tenants.yaml)               |
-| `Platform`                              | Namespaced | [`platform_types.go`](../../operators/api/v1alpha1/platform_types.go)         | [`agents.stxkxs.io_platforms.yaml`](../../operators/config/crd/bases/agents.stxkxs.io_platforms.yaml)           |
-| `ModelGateway` (+ `ModelRoute`)         | Namespaced | [`modelgateway_types.go`](../../operators/api/v1alpha1/modelgateway_types.go) | [`agents.stxkxs.io_modelgateways.yaml`](../../operators/config/crd/bases/agents.stxkxs.io_modelgateways.yaml)   |
-| `AgentFleet` (+ `Agent`, `ScalingSpec`) | Namespaced | [`agentfleet_types.go`](../../operators/api/v1alpha1/agentfleet_types.go)     | [`agents.stxkxs.io_agentfleets.yaml`](../../operators/config/crd/bases/agents.stxkxs.io_agentfleets.yaml)       |
-| `BudgetPolicy`                          | Namespaced | [`budgetpolicy_types.go`](../../operators/api/v1alpha1/budgetpolicy_types.go) | [`agents.stxkxs.io_budgetpolicies.yaml`](../../operators/config/crd/bases/agents.stxkxs.io_budgetpolicies.yaml) |
-| `EvalSuite`                             | Namespaced | [`evalsuite_types.go`](../../operators/api/v1alpha1/evalsuite_types.go)       | [`agents.stxkxs.io_evalsuites.yaml`](../../operators/config/crd/bases/agents.stxkxs.io_evalsuites.yaml)         |
+| Kind                                    | Group                     | Scope      | Go type                                                                                  | Generated CRD manifest                                                                                                        |
+| --------------------------------------- | ------------------------- | ---------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `Tenant`                                | `platform.nanohype.dev`   | Cluster    | [`tenant_types.go`](../../operators/api/platform/v1alpha1/tenant_types.go)               | [`platform.nanohype.dev_tenants.yaml`](../../operators/config/crd/bases/platform.nanohype.dev_tenants.yaml)                   |
+| `Platform`                              | `platform.nanohype.dev`   | Namespaced | [`platform_types.go`](../../operators/api/platform/v1alpha1/platform_types.go)           | [`platform.nanohype.dev_platforms.yaml`](../../operators/config/crd/bases/platform.nanohype.dev_platforms.yaml)               |
+| `ModelGateway` (+ `ModelRoute`)         | `agents.nanohype.dev`     | Namespaced | [`modelgateway_types.go`](../../operators/api/agents/v1alpha1/modelgateway_types.go)     | [`agents.nanohype.dev_modelgateways.yaml`](../../operators/config/crd/bases/agents.nanohype.dev_modelgateways.yaml)           |
+| `AgentFleet` (+ `Agent`, `ScalingSpec`) | `agents.nanohype.dev`     | Namespaced | [`agentfleet_types.go`](../../operators/api/agents/v1alpha1/agentfleet_types.go)         | [`agents.nanohype.dev_agentfleets.yaml`](../../operators/config/crd/bases/agents.nanohype.dev_agentfleets.yaml)               |
+| `AgentSandbox`                          | `agents.nanohype.dev`     | Namespaced | [`agentsandbox_types.go`](../../operators/api/agents/v1alpha1/agentsandbox_types.go)     | [`agents.nanohype.dev_agentsandboxes.yaml`](../../operators/config/crd/bases/agents.nanohype.dev_agentsandboxes.yaml)         |
+| `SandboxPool` (+ `SandboxScalingSpec`)  | `agents.nanohype.dev`     | Namespaced | [`sandboxpool_types.go`](../../operators/api/agents/v1alpha1/sandboxpool_types.go)       | [`agents.nanohype.dev_sandboxpools.yaml`](../../operators/config/crd/bases/agents.nanohype.dev_sandboxpools.yaml)             |
+| `BudgetPolicy`                          | `governance.nanohype.dev` | Namespaced | [`budgetpolicy_types.go`](../../operators/api/governance/v1alpha1/budgetpolicy_types.go) | [`governance.nanohype.dev_budgetpolicies.yaml`](../../operators/config/crd/bases/governance.nanohype.dev_budgetpolicies.yaml) |
+| `EvalSuite`                             | `governance.nanohype.dev` | Namespaced | [`evalsuite_types.go`](../../operators/api/governance/v1alpha1/evalsuite_types.go)       | [`governance.nanohype.dev_evalsuites.yaml`](../../operators/config/crd/bases/governance.nanohype.dev_evalsuites.yaml)         |
 
 Regenerate manifests + DeepCopy: `make -C operators manifests` (also copies to `charts/operator/crds/`).
 

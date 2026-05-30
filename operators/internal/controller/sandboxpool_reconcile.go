@@ -23,10 +23,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
-const sandboxPoolFinalizer = "agents.stxkxs.io/sandboxpool-finalizer"
+const sandboxPoolFinalizer = "agents.nanohype.dev/sandboxpool-finalizer"
 
 // defaultSandboxWorkerImage is used when SandboxPool.spec.image is empty.
 const defaultSandboxWorkerImage = "ghcr.io/nanohype/eks-agent-platform/sandbox-worker:latest"
@@ -40,8 +41,8 @@ const metricsShimPort = 8080
 func ptrTo[T any](v T) *T { return &v }
 
 // resolveSandboxPlatform fetches the SandboxPool's referenced Platform.
-func (r *SandboxPoolReconciler) resolveSandboxPlatform(ctx context.Context, pool *agentsv1alpha1.SandboxPool) (*agentsv1alpha1.Platform, error) {
-	var p agentsv1alpha1.Platform
+func (r *SandboxPoolReconciler) resolveSandboxPlatform(ctx context.Context, pool *agentsv1alpha1.SandboxPool) (*platformv1alpha1.Platform, error) {
+	var p platformv1alpha1.Platform
 	key := types.NamespacedName{Namespace: pool.Namespace, Name: pool.Spec.PlatformRef.Name}
 	if err := r.Get(ctx, key, &p); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -76,7 +77,7 @@ func workerImage(pool *agentsv1alpha1.SandboxPool) string {
 
 // sandboxPodLabels are stamped on the Deployment, the pod template, and
 // the NetworkPolicy podSelector. The `sandboxpool` label is the selector.
-func sandboxPodLabels(pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) map[string]string {
+func sandboxPodLabels(pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/managed-by":   "eks-agent-platform",
 		"app.kubernetes.io/component":    "sandbox-worker",
@@ -88,7 +89,7 @@ func sandboxPodLabels(pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platfo
 // metricsBridgeLabels are stamped on the bridge Deployment, its pod
 // template, the Service, and the NetworkPolicy. The `metrics-bridge`
 // label is the selector for all three.
-func metricsBridgeLabels(pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) map[string]string {
+func metricsBridgeLabels(pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/managed-by":      "eks-agent-platform",
 		"app.kubernetes.io/component":       "sandbox-metrics-bridge",
@@ -117,7 +118,7 @@ func staticWorkerReplicas(pool *agentsv1alpha1.SandboxPool) int32 {
 // pods. Worker pods carry the toleration + nodeSelector for the dedicated
 // sandbox node pool. Replicas are set on create only — once the KEDA
 // ScaledObject exists the autoscaler owns the count.
-func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: sandboxResourceName(pool), Namespace: PlatformNamespace(p)},
 	}
@@ -175,7 +176,7 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 // NetworkPolicy cannot match an FQDN, so the HTTPS rule is any address
 // except the cloud instance-metadata endpoint, which agent tool calls
 // must never reach.
-func (r *SandboxPoolReconciler) ensureSandboxNetworkPolicy(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) ensureSandboxNetworkPolicy(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: sandboxResourceName(pool), Namespace: PlatformNamespace(p)},
 	}
@@ -200,7 +201,7 @@ func (r *SandboxPoolReconciler) ensureSandboxNetworkPolicy(ctx context.Context, 
 
 // workerReadyCount reads the worker Deployment's ready replica count. A
 // missing Deployment (not yet created) reports zero, not an error.
-func (r *SandboxPoolReconciler) workerReadyCount(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) (int32, error) {
+func (r *SandboxPoolReconciler) workerReadyCount(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) (int32, error) {
 	var dep appsv1.Deployment
 	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: sandboxResourceName(pool)}
 	if err := r.Get(ctx, key, &dep); err != nil {
@@ -215,7 +216,7 @@ func (r *SandboxPoolReconciler) workerReadyCount(ctx context.Context, pool *agen
 // deleteWorkerDeployment removes the worker Deployment — used both by the
 // finalizer and when the Platform is Suspended (stop the workers, leave
 // the NetworkPolicy so a recovery doesn't reopen the namespace).
-func (r *SandboxPoolReconciler) deleteWorkerDeployment(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) deleteWorkerDeployment(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: sandboxResourceName(pool), Namespace: PlatformNamespace(p)},
 	}
@@ -230,7 +231,7 @@ func (r *SandboxPoolReconciler) deleteWorkerDeployment(ctx context.Context, pool
 // metrics bridge calls the Managed Agents work-stats endpoint) and the
 // operator image to run that bridge. Without either, the pool runs at a
 // static replica count and any existing autoscaling machinery is removed.
-func (r *SandboxPoolReconciler) reconcileAutoscaling(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) reconcileAutoscaling(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	if pool.Spec.APIKeySecret == nil || r.ShimImage == "" {
 		if err := r.teardownAutoscaling(ctx, pool, p); err != nil {
 			return err
@@ -253,7 +254,7 @@ func (r *SandboxPoolReconciler) reconcileAutoscaling(ctx context.Context, pool *
 // single-replica HTTP bridge that holds the org API key and re-serves the
 // Managed Agents work-queue depth for KEDA's metrics-api scaler. It runs
 // on ordinary nodes: it is operator infrastructure, not sandbox work.
-func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: metricsBridgeName(pool), Namespace: PlatformNamespace(p)},
 	}
@@ -319,7 +320,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 
 // ensureMetricsBridgeService exposes the metrics bridge as a ClusterIP
 // Service that KEDA's metrics-api scaler resolves by cluster DNS.
-func (r *SandboxPoolReconciler) ensureMetricsBridgeService(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) ensureMetricsBridgeService(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: metricsBridgeName(pool), Namespace: PlatformNamespace(p)},
 	}
@@ -346,7 +347,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeService(ctx context.Context, 
 // needs explicit rules: ingress only from the keda namespace (its scaler
 // scrapes the bridge), egress only to kube-dns and outbound HTTPS (the
 // call to api.anthropic.com), the instance-metadata endpoint excluded.
-func (r *SandboxPoolReconciler) ensureMetricsBridgeNetworkPolicy(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) ensureMetricsBridgeNetworkPolicy(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: metricsBridgeName(pool), Namespace: PlatformNamespace(p)},
 	}
@@ -380,7 +381,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeNetworkPolicy(ctx context.Con
 // trigger reads `depth` from the in-cluster metrics bridge — KEDA's
 // scaler cannot send the three headers the Anthropic endpoint needs, so
 // the bridge stands in. A cluster without KEDA installed is not an error.
-func (r *SandboxPoolReconciler) ensureSandboxScaledObject(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) ensureSandboxScaledObject(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	var minR, maxR int32 = 1, 10
 	if pool.Spec.Scaling.MinReplicas != nil {
 		minR = *pool.Spec.Scaling.MinReplicas
@@ -436,7 +437,7 @@ func (r *SandboxPoolReconciler) ensureSandboxScaledObject(ctx context.Context, p
 // disappears. Missing objects — and a cluster with no KEDA CRDs — are not
 // errors. It does not touch the worker Deployment's replica count; the
 // disable path pairs it with resetWorkerReplicas.
-func (r *SandboxPoolReconciler) teardownAutoscaling(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) teardownAutoscaling(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
 	so := &unstructured.Unstructured{}
 	so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
@@ -470,7 +471,7 @@ func (r *SandboxPoolReconciler) teardownAutoscaling(ctx context.Context, pool *a
 // is disabled. KEDA leaves the Deployment at whatever count it last set,
 // so removing the ScaledObject must restore a fixed value or the pool
 // strands at a stale — possibly zero — replica count.
-func (r *SandboxPoolReconciler) resetWorkerReplicas(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) resetWorkerReplicas(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	var dep appsv1.Deployment
 	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: sandboxResourceName(pool)}
 	if err := r.Get(ctx, key, &dep); err != nil {
@@ -492,7 +493,7 @@ func (r *SandboxPoolReconciler) resetWorkerReplicas(ctx context.Context, pool *a
 
 // cleanupSandboxResources is the finalizer counterpart: removes the
 // autoscaling machinery, the worker Deployment, and the NetworkPolicy.
-func (r *SandboxPoolReconciler) cleanupSandboxResources(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *agentsv1alpha1.Platform) error {
+func (r *SandboxPoolReconciler) cleanupSandboxResources(ctx context.Context, pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) error {
 	if err := r.teardownAutoscaling(ctx, pool, p); err != nil {
 		return err
 	}

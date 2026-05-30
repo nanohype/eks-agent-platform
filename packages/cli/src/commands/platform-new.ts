@@ -91,7 +91,7 @@ export function platformNew(opts: PlatformNewOpts): void {
 
   const docs = [
     {
-      apiVersion: 'agents.stxkxs.io/v1alpha1',
+      apiVersion: 'platform.nanohype.dev/v1alpha1',
       kind: 'Platform',
       metadata: {
         name: opts.name,
@@ -108,7 +108,7 @@ export function platformNew(opts: PlatformNewOpts): void {
       },
     },
     {
-      apiVersion: 'agents.stxkxs.io/v1alpha1',
+      apiVersion: 'governance.nanohype.dev/v1alpha1',
       kind: 'BudgetPolicy',
       metadata: { name: `${opts.name}-budget`, labels: { 'eks-agent-platform/tenant': opts.tenant } },
       spec: {
@@ -119,7 +119,7 @@ export function platformNew(opts: PlatformNewOpts): void {
       },
     },
     {
-      apiVersion: 'agents.stxkxs.io/v1alpha1',
+      apiVersion: 'agents.nanohype.dev/v1alpha1',
       kind: 'ModelGateway',
       metadata: { name: `${opts.name}-gateway` },
       spec: {
@@ -128,7 +128,7 @@ export function platformNew(opts: PlatformNewOpts): void {
       },
     },
     {
-      apiVersion: 'agents.stxkxs.io/v1alpha1',
+      apiVersion: 'agents.nanohype.dev/v1alpha1',
       kind: 'AgentFleet',
       metadata: { name: `${opts.name}-fleet` },
       spec: {
@@ -138,7 +138,7 @@ export function platformNew(opts: PlatformNewOpts): void {
       },
     },
     {
-      apiVersion: 'agents.stxkxs.io/v1alpha1',
+      apiVersion: 'governance.nanohype.dev/v1alpha1',
       kind: 'EvalSuite',
       metadata: { name: `${opts.name}-eval` },
       spec: {

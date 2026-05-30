@@ -39,7 +39,7 @@ Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragr
 
 ## CRDs
 
-All under `agents.stxkxs.io/v1alpha1`. Composed on top of kagent's `Agent`/`ModelConfig`/`ToolServer`.
+Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Composed on top of kagent's `Agent`/`ModelConfig`/`ToolServer`.
 
 | Kind           | Scope      | Owns                                                                                     |
 | -------------- | ---------- | ---------------------------------------------------------------------------------------- |
@@ -96,7 +96,7 @@ Or cut a release: `git tag charts-v0.1.0 && git push origin charts-v0.1.0` (trig
 
 1. `BudgetReconciler` ticks hourly, queries the CUR Athena table + CloudWatch in-flight metric, computes percent-of-budget.
 2. At ≥ 120% with `KillSwitchEnabled: true`, the reconciler publishes a `BudgetBreach` event to the kill-switch EventBridge bus.
-3. The kill-switch Step Functions state machine detaches the baseline policy from the tenant IRSA role AND tags the role with `agents.stxkxs.io/suspended=true`.
+3. The kill-switch Step Functions state machine detaches the baseline policy from the tenant IRSA role AND tags the role with `platform.nanohype.dev/suspended=true`.
 4. On its next reconcile (≤60s), the operator's `PlatformReconciler` sees the suspension tag, sets `Platform.status.phase = Suspended`, and `AgentFleetReconciler` tears down kagent Agents + KEDA ScaledObject so no pods can serve traffic.
 5. Slack #incidents + PagerDuty fire (`PlatformSuspended` alert from `operator-slo`).
 6. Recovery: ops removes the IAM tag; next reconcile sees the cleared tag, reattaches the baseline, fleet scales back up. No CR mutation required.

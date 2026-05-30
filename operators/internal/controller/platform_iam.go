@@ -18,7 +18,7 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/smithy-go"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // Suspension marker tag keys written by the kill-switch Step Functions
@@ -28,8 +28,8 @@ import (
 // CR. The kill-switch is the authoritative writer; the operator only
 // observes.
 const (
-	suspendedTag       = "agents.stxkxs.io/suspended"
-	suspendedReasonTag = "agents.stxkxs.io/suspended-reason"
+	suspendedTag       = "platform.nanohype.dev/suspended"
+	suspendedReasonTag = "platform.nanohype.dev/suspended-reason"
 )
 
 // suspensionFromTags reads the suspension marker tags from a role's
@@ -70,7 +70,7 @@ type platformSuspension struct {
 //
 // Capped at 64 chars (IAM role-name limit); long platform names get
 // hash-truncated using the same scheme as PlatformNamespace.
-func tenantRoleName(env string, p *agentsv1alpha1.Platform) string {
+func tenantRoleName(env string, p *platformv1alpha1.Platform) string {
 	const suffix = "-tenant"
 	const maxLen = 64
 	full := env + "-" + p.Name + suffix
@@ -127,11 +127,11 @@ type IAMConfig struct {
 //
 // Idempotent: re-runs on the same Platform observe the role's existence
 // via GetRole and skip CreateRole. Reads the kill-switch suspension tag
-// (agents.stxkxs.io/suspended); when present, returns
+// (platform.nanohype.dev/suspended); when present, returns
 // platformSuspension{Suspended: true} and SKIPS attachBaselineIfMissing
 // so the operator doesn't fight the kill-switch by reattaching the
 // baseline policy on every reconcile.
-func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *agentsv1alpha1.Platform, cfg IAMConfig) (platformSuspension, error) {
+func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) (platformSuspension, error) {
 	if r.IAM == nil {
 		// IAM client not wired (e.g., envtest path with no AWS creds).
 		// Skip silently — AWS-side callers explicitly check IAM != nil.
@@ -264,7 +264,7 @@ func (r *PlatformReconciler) reconcileManagedPolicies(ctx context.Context, roleN
 
 // deleteIamRole is the finalizer counterpart: detach all policies and
 // delete the role. Tolerates NotFound so re-runs are safe.
-func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *agentsv1alpha1.Platform, environment string) error {
+func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alpha1.Platform, environment string) error {
 	if r.IAM == nil {
 		return nil
 	}

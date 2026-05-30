@@ -18,7 +18,7 @@ serviceAccount:
 
 leaderElection:
   enabled: true
-  id: eks-agent-platform.agents.stxkxs.io
+  id: eks-agent-platform.nanohype.dev
 
 # Extra args appended verbatim to the operator container's command line.
 # Useful for local-dev (`--disable-aws`), debug flags, or env-specific

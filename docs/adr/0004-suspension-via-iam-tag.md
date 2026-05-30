@@ -13,7 +13,7 @@ When the `BudgetPolicy` reconciler detects a >120% breach, it publishes a `Budge
 Two architectural options for (b):
 
 1. **Lambda subscribed to the bus calls the k8s API** — requires the Lambda to authenticate to the EKS cluster's API server (IRSA + aws-iam-authenticator mapping), patch the Platform CR with a suspension marker, and either the operator or a future controller acts on that marker.
-2. **SFN modifies AWS state, operator detects drift** — the SFN tags the tenant IAM role with `agents.stxkxs.io/suspended=true`. The operator already calls `iam:GetRole` on every Platform reconcile (for IRSA verification); it reads the tag and propagates to `Platform.status.phase = Suspended` from there.
+2. **SFN modifies AWS state, operator detects drift** — the SFN tags the tenant IAM role with `platform.nanohype.dev/suspended=true`. The operator already calls `iam:GetRole` on every Platform reconcile (for IRSA verification); it reads the tag and propagates to `Platform.status.phase = Suspended` from there.
 
 ## Decision
 

@@ -16,7 +16,13 @@ The system organizes around seven bounded contexts. Each gets a CRD, a reconcile
 | **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`, `eval-runtime` | —                | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate`; status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore`                           |
 | **Observability** | —              | —          | —                                 | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family`, `agents.model_id` resource attrs; Bedrock invocation spans + per-invocation cost                      |
 
-All six CRDs are under `agents.stxkxs.io/v1alpha1`. The field-level reference is regenerated from godoc on every `make manifests` into [`docs/crd-reference/v1alpha1.md`](./docs/crd-reference/v1alpha1.md).
+The CRDs are split across three capability groups under the `nanohype.dev` domain, all at version `v1alpha1`:
+
+- **`platform.nanohype.dev`** — the Tenancy and Workspace contexts: `Tenant`, `Platform`
+- **`agents.nanohype.dev`** — the Model-access and Agent-runtime contexts plus the sandbox kinds: `AgentFleet`, `ModelGateway`, `AgentSandbox`, `SandboxPool`
+- **`governance.nanohype.dev`** — the Budgets and Evals contexts: `BudgetPolicy`, `EvalSuite`
+
+The field-level reference is regenerated from godoc on every `make manifests` into [`docs/crd-reference/v1alpha1.md`](./docs/crd-reference/v1alpha1.md).
 
 ## Key architectural decisions
 
@@ -56,7 +62,7 @@ A breach of the auditor role surfaces audit history (an acceptable disclosure fo
 A `BudgetPolicy` breach at ≥120% triggers an EventBridge rule → Step Functions state machine that:
 
 1. Detaches the Bedrock-invoke baseline policy from the tenant's IRSA role.
-2. Tags the role with `agents.stxkxs.io/suspended=true` so the `PlatformReconciler` won't re-attach the baseline on its next tick.
+2. Tags the role with `platform.nanohype.dev/suspended=true` so the `PlatformReconciler` won't re-attach the baseline on its next tick.
 
 The operator detects the tag on its next reconcile (≤60s in production), sets `Platform.status.phase = Suspended`, and the `AgentFleetReconciler` tears down the fleet's kagent `Agent`s and KEDA `ScaledObject` — pods scale to zero and stop serving traffic. Recovery is exclusively human: ops removes the IAM tag (typically via an SSO elevation flow with MFA + approver), and the next reconcile reattaches the baseline and scales the fleet back up. No CR mutation, no API path back.
 

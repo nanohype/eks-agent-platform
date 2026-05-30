@@ -14,7 +14,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
@@ -54,7 +56,7 @@ func TestModelGatewayReconciler_PendingWhenPlatformMissing(t *testing.T) {
 	mg := &agentsv1alpha1.ModelGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "g"), Namespace: testNs},
 		Spec: agentsv1alpha1.ModelGatewaySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "no-such-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "no-such-platform"},
 			Routes: []agentsv1alpha1.ModelRouteSpec{
 				{Name: "primary", ModelFamily: "anthropic", ModelID: "us.anthropic.claude-3-5-sonnet-20241022-v2:0"},
 			},
@@ -78,12 +80,12 @@ func TestModelGatewayReconciler_PendingWhenPlatformNotReady(t *testing.T) {
 
 	// Create a Platform CR but don't reconcile it — its status.phase stays empty.
 	pName := uniqueName(t, "platfo")
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: pName, Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "marketing", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -91,7 +93,7 @@ func TestModelGatewayReconciler_PendingWhenPlatformNotReady(t *testing.T) {
 	mg := &agentsv1alpha1.ModelGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "g"), Namespace: testNs},
 		Spec: agentsv1alpha1.ModelGatewaySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: pName},
+			PlatformRef: commonv1alpha1.LocalRef{Name: pName},
 			Routes: []agentsv1alpha1.ModelRouteSpec{
 				{Name: "primary", ModelFamily: "anthropic", ModelID: "us.anthropic.claude-3-5-sonnet-20241022-v2:0"},
 			},
@@ -117,12 +119,12 @@ func TestModelGatewayReconciler_ReadyWhenPlatformReadyAndAgentgatewayMissing(t *
 	// should detect that and surface Pending (not error). When we add the
 	// CRD to the test scheme in a future iteration this becomes Ready.
 	pName := uniqueName(t, "platfo")
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: pName, Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "support", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -138,7 +140,7 @@ func TestModelGatewayReconciler_ReadyWhenPlatformReadyAndAgentgatewayMissing(t *
 	mg := &agentsv1alpha1.ModelGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "g"), Namespace: testNs},
 		Spec: agentsv1alpha1.ModelGatewaySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: pName},
+			PlatformRef: commonv1alpha1.LocalRef{Name: pName},
 			Routes: []agentsv1alpha1.ModelRouteSpec{
 				{Name: "primary", ModelFamily: "anthropic", ModelID: "us.anthropic.claude-3-5-sonnet-20241022-v2:0"},
 			},

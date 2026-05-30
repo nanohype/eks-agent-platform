@@ -19,7 +19,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // defaultAgentSandboxTTL is the fallback retention (seconds) for an
@@ -28,8 +29,8 @@ import (
 const defaultAgentSandboxTTL int32 = 3600
 
 // resolveAgentSandboxPlatform fetches the AgentSandbox's referenced Platform.
-func (r *AgentSandboxReconciler) resolveAgentSandboxPlatform(ctx context.Context, box *agentsv1alpha1.AgentSandbox) (*agentsv1alpha1.Platform, error) {
-	var p agentsv1alpha1.Platform
+func (r *AgentSandboxReconciler) resolveAgentSandboxPlatform(ctx context.Context, box *agentsv1alpha1.AgentSandbox) (*platformv1alpha1.Platform, error) {
+	var p platformv1alpha1.Platform
 	key := types.NamespacedName{Namespace: box.Namespace, Name: box.Spec.PlatformRef.Name}
 	if err := r.Get(ctx, key, &p); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -48,7 +49,7 @@ func agentSandboxResourceName(box *agentsv1alpha1.AgentSandbox) string {
 
 // agentSandboxLabels are stamped on the session pod and matched by the
 // NetworkPolicy podSelector. The `agentsandbox` label is the selector.
-func agentSandboxLabels(box *agentsv1alpha1.AgentSandbox, p *agentsv1alpha1.Platform) map[string]string {
+func agentSandboxLabels(box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/managed-by":    "eks-agent-platform",
 		"app.kubernetes.io/component":     "agent-sandbox",
@@ -60,7 +61,7 @@ func agentSandboxLabels(box *agentsv1alpha1.AgentSandbox, p *agentsv1alpha1.Plat
 // ensureSessionPod creates the hardened, single-use session pod. The pod is
 // create-only: a session runs once and a pod spec is immutable, so once it
 // exists the operator never rewrites it.
-func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *agentsv1alpha1.Platform) error {
+func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
 	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: agentSandboxResourceName(box)}
 	var existing corev1.Pod
 	if err := r.Get(ctx, key, &existing); err == nil {
@@ -108,7 +109,7 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, box *agen
 // for the session pod: ingress denied entirely; egress only to kube-dns and
 // outbound HTTPS (Bedrock inference + the AWS STS endpoint for IRSA), with
 // the cloud instance-metadata endpoint excluded.
-func (r *AgentSandboxReconciler) ensureAgentSandboxNetworkPolicy(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *agentsv1alpha1.Platform) error {
+func (r *AgentSandboxReconciler) ensureAgentSandboxNetworkPolicy(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: agentSandboxResourceName(box), Namespace: PlatformNamespace(p)},
 	}
@@ -133,7 +134,7 @@ func (r *AgentSandboxReconciler) ensureAgentSandboxNetworkPolicy(ctx context.Con
 
 // deleteSessionPod removes the session pod — used by the finalizer and the
 // Platform-Suspended kill-switch branch.
-func (r *AgentSandboxReconciler) deleteSessionPod(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *agentsv1alpha1.Platform) error {
+func (r *AgentSandboxReconciler) deleteSessionPod(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: agentSandboxResourceName(box), Namespace: PlatformNamespace(p)},
 	}
@@ -145,7 +146,7 @@ func (r *AgentSandboxReconciler) deleteSessionPod(ctx context.Context, box *agen
 
 // cleanupAgentSandbox is the finalizer counterpart: removes the session pod
 // and the NetworkPolicy.
-func (r *AgentSandboxReconciler) cleanupAgentSandbox(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *agentsv1alpha1.Platform) error {
+func (r *AgentSandboxReconciler) cleanupAgentSandbox(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
 	if err := r.deleteSessionPod(ctx, box, p); err != nil {
 		return err
 	}

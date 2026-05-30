@@ -24,19 +24,18 @@ Specific locations to verify:
 - `ARCHITECTURE.md` — references to `eks-gitops`, `aws-eks` (master plan open question)
 - `README.md` — companion repo links
 - `package.json` (root + packages) — repository URL fields
-- `go.mod` — module path (`stxkxs.io/eks-agent-platform/...`?). **Caution:** changing a Go module path is a breaking change for any importers. If the module path is `stxkxs.io/...`, decide whether to:
-  - Keep the existing `stxkxs.io/` import path indefinitely (decoupled from GitHub org)
-  - Migrate to a new path (`nanohype.io/...` or `github.com/nanohype/eks-agent-platform/...`) — requires updating every import in this repo and the operator binary
-- CRD group: `agents.stxkxs.io/v1alpha1` — same caution. Changing the API group is a breaking change for any deployed CRDs and CRs. Likely keep `stxkxs.io` as the API domain even after org transfer (decouple branding from API surface)
+- `go.mod` — module path is `github.com/nanohype/eks-agent-platform/operators`. Stable identifier; leave it alone (changing a Go module path is a breaking change for any importers).
+- CRD groups — the eight CRDs sit under three capability groups on the `nanohype.dev` domain: `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). The kubebuilder `domain` is `nanohype.dev` with `multigroup: true`. Finalizers, label/tag keys, and the leader-election lease ID follow the same domain.
 - Helm chart `Chart.yaml` files — `home` / `sources` fields
 - Tofu component `versions.tf` files — source URLs
 - OCI image references in `gitops/applicationsets/` — registry paths
 
 ## Decisions to make during execution
 
-The Go module path and CRD API group are independent of GitHub ownership. Recommendation (revisit during the loop iteration):
+The Go module path is independent of GitHub ownership, but the CRD API groups are org-aligned:
 
-- **Keep** `stxkxs.io` as the Go module path and CRD API domain (it's a stable identifier, doesn't track GitHub org moves)
+- **Keep** `github.com/nanohype/eks-agent-platform/operators` as the Go module path (stable identifier)
+- **CRD API groups** are org-aligned on the `nanohype.dev` domain (`{platform,agents,governance}.nanohype.dev`)
 - **Change** README/ARCHITECTURE.md companion links to point at `nanohype/*`
 - **Change** GitHub-specific paths (Actions workflows, container registry refs if `ghcr.io/stxkxs/*`)
 

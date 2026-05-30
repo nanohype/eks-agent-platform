@@ -37,7 +37,7 @@ spec:
           # The KubernetesProvider reads .status.lastScore + .status.phase
           # off the named EvalSuite. result.score and result.passed are
           # available to successCondition / failureCondition.
-          group: agents.stxkxs.io
+          group: governance.nanohype.dev
           version: v1alpha1
           resource: evalsuites
           name: "{{args.eval-suite}}"

@@ -17,7 +17,7 @@ eks-agent-platform operator installed.
 
       serviceAccount:
         annotations:
-          eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<env>-<cluster>-eap-operator
+          eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<env>-<cluster>-eks-agent-platform-operator
 
     Read the role ARN from SSM (provisioned by terraform/components/agent-iam):
 

@@ -4,17 +4,23 @@
 #   - update EvalSuite.status (writeback of lastScore + lastRunAt + phase),
 #   - read/list pods + emit events (Workflow controller-side helpers).
 #
-# Tenant access is read-only on the agents.stxkxs.io API group. Writes are
-# scoped to the EvalSuite status subresource.
+# Tenant access is read-only across the nanohype.dev capability groups.
+# Writes are scoped to the EvalSuite status subresource (governance group).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: eval-runner
 rules:
-  - apiGroups: ["agents.stxkxs.io"]
-    resources: ["evalsuites", "agentfleets", "platforms", "modelgateways"]
+  - apiGroups: ["governance.nanohype.dev"]
+    resources: ["evalsuites"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["agents.stxkxs.io"]
+  - apiGroups: ["agents.nanohype.dev"]
+    resources: ["agentfleets", "modelgateways"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["platform.nanohype.dev"]
+    resources: ["platforms"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["governance.nanohype.dev"]
     resources: ["evalsuites/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]

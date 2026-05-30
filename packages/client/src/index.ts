@@ -1,7 +1,13 @@
 import type { PlatformSpec, ModelRouteSpec } from '@eks-agent/core';
 import { KubeConfig, CustomObjectsApi } from '@kubernetes/client-node';
 
-const GROUP = 'agents.stxkxs.io';
+// The operator's CRDs are split across three capability groups under the
+// nanohype.dev domain. Each kind maps to the group that owns it.
+const GROUPS = {
+  platform: 'platform.nanohype.dev',
+  agents: 'agents.nanohype.dev',
+  governance: 'governance.nanohype.dev',
+} as const;
 const VERSION = 'v1alpha1';
 
 export interface ResourceMeta {
@@ -14,7 +20,7 @@ export interface ResourceMeta {
 }
 
 export interface Platform {
-  apiVersion: `${typeof GROUP}/${typeof VERSION}`;
+  apiVersion: `${typeof GROUPS.platform}/${typeof VERSION}`;
   kind: 'Platform';
   metadata: ResourceMeta;
   spec: PlatformSpec;
@@ -22,7 +28,7 @@ export interface Platform {
 }
 
 export interface ModelGateway {
-  apiVersion: `${typeof GROUP}/${typeof VERSION}`;
+  apiVersion: `${typeof GROUPS.agents}/${typeof VERSION}`;
   kind: 'ModelGateway';
   metadata: ResourceMeta;
   spec: {
@@ -58,13 +64,17 @@ export class EksAgentClient {
   }
 
   async listPlatforms(): Promise<Platform[]> {
-    const r: unknown = await this.api.listClusterCustomObject({ group: GROUP, version: VERSION, plural: 'platforms' });
+    const r: unknown = await this.api.listClusterCustomObject({
+      group: GROUPS.platform,
+      version: VERSION,
+      plural: 'platforms',
+    });
     return (r as { items?: Platform[] }).items ?? [];
   }
 
   async getPlatform(name: string): Promise<Platform> {
     const r: unknown = await this.api.getClusterCustomObject({
-      group: GROUP,
+      group: GROUPS.platform,
       version: VERSION,
       plural: 'platforms',
       name,
@@ -74,7 +84,7 @@ export class EksAgentClient {
 
   async applyPlatform(p: Platform): Promise<Platform> {
     const r: unknown = await this.api.createClusterCustomObject({
-      group: GROUP,
+      group: GROUPS.platform,
       version: VERSION,
       plural: 'platforms',
       body: p,
@@ -83,12 +93,12 @@ export class EksAgentClient {
   }
 
   async deletePlatform(name: string): Promise<void> {
-    await this.api.deleteClusterCustomObject({ group: GROUP, version: VERSION, plural: 'platforms', name });
+    await this.api.deleteClusterCustomObject({ group: GROUPS.platform, version: VERSION, plural: 'platforms', name });
   }
 
   async listModelGateways(namespace: string): Promise<ModelGateway[]> {
     const r: unknown = await this.api.listNamespacedCustomObject({
-      group: GROUP,
+      group: GROUPS.agents,
       version: VERSION,
       namespace,
       plural: 'modelgateways',

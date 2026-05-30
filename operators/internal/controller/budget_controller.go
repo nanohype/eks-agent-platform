@@ -17,7 +17,7 @@ import (
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
 
@@ -59,15 +59,15 @@ type BudgetReconciler struct {
 	KillSwitchEventBusName string
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=budgetpolicies,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=budgetpolicies/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=governance.nanohype.dev,resources=budgetpolicies,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=governance.nanohype.dev,resources=budgetpolicies/status,verbs=get;update;patch
 
 // Reconcile reads spend signals and updates the BudgetPolicy status,
 // firing the kill-switch on breach.
 func (r *BudgetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("budget", req.NamespacedName)
 
-	var bp agentsv1alpha1.BudgetPolicy
+	var bp governancev1alpha1.BudgetPolicy
 	if err := r.Get(ctx, req.NamespacedName, &bp); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -106,7 +106,7 @@ func (r *BudgetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		c = 1
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&agentsv1alpha1.BudgetPolicy{}).
+		For(&governancev1alpha1.BudgetPolicy{}).
 		Named("budget").
 		WithOptions(ctrlruntime.Options{MaxConcurrentReconciles: c}).
 		Complete(r)

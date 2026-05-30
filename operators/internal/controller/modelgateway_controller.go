@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
 // ModelGatewayReconciler reconciles ModelGateway CRs into upstream
@@ -39,9 +39,9 @@ type ModelGatewayReconciler struct {
 	GuardrailVersion string
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=modelgateways,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=modelgateways/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=modelgateways/finalizers,verbs=update
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways/finalizers,verbs=update
 // +kubebuilder:rbac:groups=agentgateway.dev,resources=routes;listeners,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives a ModelGateway CR toward its desired state.

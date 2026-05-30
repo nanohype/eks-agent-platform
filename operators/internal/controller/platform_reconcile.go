@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 	// up resources outside the Platform's own namespace (tenant namespace,
 	// ArgoCD AppProject) that the kube garbage collector can't reap via
 	// OwnerReferences from a namespaced parent.
-	finalizerName = "agents.stxkxs.io/platform-finalizer"
+	finalizerName = "platform.nanohype.dev/platform-finalizer"
 
 	// argoCDNamespace is where Argo CD lives; the AppProject for each
 	// Platform is created here. Hardcoded to match the eks-gitops
@@ -45,7 +45,7 @@ const (
 // The namespace name must fit the RFC 1123 subdomain label limit of 63 chars.
 // For Platform names longer than what fits with the `tenants-` prefix, we
 // truncate the name and append a short FNV-1a hash so it remains unique.
-func PlatformNamespace(p *agentsv1alpha1.Platform) string {
+func PlatformNamespace(p *platformv1alpha1.Platform) string {
 	const prefix = "tenants-"
 	const maxLabel = 63
 	full := prefix + p.Name
@@ -80,7 +80,7 @@ func fnv1a64(s string) uint64 {
 //   - the BudgetPolicy controller's tag-based spend attribution
 //     (downstream of CUR / cost-pipeline),
 //   - dashboard filtering on `agents.platform=<name>`.
-func labelsForPlatform(p *agentsv1alpha1.Platform) map[string]string {
+func labelsForPlatform(p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/managed-by": "eks-agent-platform",
 		"app.kubernetes.io/part-of":    "eks-agent-platform",
@@ -95,7 +95,7 @@ func labelsForPlatform(p *agentsv1alpha1.Platform) map[string]string {
 // escalate privilege; the namespace is NOT owned by the Platform CR (a
 // namespaced parent can't cascade-delete a cluster-scoped child via
 // OwnerReferences), so cleanup goes through the finalizer on the Platform.
-func (r *PlatformReconciler) ensureNamespace(ctx context.Context, p *agentsv1alpha1.Platform) error {
+func (r *PlatformReconciler) ensureNamespace(ctx context.Context, p *platformv1alpha1.Platform) error {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: PlatformNamespace(p)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
 		if ns.Labels == nil {
@@ -118,7 +118,7 @@ func (r *PlatformReconciler) ensureNamespace(ctx context.Context, p *agentsv1alp
 // ensureQuota installs a default ResourceQuota in the tenant namespace.
 // Defaults are deliberately conservative; Platform.spec.quotas can override
 // per-Platform once that field is wired through the spec.
-func (r *PlatformReconciler) ensureQuota(ctx context.Context, p *agentsv1alpha1.Platform) error {
+func (r *PlatformReconciler) ensureQuota(ctx context.Context, p *platformv1alpha1.Platform) error {
 	q := &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tenant-default",
@@ -144,7 +144,7 @@ func (r *PlatformReconciler) ensureQuota(ctx context.Context, p *agentsv1alpha1.
 
 // ensureLimitRange sets sensible per-container defaults so pods that omit
 // resources don't trip the ResourceQuota.
-func (r *PlatformReconciler) ensureLimitRange(ctx context.Context, p *agentsv1alpha1.Platform) error {
+func (r *PlatformReconciler) ensureLimitRange(ctx context.Context, p *platformv1alpha1.Platform) error {
 	lr := &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tenant-default",
@@ -180,7 +180,7 @@ func (r *PlatformReconciler) ensureLimitRange(ctx context.Context, p *agentsv1al
 // helper would obscure the per-namespace vs per-fleet semantic.
 //
 //nolint:dupl // intentionally similar to agentfleet_reconcile.go's fleet
-func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *agentsv1alpha1.Platform) error {
+func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platformv1alpha1.Platform) error {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tenant-egress",
@@ -248,7 +248,7 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *agentsv
 // namespace so per-Platform ArgoCD Applications inherit the right sourceRepo
 // allowlist and destination scope. Uses unstructured.Unstructured to avoid
 // pulling the argoproj.io Go types into the operator's dep graph.
-func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *agentsv1alpha1.Platform) error {
+func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *platformv1alpha1.Platform) error {
 	ap := &unstructured.Unstructured{}
 	ap.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "argoproj.io",
@@ -283,7 +283,7 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *agentsv1al
 // cleanupTenantResources removes resources outside the Platform's own
 // namespace that the kube GC can't reap via OwnerReferences. Called from
 // the finalizer flow when Platform.DeletionTimestamp is set.
-func (r *PlatformReconciler) cleanupTenantResources(ctx context.Context, p *agentsv1alpha1.Platform) error {
+func (r *PlatformReconciler) cleanupTenantResources(ctx context.Context, p *platformv1alpha1.Platform) error {
 	// Delete the tenant namespace; cascades to ResourceQuota, LimitRange,
 	// NetworkPolicy, and any agent pods.
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: PlatformNamespace(p)}}
@@ -333,8 +333,8 @@ func containsString(haystack, needle string) bool {
 
 // fetchPlatform is a thin wrapper that returns NotFound vs other errors
 // distinctly so the caller can choose between IgnoreNotFound and requeue.
-func (r *PlatformReconciler) fetchPlatform(ctx context.Context, key types.NamespacedName) (*agentsv1alpha1.Platform, error) {
-	var p agentsv1alpha1.Platform
+func (r *PlatformReconciler) fetchPlatform(ctx context.Context, key types.NamespacedName) (*platformv1alpha1.Platform, error) {
+	var p platformv1alpha1.Platform
 	if err := r.Get(ctx, key, &p); err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}

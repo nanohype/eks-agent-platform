@@ -104,7 +104,7 @@ sequenceDiagram
 
 | State                            | Source of truth                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Per-tenant access control        | IAM role tags (operator reads `agents.stxkxs.io/suspended`)                                                                    |
+| Per-tenant access control        | IAM role tags (operator reads `platform.nanohype.dev/suspended`)                                                               |
 | Per-tenant data encryption scope | KMS grant `EncryptionContext: {PlatformId}`                                                                                    |
 | Per-tenant S3 isolation          | bucket policy statements with `s3:prefix` condition                                                                            |
 | Per-tenant Bedrock spend         | CUR Athena table (`resource_tags_user_platformid`) + in-flight CloudWatch metric (`agents/Bedrock:EstimatedInvocationCostUsd`) |
