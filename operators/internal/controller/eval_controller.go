@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 )
 
 // EvalReconciler reconciles EvalSuite CRs into Argo Workflows
@@ -40,9 +40,9 @@ type EvalReconciler struct {
 	RunnerNamespace string
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=evalsuites,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=evalsuites/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=evalsuites/finalizers,verbs=update
+// +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites/finalizers,verbs=update
 // +kubebuilder:rbac:groups=argoproj.io,resources=workflows;workflowtemplates;cronworkflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=analysisruns;analysistemplates,verbs=get;list;watch
 
@@ -50,7 +50,7 @@ type EvalReconciler struct {
 func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("evalsuite", req.NamespacedName)
 
-	var suite agentsv1alpha1.EvalSuite
+	var suite governancev1alpha1.EvalSuite
 	if err := r.Get(ctx, req.NamespacedName, &suite); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -96,7 +96,7 @@ func (r *EvalReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		c = 1
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&agentsv1alpha1.EvalSuite{}).
+		For(&governancev1alpha1.EvalSuite{}).
 		Named("eval").
 		WithOptions(ctrlruntime.Options{MaxConcurrentReconciles: c}).
 		Complete(r)

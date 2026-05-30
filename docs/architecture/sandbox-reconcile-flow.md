@@ -44,7 +44,7 @@ The reconcile gates entirely on the owning Platform: a missing or not-Ready Plat
 
 ## Worker pool
 
-The worker Deployment runs Anthropic's `ant beta:worker` — each pod long-polls the environment's work queue and executes agent tool calls. Worker pods land on the dedicated, tainted sandbox node pool that `eks-gitops` provisions via Karpenter: the `agents.stxkxs.io/sandbox` label plus a matching `NoSchedule` taint keep sandbox workloads off the nodes that run operator, system, or other tenant pods.
+The worker Deployment runs Anthropic's `ant beta:worker` — each pod long-polls the environment's work queue and executes agent tool calls. Worker pods land on the dedicated, tainted sandbox node pool that `eks-gitops` provisions via Karpenter: the `agents.nanohype.dev/sandbox` label plus a matching `NoSchedule` taint keep sandbox workloads off the nodes that run operator, system, or other tenant pods.
 
 ```mermaid
 flowchart LR

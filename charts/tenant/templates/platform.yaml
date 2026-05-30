@@ -1,7 +1,7 @@
 {{- if not .Values.platform.name -}}{{ fail "platform.name is required" }}{{- end -}}
 {{- if not .Values.platform.tenant -}}{{ fail "platform.tenant is required" }}{{- end -}}
 {{- if not .Values.platform.persona -}}{{ fail "platform.persona is required (one of: sales-ops, support, finance, ops, founder, eng, marketing, legal, generic)" }}{{- end -}}
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
 metadata:
   name: {{ .Values.platform.name }}

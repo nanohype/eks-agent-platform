@@ -13,7 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 )
 
 func TestModelGateway_CreateGetDelete(t *testing.T) {
@@ -23,7 +24,7 @@ func TestModelGateway_CreateGetDelete(t *testing.T) {
 	mg := &agentsv1alpha1.ModelGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "g"), Namespace: testNs},
 		Spec: agentsv1alpha1.ModelGatewaySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "conformance-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			Routes: []agentsv1alpha1.ModelRouteSpec{
 				{
 					Name:        "primary",
@@ -53,7 +54,7 @@ func TestModelGateway_RejectsEmptyRoutes(t *testing.T) {
 	mg := &agentsv1alpha1.ModelGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "g"), Namespace: testNs},
 		Spec: agentsv1alpha1.ModelGatewaySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "conformance-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			Routes:      []agentsv1alpha1.ModelRouteSpec{}, // empty — should violate MinItems=1
 		},
 	}
@@ -72,7 +73,7 @@ func TestModelGateway_RejectsInvalidModelFamily(t *testing.T) {
 	mg := &agentsv1alpha1.ModelGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "g"), Namespace: testNs},
 		Spec: agentsv1alpha1.ModelGatewaySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "conformance-platform"},
+			PlatformRef: commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			Routes: []agentsv1alpha1.ModelRouteSpec{
 				{Name: "x", ModelFamily: "not-a-family", ModelID: "x"},
 			},

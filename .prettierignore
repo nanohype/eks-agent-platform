@@ -10,4 +10,4 @@ charts/*/templates/**/*.tpl
 **/generated/**
 pnpm-lock.yaml
 operators/go.sum
-operators/api/v1alpha1/zz_generated.deepcopy.go
+operators/api/**/zz_generated.deepcopy.go

@@ -35,15 +35,11 @@ rules:
       - update
       - watch
   - apiGroups:
-      - agents.stxkxs.io
+      - agents.nanohype.dev
     resources:
       - agentfleets
-      - budgetpolicies
-      - evalsuites
       - modelgateways
-      - platforms
       - sandboxpools
-      - tenants
     verbs:
       - get
       - list
@@ -51,33 +47,27 @@ rules:
       - update
       - watch
   - apiGroups:
-      - agents.stxkxs.io
+      - agents.nanohype.dev
     resources:
       - agentfleets/finalizers
       - agentsandboxes/finalizers
-      - evalsuites/finalizers
       - modelgateways/finalizers
-      - platforms/finalizers
       - sandboxpools/finalizers
     verbs:
       - update
   - apiGroups:
-      - agents.stxkxs.io
+      - agents.nanohype.dev
     resources:
       - agentfleets/status
       - agentsandboxes/status
-      - budgetpolicies/status
-      - evalsuites/status
       - modelgateways/status
-      - platforms/status
       - sandboxpools/status
-      - tenants/status
     verbs:
       - get
       - patch
       - update
   - apiGroups:
-      - agents.stxkxs.io
+      - agents.nanohype.dev
     resources:
       - agentsandboxes
     verbs:
@@ -124,6 +114,32 @@ rules:
       - update
       - watch
   - apiGroups:
+      - governance.nanohype.dev
+    resources:
+      - budgetpolicies
+      - evalsuites
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - governance.nanohype.dev
+    resources:
+      - budgetpolicies/status
+      - evalsuites/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - governance.nanohype.dev
+    resources:
+      - evalsuites/finalizers
+    verbs:
+      - update
+  - apiGroups:
       - kagent.dev
     resources:
       - agents
@@ -162,6 +178,32 @@ rules:
       - patch
       - update
       - watch
+  - apiGroups:
+      - platform.nanohype.dev
+    resources:
+      - platforms
+      - tenants
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - platform.nanohype.dev
+    resources:
+      - platforms/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - platform.nanohype.dev
+    resources:
+      - platforms/status
+      - tenants/status
+    verbs:
+      - get
+      - patch
+      - update
   - apiGroups:
       - resource.k8s.io
     resources:

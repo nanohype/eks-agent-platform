@@ -184,8 +184,8 @@ resource "aws_sfn_state_machine" "killswitch" {
         Parameters = {
           "RoleName.$" = "States.Format('${replace(var.tenant_role_name_pattern, "<env>", var.environment)}', $.detail.platformId)"
           Tags = [
-            { Key = "agents.stxkxs.io/suspended", Value = "true" },
-            { Key = "agents.stxkxs.io/suspended-reason", "Value.$" = "$.detail.reason" }
+            { Key = "platform.nanohype.dev/suspended", Value = "true" },
+            { Key = "platform.nanohype.dev/suspended-reason", "Value.$" = "$.detail.reason" }
           ]
         }
         Retry = [{

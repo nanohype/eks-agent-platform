@@ -19,12 +19,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // evalFinalizer ensures we tear down the Argo CronWorkflow / Workflow
 // the reconciler emitted before the EvalSuite is deleted.
-const evalFinalizer = "agents.stxkxs.io/eval-finalizer"
+const evalFinalizer = "governance.nanohype.dev/eval-finalizer"
 
 // defaultEvalRunnerNamespace is the fallback when the reconciler is built
 // without an EvalRunnerNamespace override (envtest / dev paths). Production
@@ -52,8 +54,8 @@ var (
 	errArgoNotInstalled     = errors.New("argoproj.io Workflows CRDs not installed on this cluster")
 )
 
-func (r *EvalReconciler) resolveEvalRefs(ctx context.Context, suite *agentsv1alpha1.EvalSuite) (*agentsv1alpha1.Platform, *agentsv1alpha1.AgentFleet, error) {
-	var p agentsv1alpha1.Platform
+func (r *EvalReconciler) resolveEvalRefs(ctx context.Context, suite *governancev1alpha1.EvalSuite) (*platformv1alpha1.Platform, *agentsv1alpha1.AgentFleet, error) {
+	var p platformv1alpha1.Platform
 	pKey := types.NamespacedName{Namespace: suite.Namespace, Name: suite.Spec.PlatformRef.Name}
 	if err := r.Get(ctx, pKey, &p); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -76,7 +78,7 @@ func (r *EvalReconciler) resolveEvalRefs(ctx context.Context, suite *agentsv1alp
 // for a suite. CronWorkflow when spec.Schedule is set, Workflow
 // otherwise. Either way the name is platform-prefixed so two suites
 // across two Platforms with the same suite name don't collide.
-func evalWorkflowName(suite *agentsv1alpha1.EvalSuite) string {
+func evalWorkflowName(suite *governancev1alpha1.EvalSuite) string {
 	return suite.Spec.PlatformRef.Name + "-" + suite.Name
 }
 
@@ -85,7 +87,7 @@ func evalWorkflowName(suite *agentsv1alpha1.EvalSuite) string {
 // container image + script lives in the platform-shared
 // `eval-runner` WorkflowTemplate that terraform/components/eval-runtime
 // installs; this reconciler just references it via templateRef.
-func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *agentsv1alpha1.EvalSuite, platform *agentsv1alpha1.Platform, fleet *agentsv1alpha1.AgentFleet) error {
+func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governancev1alpha1.EvalSuite, platform *platformv1alpha1.Platform, fleet *agentsv1alpha1.AgentFleet) error {
 	kind := "Workflow"
 	if suite.Spec.Schedule != "" {
 		kind = "CronWorkflow"
@@ -157,7 +159,7 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *agentsv1
 }
 
 // inlineCase is the wire shape consumed by the eval-runner script. It
-// mirrors agentsv1alpha1.EvalCase but with explicit JSON tags so the
+// mirrors governancev1alpha1.EvalCase but with explicit JSON tags so the
 // JSON output is the runner's expected schema (jq paths in
 // eval-runner reference .name, .input, etc.).
 type inlineCase struct {
@@ -173,7 +175,7 @@ type inlineCase struct {
 // so any byte sequence (UTF-8, embedded quotes, control characters) is
 // safely escaped — fmt's %q is *Go* quoting, not JSON quoting, and
 // produces invalid JSON for control bytes like 0x07 (\a).
-func buildInlineCasesParam(cases []agentsv1alpha1.EvalCase) (string, error) {
+func buildInlineCasesParam(cases []governancev1alpha1.EvalCase) (string, error) {
 	if len(cases) == 0 {
 		return "[]", nil
 	}
@@ -196,7 +198,7 @@ func buildInlineCasesParam(cases []agentsv1alpha1.EvalCase) (string, error) {
 // cleanupArgoWorkflow is the finalizer counterpart: deletes both the
 // CronWorkflow and the Workflow variants so a suite that toggled
 // Schedule mid-life doesn't leave one of them orphaned.
-func (r *EvalReconciler) cleanupArgoWorkflow(ctx context.Context, suite *agentsv1alpha1.EvalSuite) error {
+func (r *EvalReconciler) cleanupArgoWorkflow(ctx context.Context, suite *governancev1alpha1.EvalSuite) error {
 	name := evalWorkflowName(suite)
 	for _, kind := range []string{"CronWorkflow", "Workflow"} {
 		obj := &unstructured.Unstructured{}
@@ -216,7 +218,7 @@ func (r *EvalReconciler) cleanupArgoWorkflow(ctx context.Context, suite *agentsv
 // reconcileEval is the substantive body. Returns the phase to write
 // into status. Errors are real retries; missing-CRD + missing-ref are
 // surfaced as Pending so the reconciler doesn't burn on backoff.
-func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *agentsv1alpha1.EvalSuite) (string, error) {
+func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1alpha1.EvalSuite) (string, error) {
 	platform, fleet, err := r.resolveEvalRefs(ctx, suite)
 	if err != nil {
 		if errors.Is(err, errEvalPlatformNotFound) || errors.Is(err, errEvalFleetNotFound) {
@@ -248,7 +250,7 @@ func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *agentsv1alpha
 }
 
 // applyEvalStatus writes the computed phase + condition.
-func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *agentsv1alpha1.EvalSuite, phase string) error {
+func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *governancev1alpha1.EvalSuite, phase string) error {
 	suite.Status.Phase = phase
 	cond := metav1.Condition{
 		Type:               "EvalReconciled",

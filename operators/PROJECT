@@ -1,18 +1,27 @@
-domain: stxkxs.io
+domain: nanohype.dev
 layout:
   - go.kubebuilder.io/v4
 projectName: eks-agent-platform
 repo: github.com/nanohype/eks-agent-platform/operators
-multigroup: false
+multigroup: true
 resources:
+  - api:
+      crdVersion: v1
+      namespaced: false
+    controller: true
+    domain: nanohype.dev
+    group: platform
+    kind: Tenant
+    path: github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1
+    version: v1alpha1
   - api:
       crdVersion: v1
       namespaced: true
     controller: true
-    domain: stxkxs.io
-    group: agents
+    domain: nanohype.dev
+    group: platform
     kind: Platform
-    path: github.com/nanohype/eks-agent-platform/operators/api/v1alpha1
+    path: github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1
     version: v1alpha1
     webhooks:
       defaulting: true
@@ -22,36 +31,54 @@ resources:
       crdVersion: v1
       namespaced: true
     controller: true
-    domain: stxkxs.io
-    group: agents
-    kind: ModelGateway
-    path: github.com/nanohype/eks-agent-platform/operators/api/v1alpha1
-    version: v1alpha1
-  - api:
-      crdVersion: v1
-      namespaced: true
-    controller: true
-    domain: stxkxs.io
+    domain: nanohype.dev
     group: agents
     kind: AgentFleet
-    path: github.com/nanohype/eks-agent-platform/operators/api/v1alpha1
+    path: github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1
     version: v1alpha1
   - api:
       crdVersion: v1
       namespaced: true
     controller: true
-    domain: stxkxs.io
+    domain: nanohype.dev
     group: agents
+    kind: ModelGateway
+    path: github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1
+    version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: nanohype.dev
+    group: agents
+    kind: AgentSandbox
+    path: github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1
+    version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: nanohype.dev
+    group: agents
+    kind: SandboxPool
+    path: github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1
+    version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: nanohype.dev
+    group: governance
     kind: BudgetPolicy
-    path: github.com/nanohype/eks-agent-platform/operators/api/v1alpha1
+    path: github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1
     version: v1alpha1
   - api:
       crdVersion: v1
       namespaced: true
     controller: true
-    domain: stxkxs.io
-    group: agents
+    domain: nanohype.dev
+    group: governance
     kind: EvalSuite
-    path: github.com/nanohype/eks-agent-platform/operators/api/v1alpha1
+    path: github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1
     version: v1alpha1
 version: "3"

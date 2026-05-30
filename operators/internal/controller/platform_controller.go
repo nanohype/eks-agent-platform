@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
 
@@ -54,9 +54,9 @@ type PlatformReconciler struct {
 	AWSCfg PlatformAWSConfig
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=platforms,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=platforms/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=platforms/finalizers,verbs=update
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=appprojects,verbs=get;list;watch;create;update;patch;delete
@@ -126,7 +126,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// quota/limits/networkpolicy can land in it.
 	steps := []struct {
 		name string
-		fn   func(context.Context, *agentsv1alpha1.Platform) error
+		fn   func(context.Context, *platformv1alpha1.Platform) error
 	}{
 		{"ensureNamespace", r.ensureNamespace},
 		{"ensureQuota", r.ensureQuota},
@@ -255,7 +255,7 @@ func (r *PlatformReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		c = 1
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&agentsv1alpha1.Platform{}).
+		For(&platformv1alpha1.Platform{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&corev1.LimitRange{}).
 		Owns(&networkingv1.NetworkPolicy{}).

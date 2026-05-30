@@ -39,7 +39,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 var (
@@ -81,7 +83,9 @@ func mustCreate(ctx context.Context, t *testing.T, obj client.Object) {
 func TestMain(m *testing.M) {
 	scheme = runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(platformv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(agentsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(governancev1alpha1.AddToScheme(scheme))
 
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},

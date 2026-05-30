@@ -14,7 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
@@ -26,7 +29,7 @@ func newEvalReconciler() *controller.EvalReconciler {
 	}
 }
 
-func reconcileEval(ctx context.Context, t *testing.T, suite *agentsv1alpha1.EvalSuite) {
+func reconcileEval(ctx context.Context, t *testing.T, suite *governancev1alpha1.EvalSuite) {
 	t.Helper()
 	r := newEvalReconciler()
 	for i := 0; i < 3; i++ {
@@ -44,14 +47,14 @@ func TestEvalReconciler_PendingWhenPlatformMissing(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	suite := &agentsv1alpha1.EvalSuite{
+	suite := &governancev1alpha1.EvalSuite{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "e"), Namespace: testNs},
-		Spec: agentsv1alpha1.EvalSuiteSpec{
-			PlatformRef:   agentsv1alpha1.LocalRef{Name: "no-such-platform"},
-			AgentFleetRef: agentsv1alpha1.LocalRef{Name: "no-such-fleet"},
+		Spec: governancev1alpha1.EvalSuiteSpec{
+			PlatformRef:   commonv1alpha1.LocalRef{Name: "no-such-platform"},
+			AgentFleetRef: commonv1alpha1.LocalRef{Name: "no-such-fleet"},
 			PassThreshold: "0.85",
 			Schedule:      "0 6 * * *",
-			Cases: []agentsv1alpha1.EvalCase{
+			Cases: []governancev1alpha1.EvalCase{
 				{Name: "smoke", Input: "ping", ExpectContains: []string{"pong"}},
 			},
 		},
@@ -59,7 +62,7 @@ func TestEvalReconciler_PendingWhenPlatformMissing(t *testing.T) {
 	mustCreate(ctx, t, suite)
 	reconcileEval(ctx, t, suite)
 
-	var got agentsv1alpha1.EvalSuite
+	var got governancev1alpha1.EvalSuite
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: suite.Name, Namespace: suite.Namespace}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -75,12 +78,12 @@ func TestEvalReconciler_PendingWhenArgoMissing(t *testing.T) {
 	// Force a Ready Platform + Ready AgentFleet so the only thing the
 	// reconciler can be Pending on is Argo Workflows CRDs not installed.
 	pName := uniqueName(t, "platfo")
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: pName, Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "ops", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -94,7 +97,7 @@ func TestEvalReconciler_PendingWhenArgoMissing(t *testing.T) {
 	fleet := &agentsv1alpha1.AgentFleet{
 		ObjectMeta: metav1.ObjectMeta{Name: fName, Namespace: testNs},
 		Spec: agentsv1alpha1.AgentFleetSpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: pName},
+			PlatformRef: commonv1alpha1.LocalRef{Name: pName},
 			Agents: []agentsv1alpha1.AgentSpec{
 				{Name: "primary", ModelRoute: "primary", SystemPrompt: "be brief"},
 			},
@@ -106,14 +109,14 @@ func TestEvalReconciler_PendingWhenArgoMissing(t *testing.T) {
 		t.Fatalf("force fleet Ready: %v", err)
 	}
 
-	suite := &agentsv1alpha1.EvalSuite{
+	suite := &governancev1alpha1.EvalSuite{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "e"), Namespace: testNs},
-		Spec: agentsv1alpha1.EvalSuiteSpec{
-			PlatformRef:   agentsv1alpha1.LocalRef{Name: pName},
-			AgentFleetRef: agentsv1alpha1.LocalRef{Name: fName},
+		Spec: governancev1alpha1.EvalSuiteSpec{
+			PlatformRef:   commonv1alpha1.LocalRef{Name: pName},
+			AgentFleetRef: commonv1alpha1.LocalRef{Name: fName},
 			PassThreshold: "0.85",
 			Schedule:      "0 6 * * *",
-			Cases: []agentsv1alpha1.EvalCase{
+			Cases: []governancev1alpha1.EvalCase{
 				{Name: "smoke", Input: "ping", ExpectContains: []string{"pong"}},
 			},
 		},
@@ -121,7 +124,7 @@ func TestEvalReconciler_PendingWhenArgoMissing(t *testing.T) {
 	mustCreate(ctx, t, suite)
 	reconcileEval(ctx, t, suite)
 
-	var got agentsv1alpha1.EvalSuite
+	var got governancev1alpha1.EvalSuite
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: suite.Name, Namespace: suite.Namespace}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}

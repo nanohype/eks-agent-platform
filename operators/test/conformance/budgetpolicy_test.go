@@ -13,17 +13,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 )
 
 func TestBudgetPolicy_CreateGetDelete(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	bp := &agentsv1alpha1.BudgetPolicy{
+	bp := &governancev1alpha1.BudgetPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "b"), Namespace: testNs},
-		Spec: agentsv1alpha1.BudgetPolicySpec{
-			PlatformRef:            agentsv1alpha1.LocalRef{Name: "conformance-platform"},
+		Spec: governancev1alpha1.BudgetPolicySpec{
+			PlatformRef:            commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			MonthlyUsd:             "500",
 			AlertThresholdsPercent: []int32{50, 80, 100},
 			KillSwitchEnabled:      true,
@@ -32,7 +33,7 @@ func TestBudgetPolicy_CreateGetDelete(t *testing.T) {
 
 	mustCreate(ctx, t, bp)
 
-	var got agentsv1alpha1.BudgetPolicy
+	var got governancev1alpha1.BudgetPolicy
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: bp.Name, Namespace: testNs}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -45,10 +46,10 @@ func TestBudgetPolicy_AcceptsFractionalDollars(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	bp := &agentsv1alpha1.BudgetPolicy{
+	bp := &governancev1alpha1.BudgetPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "b"), Namespace: testNs},
-		Spec: agentsv1alpha1.BudgetPolicySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "x"},
+		Spec: governancev1alpha1.BudgetPolicySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: "x"},
 			MonthlyUsd:  "1500.50",
 		},
 	}
@@ -60,10 +61,10 @@ func TestBudgetPolicy_RejectsMalformedMonthlyUsd(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	bp := &agentsv1alpha1.BudgetPolicy{
+	bp := &governancev1alpha1.BudgetPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "b"), Namespace: testNs},
-		Spec: agentsv1alpha1.BudgetPolicySpec{
-			PlatformRef: agentsv1alpha1.LocalRef{Name: "x"},
+		Spec: governancev1alpha1.BudgetPolicySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: "x"},
 			MonthlyUsd:  "not-a-number",
 		},
 	}

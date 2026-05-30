@@ -1070,14 +1070,14 @@
       "updated": 1700000000000,
       "link": null,
       "locked": false,
-      "text": "6 CR kinds (group agents.stxkxs.io v1alpha1)\nTenant (cluster) → Platform → ModelGateway / AgentFleet / BudgetPolicy / EvalSuite\nSLO + paging via PrometheusRule · 4 Grafana dashboards · 8 runbooks",
+      "text": "8 CR kinds across 3 groups (*.nanohype.dev v1alpha1)\nTenant (cluster) → Platform → ModelGateway / AgentFleet / BudgetPolicy / EvalSuite\nSLO + paging via PrometheusRule · 4 Grafana dashboards · 8 runbooks",
       "fontSize": 12,
       "fontFamily": 1,
       "textAlign": "left",
       "verticalAlign": "top",
       "baseline": 11,
       "containerId": null,
-      "originalText": "6 CR kinds (group agents.stxkxs.io v1alpha1)\nTenant (cluster) → Platform → ModelGateway / AgentFleet / BudgetPolicy / EvalSuite\nSLO + paging via PrometheusRule · 4 Grafana dashboards · 8 runbooks",
+      "originalText": "8 CR kinds across 3 groups (*.nanohype.dev v1alpha1)\nTenant (cluster) → Platform → ModelGateway / AgentFleet / BudgetPolicy / EvalSuite\nSLO + paging via PrometheusRule · 4 Grafana dashboards · 8 runbooks",
       "lineHeight": 1.3
     },
 

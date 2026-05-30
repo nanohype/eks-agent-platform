@@ -17,7 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
@@ -56,14 +58,14 @@ func sandboxEnvKeyRef() corev1.SecretKeySelector {
 // readySandboxPlatform creates a Platform, forces it Ready, and stubs the
 // tenant namespace the PlatformReconciler would normally create — the
 // shared fixture for SandboxPool tests that need a Ready Platform.
-func readySandboxPlatform(ctx context.Context, t *testing.T) *agentsv1alpha1.Platform {
+func readySandboxPlatform(ctx context.Context, t *testing.T) *platformv1alpha1.Platform {
 	t.Helper()
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "platfo"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "ops", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -87,7 +89,7 @@ func TestSandboxPoolReconciler_PendingWhenPlatformMissing(t *testing.T) {
 	pool := &agentsv1alpha1.SandboxPool{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "pool"), Namespace: testNs},
 		Spec: agentsv1alpha1.SandboxPoolSpec{
-			PlatformRef:          agentsv1alpha1.LocalRef{Name: "no-such-platform"},
+			PlatformRef:          commonv1alpha1.LocalRef{Name: "no-such-platform"},
 			EnvironmentID:        "env_test",
 			EnvironmentKeySecret: sandboxEnvKeyRef(),
 		},
@@ -113,7 +115,7 @@ func TestSandboxPoolReconciler_ReadyWhenPlatformReady(t *testing.T) {
 	pool := &agentsv1alpha1.SandboxPool{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "pool"), Namespace: testNs},
 		Spec: agentsv1alpha1.SandboxPoolSpec{
-			PlatformRef:          agentsv1alpha1.LocalRef{Name: p.Name},
+			PlatformRef:          commonv1alpha1.LocalRef{Name: p.Name},
 			EnvironmentID:        "env_test",
 			EnvironmentKeySecret: sandboxEnvKeyRef(),
 			RuntimeClassName:     &runtimeClass,
@@ -149,7 +151,7 @@ func TestSandboxPoolReconciler_Autoscaling(t *testing.T) {
 	pool := &agentsv1alpha1.SandboxPool{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "pool"), Namespace: testNs},
 		Spec: agentsv1alpha1.SandboxPoolSpec{
-			PlatformRef:          agentsv1alpha1.LocalRef{Name: p.Name},
+			PlatformRef:          commonv1alpha1.LocalRef{Name: p.Name},
 			EnvironmentID:        "env_test",
 			EnvironmentKeySecret: sandboxEnvKeyRef(),
 			APIKeySecret: &corev1.SecretKeySelector{

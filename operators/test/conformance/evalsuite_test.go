@@ -13,21 +13,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 )
 
 func TestEvalSuite_CreateGetDelete(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	es := &agentsv1alpha1.EvalSuite{
+	es := &governancev1alpha1.EvalSuite{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "e"), Namespace: testNs},
-		Spec: agentsv1alpha1.EvalSuiteSpec{
-			PlatformRef:   agentsv1alpha1.LocalRef{Name: "conformance-platform"},
-			AgentFleetRef: agentsv1alpha1.LocalRef{Name: "conformance-fleet"},
+		Spec: governancev1alpha1.EvalSuiteSpec{
+			PlatformRef:   commonv1alpha1.LocalRef{Name: "conformance-platform"},
+			AgentFleetRef: commonv1alpha1.LocalRef{Name: "conformance-fleet"},
 			Schedule:      "0 6 * * *",
 			PassThreshold: "0.85",
-			Cases: []agentsv1alpha1.EvalCase{
+			Cases: []governancev1alpha1.EvalCase{
 				{Name: "smoke", Input: "pong?", ExpectContains: []string{"pong"}, MaxLatencyMs: 5000},
 			},
 		},
@@ -35,7 +36,7 @@ func TestEvalSuite_CreateGetDelete(t *testing.T) {
 
 	mustCreate(ctx, t, es)
 
-	var got agentsv1alpha1.EvalSuite
+	var got governancev1alpha1.EvalSuite
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: es.Name, Namespace: testNs}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -52,13 +53,13 @@ func TestEvalSuite_RejectsInvalidPassThreshold(t *testing.T) {
 	// rejecting on is the passThreshold pattern. Otherwise this test would
 	// pass for the wrong reason if a future required-field is added to the
 	// EvalSuite schema.
-	es := &agentsv1alpha1.EvalSuite{
+	es := &governancev1alpha1.EvalSuite{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "e"), Namespace: testNs},
-		Spec: agentsv1alpha1.EvalSuiteSpec{
-			PlatformRef:   agentsv1alpha1.LocalRef{Name: "x"},
-			AgentFleetRef: agentsv1alpha1.LocalRef{Name: "y"},
+		Spec: governancev1alpha1.EvalSuiteSpec{
+			PlatformRef:   commonv1alpha1.LocalRef{Name: "x"},
+			AgentFleetRef: commonv1alpha1.LocalRef{Name: "y"},
 			PassThreshold: "1.5", // out of 0..1 range — the field under test
-			Cases: []agentsv1alpha1.EvalCase{
+			Cases: []governancev1alpha1.EvalCase{
 				{Name: "smoke", Input: "x", ExpectContains: []string{"x"}},
 			},
 		},
@@ -75,14 +76,14 @@ func TestEvalSuite_RejectsCasesPlusCasesFromManifest(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	es := &agentsv1alpha1.EvalSuite{
+	es := &governancev1alpha1.EvalSuite{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "e"), Namespace: testNs},
-		Spec: agentsv1alpha1.EvalSuiteSpec{
-			PlatformRef:       agentsv1alpha1.LocalRef{Name: "x"},
-			AgentFleetRef:     agentsv1alpha1.LocalRef{Name: "y"},
+		Spec: governancev1alpha1.EvalSuiteSpec{
+			PlatformRef:       commonv1alpha1.LocalRef{Name: "x"},
+			AgentFleetRef:     commonv1alpha1.LocalRef{Name: "y"},
 			PassThreshold:     "0.85",
 			CasesFromManifest: "s3://bucket/manifest.json",
-			Cases: []agentsv1alpha1.EvalCase{
+			Cases: []governancev1alpha1.EvalCase{
 				{Name: "inline", Input: "x", ExpectContains: []string{"x"}},
 			},
 		},

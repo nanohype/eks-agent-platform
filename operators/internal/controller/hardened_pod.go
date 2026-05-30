@@ -21,7 +21,7 @@ import (
 // sandboxNodeLabel keys both the label and the NoSchedule taint on the
 // dedicated Karpenter sandbox node pool (eks-gitops karpenter-resources).
 // Sandbox pods carry the matching nodeSelector + toleration.
-const sandboxNodeLabel = "agents.stxkxs.io/sandbox"
+const sandboxNodeLabel = "agents.nanohype.dev/sandbox"
 
 // metadataServiceCIDR is the cloud instance-metadata endpoint. Agent tool
 // calls must never reach it, so the sandbox egress rules exclude it from

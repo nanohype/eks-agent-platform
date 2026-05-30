@@ -2,7 +2,7 @@
 # The operator creates the tenant *workload* namespace (tenants-blank)
 # separately at reconcile time — that's where agent pods land.
 ---
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
 metadata:
   name: blank
@@ -24,7 +24,7 @@ spec:
     soc2: true
     hipaa: false
 ---
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: governance.nanohype.dev/v1alpha1
 kind: BudgetPolicy
 metadata:
   name: blank-budget
@@ -36,7 +36,7 @@ spec:
   alertThresholdsPercent: [50, 80, 100]
   killSwitchEnabled: true
 ---
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: agents.nanohype.dev/v1alpha1
 kind: ModelGateway
 metadata:
   name: blank-gateway
@@ -50,7 +50,7 @@ spec:
       modelId: us.anthropic.claude-3-5-sonnet-20241022-v2:0
       rateLimit: 30
 ---
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: agents.nanohype.dev/v1alpha1
 kind: AgentFleet
 metadata:
   name: blank-fleet
@@ -68,7 +68,7 @@ spec:
       systemPrompt: "You are a helpful assistant."
       modelRoute: primary
 ---
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite
 metadata:
   name: blank-eval

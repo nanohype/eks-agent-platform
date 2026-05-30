@@ -1,4 +1,4 @@
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: agents.nanohype.dev/v1alpha1
 kind: ModelGateway
 metadata:
   name: {{ .Values.platform.name }}-gateway

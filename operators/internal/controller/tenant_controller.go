@@ -24,7 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // tenantSpecField is the indexer key registered on Platform so the
@@ -48,10 +49,10 @@ type TenantReconciler struct {
 	RequeueInterval time.Duration
 }
 
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=tenants,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=tenants/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=platforms,verbs=get;list;watch
-// +kubebuilder:rbac:groups=agents.stxkxs.io,resources=budgetpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=tenants,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=tenants/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms,verbs=get;list;watch
+// +kubebuilder:rbac:groups=governance.nanohype.dev,resources=budgetpolicies,verbs=get;list;watch
 
 // Reconcile re-aggregates the owned Platforms + BudgetPolicies and
 // writes the rolled-up status. Always re-queues on a periodic tick;
@@ -61,7 +62,7 @@ type TenantReconciler struct {
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("tenant", req.NamespacedName)
 
-	var tenant agentsv1alpha1.Tenant
+	var tenant platformv1alpha1.Tenant
 	if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -99,7 +100,7 @@ type tenantReading struct {
 // and rolls up the readiness + budget state. Cluster-scoped list with a
 // post-filter; for a cluster with thousands of Platforms an indexer would
 // reduce CPU but this stays simple until that's the bottleneck.
-func (r *TenantReconciler) aggregate(ctx context.Context, t *agentsv1alpha1.Tenant) (tenantReading, error) {
+func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Tenant) (tenantReading, error) {
 	// Cluster-wide list + post-filter on spec.tenant. The manager
 	// registers a field indexer at SetupWithManager which kicks in
 	// for cache-backed clients in production; the conformance tests
@@ -108,7 +109,7 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *agentsv1alpha1.Tena
 	// the in-memory filter as the load-bearing implementation; the
 	// indexer is a future optimization for very-large multi-tenant
 	// clusters (1000+ Platforms).
-	var platforms agentsv1alpha1.PlatformList
+	var platforms platformv1alpha1.PlatformList
 	if err := r.List(ctx, &platforms); err != nil {
 		return tenantReading{}, fmt.Errorf("list platforms: %w", err)
 	}
@@ -136,7 +137,7 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *agentsv1alpha1.Tena
 		if p.Spec.Budget.Name == "" {
 			continue
 		}
-		var bp agentsv1alpha1.BudgetPolicy
+		var bp governancev1alpha1.BudgetPolicy
 		if err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.Spec.Budget.Name}, &bp); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return tenantReading{}, fmt.Errorf("get budget %s/%s: %w", p.Namespace, p.Spec.Budget.Name, err)
@@ -181,14 +182,14 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *agentsv1alpha1.Tena
 // applyStatus writes the roll-up + the standard conditions, re-fetching
 // the Tenant on conflict so concurrent reconciles don't fight over a
 // stale ResourceVersion.
-func (r *TenantReconciler) applyStatus(ctx context.Context, t *agentsv1alpha1.Tenant, reading tenantReading) error {
+func (r *TenantReconciler) applyStatus(ctx context.Context, t *platformv1alpha1.Tenant, reading tenantReading) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Re-fetch on each attempt so we never write against a stale
 		// ResourceVersion. The first attempt could use the passed-in
 		// object, but the indirection cost is negligible and the
 		// invariant ('always write against the latest object') is
 		// easier to reason about.
-		var fresh agentsv1alpha1.Tenant
+		var fresh platformv1alpha1.Tenant
 		if err := r.Get(ctx, types.NamespacedName{Name: t.Name}, &fresh); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil // deleted mid-reconcile; nothing to write
@@ -245,8 +246,8 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if c <= 0 {
 		c = 1
 	}
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &agentsv1alpha1.Platform{}, tenantSpecField, func(obj client.Object) []string {
-		p, ok := obj.(*agentsv1alpha1.Platform)
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &platformv1alpha1.Platform{}, tenantSpecField, func(obj client.Object) []string {
+		p, ok := obj.(*platformv1alpha1.Platform)
 		if !ok || p.Spec.Tenant == "" {
 			return nil
 		}
@@ -255,9 +256,9 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index platforms by spec.tenant: %w", err)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&agentsv1alpha1.Tenant{}).
-		Watches(&agentsv1alpha1.Platform{}, handler.EnqueueRequestsFromMapFunc(r.platformToTenant), builder.WithPredicates()).
-		Watches(&agentsv1alpha1.BudgetPolicy{}, handler.EnqueueRequestsFromMapFunc(r.budgetToTenant), builder.WithPredicates()).
+		For(&platformv1alpha1.Tenant{}).
+		Watches(&platformv1alpha1.Platform{}, handler.EnqueueRequestsFromMapFunc(r.platformToTenant), builder.WithPredicates()).
+		Watches(&governancev1alpha1.BudgetPolicy{}, handler.EnqueueRequestsFromMapFunc(r.budgetToTenant), builder.WithPredicates()).
 		Named("tenant").
 		WithOptions(ctrlruntime.Options{MaxConcurrentReconciles: c}).
 		Complete(r)
@@ -266,7 +267,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // platformToTenant maps a Platform change to a Tenant reconcile request
 // on its owning Tenant (Platform.spec.tenant). Empty tenant → no enqueue.
 func (r *TenantReconciler) platformToTenant(_ context.Context, obj client.Object) []reconcile.Request {
-	p, ok := obj.(*agentsv1alpha1.Platform)
+	p, ok := obj.(*platformv1alpha1.Platform)
 	if !ok || p.Spec.Tenant == "" {
 		return nil
 	}
@@ -277,11 +278,11 @@ func (r *TenantReconciler) platformToTenant(_ context.Context, obj client.Object
 // looking up its referenced Platform first. Two lookups per budget
 // change is acceptable — budget reconciles are infrequent (hourly+).
 func (r *TenantReconciler) budgetToTenant(ctx context.Context, obj client.Object) []reconcile.Request {
-	bp, ok := obj.(*agentsv1alpha1.BudgetPolicy)
+	bp, ok := obj.(*governancev1alpha1.BudgetPolicy)
 	if !ok || bp.Spec.PlatformRef.Name == "" {
 		return nil
 	}
-	var p agentsv1alpha1.Platform
+	var p platformv1alpha1.Platform
 	if err := r.Get(ctx, types.NamespacedName{Namespace: bp.Namespace, Name: bp.Spec.PlatformRef.Name}, &p); err != nil {
 		return nil
 	}

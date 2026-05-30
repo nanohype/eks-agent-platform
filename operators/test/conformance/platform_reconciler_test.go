@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
@@ -36,7 +36,7 @@ func newPlatformReconciler() *controller.PlatformReconciler {
 // The platform reconciler intentionally returns Requeue=true on the first
 // pass (after adding the finalizer) so a single Reconcile call isn't enough
 // to reach Ready.
-func reconcileOnce(ctx context.Context, t *testing.T, p *agentsv1alpha1.Platform) {
+func reconcileOnce(ctx context.Context, t *testing.T, p *platformv1alpha1.Platform) {
 	t.Helper()
 	r := newPlatformReconciler()
 	for i := 0; i < 5; i++ {
@@ -51,9 +51,9 @@ func reconcileOnce(ctx context.Context, t *testing.T, p *agentsv1alpha1.Platform
 	t.Fatalf("reconcile did not converge in 5 attempts")
 }
 
-func getPlatform(ctx context.Context, t *testing.T, ns, name string) *agentsv1alpha1.Platform {
+func getPlatform(ctx context.Context, t *testing.T, ns, name string) *platformv1alpha1.Platform {
 	t.Helper()
-	var got agentsv1alpha1.Platform
+	var got platformv1alpha1.Platform
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &got); err != nil {
 		t.Fatalf("get platform: %v", err)
 	}
@@ -64,13 +64,13 @@ func TestPlatformReconciler_CreatesTenantNamespaceWithPSS(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona:  "marketing",
 			Tenant:   "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -98,13 +98,13 @@ func TestPlatformReconciler_InstallsResourceQuotaAndLimitRange(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona:  "ops",
 			Tenant:   "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -134,12 +134,12 @@ func TestPlatformReconciler_InstallsNetworkPolicy(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "eng", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -164,12 +164,12 @@ func TestPlatformReconciler_StatusGoesToReady(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "founder", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -204,12 +204,12 @@ func TestPlatformReconciler_FinalizerCleansUpOnDelete(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	p := &agentsv1alpha1.Platform{
+	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
-		Spec: agentsv1alpha1.PlatformSpec{
+		Spec: platformv1alpha1.PlatformSpec{
 			Persona: "legal", Tenant: "acme",
-			Budget:   agentsv1alpha1.BudgetRef{Name: "x"},
-			Identity: agentsv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
 		},
 	}
 	mustCreate(ctx, t, p)

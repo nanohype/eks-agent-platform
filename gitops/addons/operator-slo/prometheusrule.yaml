@@ -122,7 +122,7 @@ spec:
             component: kill-switch
           annotations:
             summary: "Platform {{ $labels.name }} suspended by kill-switch"
-            description: "Tenant IRSA role has been detached. Check BudgetPolicy + invoke spend. Operator will keep the platform suspended until the agents.stxkxs.io/suspended IAM tag is removed."
+            description: "Tenant IRSA role has been detached. Check BudgetPolicy + invoke spend. Operator will keep the platform suspended until the platform.nanohype.dev/suspended IAM tag is removed."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/platform-suspended.md
 
         # Tenant aggregate spend over its soft cap.

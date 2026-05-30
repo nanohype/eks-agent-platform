@@ -13,7 +13,8 @@ import (
 	"sort"
 	"strings"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // PersonaDefaults describes the persona-flexed defaults the
@@ -55,7 +56,7 @@ type PersonaDefaults struct {
 
 	// ComplianceDefaults — finance, legal, support default soc2=true;
 	// founder and eng default soc2=false unless explicitly set.
-	Compliance agentsv1alpha1.ComplianceSpec
+	Compliance platformv1alpha1.ComplianceSpec
 
 	// PrimaryRateLimit (rpm) on the primary route.
 	PrimaryRateLimit int32
@@ -97,7 +98,7 @@ var personaCatalog = map[string]PersonaDefaults{
 		SecondaryRateLimit: 30,
 		MonthlyBudgetUsd:   "1500",
 		FleetMin:           1, FleetMax: 5,
-		Compliance: agentsv1alpha1.ComplianceSpec{SOC2: true},
+		Compliance: platformv1alpha1.ComplianceSpec{SOC2: true},
 		DefaultAgents: []agentsv1alpha1.AgentSpec{
 			{
 				Name:         "triager",
@@ -113,7 +114,7 @@ var personaCatalog = map[string]PersonaDefaults{
 		PrimaryRateLimit: 20,
 		MonthlyBudgetUsd: "1000",
 		FleetMin:         1, FleetMax: 2,
-		Compliance: agentsv1alpha1.ComplianceSpec{SOC2: true},
+		Compliance: platformv1alpha1.ComplianceSpec{SOC2: true},
 		DefaultAgents: []agentsv1alpha1.AgentSpec{
 			{
 				Name:         "month-end-helper",
@@ -129,7 +130,7 @@ var personaCatalog = map[string]PersonaDefaults{
 		PrimaryRateLimit: 30,
 		MonthlyBudgetUsd: "1500",
 		FleetMin:         1, FleetMax: 3,
-		Compliance: agentsv1alpha1.ComplianceSpec{SOC2: true},
+		Compliance: platformv1alpha1.ComplianceSpec{SOC2: true},
 		DefaultAgents: []agentsv1alpha1.AgentSpec{
 			{
 				Name:         "incident-summarizer",
@@ -196,7 +197,7 @@ var personaCatalog = map[string]PersonaDefaults{
 		PrimaryRateLimit: 15,
 		MonthlyBudgetUsd: "800",
 		FleetMin:         0, FleetMax: 2,
-		Compliance: agentsv1alpha1.ComplianceSpec{SOC2: true, HIPAA: false},
+		Compliance: platformv1alpha1.ComplianceSpec{SOC2: true, HIPAA: false},
 		DefaultAgents: []agentsv1alpha1.AgentSpec{
 			{
 				Name:         "contract-reviewer",

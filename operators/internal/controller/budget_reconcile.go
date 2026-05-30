@@ -27,7 +27,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // killSwitchBreachPercent is the percent-of-budget at which the kill-
@@ -38,7 +39,7 @@ const killSwitchBreachPercent int32 = 120
 // budgetEventSource is the EventBridge `Source` value the kill-switch
 // rule subscribes to. Keep stable — changing it requires a coordinated
 // terraform/components/kill-switch update.
-const budgetEventSource = "agents.stxkxs.io/budget"
+const budgetEventSource = "governance.nanohype.dev/budget"
 
 // bedrockInvocationCostMetric is the per-minute CloudWatch metric the
 // Bedrock invocation logger publishes via the cost-pipeline component.
@@ -63,8 +64,8 @@ var errPlatformBudgetNotFound = errors.New("budget platformRef not found")
 
 // resolveBudgetPlatform fetches the referenced Platform. Same shape as
 // the ModelGateway/AgentFleet resolvers.
-func (r *BudgetReconciler) resolveBudgetPlatform(ctx context.Context, bp *agentsv1alpha1.BudgetPolicy) (*agentsv1alpha1.Platform, error) {
-	var p agentsv1alpha1.Platform
+func (r *BudgetReconciler) resolveBudgetPlatform(ctx context.Context, bp *governancev1alpha1.BudgetPolicy) (*platformv1alpha1.Platform, error) {
+	var p platformv1alpha1.Platform
 	key := types.NamespacedName{Namespace: bp.Namespace, Name: bp.Spec.PlatformRef.Name}
 	if err := r.Get(ctx, key, &p); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -320,7 +321,7 @@ func shouldAlertAt(thresholds []int32, lastPct, currentPct int32) int32 {
 // We carry both the spend snapshot and the budget threshold in the
 // event payload so the SFN execution can render an audit-trail message
 // without re-reading Kubernetes state.
-func (r *BudgetReconciler) fireKillSwitch(ctx context.Context, bp *agentsv1alpha1.BudgetPolicy, spend string, pct int32) error {
+func (r *BudgetReconciler) fireKillSwitch(ctx context.Context, bp *governancev1alpha1.BudgetPolicy, spend string, pct int32) error {
 	if r.EventBridge == nil || r.KillSwitchEventBusName == "" {
 		// No bus configured → log-only mode. The status condition already
 		// records the breach; ops alerting can fire from there.
@@ -380,7 +381,7 @@ type budgetReading struct {
 	platformReady   bool
 }
 
-func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *agentsv1alpha1.BudgetPolicy) (budgetReading, error) {
+func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1alpha1.BudgetPolicy) (budgetReading, error) {
 	platform, err := r.resolveBudgetPlatform(ctx, bp)
 	if err != nil {
 		if errors.Is(err, errPlatformBudgetNotFound) {
@@ -441,7 +442,7 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *agentsv1alph
 
 // applyBudgetStatus writes the computed reading into status and emits
 // the matching Conditions/Events.
-func (r *BudgetReconciler) applyBudgetStatus(ctx context.Context, bp *agentsv1alpha1.BudgetPolicy, reading budgetReading) error {
+func (r *BudgetReconciler) applyBudgetStatus(ctx context.Context, bp *governancev1alpha1.BudgetPolicy, reading budgetReading) error {
 	bp.Status.CurrentSpendUsd = reading.spendUsd
 	bp.Status.PercentOfBudget = reading.pct
 	now := metav1.Now()
@@ -477,7 +478,7 @@ func (r *BudgetReconciler) applyBudgetStatus(ctx context.Context, bp *agentsv1al
 // running" without inspecting logs. LastReconciled is not bumped — the
 // existing timestamp keeps reflecting the last successful tick, which is
 // what the budget-stale alert wants.
-func (r *BudgetReconciler) applyBudgetStatusError(ctx context.Context, bp *agentsv1alpha1.BudgetPolicy, reason string, cause error) error {
+func (r *BudgetReconciler) applyBudgetStatusError(ctx context.Context, bp *governancev1alpha1.BudgetPolicy, reason string, cause error) error {
 	upsertCondition(&bp.Status.Conditions, metav1.Condition{
 		Type:               "BudgetReconciled",
 		Status:             metav1.ConditionFalse,

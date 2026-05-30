@@ -1,4 +1,4 @@
-apiVersion: agents.stxkxs.io/v1alpha1
+apiVersion: governance.nanohype.dev/v1alpha1
 kind: BudgetPolicy
 metadata:
   name: {{ .Values.platform.name }}-budget
