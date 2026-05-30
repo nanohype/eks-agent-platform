@@ -27,3 +27,13 @@ output "invocation_cost_publisher_function_name" {
   description = "Name of the Lambda that republishes Bedrock invocation cost as a per-PlatformId CloudWatch metric."
   value       = aws_lambda_function.invocation_cost_publisher.function_name
 }
+
+output "estimate_table_name" {
+  description = "Glue table over the per-platform daily invocation-cost estimate prefix (partition projection on usage_date)."
+  value       = local.estimate_table_name
+}
+
+output "reconciliation_view" {
+  description = "Athena view name (estimate vs CUR truth) created by the spend_reconciliation saved query. Materialize it by running that query once in the cost workgroup."
+  value       = local.reconciliation_view
+}
