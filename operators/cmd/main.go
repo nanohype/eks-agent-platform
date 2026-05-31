@@ -179,6 +179,7 @@ func main() {
 		Client:      mgr.GetClient(),
 		Scheme:      mgr.GetScheme(),
 		Concurrency: gatewayWorkers,
+		Region:      region,
 	}
 	if opConfig != nil {
 		gatewayReconciler.GuardrailID = opConfig.BaselineGuardrailID
