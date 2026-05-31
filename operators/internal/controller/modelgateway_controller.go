@@ -37,12 +37,18 @@ type ModelGatewayReconciler struct {
 	// Guardrails or when var.enable_guardrails_baseline=false.
 	GuardrailID      string
 	GuardrailVersion string
+
+	// Region is the AWS region stamped onto each AgentgatewayBackend's
+	// Bedrock provider. Empty falls back to the agentgateway pod's ambient
+	// region (its IRSA/credential-chain region).
+	Region string
 }
 
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways/finalizers,verbs=update
-// +kubebuilder:rbac:groups=agentgateway.dev,resources=routes;listeners,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=agentgateway.dev,resources=agentgatewaybackends;agentgatewaypolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives a ModelGateway CR toward its desired state.
 func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -56,7 +62,7 @@ func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Finalizer-driven cleanup. Same pattern as PlatformReconciler.
 	if !gw.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&gw, modelGatewayFinalizer) {
-			if err := r.cleanupAgentgatewayRoutes(ctx, &gw); err != nil {
+			if err := r.cleanupGatewayResources(ctx, &gw); err != nil {
 				return ctrl.Result{}, err
 			}
 			controllerutil.RemoveFinalizer(&gw, modelGatewayFinalizer)

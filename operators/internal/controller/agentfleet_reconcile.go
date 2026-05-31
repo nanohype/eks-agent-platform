@@ -34,7 +34,11 @@ const agentFleetFinalizer = "agents.nanohype.dev/agentfleet-finalizer"
 // the missing-CRD as a Pending state, not a reconcile error.
 var (
 	kagentGV = schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha1"}
-	kedaGV   = schema.GroupVersion{Group: "keda.sh", Version: "v1alpha1"}
+	// Agent's storage version is v1alpha2 (declarative wrapper); ModelConfig
+	// is emitted at v1alpha1 (its fields convert cleanly to the v1alpha2
+	// storage version).
+	kagentAgentGV = schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha2"}
+	kedaGV        = schema.GroupVersion{Group: "keda.sh", Version: "v1alpha1"}
 )
 
 // tenantSAName is the ServiceAccount tenant pods run under; matches the
@@ -146,71 +150,120 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 	return err
 }
 
-// ensureKagentAgents emits one kagent.dev/v1alpha1 Agent + ModelConfig
-// per AgentSpec in the fleet. Idempotent; tolerates absent kagent CRDs.
+// ensureKagentAgents emits, per AgentSpec in the fleet, a kagent ModelConfig
+// and a kagent Agent bound to it. The ModelConfig is provider=OpenAI pointed
+// at the Platform's agentgateway route — agentgateway exposes an
+// OpenAI-compatible endpoint and proxies to Bedrock (applying the route's
+// guardrail + rate limit), authenticating with its own IRSA. No client API
+// key is set: the gateway does the auth, and the operator does not write
+// Secrets (tenant credentials flow through ExternalSecrets). Idempotent;
+// tolerates absent kagent CRDs (NoKindMatch → Pending).
 func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+	ns := PlatformNamespace(p)
+	gwHost := fmt.Sprintf("%s-gateway.%s.svc.cluster.local:%d", p.Name, agentgatewayNamespace, gatewayListenerPort)
 	for _, agent := range fleet.Spec.Agents {
-		// kagent Agent CR
-		ag := &unstructured.Unstructured{}
-		ag.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: "Agent"})
-		ag.SetName(fleet.Name + "-" + agent.Name)
-		ag.SetNamespace(PlatformNamespace(p))
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ag, func() error {
-			ag.SetLabels(map[string]string{
-				"app.kubernetes.io/managed-by": "eks-agent-platform",
-				"eks-agent-platform/platform":  p.Name,
-				"eks-agent-platform/fleet":     fleet.Name,
-				"eks-agent-platform/agent":     agent.Name,
-			})
+		base := fleet.Name + "-" + agent.Name
+		configName := base + "-config"
+		labels := map[string]string{
+			"app.kubernetes.io/managed-by": "eks-agent-platform",
+			"eks-agent-platform/platform":  p.Name,
+			"eks-agent-platform/fleet":     fleet.Name,
+			"eks-agent-platform/agent":     agent.Name,
+		}
+
+		// kagent ModelConfig — provider OpenAI pointed at the route's
+		// OpenAI-compatible endpoint on the per-Platform Gateway. The
+		// agentgateway backend pins the real Bedrock model; the model here
+		// is the OpenAI passthrough identifier (set to the resolved model so
+		// it stays correct whether or not the gateway overrides it).
+		mc := &unstructured.Unstructured{}
+		mc.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: "ModelConfig"})
+		mc.SetName(configName)
+		mc.SetNamespace(ns)
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, mc, func() error {
+			mc.SetLabels(labels)
 			spec := map[string]any{
-				"systemPrompt": agent.SystemPrompt,
-				"modelConfig":  fleet.Name + "-" + agent.Name + "-config",
+				"provider": "OpenAI",
+				"model":    r.resolveRouteModel(ctx, fleet, agent.ModelRoute),
+				"openAI": map[string]any{
+					"baseUrl": fmt.Sprintf("http://%s/%s-%s/v1", gwHost, p.Name, agent.ModelRoute),
+				},
+			}
+			return unstructured.SetNestedField(mc.Object, spec, "spec")
+		}); err != nil {
+			if isNoKindMatch(err) {
+				return errKagentNotInstalled
+			}
+			return fmt.Errorf("kagent ModelConfig %s/%s: %w", ns, configName, err)
+		}
+
+		// kagent Agent — bound to the ModelConfig. The storage version is
+		// kagent.dev/v1alpha2, which nests the agent config in a
+		// `declarative` block under spec.type=Declarative; the flat
+		// v1alpha1 fields are dropped on conversion, so emit v1alpha2
+		// directly. systemMessage is the instruction text (renamed from
+		// systemPrompt in the API this operator originally targeted).
+		ag := &unstructured.Unstructured{}
+		ag.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentAgentGV.Group, Version: kagentAgentGV.Version, Kind: "Agent"})
+		ag.SetName(base)
+		ag.SetNamespace(ns)
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ag, func() error {
+			ag.SetLabels(labels)
+			declarative := map[string]any{
+				"modelConfig":   configName,
+				"systemMessage": agent.SystemPrompt,
 			}
 			if len(agent.Tools) > 0 {
 				toolRefs := make([]any, 0, len(agent.Tools))
 				for _, t := range agent.Tools {
-					toolRefs = append(toolRefs, map[string]any{"name": t.Name})
+					toolRefs = append(toolRefs, map[string]any{
+						"type":      "McpServer",
+						"mcpServer": map[string]any{"toolServer": t.Name},
+					})
 				}
-				spec["tools"] = toolRefs
+				declarative["tools"] = toolRefs
+			}
+			spec := map[string]any{
+				"type":        "Declarative",
+				"declarative": declarative,
+				"description": fmt.Sprintf("%s fleet agent %q", fleet.Name, agent.Name),
 			}
 			return unstructured.SetNestedField(ag.Object, spec, "spec")
-		})
-		if err != nil {
+		}); err != nil {
 			if isNoKindMatch(err) {
 				return errKagentNotInstalled
 			}
-			return fmt.Errorf("kagent Agent %s/%s: %w", PlatformNamespace(p), agent.Name, err)
-		}
-
-		// kagent ModelConfig pointing at the local ModelGateway's named route.
-		mc := &unstructured.Unstructured{}
-		mc.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: "ModelConfig"})
-		mc.SetName(fleet.Name + "-" + agent.Name + "-config")
-		mc.SetNamespace(PlatformNamespace(p))
-		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, mc, func() error {
-			mc.SetLabels(map[string]string{
-				"app.kubernetes.io/managed-by": "eks-agent-platform",
-				"eks-agent-platform/platform":  p.Name,
-				"eks-agent-platform/fleet":     fleet.Name,
-				"eks-agent-platform/agent":     agent.Name,
-			})
-			spec := map[string]any{
-				"provider": map[string]any{
-					"type":    "agentgateway",
-					"baseURL": "http://agentgateway.agentgateway.svc.cluster.local:8080",
-					"route":   p.Name + "-" + agent.ModelRoute,
-				},
-			}
-			return unstructured.SetNestedField(mc.Object, spec, "spec")
-		})
-		if err != nil {
-			if isNoKindMatch(err) {
-				return errKagentNotInstalled
-			}
-			return fmt.Errorf("kagent ModelConfig %s/%s: %w", PlatformNamespace(p), agent.Name, err)
+			return fmt.Errorf("kagent Agent %s/%s: %w", ns, base, err)
 		}
 	}
 	return nil
+}
+
+// resolveRouteModel finds the effective Bedrock model id for a named route
+// on the fleet's Platform ModelGateway (cross-region inference profile when
+// set, else the bare model id). Falls back to the route name when the
+// gateway/route can't be found — the agentgateway backend pins the real
+// model regardless, so this is only the OpenAI "model" passthrough.
+func (r *AgentFleetReconciler) resolveRouteModel(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, routeName string) string {
+	var gws agentsv1alpha1.ModelGatewayList
+	if err := r.List(ctx, &gws, client.InNamespace(fleet.Namespace)); err == nil {
+		for i := range gws.Items {
+			mg := &gws.Items[i]
+			if mg.Spec.PlatformRef.Name != fleet.Spec.PlatformRef.Name {
+				continue
+			}
+			for _, rt := range mg.Spec.Routes {
+				if rt.Name != routeName {
+					continue
+				}
+				if rt.CrossRegionProfile != "" {
+					return rt.CrossRegionProfile
+				}
+				return rt.ModelID
+			}
+		}
+	}
+	return routeName
 }
 
 var (
@@ -369,6 +422,7 @@ func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, fleet 
 	ns := PlatformNamespace(p)
 	// kagent objects
 	for _, agent := range fleet.Spec.Agents {
+		base := fleet.Name + "-" + agent.Name
 		for _, kind := range []string{"Agent", "ModelConfig"} {
 			suffix := "-config"
 			if kind == "Agent" {
@@ -376,7 +430,7 @@ func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, fleet 
 			}
 			o := &unstructured.Unstructured{}
 			o.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: kind})
-			o.SetName(fleet.Name + "-" + agent.Name + suffix)
+			o.SetName(base + suffix)
 			o.SetNamespace(ns)
 			if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
 				return fmt.Errorf("delete kagent %s %s: %w", kind, o.GetName(), err)
