@@ -28,10 +28,11 @@ type Config struct {
 	Region      string
 
 	// agent-iam outputs
-	OperatorRoleARN         string
-	TenantIAMPath           string
-	TenantBaselinePolicyARN string
-	AllowedRegions          []string
+	OperatorRoleARN              string
+	TenantIAMPath                string
+	TenantBaselinePolicyARN      string
+	TenantPermissionsBoundaryARN string
+	AllowedRegions               []string
 
 	// model-artifacts outputs
 	ArtifactsBucketARN    string
@@ -113,6 +114,8 @@ func (c *Config) assign(suffix, value string) {
 		c.TenantIAMPath = value
 	case "agent-iam/tenant_baseline_policy_arn":
 		c.TenantBaselinePolicyARN = value
+	case "agent-iam/tenant_permissions_boundary_arn":
+		c.TenantPermissionsBoundaryARN = value
 	case "model-artifacts/bucket_arn":
 		c.ArtifactsBucketARN = value
 	case "model-artifacts/bucket_name":

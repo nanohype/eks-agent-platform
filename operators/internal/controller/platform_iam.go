@@ -115,9 +115,15 @@ func assumeRolePolicyForOIDC(oidcProviderARN, oidcIssuerHost, namespace, service
 type IAMConfig struct {
 	TenantIAMPath           string
 	TenantBaselinePolicyARN string
-	OIDCProviderARN         string
-	OIDCIssuerHost          string // e.g. oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE
-	Environment             string
+	// TenantPermissionsBoundaryARN, when set, is attached as the permissions
+	// boundary on every tenant role the operator creates — capping a tenant
+	// role's effective privileges regardless of which managed policies a
+	// Platform CR requests. The operator's own IAM policy requires this
+	// boundary on CreateRole/Attach, so it must be set on real clusters.
+	TenantPermissionsBoundaryARN string
+	OIDCProviderARN              string
+	OIDCIssuerHost               string // e.g. oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE
+	Environment                  string
 }
 
 // ensureIamRole creates (or no-ops if already present) the tenant IRSA
@@ -180,7 +186,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		return platformSuspension{}, fmt.Errorf("iam GetRole: %w", getErr)
 	}
 
-	createOut, err := r.IAM.CreateRole(ctx, &iam.CreateRoleInput{
+	createInput := &iam.CreateRoleInput{
 		RoleName:                 aws.String(name),
 		Path:                     aws.String(path),
 		AssumeRolePolicyDocument: aws.String(trust),
@@ -192,7 +198,11 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 			{Key: aws.String("Environment"), Value: aws.String(cfg.Environment)},
 			{Key: aws.String("ManagedBy"), Value: aws.String("eks-agent-platform")},
 		},
-	})
+	}
+	if cfg.TenantPermissionsBoundaryARN != "" {
+		createInput.PermissionsBoundary = aws.String(cfg.TenantPermissionsBoundaryARN)
+	}
+	createOut, err := r.IAM.CreateRole(ctx, createInput)
 	if err != nil {
 		return platformSuspension{}, fmt.Errorf("iam CreateRole %s: %w", name, err)
 	}
