@@ -123,10 +123,15 @@ priorityClassName: system-cluster-critical
 
 networkPolicy:
   enabled: true
-  # CIDR of the kube-apiserver service. EKS default is 172.20.0.1/32; legacy
-  # clusters or self-managed clusters may use a different service IP (e.g.
-  # 10.100.0.1/32). Override per-environment if your cluster's service CIDR
-  # differs from the default.
+  # Policy engine. `cilium` emits a CiliumNetworkPolicy that allows egress to
+  # the kube-apiserver via its reserved identity — the only way to express
+  # that under cilium, which is the CNI on every cluster this operator runs
+  # on (kx + EKS). `kubernetes` emits a vanilla NetworkPolicy for non-cilium
+  # clusters (its kube-apiserver egress rule does NOT work under cilium).
+  engine: cilium
+  # CIDR of the kube-apiserver service. Only used by the `kubernetes` engine.
+  # EKS default is 172.20.0.1/32; legacy or self-managed clusters may use a
+  # different service IP (e.g. 10.100.0.1/32). Override per-environment.
   kubernetesServiceCIDR: "172.20.0.1/32"
 
 podDisruptionBudget:
