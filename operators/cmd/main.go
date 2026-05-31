@@ -155,11 +155,12 @@ func main() {
 		platformReconciler.KMS = awsClients.KMS
 		platformReconciler.S3 = awsClients.S3
 		platformReconciler.IAMCfg = controller.IAMConfig{
-			TenantIAMPath:           opConfig.TenantIAMPath,
-			TenantBaselinePolicyARN: opConfig.TenantBaselinePolicyARN,
-			OIDCProviderARN:         oidcProviderARN,
-			OIDCIssuerHost:          oidcIssuerHost,
-			Environment:             environment,
+			TenantIAMPath:                opConfig.TenantIAMPath,
+			TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,
+			TenantPermissionsBoundaryARN: opConfig.TenantPermissionsBoundaryARN,
+			OIDCProviderARN:              oidcProviderARN,
+			OIDCIssuerHost:               oidcIssuerHost,
+			Environment:                  environment,
 		}
 		platformReconciler.AWSCfg = controller.PlatformAWSConfig{
 			// cmk-data ARN isn't in operatorconfig today; the operator reads

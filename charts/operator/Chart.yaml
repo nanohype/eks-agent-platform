@@ -4,7 +4,9 @@ description: eks-agent-platform — Kubernetes operator (CRDs + Deployment + RBA
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-kubeVersion: ">=1.32.0"
+# `-0` admits pre-release-tagged versions so the constraint matches managed
+# distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
+kubeVersion: ">=1.32.0-0"
 home: https://github.com/nanohype/eks-agent-platform
 sources:
   - https://github.com/nanohype/eks-agent-platform
