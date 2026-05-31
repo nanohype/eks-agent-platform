@@ -7,6 +7,22 @@
 #     --set platform.tenant=acme \
 #     --set budget.monthlyUsd=2500
 
+# Where this tenant's control-plane CRs (Platform, BudgetPolicy, ModelGateway,
+# AgentFleet, EvalSuite) live. This is the first dial of the tenant isolation
+# tier — the template grows with you instead of being outgrown:
+#   shared (default)  controlPlaneNamespace: eks-agent-platform — every tenant's
+#                     control-plane CRs in one platform-team-owned namespace.
+#                     Simplest; right for a startup / few tenants.
+#   dedicated         controlPlaneNamespace: eap-tenant-<name> — per-tenant
+#                     control-plane namespace for isolation / per-tenant GitOps
+#                     granularity at scale or under compliance.
+#   harder            platform.isolation: vcluster, then a dedicated cluster —
+#                     the workload-side dials, orthogonal to this one.
+# The Tenant CR is cluster-scoped and the operator watches Platforms
+# cluster-wide, so moving a tenant up a tier is a re-render, never a migration.
+# See docs/architecture/tenant-isolation-tiers.md.
+controlPlaneNamespace: eks-agent-platform
+
 platform:
   name: "" # required
   tenant: "" # required

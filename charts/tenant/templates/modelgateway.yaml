@@ -2,7 +2,7 @@ apiVersion: agents.nanohype.dev/v1alpha1
 kind: ModelGateway
 metadata:
   name: {{ .Values.platform.name }}-gateway
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Values.controlPlaneNamespace | default .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
     eks-agent-platform/tenant: {{ .Values.platform.tenant }}
