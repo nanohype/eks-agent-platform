@@ -111,20 +111,27 @@ boundary ARNs) from SSM via its IRSA role. Verify:
 cd portal && docker compose up -d && task dev
 ```
 
-Config the worker (env): `GITOPS_TENANTS_REPO_URL` (a tenants gitops repo),
+Config the worker (env): `GITOPS_TENANTS_REPO_URL` (the tenants gitops repo),
 `GITOPS_TENANTS_REPO_REF`, `GITOPS_SSH_KEY_PATH`, `GITOPS_AUTHOR_NAME/EMAIL`,
 `EKS_AGENT_PLATFORM_CHARTS_REPO_URL` (the operator repo, for the `charts/tenant`
-boundary chart). Register the EKS cluster (SlimConfig: API endpoint + CA + a
-`view`-bound SA token; add the AWS provider so the connection-test assume-role
-runs). Then drive create-tenant in the UI → it renders `charts/tenant`
-(Platform + BudgetPolicy) → commits to the tenants repo → ArgoCD applies → the
-operator provisions namespace + real per-Platform IRSA + KMS. The app workloads
-land via the eks-gitops `apps-tenants` ApplicationSet, with per-env values from
-`tofu output` (platform role ARN, tenant infra).
+boundary chart). **`GITOPS_TENANTS_REPO_URL` must equal the `repoURL` in the
+eks-gitops `portal-tenants` ApplicationSet** — that's what applies the commits.
+Register the EKS cluster (SlimConfig: API endpoint + CA + a `view`-bound SA
+token; add the AWS provider so the connection-test assume-role runs). Then drive
+create-tenant in the UI → it renders `charts/tenant` (Tenant + Platform +
+BudgetPolicy + agent-plane CRs) → commits to `tenants/<cluster>/<tenant>.yaml` →
+the `portal-tenants` ApplicationSet applies it → the operator provisions the
+namespace + real per-Platform IRSA + KMS → the watcher lists the Tenant back into
+the portal inventory. The app workloads land separately via the `apps-tenants`
+ApplicationSet, with per-env values from `tofu output`.
 
-> Portal-driven deploy is the one path that was NOT live-exercised on EKS in the
-> 2026-05-31 run — verify it on first use. Everything below it (operator real
-> reconcile) is verified.
+> The write→read loop (render → commit → apply → reconcile → watcher observes) was
+> validated on kx on 2026-05-31: the rendered Tenant + Platform reconcile to Ready
+> and the Tenant appears under the watcher's `tenants.platform.nanohype.dev` query,
+> cloudgov-clean. NOT yet exercised on real EKS: the full portal stack
+> (server/worker/DB) + the `portal-tenants` ApplicationSet's ArgoCD apply — verify
+> those on first EKS use. (On kx, ArgoCD is idle by design, so the rehearsal applied
+> the rendered manifest directly.)
 
 ### B4. Validate
 
