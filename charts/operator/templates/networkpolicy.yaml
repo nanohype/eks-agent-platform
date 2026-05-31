@@ -1,4 +1,69 @@
 {{- if .Values.networkPolicy.enabled -}}
+{{- if eq .Values.networkPolicy.engine "cilium" }}
+# CiliumNetworkPolicy — the cilium-native expression of the operator's
+# ingress/egress. Required because a vanilla NetworkPolicy cannot allow
+# egress to the kube-apiserver under cilium: the API ClusterIP resolves to
+# the reserved `kube-apiserver` identity, which ipBlock/CIDR rules (even
+# 0.0.0.0/0) do not match. Without this the operator cannot register its
+# field-indexers and CrashLoops on `dial tcp <apiserver>:443: i/o timeout`.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "operator.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels: {{- include "operator.selectorLabels" . | nindent 6 }}
+  ingress:
+    # Prometheus scrape from the monitoring namespace.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+      toPorts:
+        - ports:
+            - port: "{{ .Values.metrics.port }}"
+              protocol: TCP
+    {{- if .Values.webhooks.enabled }}
+    # Webhook calls originate from the kube-apiserver (reserved identity),
+    # not from a pod, so they need fromEntities rather than fromEndpoints.
+    - fromEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "{{ .Values.webhooks.port }}"
+              protocol: TCP
+    {{- end }}
+  egress:
+    # DNS
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+    # kube-apiserver — matched by reserved identity. This is the rule a
+    # vanilla NetworkPolicy cannot express under cilium.
+    - toEntities:
+        - kube-apiserver
+    # AWS APIs (Bedrock/IAM/KMS/STS/SSM/EventBridge) over TLS — reachable
+    # as `world` whether via public endpoints or in-VPC interface endpoints.
+    - toEntities:
+        - world
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+{{- else }}
+# Vanilla NetworkPolicy — portable fallback for non-cilium clusters
+# (networkPolicy.engine: kubernetes). NOTE: under cilium this cannot allow
+# egress to the kube-apiserver (the API ClusterIP maps to the reserved
+# kube-apiserver identity, which CIDR rules do not match) — use the cilium
+# engine on cilium clusters.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -62,4 +127,5 @@ spec:
           protocol: TCP
         - port: 6443
           protocol: TCP
+{{- end }}
 {{- end }}
