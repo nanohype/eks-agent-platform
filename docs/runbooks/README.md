@@ -14,12 +14,13 @@ Operational playbooks for the eks-agent-platform. Each runbook is referenced by 
 
 ## Scenario-triggered (no automated page)
 
-| Runbook                                                | When                                                       |
-| ------------------------------------------------------ | ---------------------------------------------------------- |
-| [kill-switch-fired.md](./kill-switch-fired.md)         | A tenant calls in panic that their agents stopped working. |
-| [iam-compromise.md](./iam-compromise.md)               | Suspected operator-role compromise; revoke and audit.      |
-| [cluster-failover.md](./cluster-failover.md)           | Primary EKS cluster unreachable; promote standby.          |
-| [cross-region-fallback.md](./cross-region-fallback.md) | A Bedrock region degrades or quotas exhaust.               |
+| Runbook                                                | When                                                                        |
+| ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| [kill-switch-fired.md](./kill-switch-fired.md)         | A tenant calls in panic that their agents stopped working.                  |
+| [iam-compromise.md](./iam-compromise.md)               | Suspected operator-role compromise; revoke and audit.                       |
+| [cluster-failover.md](./cluster-failover.md)           | Primary EKS cluster unreachable; promote standby.                           |
+| [cross-region-fallback.md](./cross-region-fallback.md) | A Bedrock region degrades or quotas exhaust.                                |
+| [deploy-end-to-end.md](./deploy-end-to-end.md)         | Stand up the platform from scratch (local kx or real EKS); or tear it down. |
 
 ## Architecture references
 
