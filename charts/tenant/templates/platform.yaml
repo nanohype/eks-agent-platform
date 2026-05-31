@@ -5,7 +5,7 @@ apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
 metadata:
   name: {{ .Values.platform.name }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Values.controlPlaneNamespace | default .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
     eks-agent-platform/persona: {{ .Values.platform.persona }}
