@@ -38,6 +38,7 @@ type AgentFleetReconciler struct {
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets/finalizers,verbs=update
+// +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kagent.dev,resources=agents;modelconfigs;toolservers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects;triggerauthentications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
