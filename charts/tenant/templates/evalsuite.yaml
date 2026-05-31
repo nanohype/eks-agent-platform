@@ -3,6 +3,7 @@ apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite
 metadata:
   name: {{ .Values.platform.name }}-eval
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
     eks-agent-platform/tenant: {{ .Values.platform.tenant }}

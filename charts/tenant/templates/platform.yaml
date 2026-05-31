@@ -5,6 +5,7 @@ apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
 metadata:
   name: {{ .Values.platform.name }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
     eks-agent-platform/persona: {{ .Values.platform.persona }}
@@ -17,8 +18,19 @@ spec:
   budget:
     name: {{ .Values.platform.name }}-budget
   identity:
-    allowedModelFamilies: {{- toYaml .Values.identity.allowedModelFamilies | nindent 6 }}
+    # allowedModels and allowedModelFamilies are mutually exclusive in the CRD —
+    # emit exactly one, and fail the render rather than ship a Platform the
+    # operator's webhook rejects (or a both-empty identity that passes admission
+    # but fails the conformance audit).
+{{- if and (gt (len .Values.identity.allowedModels) 0) (gt (len .Values.identity.allowedModelFamilies) 0) }}
+{{- fail "identity.allowedModels and identity.allowedModelFamilies are mutually exclusive; set only one" }}
+{{- else if gt (len .Values.identity.allowedModels) 0 }}
     allowedModels: {{- toYaml .Values.identity.allowedModels | nindent 6 }}
+{{- else if gt (len .Values.identity.allowedModelFamilies) 0 }}
+    allowedModelFamilies: {{- toYaml .Values.identity.allowedModelFamilies | nindent 6 }}
+{{- else }}
+{{- fail "identity: set one of allowedModels or allowedModelFamilies" }}
+{{- end }}
     extraPolicyArns: {{- toYaml .Values.identity.extraPolicyArns | nindent 6 }}
   compliance:
     hipaa: {{ .Values.platform.compliance.hipaa }}

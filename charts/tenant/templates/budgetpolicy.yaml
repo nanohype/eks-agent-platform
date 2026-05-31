@@ -1,7 +1,11 @@
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]{1,2})?$" (toString .Values.budget.monthlyUsd)) }}
+{{- fail "budget.monthlyUsd must be a non-negative decimal string with up to 2 fractional digits" }}
+{{- end -}}
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: BudgetPolicy
 metadata:
   name: {{ .Values.platform.name }}-budget
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
     eks-agent-platform/tenant: {{ .Values.platform.tenant }}
@@ -10,4 +14,7 @@ spec:
     name: {{ .Values.platform.name }}
   monthlyUsd: {{ .Values.budget.monthlyUsd | quote }}
   alertThresholdsPercent: {{- toYaml .Values.budget.alertThresholdsPercent | nindent 4 }}
-  killSwitchEnabled: {{ .Values.budget.killSwitchEnabled }}
+  # SOC2 tenants must keep the budget kill-switch armed — force it on whenever
+  # compliance.soc2 is set, so the conformance invariant holds on every render
+  # path (CLI and portal), not just when the value happens to be true.
+  killSwitchEnabled: {{ or .Values.budget.killSwitchEnabled .Values.platform.compliance.soc2 }}

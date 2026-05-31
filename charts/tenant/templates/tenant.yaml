@@ -1,0 +1,21 @@
+{{- if .Values.platform.createTenant }}
+# Tenant is cluster-scoped: the owning team a Platform belongs to (one Tenant can
+# own many Platforms). The portal watcher lists Tenants into its inventory, and
+# cloudgov requires the Tenant that Platform.spec.tenant references to exist — so
+# the tenant-owner Platform emits it here. Set platform.createTenant=false on
+# additional Platforms that share an already-created Tenant.
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Tenant
+metadata:
+  name: {{ .Values.platform.tenant }}
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+spec:
+  displayName: {{ .Values.platform.displayName | default .Values.platform.tenant | quote }}
+  primaryPersona: {{ .Values.platform.persona }}
+  aggregateMonthlyBudgetUsd: {{ .Values.budget.monthlyUsd | quote }}
+  compliance:
+    hipaa: {{ .Values.platform.compliance.hipaa }}
+    soc2: {{ .Values.platform.compliance.soc2 }}
+{{- end }}

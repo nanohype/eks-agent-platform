@@ -2,6 +2,7 @@ apiVersion: agents.nanohype.dev/v1alpha1
 kind: AgentFleet
 metadata:
   name: {{ .Values.platform.name }}-fleet
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
     eks-agent-platform/tenant: {{ .Values.platform.tenant }}
