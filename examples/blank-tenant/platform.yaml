@@ -1,6 +1,26 @@
-# The CRs all live in a single management namespace (eks-agent-platform).
-# The operator creates the tenant *workload* namespace (tenants-blank)
-# separately at reconcile time — that's where agent pods land.
+# The namespaced CRs all live in a single management namespace
+# (eks-agent-platform). The operator creates the tenant *workload* namespace
+# (tenants-blank) separately at reconcile time — that's where agent pods land.
+#
+# Tenant is cluster-scoped: it's the owning team a Platform belongs to (one
+# Tenant can own multiple Platforms). Platform.spec.tenant references it by
+# name, and a Platform must be at least as strict as its Tenant's compliance
+# baseline.
+---
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Tenant
+metadata:
+  name: example
+spec:
+  displayName: Example team
+  primaryPersona: generic
+  aggregateMonthlyBudgetUsd: "100"
+  contact:
+    billingEmail: platform@example.com
+    slackChannel: "#example-platform"
+  compliance:
+    soc2: true
+    hipaa: false
 ---
 apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
