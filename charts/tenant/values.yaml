@@ -13,6 +13,10 @@ platform:
   persona: generic # one of: sales-ops, support, finance, ops, founder, eng, marketing, legal, generic
   displayName: ""
   isolation: namespace # or vcluster
+  # Emit the cluster-scoped Tenant CR this Platform belongs to. Default true
+  # (one tenant = one Platform). Set false on additional Platforms that share an
+  # already-created Tenant (one Tenant owns many Platforms).
+  createTenant: true
   compliance:
     hipaa: false
     soc2: true
