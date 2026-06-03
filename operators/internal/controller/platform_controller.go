@@ -179,6 +179,17 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	platform.Status.ObservedGeneration = platform.Generation
 
+	// Create the tenant-runtime ServiceAccount (IRSA-annotated with the role just
+	// minted). It is a Platform-level identity primitive: the tenant IRSA role's
+	// trust is scoped to exactly system:serviceaccount:<ns>:tenant-runtime, so the
+	// SA must exist whenever the Platform is Ready — independent of whether the
+	// tenant has an AgentFleet yet. The AgentFleet/AgentSandbox reconcilers also
+	// ensure it; CreateOrUpdate is idempotent so the duplicate call is harmless.
+	if err := ensureTenantServiceAccount(ctx, r.Client, platform); err != nil {
+		logger.Error(err, "ensureTenantServiceAccount failed")
+		return ctrl.Result{}, err
+	}
+
 	if susp.Suspended {
 		platform.Status.Phase = phaseSuspended
 		if platform.Status.SuspendedAt == nil {
