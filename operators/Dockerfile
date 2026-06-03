@@ -11,11 +11,15 @@ COPY api/ api/
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-# TARGETOS + TARGETARCH are auto-populated by buildx when --platform is set.
-# Defaults below let plain `docker build` still work on amd64/linux hosts.
+# TARGETOS + TARGETARCH are auto-populated PER-PLATFORM by buildx — declared
+# WITHOUT defaults on purpose: a default value shadows buildx's per-platform value
+# and silently cross-builds the wrong arch (an amd64 binary inside the arm64 image
+# -> "exec format error" on Graviton nodes). Plain `docker build` without
+# --platform leaves them empty, so Go builds for the native host; pass an explicit
+# --build-arg TARGETARCH=… to cross-build a specific arch by hand.
 ARG VERSION=dev
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" \
     -o /workspace/manager ./cmd
