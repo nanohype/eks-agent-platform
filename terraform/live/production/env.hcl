@@ -5,14 +5,15 @@ locals {
   cost_center   = "engineering"
   business_unit = "platform"
 
-  # account_id is the only environment-identifying value that has to live
-  # in git: terragrunt's `remote_state.config.bucket` evaluates this at
-  # parse time, so the backend bucket name needs it before any AWS API
-  # is reachable. All other infrastructure identifiers (OIDC issuer,
+  # account_id resolves at parse time from the AWS_ACCOUNT_ID environment
+  # variable: terragrunt's `remote_state.config.bucket` embeds it and is
+  # evaluated before any AWS API is reachable, so it can't arrive as a
+  # `TF_VAR_` (those reach the leaf module, not the backend config) — and it
+  # stays out of git. All other infrastructure identifiers (OIDC issuer,
   # VPC/subnet IDs, KMS key ARN, route tables, security group, Karpenter
   # node-role name) come in as `TF_VAR_*` from the orchestrator (portal
   # workspace variables for the production deploy). Leaves declare the
-  # variables in `variables.tf`; if a leaf is run outside portal, set the
-  # corresponding TF_VAR_ in the shell.
-  account_id = "351619759866"
+  # variables in `variables.tf`. The orchestrator sets AWS_ACCOUNT_ID; if a
+  # leaf is run outside portal, export AWS_ACCOUNT_ID (and the TF_VAR_s) first.
+  account_id = get_env("AWS_ACCOUNT_ID")
 }
