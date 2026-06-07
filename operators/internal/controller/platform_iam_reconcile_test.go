@@ -170,8 +170,8 @@ func TestReconcileManagedPolicies(t *testing.T) {
 	const role = "production-acme-tenant"
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
 	extras := []string{
-		"arn:aws:iam::123:policy/almanac-tenant",
-		"arn:aws:iam::123:policy/dispatch-tenant",
+		"arn:aws:iam::123:policy/slack-knowledge-bot-tenant",
+		"arn:aws:iam::123:policy/digest-pipeline-tenant",
 	}
 
 	t.Run("fresh role: attaches baseline + every extra", func(t *testing.T) {
@@ -321,8 +321,8 @@ func TestReconcileManagedPolicies(t *testing.T) {
 func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
 	extras := []string{
-		"arn:aws:iam::123:policy/almanac-tenant",
-		"arn:aws:iam::123:policy/almanac-tenant-bedrock",
+		"arn:aws:iam::123:policy/slack-knowledge-bot-tenant",
+		"arn:aws:iam::123:policy/slack-knowledge-bot-tenant-bedrock",
 	}
 
 	f := newFakeIAM()
@@ -333,7 +333,7 @@ func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 		OIDCIssuerHost:          "example.com/eks",
 		Environment:             "production",
 	}
-	platform := newPlatform("almanac", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "protohype")
 	platform.Spec.Identity.ExtraPolicyArns = extras
 
 	got, err := r.ensureIamRole(context.Background(), platform, cfg)
@@ -359,7 +359,7 @@ func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 
 func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
-	extras := []string{"arn:aws:iam::123:policy/almanac-tenant"}
+	extras := []string{"arn:aws:iam::123:policy/slack-knowledge-bot-tenant"}
 
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
@@ -369,7 +369,7 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 		OIDCIssuerHost:          "example.com/eks",
 		Environment:             "production",
 	}
-	platform := newPlatform("almanac", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "protohype")
 	platform.Spec.Identity.ExtraPolicyArns = extras
 
 	// Seed the role with the suspension marker so ensureIamRole's GetRole

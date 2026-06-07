@@ -31,7 +31,7 @@ Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragr
 | Layer        | What's in it                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `terraform/` | OpenTofu/Terragrunt components: `bedrock` (invocation logging + Guardrails), `model-artifacts` (S3 + KMS), `agent-iam` (operator IRSA + tenant role factory), `agent-egress` (PrivateLink + WAF), `accelerator-pools` (NVIDIA + Neuron), `kill-switch` (EventBridge + Step Functions), `cost-pipeline` (CUR + Athena + Glue Crawler + invocation-cost-publisher Lambda), `eval-runtime` (eval-runner IRSA + Workflow infra). |
-| `operators/` | Go (kubebuilder v4) — one binary, six reconcilers (`tenant`, `platform`, `gateway`, `runtime`, `budget`, `eval`), per-reconciler leader election. Owns per-tenant AWS state via in-cluster IRSA. Also ships `agentctl` CLI.                                                                                                                                                                                                  |
+| `operators/` | Go (kubebuilder v4) — one binary, nine reconcilers (`tenant`, `platform`, `gateway`, `runtime`, `budget`, `eval`, `sandboxpool`, `agentsandbox`, `batch`), one shared leader-election lease. Owns per-tenant AWS state via in-cluster IRSA. Also ships `agentctl` CLI.                                                                                                                                                       |
 | `charts/`    | Helm — `operator` (CRDs + Deployment + RBAC + cert-manager-issued webhook cert), `bedrock-egress`, `tenant` (opinionated `Platform` CR scaffold).                                                                                                                                                                                                                                                                            |
 | `gitops/`    | ArgoCD ApplicationSets layered on top of `eks-gitops`: agentgateway, kagent, KEDA, Argo Workflows + Rollouts, GPU operator, Neuron device plugin, DRA driver, eval-runtime kustomize, operator chart. Per-environment values (dev/staging/production). PrometheusRule + AlertmanagerConfig (`operator-slo`). Grafana dashboards.                                                                                             |
 | `examples/`  | `blank-tenant` (smoke-test single-agent Platform), `agent-fleet` (KEDA + ToolServer snippet), `bedrock-rag` (RAG snippet).                                                                                                                                                                                                                                                                                                   |
@@ -39,7 +39,7 @@ Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragr
 
 ## CRDs
 
-Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Composed on top of kagent's `Agent`/`ModelConfig`/`ToolServer`.
+Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Composed on top of kagent's `Agent`/`ModelConfig`/`ToolServer`.
 
 | Kind           | Scope      | Owns                                                                                     |
 | -------------- | ---------- | ---------------------------------------------------------------------------------------- |
@@ -53,7 +53,7 @@ Split across three capability groups under the `nanohype.dev` domain (version `v
 ## Quickstart
 
 ```bash
-# Prereqs: tofu >=1.11, terragrunt, kubectl, helm, argocd CLI, pnpm >=11, go >=1.24
+# Prereqs: tofu >=1.11, terragrunt, kubectl, helm, argocd CLI, pnpm >=11, go >=1.26
 git clone git@github.com:nanohype/eks-agent-platform.git
 cd eks-agent-platform
 pnpm install
