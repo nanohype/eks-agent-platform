@@ -263,7 +263,10 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *platformv1
 		spec := map[string]interface{}{
 			"description": fmt.Sprintf("AppProject for Platform %s (tenant %s)", p.Name, p.Spec.Tenant),
 			"sourceRepos": []interface{}{
-				"https://github.com/nanohype/eks-agent-platform.git",
+				// Allow every nanohype org repo so a tenant Application can pull
+				// its own chart + values (github.com/nanohype/<app>.git) through
+				// this per-Platform AppProject, plus the operator's own charts.
+				"https://github.com/nanohype/*",
 				"oci://ghcr.io/nanohype/eks-agent-platform/charts/*",
 			},
 			"destinations": []interface{}{

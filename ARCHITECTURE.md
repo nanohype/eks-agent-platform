@@ -4,7 +4,7 @@
 
 ## Bounded contexts
 
-The system organizes around seven bounded contexts. Each gets a CRD, a reconciler in the operator binary, and (where it makes sense) an OpenTofu component and a Helm chart.
+The system organizes around nine bounded contexts. Each gets a CRD, a reconciler in the operator binary, and (where it makes sense) an OpenTofu component and a Helm chart.
 
 | Context           | CRD            | Reconciler | OpenTofu component                | Helm chart       | What it owns                                                                                                                                                                                               |
 | ----------------- | -------------- | ---------- | --------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -19,16 +19,16 @@ The system organizes around seven bounded contexts. Each gets a CRD, a reconcile
 The CRDs are split across three capability groups under the `nanohype.dev` domain, all at version `v1alpha1`:
 
 - **`platform.nanohype.dev`** — the Tenancy and Workspace contexts: `Tenant`, `Platform`
-- **`agents.nanohype.dev`** — the Model-access and Agent-runtime contexts plus the sandbox kinds: `AgentFleet`, `ModelGateway`, `AgentSandbox`, `SandboxPool`
+- **`agents.nanohype.dev`** — the Model-access and Agent-runtime contexts plus the sandbox kinds: `AgentFleet`, `ModelGateway`, `AgentSandbox`, `SandboxPool`, `BatchJob`
 - **`governance.nanohype.dev`** — the Budgets and Evals contexts: `BudgetPolicy`, `EvalSuite`
 
 The field-level reference is regenerated from godoc on every `make manifests` into [`docs/crd-reference/v1alpha1.md`](./docs/crd-reference/v1alpha1.md).
 
 ## Key architectural decisions
 
-### One operator binary, six reconcilers
+### One operator binary, nine reconcilers
 
-A single Go binary registers six reconcilers (`tenant`, `platform`, `gateway`, `runtime`, `budget`, `eval`) with separate leader-election leases. Operationally simpler than six deployments; the split is trivial if any reconciler outgrows it.
+A single Go binary registers nine reconcilers (`tenant`, `platform`, `gateway`, `runtime`, `budget`, `eval`, `sandboxpool`, `agentsandbox`, `batch`) with one shared leader-election lease. Operationally simpler than six deployments; the split is trivial if any reconciler outgrows it.
 
 ### Operator owns fast-moving AWS state; OpenTofu owns slow-moving infra
 
