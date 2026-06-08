@@ -14,49 +14,6 @@ misconfigurations:
     statement: "S3 server access logging destination buckets cannot use SSE-KMS (per AWS docs + the rule description itself). AES256 is the correct config."
 
   # ----------------------------------------------------------------------------
-  # AWS Neuron device plugin — inherent privilege requirements
-  # ----------------------------------------------------------------------------
-  # Device plugins legitimately require root, hostPath, and a public image
-  # registry. We harden what we can (RuntimeDefault seccomp, capabilities
-  # dropped, readOnlyRootFilesystem, allowPrivilegeEscalation: false, dedicated
-  # namespace with privileged PSS rather than kube-system) and accept the rest.
-
-  - id: KSV012 # runAsNonRoot must be true
-    paths:
-      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
-    statement: "Neuron plugin must run as uid 0 to read /sys/class/neuron_device; runAsNonRoot=true blocks startup."
-
-  - id: KSV020 # runAsUser > 10000
-    paths:
-      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
-    statement: "Neuron plugin requires uid 0; high-uid recommendation does not apply to device plugins."
-
-  - id: KSV021 # runAsGroup > 10000
-    paths:
-      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
-    statement: "Neuron plugin requires gid 0; high-gid recommendation does not apply to device plugins."
-
-  - id: KSV105 # runAsUser must not be 0
-    paths:
-      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
-    statement: "Neuron plugin requires uid 0 (see KSV012)."
-
-  - id: KSV116 # supplementary GID 0
-    paths:
-      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
-    statement: "Neuron plugin requires gid 0 (see KSV021)."
-
-  - id: KSV023 # hostPath volumes
-    paths:
-      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
-    statement: "Device plugins must mount the kubelet's /var/lib/kubelet/device-plugins socket dir and /run; this is the device-plugin contract."
-
-  - id: KSV-0125 # untrusted image registry
-    paths:
-      - "gitops/addons/aws-neuron-device-plugin/daemonset.yaml"
-    statement: "public.ecr.aws/neuron is the official AWS Neuron registry; trivy has no allow-list config for trusted ECR Public registries."
-
-  # ----------------------------------------------------------------------------
   # Access-logs buckets — versioning + self-logging do not apply
   # ----------------------------------------------------------------------------
   # The access-logs destination buckets exist to receive logs from other

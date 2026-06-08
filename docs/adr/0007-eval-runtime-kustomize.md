@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted (2026-05-16).
+Superseded by [ADR 0008](0008-eval-runtime-operator-chart.md) (2026-06-07). The
+reasoning below stands as the historical record; the eval-runtime k8s pieces now ship
+in the operator chart behind values toggles (see ADR 0008 for why the original blockers
+no longer apply).
 
 ## Context
 

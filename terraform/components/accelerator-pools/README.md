@@ -1,6 +1,6 @@
 # components/accelerator-pools
 
-AWS-side prerequisites for accelerator scheduling. The actual Karpenter `NodePool` and DRA `DeviceClass` resources live in `gitops/addons/` (they are Kubernetes resources, not AWS resources). This component provisions:
+AWS-side prerequisites for accelerator scheduling. The actual Karpenter `NodePool` and DRA `DeviceClass` resources live in the eks-gitops `accelerators` category (they are Kubernetes resources, not AWS resources). This component provisions:
 
 - **IRSA roles** for the NVIDIA GPU Operator and the AWS Neuron device plugin (introspection-only permissions: `ec2:DescribeInstances`, `ec2:DescribeInstanceTypes`).
 - **Karpenter node role extension** for Neuron topology discovery.
@@ -13,10 +13,10 @@ AWS-side prerequisites for accelerator scheduling. The actual Karpenter `NodePoo
 | `environment`, `region`, `cluster_name`            | identifying                                                |
 | `oidc_provider_arn`, `oidc_issuer`                 | from landing-zone cluster outputs                          |
 | `node_role_name`                                   | existing Karpenter node IAM role (managed in landing-zone) |
-| `neuron_addon_namespace`, `gpu_operator_namespace` | defaults match the gitops chart values                     |
+| `neuron_addon_namespace`, `gpu_operator_namespace` | defaults match the eks-gitops accelerator values           |
 
 ## Outputs
 
-- `neuron_role_arn` — set as the IRSA annotation on the Neuron device plugin ServiceAccount in `gitops/addons/aws-neuron-device-plugin/values.yaml`
-- `gpu_operator_role_arn` — same for `gitops/addons/gpu-operator/values.yaml`
+- `neuron_role_arn` — set as the IRSA annotation on the Neuron device plugin ServiceAccount in `eks-gitops/addons/accelerators/aws-neuron-device-plugin/values.yaml`
+- `gpu_operator_role_arn` — same for `eks-gitops/addons/accelerators/gpu-operator/values.yaml`
 - `pool_catalog_ssm_path` — operator config

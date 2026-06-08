@@ -40,7 +40,7 @@ landing-zone (external) ──▶ cluster outputs: VPC, subnets, RTBs, cluster S
                                           │
                                           ▼
                             consumed by operator (in-cluster)
-                                  and gitops/ Helm values
+                                  and eks-gitops Helm values
 ```
 
 ## Apply order
@@ -66,7 +66,7 @@ Every component publishes its outputs to SSM under:
 Consumers:
 
 - **Operator pod** reads SSM at startup for `agent-iam.operator_role_arn` (its own role), `agent-iam.tenant_iam_path`, `agent-iam.tenant_baseline_policy_arn`, `kill-switch.event_bus_name`, `cost-pipeline.athena_workgroup`, `cost-pipeline.athena_database`, `bedrock.baseline_guardrail_id`, `accelerator-pools.pool_catalog`, `model-artifacts.bucket_name`.
-- **GitOps Helm values** (`gitops/addons/*/values-<env>.yaml`) reference `accelerator-pools.neuron_role_arn` and `accelerator-pools.gpu_operator_role_arn` for IRSA annotations on the device plugin / operator ServiceAccounts.
+- **eks-gitops accelerator values** (`eks-gitops/addons/accelerators/<addon>/values-<env>.yaml`) reference `accelerator-pools.neuron_role_arn` and `accelerator-pools.gpu_operator_role_arn` for IRSA annotations on the device plugin / operator ServiceAccounts.
 
 ## Backends
 

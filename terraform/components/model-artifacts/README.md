@@ -29,4 +29,4 @@ Published to SSM under `/eks-agent-platform/<environment>/model-artifacts/`:
 
 - The operator (when reconciling `Platform` CRs, grants tenant IRSA roles `s3:Get*` / `s3:Put*` on `tenants/<platform-id>/*`)
 - `eval-controller` reads/writes to `eval_reports_bucket`
-- Grafana datasource (Athena) is wired against `eval_reports_bucket` in `gitops/dashboards/`
+- Grafana datasource (Athena) is wired against `eval_reports_bucket` in `eks-gitops/dashboards/`

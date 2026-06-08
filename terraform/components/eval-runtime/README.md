@@ -1,20 +1,25 @@
 # components/eval-runtime
 
 AWS-side substrate for `EvalSuite` reconciliation. The Kubernetes-side
-(Argo Workflows install + `eval-runner` `WorkflowTemplate` +
-Argo Rollouts `AnalysisTemplate`) lives in `gitops/addons/eval-runtime/`
-and is delivered via ArgoCD.
+(the `eval-runner` `WorkflowTemplate` + Argo Rollouts `AnalysisTemplate`
 
-- **IRSA role** for the `eval-runner` ServiceAccount. Bedrock invoke
+- SA/RBAC) ships inside the operator chart at
+  `charts/operator/templates/eval-runtime/` (with manifests under
+  `charts/operator/files/eval-runtime/`), gated behind the chart's
+  `evalRuntime.*` values. Argo Workflows itself is installed by the
+  eks-gitops `addons-argo-platform` ApplicationSet, which satisfies the
+  runtime's precondition.
+
+* **IRSA role** for the `eval-runner` ServiceAccount. Bedrock invoke
   (region-scoped via `aws:RequestedRegion`), S3 PutObject on the
   eval-reports bucket for HTML + junit artifacts, S3 GetObject scoped to
   `*/manifests/*` for `EvalSuite.spec.casesFromManifest`, KMS decrypt
   via `s3.<region>.amazonaws.com` for the SSE-KMS bucket.
-- **Controller log group** (`/aws/eks/<cluster>/eval-runner`) with
+* **Controller log group** (`/aws/eks/<cluster>/eval-runner`) with
   retention separate from per-Workflow pod logs so controller-level
   errors (template parse failures, scheduling) have their own retention
   policy.
-- **SSM outputs** the operator picks up at startup:
+* **SSM outputs** the operator picks up at startup:
   `/eks-agent-platform/<env>/eval-runtime/runner_role_arn` (and
   `runner_namespace`, `runner_service_account`, `eval_reports_bucket`).
 
@@ -43,6 +48,6 @@ The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 
 ## Outputs
 
-- `eval_runner_role_arn` — annotated on the SA by `gitops/addons/eval-runtime`
+- `eval_runner_role_arn` — annotated on the SA by the operator chart's `eval-runtime` templates; injected per-cluster by the eks-gitops `addons-agent-operator` ApplicationSet
 - `eval_runner_namespace`, `eval_runner_service_account` — also published to SSM
 - `controller_log_group_name`

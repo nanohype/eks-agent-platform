@@ -72,22 +72,21 @@ jobs:
               helm template "$name" "$d" \
                 --set platform.name=ci-smoke \
                 --set platform.tenant=ci-smoke >/dev/null
+            elif [[ "$name" == "operator" ]]; then
+              # Default state, then the gated eval/slo paths so the Files.Get-wrapped
+              # Argo/Prometheus/Alertmanager CRs are exercised (they don't render at
+              # the defaults — rollouts + alerting are off).
+              helm template "$name" "$d" >/dev/null
+              helm template "$name" "$d" \
+                --set evalRuntime.rollouts.enabled=true \
+                --set slo.alerting.enabled=true \
+                --set evalRuntime.serviceAccount.roleArn=ci-smoke-role \
+                --set evalRuntime.evalReportsBucket=ci-smoke-bucket >/dev/null
             else
               helm template "$name" "$d" >/dev/null
             fi
             echo "::endgroup::"
           done
-
-  gitops:
-    name: gitops dry-run
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
-      - name: kubeconform applicationsets
-        run: |
-          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
-          ./kubeconform -strict -ignore-missing-schemas -schema-location default -schema-location 'https://raw.githubusercontent.com/argoproj/argo-cd/master/manifests/crds/{{ .ResourceKind }}.yaml' gitops/applicationsets/
 
   ts:
     name: pnpm test
@@ -143,7 +142,6 @@ jobs:
           scopes: |
             operators
             charts
-            gitops
             terraform
             core
             sdk

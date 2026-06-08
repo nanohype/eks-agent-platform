@@ -81,7 +81,7 @@
       "schedule": ["before 6am on monday"]
     },
     {
-      "description": "Helm chart versions in gitops/applicationsets/*.yaml",
+      "description": "Helm chart versions (charts/* dependencies)",
       "matchManagers": ["argocd", "helm-values", "helmv3"],
       "groupName": "helm-charts",
       "schedule": ["before 6am on monday"]
@@ -116,44 +116,5 @@
     "automerge": false,
     "schedule": ["at any time"]
   },
-  "osvVulnerabilityAlerts": true,
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Track kagent chart version in ApplicationSet matrix list (OCI Helm)",
-      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
-      "matchStrings": ["chart: kagent\\s+chartVersion: \"(?<currentValue>[^\"]+)\""],
-      "datasourceTemplate": "docker",
-      "depNameTemplate": "ghcr.io/kagent-dev/kagent/helm/kagent",
-      "versioningTemplate": "helm"
-    },
-    {
-      "customType": "regex",
-      "description": "Track agentgateway chart version (OCI Helm)",
-      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
-      "matchStrings": ["chart: agentgateway\\s+chartVersion: \"(?<currentValue>[^\"]+)\""],
-      "datasourceTemplate": "docker",
-      "depNameTemplate": "ghcr.io/agentgateway/agentgateway/charts/agentgateway",
-      "versioningTemplate": "helm"
-    },
-    {
-      "customType": "regex",
-      "description": "Track NVIDIA DRA driver chart version (OCI Helm)",
-      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
-      "matchStrings": ["chart: k8s-dra-driver-gpu\\s+chartVersion: \"(?<currentValue>[^\"]+)\""],
-      "datasourceTemplate": "docker",
-      "depNameTemplate": "nvcr.io/nvidia/k8s/k8s-dra-driver-gpu",
-      "versioningTemplate": "helm"
-    },
-    {
-      "customType": "regex",
-      "description": "Track NVIDIA gpu-operator chart version (HTTP Helm repo)",
-      "managerFilePatterns": ["^gitops/applicationsets/agent-platform\\.yaml$"],
-      "matchStrings": ["chart: gpu-operator\\s+chartVersion: (?<currentValue>v[0-9.]+)"],
-      "datasourceTemplate": "helm",
-      "depNameTemplate": "gpu-operator",
-      "registryUrlTemplate": "https://helm.ngc.nvidia.com/nvidia",
-      "versioningTemplate": "semver"
-    }
-  ]
+  "osvVulnerabilityAlerts": true
 }

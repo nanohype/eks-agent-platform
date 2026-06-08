@@ -1,5 +1,5 @@
 output "eval_runner_role_arn" {
-  description = "IRSA role ARN for the eval-runner ServiceAccount. Annotated on the SA by the gitops/addons/eval-runtime kustomize package."
+  description = "IRSA role ARN for the eval-runner ServiceAccount. Annotated on the SA by the operator chart's eval-runtime templates; injected per-cluster by the eks-gitops addons-agent-operator ApplicationSet."
   value       = aws_iam_role.eval_runner.arn
 }
 

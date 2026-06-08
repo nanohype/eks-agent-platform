@@ -27,17 +27,23 @@ aws eks describe-cluster --name <primary> --region <primary-region> --query 'clu
 #    Then label:
 kubectl --context=hub-argocd -n argocd label secret <standby-cluster-secret> \
   eks-agent-platform/enabled=true --overwrite
-kubectl --context=hub-argocd apply -f gitops/applicationsets/agent-platform.yaml
 
-# 3. ArgoCD syncs all addons + the operator onto standby. Watch:
+# 3. That's the whole switch. The eks-gitops ApplicationSets are cluster
+#    generators filtered on eks-agent-platform/enabled=true, so flipping the
+#    label makes them reconcile the standby in automatically — no manual
+#    `kubectl apply` of any ApplicationSet. ArgoCD syncs all addons + the
+#    operator onto standby. Watch:
 kubectl --context=hub-argocd -n argocd get applications -l 'cluster_name=standby'
 
 # 4. Wait for operator readiness on standby
 kubectl --context=standby -n eks-agent-platform wait --for=condition=ready pod -l app.kubernetes.io/name=operator --timeout=10m
 
-# 5. Re-apply tenant CRs from your gitops source of truth (or restore from
-#    velero / s3 backup if you have one).
-kubectl --context=standby apply -f gitops/tenants/
+# 5. Tenant CRs follow the same path. The portal-tenants ApplicationSet
+#    git-sources the tenants gitops repo (tenants/<cluster>/<tenant>.yaml) and
+#    is itself a cluster generator on the enabled label, so once the standby is
+#    registered + labeled it picks up the tenant manifests and applies them.
+#    Confirm they land:
+kubectl --context=standby get tenants.platform.nanohype.dev -A
 ```
 
 ## DNS / routing cutover

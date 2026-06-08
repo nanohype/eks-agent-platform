@@ -13,7 +13,6 @@ export default {
       [
         'operators',
         'charts',
-        'gitops',
         'terraform',
         'core',
         'sdk',

@@ -32,8 +32,7 @@ Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragr
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `terraform/` | OpenTofu/Terragrunt components: `bedrock` (invocation logging + Guardrails), `model-artifacts` (S3 + KMS), `agent-iam` (operator IRSA + tenant role factory), `agent-egress` (PrivateLink + WAF), `accelerator-pools` (NVIDIA + Neuron), `kill-switch` (EventBridge + Step Functions), `cost-pipeline` (CUR + Athena + Glue Crawler + invocation-cost-publisher Lambda), `eval-runtime` (eval-runner IRSA + Workflow infra). |
 | `operators/` | Go (kubebuilder v4) — one binary, nine reconcilers (`tenant`, `platform`, `gateway`, `runtime`, `budget`, `eval`, `sandboxpool`, `agentsandbox`, `batch`), one shared leader-election lease. Owns per-tenant AWS state via in-cluster IRSA. Also ships `agentctl` CLI.                                                                                                                                                       |
-| `charts/`    | Helm — `operator` (CRDs + Deployment + RBAC + cert-manager-issued webhook cert), `bedrock-egress`, `tenant` (opinionated `Platform` CR scaffold).                                                                                                                                                                                                                                                                            |
-| `gitops/`    | ArgoCD ApplicationSets layered on top of `eks-gitops`: agentgateway, kagent, KEDA, Argo Workflows + Rollouts, GPU operator, Neuron device plugin, DRA driver, eval-runtime kustomize, operator chart. Per-environment values (dev/staging/production). PrometheusRule + AlertmanagerConfig (`operator-slo`). Grafana dashboards.                                                                                             |
+| `charts/`    | Helm — `operator` (CRDs + Deployment + RBAC + cert-manager-issued webhook cert; ships its own eval-runtime and SLO bundles behind `evalRuntime.*` / `slo.*` toggles), `bedrock-egress`, `tenant` (opinionated `Platform` CR scaffold).                                                                                                                                                                                       |
 | `examples/`  | `blank-tenant` (smoke-test single-agent Platform), `agent-fleet` (KEDA + ToolServer snippet), `bedrock-rag` (RAG snippet).                                                                                                                                                                                                                                                                                                   |
 | `docs/`      | `onboarding/` (per-persona playbooks), `runbooks/` (alert + scenario playbooks), `architecture/` (overview + flow diagrams + multi-cluster), `adr/` (Architecture Decision Records), `crd-reference/` (CRD index).                                                                                                                                                                                                           |
 
@@ -70,8 +69,8 @@ task tofu:apply ENVIRONMENT=dev COMPONENT=cost-pipeline
 task tofu:apply ENVIRONMENT=dev COMPONENT=kill-switch
 task tofu:apply ENVIRONMENT=dev COMPONENT=eval-runtime
 
-# Cluster-side (point eks-gitops at gitops/applicationsets/)
-task gitops:validate
+# Cluster-side delivery (operator + agent addons) lives in eks-gitops —
+# addons-agent-operator git-sources charts/operator and injects per-cluster IRSA.
 
 # Onboard a tenant (persona-flexed scaffolding)
 agentctl tenant init my-team --persona support --slack '#my-team' \
@@ -105,13 +104,22 @@ Full sequence + recovery in [`docs/runbooks/platform-suspended.md`](./docs/runbo
 
 ## Boundaries
 
-This repo deliberately does **not** own:
+This repo **builds the product**: the operator (`charts/operator` — CRDs, Deployment, RBAC, plus the eval-runtime and SLO bundles behind chart toggles) and the per-tenant AWS state (`terraform/`). It is not a deploy catalog.
+
+Cluster delivery lives in [`eks-gitops`](https://github.com/nanohype/eks-gitops):
+
+- `addons-agent-operator` git-sources `charts/operator` and injects per-cluster IRSA/OIDC (operator role, eval-runner role ARN, report bucket) from the cluster-Secret annotations `cluster-bootstrap` sets.
+- `addons-ai-platform` delivers kagent + agentgateway.
+- `addons-argo-platform` delivers Argo Workflows + Rollouts + Events.
+- `addons-accelerators-{helm,kustomize}` deliver the GPU operator, NVIDIA DRA driver, and AWS Neuron device plugin.
+
+Clusters opt in via the label `eks-agent-platform/enabled=true`.
+
+It also deliberately does **not** own:
 
 - Org, account, network, EKS cluster, baseline IAM → [`landing-zone`](https://github.com/nanohype/landing-zone)
 - General-purpose cluster addons (cert-manager, cilium, kyverno, observability stack) → [`eks-gitops`](https://github.com/nanohype/eks-gitops)
 - Cluster bootstrap (ArgoCD install, app-of-apps wiring) → `aws-eks` (CDK)
-
-This repo **does** own everything between "an empty EKS cluster with ArgoCD running" and "non-technical teams can onboard a tenant with `agentctl tenant init`".
 
 ## Contributing
 

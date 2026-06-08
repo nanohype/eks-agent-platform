@@ -24,7 +24,7 @@ variable "oidc_issuer" {
 }
 
 variable "eval_runner_namespace" {
-  description = "Kubernetes namespace where Argo Workflows execute. Argo Workflows must already be installed here (see gitops/applicationsets/agent-platform.yaml)."
+  description = "Kubernetes namespace where Argo Workflows execute. Argo Workflows must already be installed (via the eks-gitops addons-argo-platform ApplicationSet)."
   type        = string
   default     = "eval-runner"
 }

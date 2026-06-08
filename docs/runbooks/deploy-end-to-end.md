@@ -62,8 +62,13 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
    access entry). Then: `aws eks update-kubeconfig --name <cluster> --region <r>
 --profile <profile> --alias <cluster>` → `kubectl --context <cluster> get nodes`.
 3. `cluster-bootstrap` — installs cilium (ENI mode, replaces VPC-CNI) + ArgoCD +
-   an app-of-apps pointing at `eks-gitops/applicationsets`. ArgoCD then syncs the
-   addon catalog, including `addons-ai-platform` (kagent + agentgateway).
+   an app-of-apps pointing at `eks-gitops/applicationsets`. It also registers the
+   cluster as an ArgoCD cluster Secret carrying the `eks-agent-platform/enabled=true`
+   label and the OIDC/role-arn annotations the operator ApplicationSet reads. ArgoCD
+   then syncs the addon catalog onto every labeled cluster: `addons-ai-platform`
+   (kagent + agentgateway), `addons-argo-platform` (argo-workflows/rollouts/events),
+   the `accelerators` category (gpu-operator, NVIDIA DRA driver, AWS Neuron device
+   plugin), and `addons-agent-operator` (the operator itself).
 4. `agent-iam` — the operator IRSA role (path-scoped, boundary-gated), the tenant
    permissions boundary + baseline policies, and the SSM params the operator
    reads (`/eks-agent-platform/<env>/agent-iam/*`).
@@ -72,11 +77,21 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
    dependency automatically.
 
 Confirm addons converge: `kubectl --context <cluster> get applications -n argocd`
-(cert-manager, external-secrets, cilium, kagent, agentgateway, … Synced/Healthy).
+(cert-manager, external-secrets, cilium, kagent, agentgateway, argo-workflows,
+gpu-operator, nvidia-dra-driver, neuron-device-plugin, the operator + its
+eval-runtime, … Synced/Healthy).
 
 ### B2. Operator on EKS
 
-Get the image. Either:
+The operator syncs itself. The `addons-agent-operator` ApplicationSet in
+eks-gitops git-sources `charts/operator` and targets every cluster carrying
+`eks-agent-platform/enabled=true`. It injects the per-cluster bits the chart
+can't hardcode — the operator IRSA role ARN, the OIDC provider ARN + issuer
+host, and the eval-runner role ARN + eval-reports bucket — from the annotations
+`cluster-bootstrap` publishes on the ArgoCD cluster Secret. So once B1 step 3
+landed, the operator (with the AWS reconcile ON and its eval-runtime + SLO
+bundles enabled by the chart defaults) is already on its way. Get the image
+published so the ApplicationSet has something to pull:
 
 - **Published (preferred):** push a release tag in `eks-agent-platform` →
   `release.yaml` builds a multi-arch image to
@@ -84,7 +99,14 @@ Get the image. Either:
 - **Dev/in-account ECR:** build for the node arch and push to ECR — see the
   arch gotcha below.
 
-Install with the AWS reconcile ON (no `--disable-aws`):
+The operator loads the rest of its config (tenant IAM path, baseline +
+boundary ARNs) from SSM via its IRSA role. Verify:
+`kubectl --context <cluster> logs -n eks-agent-platform -l app.kubernetes.io/name=operator`
+→ "AWS substrate loaded".
+
+**First-boot fallback.** If you need the operator up before the ApplicationSet
+reconciles (or you're debugging outside ArgoCD), install the chart by hand with
+the same per-cluster values:
 
 ```bash
 helm upgrade --install eks-agent-platform eks-agent-platform/charts/operator \
@@ -96,14 +118,11 @@ helm upgrade --install eks-agent-platform eks-agent-platform/charts/operator \
   --set config.ssmPathPrefix=/eks-agent-platform \
   --set config.oidc.providerArn=<cluster oidc_provider_arn> \
   --set config.oidc.issuerHost=<cluster oidc_issuer> \
+  --set evalRuntime.serviceAccount.roleArn=<eval-runner role ARN> \
+  --set evalRuntime.evalReportsBucket=<eval-reports bucket> \
   --set webhooks.certManager.installSelfSignedIssuer=true \
   --set networkPolicy.engine=cilium --wait
 ```
-
-The operator loads the rest of its config (tenant IAM path, baseline +
-boundary ARNs) from SSM via its IRSA role. Verify:
-`kubectl --context <cluster> logs -n eks-agent-platform -l app.kubernetes.io/name=operator`
-→ "AWS substrate loaded".
 
 ### B3. Deploy tenants through the portal
 

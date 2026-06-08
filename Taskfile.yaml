@@ -20,7 +20,7 @@ tasks:
       - task: fmt:check
       - task: tofu:validate
       - task: helm:lint
-      - task: gitops:validate
+      - task: helm:template
       - task: ts:test
       - task: operator:test
       - task: security:scan
@@ -124,24 +124,26 @@ tasks:
         done
 
   helm:template:
-    desc: Render every Helm chart against default values to catch template errors
+    desc: Render every Helm chart to catch template errors (tenant + operator need value flags)
     cmds:
       - |
         for d in charts/*/; do
           name=$(basename "$d")
           echo "Rendering $name..."
-          helm template "$name" "$d" >/dev/null || exit 1
-        done
-
-  # === GitOps ===
-
-  gitops:validate:
-    desc: Dry-run apply every ApplicationSet to confirm YAML and schema
-    cmds:
-      - |
-        for f in gitops/applicationsets/*.yaml; do
-          echo "Validating $f..."
-          kubectl apply --dry-run=client -f "$f" -o yaml >/dev/null || exit 1
+          if [ "$name" = "tenant" ]; then
+            # tenant requires platform.name + platform.tenant
+            helm template "$name" "$d" --set platform.name=ci-smoke --set platform.tenant=ci-smoke >/dev/null || exit 1
+          elif [ "$name" = "operator" ]; then
+            # default state, then the gated eval/slo paths so the Files.Get-wrapped
+            # Argo/Prometheus/Alertmanager CRs get exercised
+            helm template "$name" "$d" >/dev/null || exit 1
+            helm template "$name" "$d" \
+              --set evalRuntime.rollouts.enabled=true --set slo.alerting.enabled=true \
+              --set evalRuntime.serviceAccount.roleArn=ci-smoke-role \
+              --set evalRuntime.evalReportsBucket=ci-smoke-bucket >/dev/null || exit 1
+          else
+            helm template "$name" "$d" >/dev/null || exit 1
+          fi
         done
 
   # === Operator ===
