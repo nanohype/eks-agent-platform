@@ -1,0 +1,12 @@
+{{- if and .Values.slo.enabled .Values.slo.alerting.enabled }}
+{{- /*
+  Gated behind slo.alerting.enabled (default false): the receivers reference six
+  external Secrets (pagerduty-platform, slack-webhook-{incidents,finance,ops,eng,
+  platform}) that must pre-exist, so this only renders once those are provisioned
+  (typically production). Emitted verbatim — it carries Alertmanager Go-template
+  mustache ({{ template ... }}, {{ range .Alerts }}, {{ .CommonLabels.* }}).
+  Needs the monitoring.coreos.com/v1alpha1 CRD.
+*/ -}}
+{{ .Files.Get "files/slo/alertmanagerconfig.yaml"
+   | replace "namespace: eks-agent-platform-monitoring" (printf "namespace: %s" .Values.slo.namespace) }}
+{{- end }}

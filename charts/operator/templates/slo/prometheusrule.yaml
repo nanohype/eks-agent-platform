@@ -1,0 +1,12 @@
+{{- if .Values.slo.enabled }}
+{{- /*
+  Emitted verbatim: the PrometheusRule is dense with Prometheus templating
+  ({{ $labels.* }}, {{ $value | humanize* }}) Helm must not evaluate. Two
+  substitutions: metadata.namespace -> slo.namespace, and the PromQL
+  namespace="..." metric selectors -> slo.operatorNamespace (where the operator
+  actually runs). Needs the monitoring.coreos.com/v1 CRD on the cluster.
+*/ -}}
+{{ .Files.Get "files/slo/prometheusrule.yaml"
+   | replace "namespace: eks-agent-platform-monitoring" (printf "namespace: %s" .Values.slo.namespace)
+   | replace "namespace=\"eks-agent-platform\"" (printf "namespace=\"%s\"" .Values.slo.operatorNamespace) }}
+{{- end }}

@@ -33,6 +33,30 @@ eks-agent-platform operator installed.
 {{- end }}
 
 ──────────────────────────────────────────────────────────────────────────────
+ Bundled runtime (eval + SLO)
+──────────────────────────────────────────────────────────────────────────────
+
+  eval-runtime: {{ if .Values.evalRuntime.enabled }}enabled (ns {{ .Values.evalRuntime.namespace }}){{ else }}disabled{{ end }}
+{{- if and .Values.evalRuntime.enabled (not .Values.evalRuntime.serviceAccount.roleArn) }}
+    ⚠ evalRuntime.serviceAccount.roleArn is empty — eks-gitops injects it per-cluster
+      from the eks-agent-platform/eval-runner-role-arn annotation.
+{{- end }}
+{{- if and .Values.evalRuntime.enabled .Values.evalRuntime.rollouts.enabled }}
+    AnalysisTemplate on — requires the Argo Rollouts CRD on the cluster.
+{{- end }}
+  operator SLO:  {{ if .Values.slo.enabled }}enabled (ns {{ .Values.slo.namespace }}){{ else }}disabled{{ end }}
+{{- if .Values.slo.enabled }}
+    ⚠ kube_customresource_* metrics require kube-state-metrics started with
+      --custom-resource-state-config-file pointing at the
+      kube-state-metrics-customresource-config ConfigMap (owned by the eks-gitops
+      kube-state-metrics addon). Without it, CR-status alerts + dashboards no-data.
+{{- end }}
+{{- if and .Values.slo.enabled .Values.slo.alerting.enabled }}
+    AlertmanagerConfig on — requires Secrets pagerduty-platform +
+    slack-webhook-{incidents,finance,ops,eng,platform} to pre-exist.
+{{- end }}
+
+──────────────────────────────────────────────────────────────────────────────
  Verify
 ──────────────────────────────────────────────────────────────────────────────
 

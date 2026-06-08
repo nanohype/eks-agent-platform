@@ -1,0 +1,51 @@
+{{- if .Values.evalRuntime.enabled }}
+# Argo Workflow pods need to read EvalSuite/AgentFleet/Platform across tenant
+# namespaces, write back EvalSuite.status, and drive Argo Workflows. The
+# cluster-scoped names are release-prefixed to avoid collision; the subject SA
+# stays the terraform-pinned eval-runner.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "operator.fullname" . }}-eval-runner
+  labels:
+    {{- include "operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: eval-runtime
+rules:
+  - apiGroups: ["governance.nanohype.dev"]
+    resources: ["evalsuites"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["agents.nanohype.dev"]
+    resources: ["agentfleets", "modelgateways"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["platform.nanohype.dev"]
+    resources: ["platforms"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["governance.nanohype.dev"]
+    resources: ["evalsuites/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows", "workflowtaskresults"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "operator.fullname" . }}-eval-runner
+  labels:
+    {{- include "operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: eval-runtime
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "operator.fullname" . }}-eval-runner
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.evalRuntime.serviceAccount.name }}
+    namespace: {{ .Values.evalRuntime.namespace }}
+{{- end }}

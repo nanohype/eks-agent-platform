@@ -1,0 +1,13 @@
+{{- if .Values.slo.enabled }}
+{{- /*
+  The CustomResourceStateMetrics ConfigMap that makes kube_customresource_*
+  metrics exist. INERT until kube-state-metrics is started with
+  --custom-resource-state-config-file pointing at this ConfigMap — that mount is
+  owned by the eks-gitops kube-state-metrics addon, not this chart. Without it,
+  every CR-status alert (PrometheusRule) and persona dashboard silently no-data.
+  Emitted verbatim (no Helm-conflicting mustache); only metadata.namespace is
+  substituted to slo.namespace.
+*/ -}}
+{{ .Files.Get "files/slo/customresourcestatemetrics.yaml"
+   | replace "namespace: eks-agent-platform-monitoring" (printf "namespace: %s" .Values.slo.namespace) }}
+{{- end }}
