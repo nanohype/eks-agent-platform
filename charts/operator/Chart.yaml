@@ -6,7 +6,7 @@ type: application
 # operator SLO (PrometheusRule/AlertmanagerConfig/CR-state metrics) into the chart
 # behind evalRuntime.* / slo.* toggles. appVersion unchanged — the operator binary
 # is untouched.
-version: 0.2.0
+version: 0.2.1
 appVersion: "0.1.1"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
