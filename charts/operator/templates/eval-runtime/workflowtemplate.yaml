@@ -1,0 +1,14 @@
+{{- if .Values.evalRuntime.enabled }}
+{{- /*
+  Emitted verbatim via Files.Get: the WorkflowTemplate is dense with Argo
+  mustache ({{workflow.parameters.*}}, {{inputs.parameters.*}}, {{tasks.*}})
+  that Helm must NOT evaluate. Only the three env-specific literals are
+  substituted by string replace. metadata.name (eval-runner) is the contract
+  the operator's eval_reconcile.go references — it stays byte-identical.
+*/ -}}
+{{ .Files.Get "files/eval-runtime/workflow-template.yaml"
+   | replace "REPLACE_BY_APPLICATIONSET" .Values.evalRuntime.evalReportsBucket
+   | replace "http://agentgateway.agentgateway.svc.cluster.local:8080" .Values.evalRuntime.gatewayUrl
+   | replace "namespace: eval-runner" (printf "namespace: %s" .Values.evalRuntime.namespace)
+   | replace "serviceAccountName: eval-runner" (printf "serviceAccountName: %s" .Values.evalRuntime.serviceAccount.name) }}
+{{- end }}

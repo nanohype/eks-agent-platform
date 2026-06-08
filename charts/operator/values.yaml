@@ -137,3 +137,53 @@ networkPolicy:
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
+
+# ── eval-runtime ─────────────────────────────────────────────────────────────
+# The Argo Workflows runtime the operator submits EvalSuite runs to: a
+# WorkflowTemplate (eval-runner), the gating AnalysisTemplate, and the SA + RBAC
+# the workflow pods run under. Ships with the operator so the product owns its
+# own runtime; eks-gitops deploys the chart. Enabled by default (it was applied
+# unconditionally by the former gitops overlay).
+#
+# Requires the Argo Workflows CRD on the cluster (eks-gitops addons-argo-platform).
+evalRuntime:
+  enabled: true
+  # Create the eval-runner namespace. Disable if it is provisioned elsewhere.
+  createNamespace: true
+  # Name/namespace are byte-pinned to the terraform/components/eval-runtime IRSA
+  # trust (system:serviceaccount:eval-runner:eval-runner). Change both the chart
+  # and that component together, or IRSA breaks.
+  namespace: eval-runner
+  serviceAccount:
+    name: eval-runner
+    # IRSA role ARN — embeds the AWS account id, so it is injected per-cluster by
+    # the eks-gitops addons-agent-operator ApplicationSet from a cluster-Secret
+    # annotation, never committed here. Empty = no annotation rendered.
+    roleArn: ""
+  # S3 bucket the eval workflow writes reports to (terraform eval-runtime output).
+  # Injected per-cluster; empty in the base chart.
+  evalReportsBucket: ""
+  # ModelGateway endpoint every fleet routes through.
+  gatewayUrl: http://agentgateway.agentgateway.svc.cluster.local:8080
+  rollouts:
+    # The Argo Rollouts AnalysisTemplate (eval-suite-gate). Off by default: it
+    # needs the Argo Rollouts CRD, which is not guaranteed on every cluster.
+    enabled: false
+
+# ── operator SLO ─────────────────────────────────────────────────────────────
+# The operator's own observability: recording rules + alerts (PrometheusRule),
+# the kube-state-metrics CustomResourceState config that makes kube_customresource_*
+# metrics exist, and the persona alert routing (AlertmanagerConfig).
+#
+# Requires the prometheus-operator CRDs (eks-gitops bootstrap wave 0).
+slo:
+  enabled: true
+  createNamespace: true
+  namespace: eks-agent-platform-monitoring
+  # The namespace the operator runs in — used in the PromQL metric selectors.
+  operatorNamespace: eks-agent-platform
+  alerting:
+    # The AlertmanagerConfig persona routing. Off by default: its receivers
+    # reference six external Secrets (pagerduty-platform, slack-webhook-*) that
+    # must pre-exist. Enable per-env (production) once those Secrets are provisioned.
+    enabled: false

@@ -2,7 +2,11 @@ apiVersion: v2
 name: operator
 description: eks-agent-platform — Kubernetes operator (CRDs + Deployment + RBAC).
 type: application
-version: 0.1.1
+# 0.2.0 — folds the eval-runtime (Argo WorkflowTemplate/AnalysisTemplate) and the
+# operator SLO (PrometheusRule/AlertmanagerConfig/CR-state metrics) into the chart
+# behind evalRuntime.* / slo.* toggles. appVersion unchanged — the operator binary
+# is untouched.
+version: 0.2.0
 appVersion: "0.1.1"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
@@ -20,6 +24,8 @@ keywords:
   - agents
   - dra
   - operator
+  - eval
+  - slo
 annotations:
   artifacthub.io/category: integration-delivery
   artifacthub.io/license: Apache-2.0

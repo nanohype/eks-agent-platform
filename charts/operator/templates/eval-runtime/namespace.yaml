@@ -1,0 +1,14 @@
+{{- if and .Values.evalRuntime.enabled .Values.evalRuntime.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.evalRuntime.namespace }}
+  labels:
+    {{- include "operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: eval-runtime
+    # Argo Workflow pods write EvalSuite status back to the API but need no
+    # capability beyond the standard restricted PSS allowances.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+{{- end }}

@@ -1,0 +1,114 @@
+# AlertmanagerConfig routes the PrometheusRule alerts to the right
+# destinations per persona. The receivers are referenced by name; the
+# secret backing each receiver (PagerDuty integration key, Slack
+# webhook URL) is created externally and mounted via secret keyRef.
+#
+# Route tree:
+#   severity=critical          → PagerDuty (24x7 on-call)
+#                                + Slack #incidents (visibility)
+#   persona=finance            → Slack #finance-alerts (warnings)
+#                                + Email billing@<tenant>
+#   persona=ops (warning)      → Slack #oncall
+#   persona=eng                → Slack #platform-eng
+#   default                    → Slack #platform-alerts
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: eks-agent-platform
+  namespace: eks-agent-platform-monitoring
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+spec:
+  route:
+    receiver: platform-alerts
+    groupBy: [alertname, controller, persona]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    routes:
+      # Pager — every critical alert. Group by alertname so a flood of
+      # the same alert (e.g. all platforms suspended at once) goes to
+      # one incident, not 100.
+      - receiver: pager
+        matchers:
+          - { name: severity, value: critical }
+        continue: true # also fan out to #incidents below
+      - receiver: incidents-slack
+        matchers:
+          - { name: severity, value: critical }
+        continue: true # allow persona-specific Slack to also receive critical
+
+      # Persona routes — receive BOTH warning and critical so the
+      # persona channel sees the same alert the pager fires. Without
+      # continue: true on incidents-slack above, route evaluation
+      # would stop and persona channels would silently miss critical
+      # alerts they own.
+      - receiver: finance-slack
+        matchers:
+          - { name: persona, value: finance }
+      - receiver: ops-slack
+        matchers:
+          - { name: persona, value: ops }
+      - receiver: eng-slack
+        matchers:
+          - { name: persona, value: eng }
+
+  receivers:
+    - name: pager
+      pagerdutyConfigs:
+        - sendResolved: true
+          routingKey:
+            key: routingKey
+            name: pagerduty-platform
+          description: '{{ template "pagerduty.default.description" . }}'
+          severity: "{{ .CommonLabels.severity }}"
+
+    - name: incidents-slack
+      slackConfigs:
+        - sendResolved: true
+          channel: "#incidents"
+          apiURL:
+            key: url
+            name: slack-webhook-incidents
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+          text: |
+            {{ range .Alerts }}*{{ .Annotations.summary }}*
+            {{ .Annotations.description }}
+            <{{ .Annotations.runbook_url }}|runbook>
+            {{ end }}
+
+    - name: finance-slack
+      slackConfigs:
+        - sendResolved: true
+          channel: "#finance-alerts"
+          apiURL:
+            key: url
+            name: slack-webhook-finance
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+
+    - name: ops-slack
+      slackConfigs:
+        - sendResolved: true
+          channel: "#oncall"
+          apiURL:
+            key: url
+            name: slack-webhook-ops
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+
+    - name: eng-slack
+      slackConfigs:
+        - sendResolved: true
+          channel: "#platform-eng"
+          apiURL:
+            key: url
+            name: slack-webhook-eng
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+
+    - name: platform-alerts
+      slackConfigs:
+        - sendResolved: true
+          channel: "#platform-alerts"
+          apiURL:
+            key: url
+            name: slack-webhook-platform
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
