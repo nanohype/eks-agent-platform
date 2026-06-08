@@ -5,7 +5,7 @@
 1. Branch from `main` with a conventional prefix: `feat/`, `fix/`, `chore/`, `docs/`, `refactor/`, `test/`.
 2. Run `task ci` locally before pushing. CI must pass.
 3. Conventional commits enforced via commitlint. Use the structured commit-message format from `~/.claude/CLAUDE.md` (section headers, file-level detail, scaled verbosity).
-4. Open a PR. Reviews are required for changes under `operators/api/`, `charts/`, `terraform/components/`, `gitops/applicationsets/`.
+4. Open a PR. Reviews are required for changes under `operators/api/`, `charts/`, `terraform/components/`.
 
 ## Local prereqs
 
@@ -44,11 +44,11 @@ See [README.md](./README.md#what-you-get) and [ARCHITECTURE.md](./ARCHITECTURE.m
 3. Outputs published to SSM under `/eks-agent-platform/<env>/<component>/<key>`.
 4. Add `task tofu:validate` coverage.
 
-## Adding a GitOps addon
+## Cluster addons
 
-1. Add to `gitops/applicationsets/<category>.yaml` (matrix generator with `clusters` + `list`).
-2. Add base + per-env values to `gitops/addons/<name>/`.
-3. Document in `docs/personas/` if it changes user-visible behavior.
+Agent cluster addons — kagent, agentgateway, the Argo platform, the accelerators (GPU operator, NVIDIA DRA driver, AWS Neuron device plugin), and the persona dashboards — live in `eks-gitops`, not here. See its docs for adding or tuning one. This repo's job is to build the artifacts they deploy: the operator chart (`charts/operator`) and the terraform components.
+
+The operator's own eval-runtime and SLO ride inside `charts/operator` behind the `evalRuntime.*` and `slo.*` values toggles — edit the chart, not a separate addon.
 
 ## Adding a TS package
 

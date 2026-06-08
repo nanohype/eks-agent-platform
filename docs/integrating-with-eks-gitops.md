@@ -1,43 +1,42 @@
 # Integrating with eks-gitops
 
-`eks-agent-platform/gitops/` is an _overlay_ on top of [`eks-gitops`](https://github.com/nanohype/eks-gitops). It does not replace `eks-gitops` and does not stand alone.
+`eks-agent-platform` is the **product**. It builds two things:
 
-## What eks-gitops provides
+- **The operator** — a Helm chart at `charts/operator/` (CRDs + Deployment + RBAC), published to `ghcr.io/nanohype/eks-agent-platform/operator`.
+- **The terraform** — per-tenant AWS state under `terraform/components/` (agent IRSA, Bedrock access, egress, kill-switch, eval-runtime, cost pipeline, batch runtime, model artifacts, accelerator pools).
 
-- ArgoCD (deployed by `aws-eks` CDK)
-- cert-manager, external-secrets, ALB Controller, External DNS
-- Cilium (CNI + NetworkPolicy enforcement)
-- Kyverno (verify-images, PSS policies)
-- Prometheus Operator CRDs, Loki, Tempo, Grafana Agent, OpenCost
-- Velero, VPA, Goldilocks, Descheduler, Karpenter, KEDA
-- Argo Rollouts, Events, Workflows
+It is not a deploy catalog. Nothing in this repo applies itself to a cluster.
 
-All of which are prerequisites for the agent platform.
+[`eks-gitops`](https://github.com/nanohype/eks-gitops) is the **deploy catalog**. It git-sources the operator chart from this repo, supplies per-environment values, and reconciles everything onto clusters with ArgoCD. The split is clean: this repo decides _what the operator is_, eks-gitops decides _where and how it runs_.
 
-## What this repo adds
+## What eks-gitops deploys
 
-- ApplicationSets for the agent-specific addons (kagent, agentgateway, GPU operator, Neuron device plugin, DRA driver, this repo's operator)
-- Helm values + per-environment overrides for each
-- ArgoCD `AppProject` scoped to those addons + any tenant namespaces
-- Role-flexed Grafana dashboards
+- **The operator** — `applicationsets/addons-agent-operator.yaml` git-sources `charts/operator`. It injects the per-cluster IRSA role ARNs and EKS OIDC wiring (provider ARN + issuer host) from the cluster-Secret annotations that `cluster-bootstrap` sets, so no account-specific values are ever committed to the chart. The same ApplicationSet injects the eval-runner role ARN and report bucket (see eval-runtime below).
+- **kagent + agentgateway** — `applicationsets/addons-ai-platform.yaml`.
+- **Argo Workflows / Rollouts / Events** — `applicationsets/addons-argo-platform.yaml`. These are prerequisites for the operator's eval-runtime and SLO.
+- **Accelerators** — the GPU operator, NVIDIA DRA driver, and AWS Neuron device plugin land via the `accelerators` category: `applicationsets/addons-accelerators-{helm,kustomize}.yaml`, with values under `addons/accelerators/<addon>/` (gpu sync wave 6, dra wave 7, neuron wave 6).
+- **Dashboards** — the seven persona dashboards ship as `GrafanaDashboard` CRs under `dashboards/base/platform/agent-*.yaml`.
 
-## Hook up
+eks-gitops also provides the substrate the operator assumes: ArgoCD, cert-manager, external-secrets, ALB Controller, External DNS, Cilium, Kyverno, the prometheus-operator CRDs, Loki, Tempo, Grafana, OpenCost, and the rest of the cluster addon catalog.
 
-Once per cluster:
+## What ships inside the operator chart
 
-1. Apply `gitops/applicationsets/app-project.yaml` to create the `eks-agent-platform` AppProject in `argocd` namespace.
-2. Apply the cluster-config secret in `gitops/environments/<env>/cluster-config.yaml` so the matrix generator's selector matches. This labels the in-cluster ArgoCD secret with `eks-agent-platform/enabled=true` plus env metadata.
-3. Add an ApplicationSet to your `eks-gitops` repo that watches this repo's `gitops/applicationsets/` directory (template in `gitops/README.md`).
+The operator owns its own runtime. Two subsystems ride along in `charts/operator/` (chart 0.2.0), each behind a values toggle:
 
-That's it. ArgoCD picks up the addons in the order set by sync waves (device plugins → gateway + operator → kagent), and any future ApplicationSet committed to this repo flows in automatically.
+- **eval-runtime** (`evalRuntime.*`, on by default) — the Argo `WorkflowTemplate` (eval-runner) the operator submits `EvalSuite` runs to, the gating `AnalysisTemplate`, and the `eval-runner` namespace + ServiceAccount + RBAC the workflow pods run under. Source: `charts/operator/{files,templates}/eval-runtime/`. Needs the Argo Workflows CRD (from `addons-argo-platform`). The eval-runner IRSA role ARN and the S3 report bucket carry the AWS account id, so eks-gitops injects them per-cluster via `addons-agent-operator.yaml`; they're empty in the base chart. The Rollouts `AnalysisTemplate` (`evalRuntime.rollouts.enabled`) is off by default since it needs the Argo Rollouts CRD.
+- **operator SLO** (`slo.*`, on by default) — the operator's own observability: a `PrometheusRule` (recording rules + alerts), the kube-state-metrics `CustomResourceState` config that makes `kube_customresource_*` metrics exist, and an `AlertmanagerConfig` for persona alert routing. Source: `charts/operator/{files,templates}/slo/`. Needs the prometheus-operator CRDs. Alert routing (`slo.alerting.enabled`) is off by default because its receivers reference external Secrets that must pre-exist.
 
-## Validating before applying
+## How a cluster opts in
+
+A cluster joins the agent platform by carrying the label `eks-agent-platform/enabled=true`. `cluster-bootstrap` (in `landing-zone`) sets it, along with the cluster-Secret annotations that supply the per-cluster IRSA/OIDC values. The eks-gitops ApplicationSets select on that label, so once the cluster is bootstrapped the operator, AI platform, Argo platform, accelerators, and dashboards flow in automatically in sync-wave order.
+
+## Validating before you ship
+
+Everything this repo produces is validated locally and in CI:
 
 ```bash
-# In this repo
-task gitops:validate     # kubectl dry-run on every ApplicationSet
-task helm:lint           # lint every chart
-task helm:template       # render every chart against defaults
+task helm:lint        # lint every chart in charts/
+task helm:template    # render every chart against defaults
+task tofu:validate    # validate every OpenTofu component
+task ci               # full local gate: fmt:check, lint, validate, typecheck, test
 ```
-
-CI runs the same.

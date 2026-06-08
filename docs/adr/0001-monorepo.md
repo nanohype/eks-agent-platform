@@ -13,11 +13,12 @@ Initial design proposed splitting `eks-agent-platform` into five repos: operator
 One monorepo with polyglot workspaces:
 
 - `operators/` — Go (kubebuilder v4)
-- `charts/` — Helm
-- `gitops/` — ArgoCD ApplicationSets
+- `charts/` — Helm; `charts/operator` carries the controller, the CRDs, and the operator's own runtime (eval-runtime + SLO) behind `evalRuntime.*` / `slo.*` toggles
 - `packages/` — TypeScript (pnpm + turbo)
-- `terraform/` — OpenTofu + Terragrunt
+- `terraform/` — OpenTofu + Terragrunt (per-tenant AWS state)
 - `examples/`, `docs/`
+
+Cluster delivery — which clusters run the operator and the AI/Argo/accelerator addons — lives in `eks-gitops`, not here. This repo builds the product; `eks-gitops` deploys it.
 
 ## Why
 

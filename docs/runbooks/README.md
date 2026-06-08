@@ -1,6 +1,6 @@
 # Runbooks
 
-Operational playbooks for the eks-agent-platform. Each runbook is referenced by `runbook_url` in `gitops/addons/operator-slo/prometheusrule.yaml`, so pages link directly to the relevant doc.
+Operational playbooks for the eks-agent-platform. Each runbook is referenced by `runbook_url` in the operator chart's SLO PrometheusRule (`charts/operator/files/slo/prometheusrule.yaml`), so pages link directly to the relevant doc.
 
 ## Alert-triggered
 

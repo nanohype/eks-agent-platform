@@ -10,7 +10,7 @@ Skip the changeset for PRs that only touch:
 
 - `operators/` (Go module — released via image tags, not npm)
 - `charts/` (Helm — released via OCI tags)
-- `terraform/`, `gitops/`, `docs/`, `examples/`
+- `terraform/`, `docs/`, `examples/`
 - Pure infra changes (workflows, hooks, configs)
 
 ## How

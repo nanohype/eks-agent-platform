@@ -21,8 +21,7 @@ A Kubernetes-native control plane that lets you declare agent platforms as CRDs 
 Plus:
 
 - **`operators/`** — Go operator binary registering nine reconcilers (one binary, one leader-election lease)
-- **`charts/`** — Helm charts for installing the operator + the `tenant` chart consumers use
-- **`gitops/`** — ApplicationSets the gitops repos reference to install the operator
+- **`charts/`** — Helm charts for installing the operator (CRDs + Deployment + RBAC + the eval-runtime/SLO bundles behind chart toggles) + the `tenant` chart consumers use. `eks-gitops` `addons-agent-operator` git-sources `charts/operator` and injects per-cluster IRSA to deliver it onto clusters
 - **`examples/`** — minimal end-to-end CR sets (Tenant + Platform + ModelGateway + AgentFleet + BudgetPolicy) you can copy
 
 ## Contract surface
@@ -107,7 +106,7 @@ Recovery is **human-only** — an operator clears the suspension tag manually af
 
 ## Conventions
 
-- Conventional Commits enforced via `commitlint.config.mjs` (scope enum: `operators`, `charts`, `gitops`, `terraform`, `core`, `sdk`, `pricing`, `client`, `cli`, `examples`, `docs`, `ci`, `release`, `deps`, `security`)
+- Conventional Commits enforced via `commitlint.config.mjs` (scope enum: `operators`, `charts`, `terraform`, `core`, `sdk`, `pricing`, `client`, `cli`, `examples`, `docs`, `ci`, `release`, `deps`, `security`)
 - Go: `go fmt`, `go vet`, `golangci-lint` on PR
 - Tests: `go test ./internal/...`; in-memory fakes for AWS clients (see `operators/internal/controller/platform_iam_reconcile_test.go` for the pattern)
 - Generated artifacts (CRD manifests, deepcopy code) committed; `make manifests` regenerates them

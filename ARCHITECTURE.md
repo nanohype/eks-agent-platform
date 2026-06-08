@@ -6,15 +6,15 @@
 
 The system organizes around nine bounded contexts. Each gets a CRD, a reconciler in the operator binary, and (where it makes sense) an OpenTofu component and a Helm chart.
 
-| Context           | CRD            | Reconciler | OpenTofu component                | Helm chart       | What it owns                                                                                                                                                                                               |
-| ----------------- | -------------- | ---------- | --------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Tenancy**       | `Tenant`       | `tenant`   | —                                 | `tenant`         | Cluster-scoped aggregate of a team's `Platform`s; rolls up readiness, spend, and suspension into a single dashboard surface                                                                                |
-| **Workspace**     | `Platform`     | `platform` | —                                 | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IRSA role + KMS grant + S3 bucket policy            |
-| **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`         | `bedrock-egress` | agentgateway `Route` per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attachment, per-route rate limits                                                                                   |
-| **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`               | —                | kagent `Agent` + `ModelConfig` per agent, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, tenant `ServiceAccount` annotated for IRSA, optional DRA `AcceleratorClaim` for NVIDIA/Neuron |
-| **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch`    | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                          |
-| **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`, `eval-runtime` | —                | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate`; status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore`                           |
-| **Observability** | —              | —          | —                                 | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family`, `agents.model_id` resource attrs; Bedrock invocation spans + per-invocation cost                      |
+| Context           | CRD            | Reconciler | OpenTofu component             | Helm chart       | What it owns                                                                                                                                                                                                                            |
+| ----------------- | -------------- | ---------- | ------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tenancy**       | `Tenant`       | `tenant`   | —                              | `tenant`         | Cluster-scoped aggregate of a team's `Platform`s; rolls up readiness, spend, and suspension into a single dashboard surface                                                                                                             |
+| **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IRSA role + KMS grant + S3 bucket policy                                         |
+| **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | agentgateway `Route` per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attachment, per-route rate limits                                                                                                                |
+| **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`            | —                | kagent `Agent` + `ModelConfig` per agent, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, tenant `ServiceAccount` annotated for IRSA, optional DRA `AcceleratorClaim` for NVIDIA/Neuron                              |
+| **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                       |
+| **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`              | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore` |
+| **Observability** | —              | —          | —                              | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family`, `agents.model_id` resource attrs; Bedrock invocation spans + per-invocation cost                                                   |
 
 The CRDs are split across three capability groups under the `nanohype.dev` domain, all at version `v1alpha1`:
 
@@ -44,7 +44,16 @@ Same with agentgateway: `ModelGateway` reconciles into upstream agentgateway `Ro
 
 ### DRA from day one
 
-The DRA path gives proper multi-tenant accelerator partitioning that the legacy device-plugin model can't. `AgentFleet.spec.compute` requests an accelerator class; the runtime reconciler resolves it to a `ResourceClaimTemplate` against a `DeviceClass` provisioned by `terraform/components/accelerator-pools` (NVIDIA on `g6e`/`p5`, Neuron on `inf2`/`trn2`). The NVIDIA DRA driver and AWS Neuron device plugin are both installed by `gitops/applicationsets/`.
+The DRA path gives proper multi-tenant accelerator partitioning that the legacy device-plugin model can't. `AgentFleet.spec.compute` requests an accelerator class; the runtime reconciler resolves it to a `ResourceClaimTemplate` against a `DeviceClass` provisioned by `terraform/components/accelerator-pools` (NVIDIA on `g6e`/`p5`, Neuron on `inf2`/`trn2`). The GPU operator, the NVIDIA DRA driver, and the AWS Neuron device plugin are all installed by the eks-gitops accelerators addon group.
+
+### The operator carries its own runtime
+
+The operator chart (`charts/operator`) ships more than the controller and CRDs. Two of its own runtime pieces ride along behind values toggles:
+
+- **`evalRuntime.*`** — the eval-runtime: the `eval-runner` Argo `WorkflowTemplate`, the `AnalysisTemplate` that gates Rollouts on `status.lastScore`, and the `ServiceAccount` + RBAC the runner needs. Source under `charts/operator/{files,templates}/eval-runtime/`. The eval-runner role ARN and the report bucket are injected per-cluster by the eks-gitops addon that deploys the operator.
+- **`slo.*`** — the operator SLO: a `PrometheusRule`, an `AlertmanagerConfig`, and the kube-state-metrics CR-state config that exposes the CRDs as metrics. Source under `charts/operator/{files,templates}/slo/`.
+
+Keeping these in the chart means the operator's eval gating and its own SLO arrive with the operator instead of being a separate install step.
 
 ### Bedrock-only model plane in v1
 
@@ -79,7 +88,7 @@ agent pod → OTLP (localhost:4317) → OTel Collector
    → exporters: awscloudwatch (always) + datadog (optional, gated on values)
 ```
 
-Per-persona Grafana dashboards live in `gitops/dashboards/`:
+Per-persona Grafana dashboards live in `eks-gitops` (`dashboards/`, rendered by the grafana-operator as `GrafanaDashboard` CRs):
 
 - **Finance** — spend by tenant, top-N models, forecast vs. budget
 - **Ops** — queue depth, eval scores, error budgets, model latency p50/p95/p99

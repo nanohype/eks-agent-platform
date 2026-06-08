@@ -1,7 +1,0 @@
-deviceClasses:
-  - name: gpu.nvidia.com
-    config:
-      sharing:
-        strategy: TimeSlicing
-        timeSlicingConfig:
-          interval: Long
