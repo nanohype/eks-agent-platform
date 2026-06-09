@@ -70,9 +70,14 @@ resource "aws_s3_bucket_policy" "access_logs" {
 
 resource "aws_s3_bucket" "invocations" {
   bucket = "${local.prefix}-invocations-${data.aws_caller_identity.current.account_id}"
-  # Object Lock requires bucket-level enablement at create time. Without
-  # this flag the aws_s3_bucket_object_lock_configuration apply fails.
+  # Object Lock is enabled at create time (immutable afterward) so the bucket
+  # can enforce WORM retention on invocation logs. force_destroy is permitted
+  # under GOVERNANCE — where an admin holding s3:BypassGovernanceRetention can
+  # clear the lock — so environments tear down cleanly. Under COMPLIANCE the
+  # objects (and therefore the bucket) cannot be deleted by anyone until
+  # retention expires, so destroy is intentionally left blocked.
   object_lock_enabled = true
+  force_destroy       = var.object_lock_mode != "COMPLIANCE"
   tags                = local.tags
 }
 
