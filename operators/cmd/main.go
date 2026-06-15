@@ -78,6 +78,14 @@ func main() {
 	var oidcIssuerHost string
 	var disableAWS bool
 
+	// Org-dimension tag values stamped on tenant IRSA roles (resource-tagging
+	// standard). Env-level constants for the cluster the operator serves;
+	// tenantRoleTags falls back to landing-zone env.hcl defaults when unset.
+	var costCenter string
+	var businessUnit string
+	var dataClassification string
+	var compliance string
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "Address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "Address the health probe binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", true, "Enable leader election.")
@@ -99,6 +107,10 @@ func main() {
 	flag.StringVar(&region, "region", os.Getenv("AGENTS_REGION"), "AWS region. Defaults to credential-chain region if empty.")
 	flag.StringVar(&oidcProviderARN, "oidc-provider-arn", os.Getenv("AGENTS_OIDC_PROVIDER_ARN"), "EKS cluster OIDC provider ARN; used in tenant IRSA trust policies.")
 	flag.StringVar(&oidcIssuerHost, "oidc-issuer-host", os.Getenv("AGENTS_OIDC_ISSUER_HOST"), "EKS OIDC issuer host (oidc.eks.<region>.amazonaws.com/id/<id>).")
+	flag.StringVar(&costCenter, "cost-center", os.Getenv("AGENTS_COST_CENTER"), "Org cost-center tag stamped on tenant IRSA roles (resource-tagging standard).")
+	flag.StringVar(&businessUnit, "business-unit", os.Getenv("AGENTS_BUSINESS_UNIT"), "Org business-unit tag stamped on tenant IRSA roles.")
+	flag.StringVar(&dataClassification, "data-classification", os.Getenv("AGENTS_DATA_CLASSIFICATION"), "Org data-classification tag stamped on tenant IRSA roles.")
+	flag.StringVar(&compliance, "compliance", os.Getenv("AGENTS_COMPLIANCE"), "Org compliance tag stamped on tenant IRSA roles.")
 	flag.BoolVar(&disableAWS, "disable-aws", false, "Skip AWS client init + SSM config load (k8s-side reconciliation only).")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -161,6 +173,10 @@ func main() {
 			OIDCProviderARN:              oidcProviderARN,
 			OIDCIssuerHost:               oidcIssuerHost,
 			Environment:                  environment,
+			CostCenter:                   costCenter,
+			BusinessUnit:                 businessUnit,
+			DataClassification:           dataClassification,
+			Compliance:                   compliance,
 		}
 		platformReconciler.AWSCfg = controller.PlatformAWSConfig{
 			// cmk-data ARN isn't in operatorconfig today; the operator reads

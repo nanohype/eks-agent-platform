@@ -64,6 +64,22 @@ spec:
               value: {{ .Values.config.region | quote }}
             - name: AGENTS_SSM_PATH_PREFIX
               value: {{ .Values.config.ssmPathPrefix | quote }}
+            {{- with .Values.config.tags.costCenter }}
+            - name: AGENTS_COST_CENTER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.tags.businessUnit }}
+            - name: AGENTS_BUSINESS_UNIT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.tags.dataClassification }}
+            - name: AGENTS_DATA_CLASSIFICATION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.config.tags.compliance }}
+            - name: AGENTS_COMPLIANCE
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.config.oidc.providerArn }}
             - name: AGENTS_OIDC_PROVIDER_ARN
               value: {{ . | quote }}
