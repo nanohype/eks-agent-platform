@@ -53,6 +53,16 @@ config:
   ssmPathPrefix: /eks-agent-platform
   environment: ""
   region: us-west-2
+  # Org-dimension tag values stamped on the tenant IRSA roles the operator
+  # creates (resource-tagging standard, required tier). Empty falls back to the
+  # operator's defaults (platform-engineering / engineering / internal / soc2);
+  # override per-env via values-<env>.yaml (e.g. dataClassification: confidential
+  # in production).
+  tags:
+    costCenter: ""
+    businessUnit: ""
+    dataClassification: ""
+    compliance: ""
   # EKS OIDC wiring — required by PlatformReconciler.ensureIamRole to mint
   # tenant IRSA trust policies. Set per-env values; the ApplicationSet
   # passes them in via the values-<env>.yaml file resolved from the

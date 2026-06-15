@@ -124,6 +124,56 @@ type IAMConfig struct {
 	OIDCProviderARN              string
 	OIDCIssuerHost               string // e.g. oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE
 	Environment                  string
+
+	// Org-dimension tag values for tenant IRSA roles (resource-tagging
+	// standard, required tier). Sourced from the operator's deploy config
+	// (AGENTS_COST_CENTER / _BUSINESS_UNIT / _DATA_CLASSIFICATION / _COMPLIANCE).
+	// tenantRoleTags falls back to the landing-zone env.hcl defaults when these
+	// are unset, so a tenant role always carries the keys cloudgov gates on.
+	CostCenter         string
+	BusinessUnit       string
+	DataClassification string
+	Compliance         string
+}
+
+// orDefault returns def when v is empty.
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// tenantRoleTags builds the IAM tag set for a tenant IRSA role.
+//
+// It preserves the keys the rest of the system depends on and must not rename:
+// PlatformId (the BudgetPolicy reconciler groups Cost Explorer by it), Tenant,
+// and Persona. On top of those it carries the required-tier resource-tagging
+// keys cloudgov gates on — Project, Repository, Component, Team, CostCenter,
+// BusinessUnit, DataClassification, Compliance — plus Environment and ManagedBy.
+// ManagedBy is "eks-agent-platform" (the operator owns these roles' lifecycle,
+// unlike the opentofu-managed roles in landing-zone).
+func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag {
+	tag := func(k, v string) iamtypes.Tag {
+		return iamtypes.Tag{Key: aws.String(k), Value: aws.String(v)}
+	}
+	return []iamtypes.Tag{
+		// Load-bearing keys — PlatformId drives BudgetPolicy cost attribution.
+		tag("PlatformId", p.Name),
+		tag("Tenant", p.Spec.Tenant),
+		tag("Persona", p.Spec.Persona),
+		// Required-tier resource-tagging keys.
+		tag("Environment", cfg.Environment),
+		tag("ManagedBy", "eks-agent-platform"),
+		tag("Project", "eks-agent-platform"),
+		tag("Repository", "nanohype/eks-agent-platform"),
+		tag("Component", "tenant-iam"),
+		tag("Team", p.Spec.Tenant),
+		tag("CostCenter", orDefault(cfg.CostCenter, "platform-engineering")),
+		tag("BusinessUnit", orDefault(cfg.BusinessUnit, "engineering")),
+		tag("DataClassification", orDefault(cfg.DataClassification, "internal")),
+		tag("Compliance", orDefault(cfg.Compliance, "soc2")),
+	}
 }
 
 // ensureIamRole creates (or no-ops if already present) the tenant IRSA
@@ -191,13 +241,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		Path:                     aws.String(path),
 		AssumeRolePolicyDocument: aws.String(trust),
 		Description:              aws.String(fmt.Sprintf("Tenant IRSA role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
-		Tags: []iamtypes.Tag{
-			{Key: aws.String("PlatformId"), Value: aws.String(p.Name)},
-			{Key: aws.String("Tenant"), Value: aws.String(p.Spec.Tenant)},
-			{Key: aws.String("Persona"), Value: aws.String(p.Spec.Persona)},
-			{Key: aws.String("Environment"), Value: aws.String(cfg.Environment)},
-			{Key: aws.String("ManagedBy"), Value: aws.String("eks-agent-platform")},
-		},
+		Tags:                     tenantRoleTags(p, cfg),
 	}
 	if cfg.TenantPermissionsBoundaryARN != "" {
 		createInput.PermissionsBoundary = aws.String(cfg.TenantPermissionsBoundaryARN)
