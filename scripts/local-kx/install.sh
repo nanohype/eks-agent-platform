@@ -101,7 +101,7 @@ green "── install complete ──"
 echo "operator:                  $(kubectl -n eks-agent-platform get deploy operator -o jsonpath='{.status.readyReplicas}')/$(kubectl -n eks-agent-platform get deploy operator -o jsonpath='{.spec.replicas}') ready"
 echo "platform 'blank':          $(kubectl get platform blank -n eks-agent-platform -o jsonpath='{.status.phase}' 2>/dev/null || echo Pending)"
 echo "tenant namespace:          $(kubectl get ns tenants-blank --no-headers 2>/dev/null | awk '{print $1, $2}' || echo not-yet-created)"
-echo "agentgateway routes:       $(kubectl get -n agentgateway routes.agentgateway.dev -l 'eks-agent-platform/platform=blank' --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+echo "agentgateway routes:       $(kubectl get -n agentgateway routes.agentgateway.dev -l 'agents.nanohype.dev/platform=blank' --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 echo "kagent agents:             $(kubectl get -n tenants-blank agents.kagent.dev --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 echo "keda scaledobjects:        $(kubectl get -n tenants-blank scaledobjects.keda.sh --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 echo

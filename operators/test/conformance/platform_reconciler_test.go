@@ -86,11 +86,11 @@ func TestPlatformReconciler_CreatesTenantNamespaceWithPSS(t *testing.T) {
 	if ns.Labels["pod-security.kubernetes.io/enforce"] != "restricted" {
 		t.Errorf("PSS enforce label: got %q want restricted", ns.Labels["pod-security.kubernetes.io/enforce"])
 	}
-	if ns.Labels["eks-agent-platform/platform"] != p.Name {
-		t.Errorf("platform label: got %q want %q", ns.Labels["eks-agent-platform/platform"], p.Name)
+	if ns.Labels["agents.nanohype.dev/platform"] != p.Name {
+		t.Errorf("platform label: got %q want %q", ns.Labels["agents.nanohype.dev/platform"], p.Name)
 	}
-	if ns.Labels["eks-agent-platform/tenant"] != "acme" {
-		t.Errorf("tenant label: got %q want acme", ns.Labels["eks-agent-platform/tenant"])
+	if ns.Labels["agents.nanohype.dev/tenant"] != "acme" {
+		t.Errorf("tenant label: got %q want acme", ns.Labels["agents.nanohype.dev/tenant"])
 	}
 }
 

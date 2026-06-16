@@ -83,8 +83,8 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: platformName, Namespace: opts.Namespace,
 				Labels: map[string]string{
-					"eks-agent-platform/persona": pdefs.Name,
-					"eks-agent-platform/tenant":  opts.TenantName,
+					"agents.nanohype.dev/persona": pdefs.Name,
+					"agents.nanohype.dev/tenant":  opts.TenantName,
 				},
 			},
 			Spec: platformv1alpha1.PlatformSpec{

@@ -79,8 +79,8 @@ func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platfor
 		}
 		sa.Labels = map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
-			"eks-agent-platform/platform":  p.Name,
-			"eks-agent-platform/tenant":    p.Spec.Tenant,
+			LabelPlatform:                  p.Name,
+			LabelTenant:                    p.Spec.Tenant,
 		}
 		return nil
 	})
@@ -89,7 +89,7 @@ func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platfor
 
 // ensureFleetNetworkPolicy installs an Egress NetworkPolicy in the
 // tenant namespace selecting fleet pods (label
-// eks-agent-platform/fleet=<name>). Egress narrows to: kube-dns,
+// agents.nanohype.dev/fleet=<name>). Egress narrows to: kube-dns,
 // agentgateway, observability OTel. Ingress is denied entirely — no one
 // reaches a fleet pod from outside the tenant namespace.
 //
@@ -113,12 +113,12 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
-			"eks-agent-platform/platform":  p.Name,
-			"eks-agent-platform/fleet":     fleet.Name,
+			LabelPlatform:                  p.Name,
+			LabelFleet:                     fleet.Name,
 		}
 		np.Spec = networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{"eks-agent-platform/fleet": fleet.Name},
+				MatchLabels: map[string]string{LabelFleet: fleet.Name},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress, networkingv1.PolicyTypeIngress},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
@@ -166,9 +166,9 @@ func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, fleet *ag
 		configName := base + "-config"
 		labels := map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
-			"eks-agent-platform/platform":  p.Name,
-			"eks-agent-platform/fleet":     fleet.Name,
-			"eks-agent-platform/agent":     agent.Name,
+			LabelPlatform:                  p.Name,
+			LabelFleet:                     fleet.Name,
+			LabelAgent:                     agent.Name,
 		}
 
 		// kagent ModelConfig — provider OpenAI pointed at the route's
@@ -322,8 +322,8 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, so, func() error {
 		so.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
-			"eks-agent-platform/platform":  p.Name,
-			"eks-agent-platform/fleet":     fleet.Name,
+			LabelPlatform:                  p.Name,
+			LabelFleet:                     fleet.Name,
 		})
 		var triggers []any
 		if queueURL != "" {
@@ -394,8 +394,8 @@ func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, fleet 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ta, func() error {
 		ta.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
-			"eks-agent-platform/platform":  p.Name,
-			"eks-agent-platform/fleet":     fleet.Name,
+			LabelPlatform:                  p.Name,
+			LabelFleet:                     fleet.Name,
 		})
 		spec := map[string]any{
 			"podIdentity": map[string]any{

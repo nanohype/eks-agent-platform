@@ -16,7 +16,7 @@ data:
     metadata:
       name: tenant-egress
       labels:
-        eks-agent-platform/tenant: "true"
+        agents.nanohype.dev/tenant: "true"
     spec:
       podSelector: {}
       policyTypes:

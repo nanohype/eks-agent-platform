@@ -8,8 +8,8 @@ metadata:
   namespace: {{ .Values.controlPlaneNamespace | default .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
-    eks-agent-platform/persona: {{ .Values.platform.persona }}
-    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+    agents.nanohype.dev/persona: {{ .Values.platform.persona }}
+    agents.nanohype.dev/tenant: {{ .Values.platform.tenant }}
 spec:
   displayName: {{ .Values.platform.displayName | default .Values.platform.name | quote }}
   persona: {{ .Values.platform.persona }}

@@ -6,7 +6,7 @@ metadata:
   namespace: {{ .Values.controlPlaneNamespace | default .Release.Namespace }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
-    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+    agents.nanohype.dev/tenant: {{ .Values.platform.tenant }}
 spec:
   platformRef:
     name: {{ .Values.platform.name }}
