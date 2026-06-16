@@ -95,7 +95,7 @@ export function platformNew(opts: PlatformNewOpts): void {
       kind: 'Platform',
       metadata: {
         name: opts.name,
-        labels: { 'eks-agent-platform/persona': persona, 'eks-agent-platform/tenant': opts.tenant },
+        labels: { 'agents.nanohype.dev/persona': persona, 'agents.nanohype.dev/tenant': opts.tenant },
       },
       spec: {
         displayName: opts.name,
@@ -110,7 +110,7 @@ export function platformNew(opts: PlatformNewOpts): void {
     {
       apiVersion: 'governance.nanohype.dev/v1alpha1',
       kind: 'BudgetPolicy',
-      metadata: { name: `${opts.name}-budget`, labels: { 'eks-agent-platform/tenant': opts.tenant } },
+      metadata: { name: `${opts.name}-budget`, labels: { 'agents.nanohype.dev/tenant': opts.tenant } },
       spec: {
         platformRef: { name: opts.name },
         monthlyUsd: String(opts.monthlyUsd),

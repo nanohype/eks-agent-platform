@@ -51,7 +51,7 @@ kubectl get platforms -A
 kubectl get -n tenants-blank ns,quota,limitrange,networkpolicy
 # tenant ns + ResourceQuota + LimitRange + default-deny NetworkPolicy
 
-kubectl get -n agentgateway routes.agentgateway.dev -l 'eks-agent-platform/platform=blank'
+kubectl get -n agentgateway routes.agentgateway.dev -l 'agents.nanohype.dev/platform=blank'
 # blank-primary route present
 
 kubectl get -n tenants-blank agents.kagent.dev modelconfigs.kagent.dev scaledobjects.keda.sh

@@ -247,13 +247,13 @@ func (r *ModelGatewayReconciler) ensureRouteRateLimit(ctx context.Context, platf
 func gatewayLabels(platformName string) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/managed-by": "eks-agent-platform",
-		"eks-agent-platform/platform":  platformName,
+		LabelPlatform:                  platformName,
 	}
 }
 
 func routeLabels(platformName, modelFamily string) map[string]string {
 	l := gatewayLabels(platformName)
-	l["eks-agent-platform/model-family"] = modelFamily
+	l[LabelModelFamily] = modelFamily
 	return l
 }
 

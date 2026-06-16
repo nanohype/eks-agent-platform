@@ -7,7 +7,7 @@
 ```bash
 # Map tenant name → platform → phase
 kubectl get tenant <tenant-name> -o wide
-kubectl get platforms -l eks-agent-platform/tenant=<tenant-name>
+kubectl get platforms -l agents.nanohype.dev/tenant=<tenant-name>
 ```
 
 If any Platform shows `Suspended`, follow [platform-suspended.md](./platform-suspended.md). Skip the rest of this runbook.
@@ -35,10 +35,10 @@ Cause: Bedrock model quota hit, cross-region inference profile mis-configured, a
 
 ```bash
 # Are the agent pods alive and reading from the queue (if SQS-backed)?
-kubectl -n tenants-<platform> get pods -l eks-agent-platform/fleet=<fleet-name>
+kubectl -n tenants-<platform> get pods -l agents.nanohype.dev/fleet=<fleet-name>
 
 # KEDA-scaled fleet: is the ScaledObject reporting healthy?
-kubectl -n tenants-<platform> get scaledobject -l eks-agent-platform/fleet=<fleet-name> -o yaml | grep -A 5 "status:"
+kubectl -n tenants-<platform> get scaledobject -l agents.nanohype.dev/fleet=<fleet-name> -o yaml | grep -A 5 "status:"
 
 # Inflight queue depth
 aws sqs get-queue-attributes --queue-url <queue-url> --attribute-names ApproximateNumberOfMessages

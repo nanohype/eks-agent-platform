@@ -51,10 +51,10 @@ func agentSandboxResourceName(box *agentsv1alpha1.AgentSandbox) string {
 // NetworkPolicy podSelector. The `agentsandbox` label is the selector.
 func agentSandboxLabels(box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":    "eks-agent-platform",
-		"app.kubernetes.io/component":     "agent-sandbox",
-		"eks-agent-platform/platform":     p.Name,
-		"eks-agent-platform/agentsandbox": box.Name,
+		"app.kubernetes.io/managed-by": "eks-agent-platform",
+		"app.kubernetes.io/component":  "agent-sandbox",
+		LabelPlatform:                  p.Name,
+		LabelAgentSandbox:              box.Name,
 	}
 }
 
@@ -117,7 +117,7 @@ func (r *AgentSandboxReconciler) ensureAgentSandboxNetworkPolicy(ctx context.Con
 		np.Labels = agentSandboxLabels(box, p)
 		np.Spec = networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{"eks-agent-platform/agentsandbox": box.Name},
+				MatchLabels: map[string]string{LabelAgentSandbox: box.Name},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress, networkingv1.PolicyTypeIngress},
 			Egress:      sandboxEgressRules(),

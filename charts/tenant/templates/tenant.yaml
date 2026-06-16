@@ -10,7 +10,7 @@ metadata:
   name: {{ .Values.platform.tenant }}
   labels:
     app.kubernetes.io/part-of: eks-agent-platform
-    eks-agent-platform/tenant: {{ .Values.platform.tenant }}
+    agents.nanohype.dev/tenant: {{ .Values.platform.tenant }}
 spec:
   displayName: {{ .Values.platform.displayName | default .Values.platform.tenant | quote }}
   primaryPersona: {{ .Values.platform.persona }}

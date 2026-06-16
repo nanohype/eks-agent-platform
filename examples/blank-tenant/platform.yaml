@@ -28,8 +28,8 @@ metadata:
   name: blank
   namespace: eks-agent-platform
   labels:
-    eks-agent-platform/persona: generic
-    eks-agent-platform/tenant: example
+    agents.nanohype.dev/persona: generic
+    agents.nanohype.dev/tenant: example
 spec:
   displayName: Blank tenant
   persona: generic

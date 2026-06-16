@@ -84,9 +84,9 @@ func labelsForPlatform(p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/managed-by": "eks-agent-platform",
 		"app.kubernetes.io/part-of":    "eks-agent-platform",
-		"eks-agent-platform/platform":  p.Name,
-		"eks-agent-platform/tenant":    p.Spec.Tenant,
-		"eks-agent-platform/persona":   p.Spec.Persona,
+		LabelPlatform:                  p.Name,
+		LabelTenant:                    p.Spec.Tenant,
+		LabelPersona:                   p.Spec.Persona,
 	}
 }
 

@@ -99,12 +99,12 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
 		obj.SetLabels(map[string]string{
-			"app.kubernetes.io/managed-by":      "eks-agent-platform",
-			"eks-agent-platform/platform":       platform.Name,
-			"eks-agent-platform/tenant":         platform.Spec.Tenant,
-			"eks-agent-platform/agent-fleet":    fleet.Name,
-			"eks-agent-platform/eval-suite":     suite.Name,
-			"eks-agent-platform/pass-threshold": suite.Spec.PassThreshold,
+			"app.kubernetes.io/managed-by": "eks-agent-platform",
+			LabelPlatform:                  platform.Name,
+			LabelTenant:                    platform.Spec.Tenant,
+			LabelAgentFleet:                fleet.Name,
+			LabelEvalSuite:                 suite.Name,
+			LabelPassThreshold:             suite.Spec.PassThreshold,
 		})
 
 		// Parameters consumed by the platform-shared eval-runner template:

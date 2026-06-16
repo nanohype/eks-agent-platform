@@ -79,10 +79,10 @@ func workerImage(pool *agentsv1alpha1.SandboxPool) string {
 // the NetworkPolicy podSelector. The `sandboxpool` label is the selector.
 func sandboxPodLabels(pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":   "eks-agent-platform",
-		"app.kubernetes.io/component":    "sandbox-worker",
-		"eks-agent-platform/platform":    p.Name,
-		"eks-agent-platform/sandboxpool": pool.Name,
+		"app.kubernetes.io/managed-by": "eks-agent-platform",
+		"app.kubernetes.io/component":  "sandbox-worker",
+		LabelPlatform:                  p.Name,
+		LabelSandboxPool:               pool.Name,
 	}
 }
 
@@ -91,11 +91,11 @@ func sandboxPodLabels(pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Plat
 // label is the selector for all three.
 func metricsBridgeLabels(pool *agentsv1alpha1.SandboxPool, p *platformv1alpha1.Platform) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":      "eks-agent-platform",
-		"app.kubernetes.io/component":       "sandbox-metrics-bridge",
-		"eks-agent-platform/platform":       p.Name,
-		"eks-agent-platform/sandboxpool":    pool.Name,
-		"eks-agent-platform/metrics-bridge": pool.Name,
+		"app.kubernetes.io/managed-by": "eks-agent-platform",
+		"app.kubernetes.io/component":  "sandbox-metrics-bridge",
+		LabelPlatform:                  p.Name,
+		LabelSandboxPool:               pool.Name,
+		LabelMetricsBridge:             pool.Name,
 	}
 }
 
@@ -123,7 +123,7 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 		ObjectMeta: metav1.ObjectMeta{Name: sandboxResourceName(pool), Namespace: PlatformNamespace(p)},
 	}
 	labels := sandboxPodLabels(pool, p)
-	selector := map[string]string{"eks-agent-platform/sandboxpool": pool.Name}
+	selector := map[string]string{LabelSandboxPool: pool.Name}
 	envKeyRef := pool.Spec.EnvironmentKeySecret
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		dep.Labels = labels
@@ -184,7 +184,7 @@ func (r *SandboxPoolReconciler) ensureSandboxNetworkPolicy(ctx context.Context, 
 		np.Labels = sandboxPodLabels(pool, p)
 		np.Spec = networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{"eks-agent-platform/sandboxpool": pool.Name},
+				MatchLabels: map[string]string{LabelSandboxPool: pool.Name},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress, networkingv1.PolicyTypeIngress},
 			Egress:      sandboxEgressRules(),
@@ -259,7 +259,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 		ObjectMeta: metav1.ObjectMeta{Name: metricsBridgeName(pool), Namespace: PlatformNamespace(p)},
 	}
 	labels := metricsBridgeLabels(pool, p)
-	selector := map[string]string{"eks-agent-platform/metrics-bridge": pool.Name}
+	selector := map[string]string{LabelMetricsBridge: pool.Name}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		dep.Labels = labels
 		dep.Spec.Replicas = ptrTo(int32(1))
@@ -327,7 +327,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeService(ctx context.Context, 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		svc.Labels = metricsBridgeLabels(pool, p)
 		svc.Spec.Type = corev1.ServiceTypeClusterIP
-		svc.Spec.Selector = map[string]string{"eks-agent-platform/metrics-bridge": pool.Name}
+		svc.Spec.Selector = map[string]string{LabelMetricsBridge: pool.Name}
 		svc.Spec.Ports = []corev1.ServicePort{{
 			Name:       "http",
 			Port:       80,
@@ -357,7 +357,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeNetworkPolicy(ctx context.Con
 		np.Labels = metricsBridgeLabels(pool, p)
 		np.Spec = networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{"eks-agent-platform/metrics-bridge": pool.Name},
+				MatchLabels: map[string]string{LabelMetricsBridge: pool.Name},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress, networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{

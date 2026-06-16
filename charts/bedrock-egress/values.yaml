@@ -38,6 +38,6 @@ networkPolicy:
   #   - egress to agentgateway service
   #   - egress to OTel collector
   #   - egress DNS
-  tenantNamespaceLabel: "eks-agent-platform/tenant"
+  tenantNamespaceLabel: "agents.nanohype.dev/tenant"
   agentgatewayNamespace: agentgateway
   observabilityNamespace: observability
