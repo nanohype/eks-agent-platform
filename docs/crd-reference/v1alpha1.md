@@ -621,6 +621,24 @@ Package v1alpha1 contains API Schema definitions for the platform v1alpha1 API g
 
 
 
+#### AttributionSpec
+
+
+
+AttributionSpec configures per-session human attribution for a Platform. See
+github.com/nanohype/fab docs/attribution.md for the consumer side.
+
+
+
+_Appears in:_
+- [PlatformSpec](#platformspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `operators` _string array_ | Operators is the set of human identities (e.g. email addresses) a<br />session in this Platform may act as. Each value becomes both an allowed<br />STS SourceIdentity on the session role's trust policy and a resourceNames<br />entry on the impersonate ClusterRole, so the SAME string binds the AWS<br />and Kubernetes audit records. Use a canonical form (a lowercased email);<br />it must byte-match the operator's own RBAC subject name. |  | MinItems: 1 <br /> |
+| `sessionRoleMaxDurationSeconds` _integer_ | SessionRoleMaxDurationSeconds caps the assumed session lifetime. Because<br />the caller is the tenant IRSA role, AWS STS role chaining hard-caps a<br />chained session at 3600s regardless of this value; larger values only<br />matter if the caller ever changes. Defaults to 3600. | 3600 | Maximum: 43200 <br />Minimum: 900 <br />Optional: \{\} <br /> |
+
+
 #### BudgetRef
 
 
@@ -737,6 +755,7 @@ _Appears in:_
 | `identity` _[IdentitySpec](#identityspec)_ | Identity controls how the IRSA role is named + which Bedrock models are<br />reachable. |  |  |
 | `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance flags drive stricter defaults across the Platform. |  | Optional: \{\} <br /> |
 | `isolation` _string_ | Isolation: namespace (default) or vCluster (hard isolation). | namespace | Enum: [namespace vcluster] <br />Optional: \{\} <br /> |
+| `attribution` _[AttributionSpec](#attributionspec)_ | Attribution opts the Platform into per-session human attribution. When<br />set, the operator provisions a session role — assumable by the tenant<br />IRSA role with the operator carried as STS SourceIdentity, scoped to the<br />tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a<br />ClusterRole letting the tenant ServiceAccount impersonate the named<br />operators at the apiserver. fab's role-session entrypoint consumes both,<br />so an agent's AWS + Kubernetes actions attribute to a named human.<br />nil = unattributed (the default). |  | Optional: \{\} <br /> |
 
 
 #### PlatformStatus
@@ -754,6 +773,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase: Pending, Provisioning, Ready, Suspended, Failed. |  | Optional: \{\} <br /> |
 | `iamRoleArn` _string_ | IamRoleArn is the per-Platform IRSA role created by the controller. |  | Optional: \{\} <br /> |
+| `sessionRoleArn` _string_ | SessionRoleArn is the per-Platform attribution session role, created when<br />spec.attribution is set. Empty when attribution is off. |  | Optional: \{\} <br /> |
 | `namespace` _string_ | Namespace is the tenant namespace the controller provisioned. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the last spec.generation the controller reconciled. |  | Optional: \{\} <br /> |
 | `suspendedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | SuspendedAt is the timestamp at which the kill-switch fired. When<br />non-nil the operator stops reattaching the baseline IAM policy and<br />the AgentFleetReconciler scales fleets to zero. Resets to nil only<br />when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'<br />marker on the tenant IRSA role. |  | Optional: \{\} <br /> |

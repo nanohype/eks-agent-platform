@@ -44,6 +44,40 @@ type PlatformSpec struct {
 	// +kubebuilder:default=namespace
 	// +optional
 	Isolation string `json:"isolation,omitempty"`
+
+	// Attribution opts the Platform into per-session human attribution. When
+	// set, the operator provisions a session role — assumable by the tenant
+	// IRSA role with the operator carried as STS SourceIdentity, scoped to the
+	// tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a
+	// ClusterRole letting the tenant ServiceAccount impersonate the named
+	// operators at the apiserver. fab's role-session entrypoint consumes both,
+	// so an agent's AWS + Kubernetes actions attribute to a named human.
+	// nil = unattributed (the default).
+	// +optional
+	Attribution *AttributionSpec `json:"attribution,omitempty"`
+}
+
+// AttributionSpec configures per-session human attribution for a Platform. See
+// github.com/nanohype/fab docs/attribution.md for the consumer side.
+type AttributionSpec struct {
+	// Operators is the set of human identities (e.g. email addresses) a
+	// session in this Platform may act as. Each value becomes both an allowed
+	// STS SourceIdentity on the session role's trust policy and a resourceNames
+	// entry on the impersonate ClusterRole, so the SAME string binds the AWS
+	// and Kubernetes audit records. Use a canonical form (a lowercased email);
+	// it must byte-match the operator's own RBAC subject name.
+	// +kubebuilder:validation:MinItems=1
+	Operators []string `json:"operators"`
+
+	// SessionRoleMaxDurationSeconds caps the assumed session lifetime. Because
+	// the caller is the tenant IRSA role, AWS STS role chaining hard-caps a
+	// chained session at 3600s regardless of this value; larger values only
+	// matter if the caller ever changes. Defaults to 3600.
+	// +kubebuilder:validation:Minimum=900
+	// +kubebuilder:validation:Maximum=43200
+	// +kubebuilder:default=3600
+	// +optional
+	SessionRoleMaxDurationSeconds *int32 `json:"sessionRoleMaxDurationSeconds,omitempty"`
 }
 
 // BudgetRef points at a BudgetPolicy by name.
@@ -90,6 +124,11 @@ type PlatformStatus struct {
 	// IamRoleArn is the per-Platform IRSA role created by the controller.
 	// +optional
 	IamRoleArn string `json:"iamRoleArn,omitempty"`
+
+	// SessionRoleArn is the per-Platform attribution session role, created when
+	// spec.attribution is set. Empty when attribution is off.
+	// +optional
+	SessionRoleArn string `json:"sessionRoleArn,omitempty"`
 
 	// Namespace is the tenant namespace the controller provisioned.
 	// +optional

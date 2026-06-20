@@ -317,12 +317,19 @@ func (r *PlatformReconciler) reconcileManagedPolicies(ctx context.Context, roleN
 }
 
 // deleteIamRole is the finalizer counterpart: detach all policies and
-// delete the role. Tolerates NotFound so re-runs are safe.
+// delete the tenant role. Tolerates NotFound so re-runs are safe.
 func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alpha1.Platform, environment string) error {
+	return r.detachAndDeleteRole(ctx, tenantRoleName(environment, p))
+}
+
+// detachAndDeleteRole detaches every managed policy from a role and deletes
+// it. Shared by the tenant-role and session-role finalizers. Tolerates
+// NotFound at every step so re-runs (and roles that were never created) are
+// safe no-ops.
+func (r *PlatformReconciler) detachAndDeleteRole(ctx context.Context, name string) error {
 	if r.IAM == nil {
 		return nil
 	}
-	name := tenantRoleName(environment, p)
 	var marker *string
 	for {
 		listOut, err := r.IAM.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{

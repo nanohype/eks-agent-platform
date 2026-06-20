@@ -40,11 +40,14 @@ type fakeIAM struct {
 	roles    map[string]*iamtypes.Role
 	attached map[string]map[string]struct{} // roleName -> set of policy ARNs
 
-	listCalls        int
-	attachCalls      []iam.AttachRolePolicyInput
-	listReturnsErr   error
-	attachReturnsErr map[string]error // policyARN -> err
-	pageBoundary     int              // if > 0, paginate ListAttached at this size
+	listCalls         int
+	attachCalls       []iam.AttachRolePolicyInput
+	createCalls       []iam.CreateRoleInput
+	updateAssumeCalls []iam.UpdateAssumeRolePolicyInput
+	detachCalls       []iam.DetachRolePolicyInput
+	listReturnsErr    error
+	attachReturnsErr  map[string]error // policyARN -> err
+	pageBoundary      int              // if > 0, paginate ListAttached at this size
 }
 
 func newFakeIAM() *fakeIAM {
@@ -83,6 +86,7 @@ func (f *fakeIAM) attachmentsFor(roleName string) []string {
 }
 
 func (f *fakeIAM) CreateRole(_ context.Context, params *iam.CreateRoleInput, _ ...func(*iam.Options)) (*iam.CreateRoleOutput, error) {
+	f.createCalls = append(f.createCalls, *params)
 	name := aws.ToString(params.RoleName)
 	arn := "arn:aws:iam::123456789012:role/" + name
 	f.seedRole(name, arn, params.Tags...)
@@ -109,7 +113,8 @@ func (f *fakeIAM) TagRole(_ context.Context, _ *iam.TagRoleInput, _ ...func(*iam
 	return &iam.TagRoleOutput{}, nil
 }
 
-func (f *fakeIAM) UpdateAssumeRolePolicy(_ context.Context, _ *iam.UpdateAssumeRolePolicyInput, _ ...func(*iam.Options)) (*iam.UpdateAssumeRolePolicyOutput, error) {
+func (f *fakeIAM) UpdateAssumeRolePolicy(_ context.Context, params *iam.UpdateAssumeRolePolicyInput, _ ...func(*iam.Options)) (*iam.UpdateAssumeRolePolicyOutput, error) {
+	f.updateAssumeCalls = append(f.updateAssumeCalls, *params)
 	return &iam.UpdateAssumeRolePolicyOutput{}, nil
 }
 
@@ -128,6 +133,7 @@ func (f *fakeIAM) AttachRolePolicy(_ context.Context, params *iam.AttachRolePoli
 }
 
 func (f *fakeIAM) DetachRolePolicy(_ context.Context, params *iam.DetachRolePolicyInput, _ ...func(*iam.Options)) (*iam.DetachRolePolicyOutput, error) {
+	f.detachCalls = append(f.detachCalls, *params)
 	roleName := aws.ToString(params.RoleName)
 	delete(f.attached[roleName], aws.ToString(params.PolicyArn))
 	return &iam.DetachRolePolicyOutput{}, nil
