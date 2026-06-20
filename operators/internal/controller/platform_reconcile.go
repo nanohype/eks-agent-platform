@@ -9,10 +9,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -316,22 +318,17 @@ func (r *PlatformReconciler) cleanupTenantResources(ctx context.Context, p *plat
 // isNoKindMatch returns true when the error indicates the cluster doesn't
 // have the referenced CRD installed (Argo CD AppProject is optional).
 func isNoKindMatch(err error) bool {
-	// meta.IsNoMatchError isn't available cleanly via the client package,
-	// so match by string. Brittle but acceptable for an optional resource.
-	return err != nil && (containsString(err.Error(), "no matches for kind") ||
-		containsString(err.Error(), "no kind \""))
-}
-
-func containsString(haystack, needle string) bool {
-	if len(needle) == 0 {
+	if err == nil {
+		return false
+	}
+	// apimachinery's typed predicate catches the missing-REST-mapping case
+	// (NoKindMatchError / NoResourceMatchError); the string fallback covers
+	// the rarer pre-mapping text some client paths surface.
+	if apimeta.IsNoMatchError(err) {
 		return true
 	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(err.Error(), "no matches for kind") ||
+		strings.Contains(err.Error(), "no kind \"")
 }
 
 // fetchPlatform is a thin wrapper that returns NotFound vs other errors

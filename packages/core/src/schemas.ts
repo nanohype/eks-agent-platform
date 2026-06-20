@@ -80,6 +80,12 @@ export const CallEvent = z.object({
   modelId: z.string(),
   tokens: TokenUsage,
   costUsd: z.number().nonnegative(),
+  /**
+   * True when modelId had no pricing entry, so costUsd is an unmetered 0
+   * rather than a real $0. Lets cost dashboards surface unpriced traffic
+   * instead of silently undercounting spend.
+   */
+  unpriced: z.boolean().optional(),
   latencyMs: z.number().nonnegative(),
   status: z.enum(['ok', 'error']),
   errorClass: z.string().optional(),

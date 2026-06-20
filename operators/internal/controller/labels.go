@@ -17,6 +17,9 @@ package controller
 // prevent.
 const labelPrefix = "agents.nanohype.dev"
 
+// Exported label keys, one per kind of object the operator labels. Each is the
+// single source of truth for both the object's metadata label and any selector
+// that matches it.
 const (
 	LabelPlatform      = labelPrefix + "/platform"
 	LabelTenant        = labelPrefix + "/tenant"

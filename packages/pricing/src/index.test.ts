@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { estimateCost, PRICES } from './index.js';
+import { estimateCost, PRICES, priceModel } from './index.js';
 
 describe('estimateCost', () => {
   it('prices a Claude 3.5 Sonnet call (US inference profile)', () => {
@@ -48,5 +48,33 @@ describe('estimateCost', () => {
     expect(ids.some((id) => id.startsWith('meta.'))).toBe(true);
     expect(ids.some((id) => id.startsWith('mistral.'))).toBe(true);
     expect(ids.some((id) => id.startsWith('cohere.'))).toBe(true);
+  });
+});
+
+describe('priceModel', () => {
+  it('returns priced:true with the cost for a known model', () => {
+    const r = priceModel({
+      modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      tokens: { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    });
+    expect(r.priced).toBe(true);
+    expect(r.costUsd).toBeCloseTo(18.0, 4);
+  });
+
+  it('flags an unknown model id as priced:false with an unmetered 0', () => {
+    const r = priceModel({
+      modelId: 'unknown.model.id',
+      tokens: { inputTokens: 5_000_000, outputTokens: 5_000_000, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    });
+    expect(r.priced).toBe(false);
+    expect(r.costUsd).toBe(0);
+  });
+
+  it('keeps estimateCost in sync with priceModel.costUsd', () => {
+    const args = {
+      modelId: 'amazon.nova-pro-v1:0',
+      tokens: { inputTokens: 2_000_000, outputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    };
+    expect(estimateCost(args)).toBe(priceModel(args).costUsd);
   });
 });

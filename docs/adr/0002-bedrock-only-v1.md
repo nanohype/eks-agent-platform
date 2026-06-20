@@ -21,5 +21,5 @@ v1 ships only `BedrockAdapter` with per-family submodules (Anthropic, Meta, Mist
 ## Consequences
 
 - The SDK has a thin family of adapters that share `BedrockAdapter` as a base. Adding a model family means adding `buildRequestBody` + `parseResponseBody` for that family's wire shape, nothing more.
-- Pricing tables live in `@eks-agent/pricing` and are Bedrock-only. Renovate refresh is weekly.
+- Pricing tables live in `@eks-agent/pricing`, are Bedrock-only, and are hand-curated — Renovate bumps the package's deps, not the `PRICES` content. An automated refresh from the AWS Pricing API (`scripts/refresh-pricing.mjs`) is Phase-2 and currently a fail-loud scaffold; until it lands, prices are updated by hand, and a model id missing from the table meters as an unmetered `0` (`priced:false` via `priceModel`) rather than a silent real `$0`.
 - The error taxonomy in `@eks-agent/core` is provider-agnostic, so the day we add a non-Bedrock adapter, downstream code doesn't change.
