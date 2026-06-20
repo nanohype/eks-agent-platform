@@ -168,6 +168,12 @@ func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platform
 		},
 	}
 
+	// Serialize the shared-bucket-policy read-modify-write so concurrent
+	// reconciles can't interleave Get→mutate→Put and drop a peer tenant's
+	// statement (see PlatformReconciler.bucketPolicyMu).
+	r.bucketPolicyMu.Lock()
+	defer r.bucketPolicyMu.Unlock()
+
 	currentDoc, err := r.fetchBucketPolicy(ctx, bucket)
 	if err != nil {
 		return err
@@ -210,6 +216,10 @@ func (r *PlatformReconciler) removeBucketPolicyStatements(ctx context.Context, p
 	}
 	bucket := cfg.ArtifactsBucketName
 	sid := "TenantAccess-" + p.Name
+	// Same shared-document serialization as ensureBucketPolicy: a finalizer
+	// teardown must not interleave with a peer tenant's reconcile write.
+	r.bucketPolicyMu.Lock()
+	defer r.bucketPolicyMu.Unlock()
 	currentDoc, err := r.fetchBucketPolicy(ctx, bucket)
 	if err != nil {
 		return err

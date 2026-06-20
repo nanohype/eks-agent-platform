@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -52,6 +53,14 @@ type PlatformReconciler struct {
 	// AWSCfg carries the SSM-resolved values the KMS + S3 steps need:
 	// DataKMSKeyARN, ArtifactsBucketName, Environment.
 	AWSCfg PlatformAWSConfig
+
+	// bucketPolicyMu serializes the read-modify-write of the SHARED artifacts
+	// bucket policy across concurrent reconciles. That policy is one document
+	// holding a statement per tenant; with MaxConcurrentReconciles > 1 two
+	// Platform reconciles could otherwise interleave Get→mutate→Put and
+	// silently drop a peer tenant's statement. The operator runs as a single
+	// leader (leader election), so a process-local mutex is sufficient.
+	bucketPolicyMu sync.Mutex
 }
 
 // +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms,verbs=get;list;watch;update;patch

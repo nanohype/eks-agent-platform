@@ -42,7 +42,7 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.8.0",
     "@vitest/coverage-v8": "^4.1.6",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.1",
     "eslint": "^10.4.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import-x": "^4.16.2",
@@ -54,13 +54,7 @@
     "turbo": "^2.9.14",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.3",
+    "vite": "^8.0.16",
     "vitest": "^4.1.6"
-  },
-  "pnpm": {
-    "peerDependencyRules": {
-      "allowedVersions": {
-        "typescript": "^6.0.0"
-      }
-    }
   }
 }

@@ -5,3 +5,19 @@ packages:
 allowBuilds:
   esbuild: true
   unrs-resolver: true
+
+# Force patched transitive versions to clear known advisories. ws + form-data
+# ship at runtime via @kubernetes/client-node inside @eks-agent/client; the
+# rest are dev-tree (vitest/tsx, changesets). read-yaml-file is bumped to v2 so
+# it pulls js-yaml 4 and the vulnerable js-yaml 3.x line drops out entirely.
+overrides:
+  vite: "^8.0.16" # GHSA-v6wh-96g9-6wx3, GHSA-fx2h-pf6j-xcff
+  esbuild: "^0.28.1" # GHSA-g7r4-m6w7-qqqr
+  ws: "^8.21.0" # CVE-2026-48779 (memory-exhaustion DoS)
+  form-data: "^4.0.6" # CVE-2026-12143 (CRLF header injection)
+  js-yaml: "^4.2.0" # CVE-2026-53550 (merge-key quadratic DoS)
+  read-yaml-file: "^2.1.0"
+
+peerDependencyRules:
+  allowedVersions:
+    typescript: "^6.0.0"
