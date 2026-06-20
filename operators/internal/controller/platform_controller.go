@@ -69,6 +69,8 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=appprojects,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=users,verbs=impersonate
 
 // Reconcile drives a Platform CR toward its desired state.
 func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -103,6 +105,15 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			}
 			if err := r.deleteIamRole(ctx, platform, r.IAMCfg.Environment); err != nil {
 				logger.Error(err, "IAM role cleanup failed; will retry")
+				return ctrl.Result{}, err
+			}
+			// Attribution resources (no-ops when attribution was never enabled).
+			if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.Environment); err != nil {
+				logger.Error(err, "session role cleanup failed; will retry")
+				return ctrl.Result{}, err
+			}
+			if err := r.deleteOperatorImpersonateRBAC(ctx, platform); err != nil {
+				logger.Error(err, "impersonate RBAC cleanup failed; will retry")
 				return ctrl.Result{}, err
 			}
 			controllerutil.RemoveFinalizer(platform, finalizerName)
@@ -197,6 +208,40 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err := ensureTenantServiceAccount(ctx, r.Client, platform); err != nil {
 		logger.Error(err, "ensureTenantServiceAccount failed")
 		return ctrl.Result{}, err
+	}
+
+	// Per-session human attribution (optional). Provision the session role
+	// (assumable by the tenant IRSA role with the operator as STS
+	// SourceIdentity) + the apiserver impersonate RBAC. Reconciles in both
+	// directions: removing spec.attribution tears the pair back down. The
+	// session role honors the kill-switch via the susp.Suspended flag (baseline
+	// detached when suspended, like the tenant role).
+	if platform.Spec.Attribution != nil {
+		if susp.RoleARN != "" {
+			sessionARN, err := r.ensureSessionRole(ctx, platform, susp.RoleARN, susp.Suspended, r.IAMCfg)
+			if err != nil {
+				logger.Error(err, "ensureSessionRole failed")
+				return ctrl.Result{}, err
+			}
+			if sessionARN != "" {
+				platform.Status.SessionRoleArn = sessionARN
+			}
+		}
+		if err := r.ensureOperatorImpersonateRBAC(ctx, platform); err != nil {
+			logger.Error(err, "ensureOperatorImpersonateRBAC failed")
+			return ctrl.Result{}, err
+		}
+	} else if platform.Status.SessionRoleArn != "" {
+		// Attribution was enabled and is now removed — tear the pair down.
+		if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.Environment); err != nil {
+			logger.Error(err, "deleteSessionRole (attribution removed) failed")
+			return ctrl.Result{}, err
+		}
+		if err := r.deleteOperatorImpersonateRBAC(ctx, platform); err != nil {
+			logger.Error(err, "deleteOperatorImpersonateRBAC (attribution removed) failed")
+			return ctrl.Result{}, err
+		}
+		platform.Status.SessionRoleArn = ""
 	}
 
 	if susp.Suspended {
