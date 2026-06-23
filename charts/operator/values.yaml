@@ -103,6 +103,14 @@ metrics:
     type: ClusterIP
   serviceMonitor:
     enabled: true
+  # Pod-level prometheus.io scrape annotations. The EKS clusters scrape with the
+  # Grafana Agent (→ Amazon Managed Prometheus) by pod annotation, with no
+  # prometheus-operator — so the ServiceMonitor above is consumed only on
+  # kube-prometheus-stack clusters (kx). These annotations make the operator's
+  # controller-runtime reconcile metrics reach AMP in prod. The operator
+  # NetworkPolicy already allows scrape from the monitoring namespace (where the
+  # Grafana Agent runs).
+  podScrapeAnnotations: true
 
 resources:
   requests:

@@ -13,6 +13,11 @@ spec:
       labels: {{- include "operator.selectorLabels" . | nindent 8 }}
       annotations:
         kubectl.kubernetes.io/default-container: manager
+        {{- if and .Values.metrics.enabled .Values.metrics.podScrapeAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
     spec:
       serviceAccountName: {{ include "operator.serviceAccountName" . }}
       priorityClassName: {{ .Values.priorityClassName }}
