@@ -29,6 +29,9 @@ data:
             group: platform.nanohype.dev
             version: v1alpha1
             kind: Platform
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
           metricNamePrefix: kube_customresource
           metrics:
             - name: status_phase
@@ -57,6 +60,9 @@ data:
             group: platform.nanohype.dev
             version: v1alpha1
             kind: Tenant
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
           metricNamePrefix: kube_customresource
           metrics:
             - name: status_phase
@@ -78,6 +84,16 @@ data:
               commonLabels:
                 customresource_kind: Tenant
                 field: percentOfBudget
+            - name: status_field
+              help: "Tenant.status.aggregateSpendUsd (USD) as a gauge"
+              each:
+                type: Gauge
+                gauge:
+                  path: [status, aggregateSpendUsd]
+                  nilIsZero: true
+              commonLabels:
+                customresource_kind: Tenant
+                field: aggregateSpendUsd
             - name: condition
               help: "Tenant.status.conditions by type + status"
               each:
@@ -96,10 +112,13 @@ data:
             group: governance.nanohype.dev
             version: v1alpha1
             kind: BudgetPolicy
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
           metricNamePrefix: kube_customresource
           metrics:
             - name: status_field
-              help: "BudgetPolicy.status.{lastReconciled,killSwitchFiredAt,percentOfBudget} as gauges"
+              help: "BudgetPolicy.status.lastReconciled as a unix-ts gauge"
               each:
                 type: Gauge
                 gauge:
@@ -108,12 +127,45 @@ data:
               commonLabels:
                 customresource_kind: BudgetPolicy
                 field: lastReconciled
+            - name: status_field
+              help: "BudgetPolicy.status.currentSpendUsd (USD) as a gauge"
+              each:
+                type: Gauge
+                gauge:
+                  path: [status, currentSpendUsd]
+                  nilIsZero: true
+              commonLabels:
+                customresource_kind: BudgetPolicy
+                field: currentSpendUsd
+            - name: status_field
+              help: "BudgetPolicy.status.killSwitchFiredAt as a unix-ts gauge (0 when unset)"
+              each:
+                type: Gauge
+                gauge:
+                  path: [status, killSwitchFiredAt]
+                  nilIsZero: true
+              commonLabels:
+                customresource_kind: BudgetPolicy
+                field: killSwitchFiredAt
+            - name: status_field
+              help: "BudgetPolicy.spec.monthlyUsd — the soft spend threshold (USD)"
+              each:
+                type: Gauge
+                gauge:
+                  path: [spec, monthlyUsd]
+                  nilIsZero: true
+              commonLabels:
+                customresource_kind: BudgetPolicy
+                field: monthlyUsd
 
         # AgentFleet
         - groupVersionKind:
             group: agents.nanohype.dev
             version: v1alpha1
             kind: AgentFleet
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
           metricNamePrefix: kube_customresource
           metrics:
             - name: status_phase
@@ -141,6 +193,9 @@ data:
             group: governance.nanohype.dev
             version: v1alpha1
             kind: EvalSuite
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
           metricNamePrefix: kube_customresource
           metrics:
             - name: status_phase
