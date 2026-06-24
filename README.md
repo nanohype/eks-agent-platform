@@ -119,7 +119,7 @@ It also deliberately does **not** own:
 
 - Org, account, network, EKS cluster, baseline IAM → [`landing-zone`](https://github.com/nanohype/landing-zone)
 - General-purpose cluster addons (cert-manager, cilium, kyverno, observability stack) → [`eks-gitops`](https://github.com/nanohype/eks-gitops)
-- Cluster bootstrap (ArgoCD install, app-of-apps wiring) → `aws-eks` (CDK)
+- Cluster bootstrap (ArgoCD install, app-of-apps wiring) → `landing-zone` (OpenTofu)
 
 ## Contributing
 

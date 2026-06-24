@@ -11,7 +11,7 @@ Acknowledgement target: within 72 hours. Triage target: within 5 business days.
 This platform is a tenancy substrate. Its security model assumes:
 
 - The hosting EKS cluster is provisioned by `landing-zone` with CIS EKS baseline enforced.
-- ArgoCD is deployed by `aws-eks` (CDK) with SSO-only access.
+- ArgoCD is deployed by `landing-zone` (OpenTofu) with SSO-only access.
 - `eks-gitops` enforces Pod Security Standards `restricted` and Kyverno verify-images policies.
 
 ### Tenant isolation
