@@ -46,10 +46,9 @@ eks-agent-platform operator installed.
 {{- end }}
   operator SLO:  {{ if .Values.slo.enabled }}enabled (ns {{ .Values.slo.namespace }}){{ else }}disabled{{ end }}
 {{- if .Values.slo.enabled }}
-    ⚠ kube_customresource_* metrics require kube-state-metrics started with
-      --custom-resource-state-config-file pointing at the
-      kube-state-metrics-customresource-config ConfigMap (owned by the eks-gitops
-      kube-state-metrics addon). Without it, CR-status alerts + dashboards no-data.
+    ⚠ The kube_customresource_* metrics these alerts read come from the eks-gitops
+      kube-state-metrics addon's customResourceState config (the single source).
+      Without that addon, the CR-status alerts + dashboards no-data.
 {{- end }}
 {{- if and .Values.slo.enabled .Values.slo.alerting.enabled }}
     AlertmanagerConfig on — requires Secrets pagerduty-platform +

@@ -58,10 +58,10 @@ template by name (`eval-runner`), which the chart keeps byte-identical, along wi
 ## Trade-offs
 
 - **External prerequisites stay external.** `slo.alerting.enabled` (the AlertmanagerConfig) needs
-  six pre-existing Secrets; the CR-state ConfigMap is inert unless kube-state-metrics is started
-  with `--custom-resource-state-config-file` (owned by the eks-gitops KSM addon). Both default to a
-  safe state (alerting off; the ConfigMap ships but is harmless unmounted) and are documented in the
-  chart NOTES + README.
+  six pre-existing Secrets; defaults off and is documented in the chart NOTES + README. The
+  `kube_customresource_*` metrics the SLO alerts read are defined by the eks-gitops kube-state-metrics
+  addon's customResourceState config — the single source KSM actually loads. This chart consumes those
+  metrics; it does not ship its own (duplicate) copy.
 - **The eval IRSA role ARN is injected, not in-chart.** It embeds the AWS account id, so the
   eks-gitops `addons-agent-operator` ApplicationSet injects it from a cluster-Secret annotation —
   the same pattern as the operator role.

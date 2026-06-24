@@ -41,11 +41,10 @@ The Argo Workflows runtime the operator submits EvalSuite runs to (WorkflowTempl
 
 ### operator SLO (`slo.*`)
 
-The operator's own observability: recording rules + alerts, the kube-state-metrics CustomResourceState config (makes `kube_customresource_*` metrics exist), and persona alert routing. Enabled by default; needs the prometheus-operator CRDs.
+The operator's own observability: recording rules + alerts and persona alert routing. Enabled by default; needs the prometheus-operator CRDs. The kube-state-metrics CustomResourceState config that makes the `kube_customresource_*` metrics exist lives in the eks-gitops kube-state-metrics addon (the single source — it's what KSM actually loads); this chart consumes those metrics, it doesn't define them.
 
 - `slo.operatorNamespace` — the namespace the operator runs in, used in the PromQL metric selectors
 - `slo.alerting.enabled` — the AlertmanagerConfig persona routing; **off by default** — its receivers reference six Secrets (`pagerduty-platform`, `slack-webhook-{incidents,finance,ops,eng,platform}`) that must pre-exist; enable per-env in production once provisioned
-- The CR-state ConfigMap is inert unless kube-state-metrics is started with `--custom-resource-state-config-file` pointing at it (owned by the eks-gitops kube-state-metrics addon) — otherwise CR-status alerts + dashboards no-data
 
 ## Required cluster capabilities
 
