@@ -14,6 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  placeholders:
+    name: zero-placeholder gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/no-placeholders.sh
+
   format:
     name: format check
     runs-on: ubuntu-latest
