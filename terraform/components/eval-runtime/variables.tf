@@ -13,16 +13,6 @@ variable "cluster_name" {
   type        = string
 }
 
-variable "oidc_provider_arn" {
-  description = "EKS OIDC provider ARN — for IRSA trust on the eval-runner SA"
-  type        = string
-}
-
-variable "oidc_issuer" {
-  description = "EKS OIDC issuer host (oidc.eks.<region>.amazonaws.com/id/<id>) — without the https://"
-  type        = string
-}
-
 variable "eval_runner_namespace" {
   description = "Kubernetes namespace where Argo Workflows execute. Argo Workflows must already be installed (via the eks-gitops addons-argo-platform ApplicationSet)."
   type        = string

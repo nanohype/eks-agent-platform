@@ -30,19 +30,21 @@ resource "aws_iam_role" "eval_runner" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Federated = var.oidc_provider_arn
-      }
-      Action = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "${var.oidc_issuer}:sub" = "system:serviceaccount:${var.eval_runner_namespace}:${var.eval_runner_service_account}"
-          "${var.oidc_issuer}:aud" = "sts.amazonaws.com"
-        }
-      }
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
     }]
   })
+}
+
+# EKS Pod Identity binds this role to the eval-runner ServiceAccount — no IRSA
+# annotation, no OIDC trust.
+resource "aws_eks_pod_identity_association" "eval_runner" {
+  cluster_name    = var.cluster_name
+  namespace       = var.eval_runner_namespace
+  service_account = var.eval_runner_service_account
+  role_arn        = aws_iam_role.eval_runner.arn
+  tags            = local.tags
 }
 
 resource "aws_iam_role_policy" "eval_runner" {

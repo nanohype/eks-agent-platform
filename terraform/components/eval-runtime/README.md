@@ -10,7 +10,7 @@ AWS-side substrate for `EvalSuite` reconciliation. The Kubernetes-side
   eks-gitops `addons-argo-platform` ApplicationSet, which satisfies the
   runtime's precondition.
 
-* **IRSA role** for the `eval-runner` ServiceAccount. Bedrock invoke
+* **Pod Identity-bound role** for the `eval-runner` ServiceAccount. Bedrock invoke
   (region-scoped via `aws:RequestedRegion`), S3 PutObject on the
   eval-reports bucket for HTML + junit artifacts, S3 GetObject scoped to
   `*/manifests/*` for `EvalSuite.spec.casesFromManifest`, KMS decrypt
@@ -40,7 +40,6 @@ The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 | Variable                                              | Description                                                      |
 | ----------------------------------------------------- | ---------------------------------------------------------------- |
 | `environment`, `region`, `cluster_name`               | identifying                                                      |
-| `oidc_provider_arn`, `oidc_issuer`                    | EKS IRSA wiring (from landing-zone)                              |
 | `eval_reports_bucket_arn`, `eval_reports_bucket_name` | from `model-artifacts`                                           |
 | `bedrock_invoke_resource_arns`                        | default `["*"]`; production should pin to inference profile ARNs |
 | `allowed_regions`                                     | `aws:RequestedRegion` ABAC for Bedrock                           |
@@ -48,6 +47,6 @@ The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 
 ## Outputs
 
-- `eval_runner_role_arn` — annotated on the SA by the operator chart's `eval-runtime` templates; injected per-cluster by the eks-gitops `addons-agent-operator` ApplicationSet
-- `eval_runner_namespace`, `eval_runner_service_account` — also published to SSM
+- `eval_runner_role_arn` — the eval-runner role, bound to its ServiceAccount by an EKS Pod Identity association (no annotation)
+- `eval_runner_namespace`, `eval_runner_service_account` — published to SSM; they name the Pod Identity association tuple
 - `controller_log_group_name`

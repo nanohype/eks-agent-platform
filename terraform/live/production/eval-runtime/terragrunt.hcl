@@ -23,7 +23,6 @@ dependency "model_artifacts" {
 
 # Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
-#   - oidc_provider_arn, oidc_issuer       (from lz-cluster)
 #   - data_kms_key_arn, logs_kms_key_arn   (from lz-secrets)
 inputs = {
   eval_reports_bucket_arn  = dependency.model_artifacts.outputs.eval_reports_bucket_arn

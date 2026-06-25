@@ -17,9 +17,6 @@ dependency "model_artifacts" {
 }
 
 inputs = {
-  oidc_provider_arn = "arn:aws:iam::REPLACE:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/REPLACE"
-  oidc_issuer       = "oidc.eks.us-west-2.amazonaws.com/id/REPLACE"
-
   eval_reports_bucket_arn  = dependency.model_artifacts.outputs.eval_reports_bucket_arn
   eval_reports_bucket_name = dependency.model_artifacts.outputs.eval_reports_bucket_name
 
