@@ -88,14 +88,52 @@ Confirm addons converge: `kubectl --context <cluster> get applications -n argocd
 gpu-operator, nvidia-dra-driver, neuron-device-plugin, the operator + its
 eval-runtime, … Synced/Healthy).
 
+### B1b. Agent-platform AWS substrate (`eks-agent-platform/terraform`)
+
+Apply once `agent-iam` (B1 step 5) and the cluster exist. This tree is the
+operator's own AWS substrate — `model-artifacts`, `bedrock`, `agent-egress`,
+`accelerator-pools`, `eval-runtime`, `cost-pipeline`, `kill-switch`,
+`batch-runtime` — and writes the SSM parameters the operator loads at startup
+(`/eks-agent-platform/<env>/{model-artifacts,bedrock,kill-switch,cost-pipeline,
+eval-runtime,batch-runtime}/*`). `agent-iam` is **not** here — landing-zone owns
+it (B1 step 5); this tree reads the operator role + tenant baseline from the
+`/eks-agent-platform/<env>/agent-iam/*` SSM contract.
+
+**Prereq:** the `eks-pod-identity-agent` EKS addon must be installed — the
+accelerator (neuron, gpu-operator) and eval-runner roles bind via EKS Pod
+Identity, which is inert without it. Check: `aws eks describe-addon
+--cluster-name <cluster> --addon-name eks-pod-identity-agent`.
+
+From `eks-agent-platform/`, export `AWS_ACCOUNT_ID` (it names the state bucket)
+and the `TF_VAR_*` infrastructure identifiers the orchestrator supplies —
+`TF_VAR_data_kms_key_arn`, `TF_VAR_logs_kms_key_arn` (lz-secrets); the
+agent-egress VPC / subnet / route-table / security-group IDs (lz-network /
+lz-cluster); `TF_VAR_node_role_name` (lz-cluster, changes on cluster recreate) —
+then apply in dependency order:
+
+```bash
+task tofu:apply ENVIRONMENT=<env> COMPONENT=all   # terragrunt run --all resolves the graph
+```
+
+Verify the Pod Identity associations bound:
+`aws eks list-pod-identity-associations --cluster-name <cluster>` should list the
+`aws-neuron/neuron-device-plugin`, `gpu-operator/gpu-operator`, and
+`eval-runner/eval-runner` tuples. From one of those pods,
+`AWS_CONTAINER_CREDENTIALS_FULL_URI` is injected (Pod Identity), not
+`AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` (IRSA), and `aws sts
+get-caller-identity` resolves to the bound role. A `(namespace, serviceAccount)`
+mismatch against the running chart is a silent no-credentials failure — confirm
+the chart-rendered SA names before assuming a deeper problem.
+
 ### B2. Operator on EKS
 
 The operator syncs itself. The `addons-agent-operator` ApplicationSet in
 eks-gitops git-sources `charts/operator` and targets every cluster carrying
 `eks-agent-platform/enabled=true`. It injects the per-cluster bits the chart
-can't hardcode — the operator IAM role ARN and the eval-runner role ARN +
-eval-reports bucket — from the annotations `cluster-bootstrap` publishes on the
-ArgoCD cluster Secret. The cluster name comes from SSM
+can't hardcode — the operator IAM role ARN and the eval-reports bucket — from
+the annotations `cluster-bootstrap` publishes on the ArgoCD cluster Secret (the
+eval-runner role is bound by Pod Identity, see B1b). The cluster name comes from
+SSM
 (`/eks-agent-platform/<env>/cluster/name`), read by the operator's config
 loader. So once B1 step 3
 landed, the operator (with the AWS reconcile ON and its eval-runtime + SLO
