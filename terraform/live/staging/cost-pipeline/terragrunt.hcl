@@ -1,4 +1,3 @@
-# staging environment — replace REPLACE_* placeholders before apply
 include "root" {
   path = find_in_parent_folders("root.hcl")
 }
@@ -17,9 +16,6 @@ dependency "bedrock" {
 }
 
 inputs = {
-  data_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-data"
-  logs_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-logs"
-
   cur_report_name               = "eks-agent-platform-staging"
   bedrock_invocation_log_group  = dependency.bedrock.outputs.invocation_log_group_name
   athena_results_retention_days = 90 # spans a full monthly billing cycle + buffer for cost-audit replay

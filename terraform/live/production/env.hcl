@@ -9,9 +9,9 @@ locals {
   # variable: terragrunt's `remote_state.config.bucket` embeds it and is
   # evaluated before any AWS API is reachable, so it can't arrive as a
   # `TF_VAR_` (those reach the leaf module, not the backend config) — and it
-  # stays out of git. All other infrastructure identifiers (OIDC issuer,
-  # VPC/subnet IDs, KMS key ARN, route tables, security group, Karpenter
-  # node-role name) come in as `TF_VAR_*` from the orchestrator (portal
+  # stays out of git. All other infrastructure identifiers (KMS key ARNs,
+  # VPC/subnet IDs, route tables, security group, Karpenter node-role name)
+  # come in as `TF_VAR_*` from the orchestrator (portal
   # workspace variables for the production deploy). Leaves declare the
   # variables in `variables.tf`. The orchestrator sets AWS_ACCOUNT_ID; if a
   # leaf is run outside portal, export AWS_ACCOUNT_ID (and the TF_VAR_s) first.

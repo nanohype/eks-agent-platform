@@ -6,6 +6,4 @@ terraform {
   source = "${get_repo_root()}/terraform/components/kill-switch"
 }
 
-inputs = {
-  logs_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-logs"
-}
+inputs = {}
