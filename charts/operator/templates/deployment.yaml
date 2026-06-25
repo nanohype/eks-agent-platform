@@ -49,9 +49,6 @@ spec:
             - --batch-poll-interval={{ .Values.reconcilers.batch.pollInterval }}
             - --environment={{ .Values.config.environment }}
             - --region={{ .Values.config.region }}
-            {{- with .Values.config.clusterName }}
-            - --cluster-name={{ . }}
-            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -80,10 +77,6 @@ spec:
             {{- end }}
             {{- with .Values.config.tags.compliance }}
             - name: AGENTS_COMPLIANCE
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.config.clusterName }}
-            - name: AGENTS_CLUSTER_NAME
               value: {{ . | quote }}
             {{- end }}
           ports:

@@ -27,6 +27,10 @@ type Config struct {
 	Environment string
 	Region      string
 
+	// cluster outputs (written by cluster-bootstrap). ClusterName is the EKS
+	// cluster the operator creates tenant Pod Identity associations on.
+	ClusterName string
+
 	// agent-iam outputs
 	OperatorRoleARN              string
 	TenantIAMPath                string
@@ -108,6 +112,8 @@ func Load(ctx context.Context, ssmClient awsclients.SSM, environment, region str
 // Config field. Unknown keys silently no-op — they aren't errors.
 func (c *Config) assign(suffix, value string) {
 	switch suffix {
+	case "cluster/name":
+		c.ClusterName = value
 	case "agent-iam/operator_role_arn":
 		c.OperatorRoleARN = value
 	case "agent-iam/tenant_iam_path":

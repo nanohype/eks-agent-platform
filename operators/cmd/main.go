@@ -74,7 +74,6 @@ func main() {
 	// from SSM under /eks-agent-platform/<environment>/.
 	var environment string
 	var region string
-	var clusterName string
 	var disableAWS bool
 
 	// Org-dimension tag values stamped on tenant roles (resource-tagging
@@ -104,7 +103,6 @@ func main() {
 	flag.StringVar(&shimImage, "shim-image", os.Getenv("AGENTS_SHIM_IMAGE"), "Operator image used for the SandboxPool KEDA metrics bridge. Empty disables queue-depth autoscaling.")
 	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (dev/staging/production). Drives SSM-config path.")
 	flag.StringVar(&region, "region", os.Getenv("AGENTS_REGION"), "AWS region. Defaults to credential-chain region if empty.")
-	flag.StringVar(&clusterName, "cluster-name", os.Getenv("AGENTS_CLUSTER_NAME"), "EKS cluster name; used to create the tenant Pod Identity associations that bind tenant ServiceAccounts to their roles.")
 	flag.StringVar(&costCenter, "cost-center", os.Getenv("AGENTS_COST_CENTER"), "Org cost-center tag stamped on tenant roles (resource-tagging standard).")
 	flag.StringVar(&businessUnit, "business-unit", os.Getenv("AGENTS_BUSINESS_UNIT"), "Org business-unit tag stamped on tenant roles.")
 	flag.StringVar(&dataClassification, "data-classification", os.Getenv("AGENTS_DATA_CLASSIFICATION"), "Org data-classification tag stamped on tenant roles.")
@@ -169,7 +167,7 @@ func main() {
 			TenantIAMPath:                opConfig.TenantIAMPath,
 			TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,
 			TenantPermissionsBoundaryARN: opConfig.TenantPermissionsBoundaryARN,
-			ClusterName:                  clusterName,
+			ClusterName:                  opConfig.ClusterName,
 			Environment:                  environment,
 			CostCenter:                   costCenter,
 			BusinessUnit:                 businessUnit,
