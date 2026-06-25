@@ -61,18 +61,25 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
    is on, so the applying principal gets cluster-admin automatically (no manual
    access entry). Then: `aws eks update-kubeconfig --name <cluster> --region <r>
 --profile <profile> --alias <cluster>` → `kubectl --context <cluster> get nodes`.
-3. `cluster-bootstrap` — installs cilium (ENI mode, replaces VPC-CNI) + ArgoCD +
+3. `managed-monitoring` — the AMP + AMG workspaces. Publishes the AMP endpoints
+   to Secrets Manager (External Secrets syncs them to the Grafana data source and
+   grafana-agent) and the AMG workspace URL to SSM. `cluster-bootstrap` reads that
+   URL (its `enable_managed_monitoring` is on by default) to annotate the cluster
+   Secret, so apply this before `cluster-bootstrap`.
+4. `cluster-bootstrap` — installs cilium (ENI mode, replaces VPC-CNI) + ArgoCD +
    an app-of-apps pointing at `eks-gitops/applicationsets`. It also registers the
    cluster as an ArgoCD cluster Secret carrying the `eks-agent-platform/enabled=true`
-   label and the operator-role-arn annotation the operator ApplicationSet reads. ArgoCD
-   then syncs the addon catalog onto every labeled cluster: `addons-ai-platform`
-   (kagent + agentgateway), `addons-argo-platform` (argo-workflows/rollouts/events),
-   the `accelerators` category (gpu-operator, NVIDIA DRA driver, AWS Neuron device
-   plugin), and `addons-agent-operator` (the operator itself).
-4. `agent-iam` — the operator IRSA role (path-scoped, boundary-gated), the tenant
+   label, the operator-role-arn annotation the operator ApplicationSet reads, and
+   the `monitoring/grafana-url` annotation the dashboards ApplicationSet injects
+   into the Grafana CR. ArgoCD then syncs the addon catalog onto every labeled
+   cluster: `addons-ai-platform` (kagent + agentgateway), `addons-argo-platform`
+   (argo-workflows/rollouts/events), the `accelerators` category (gpu-operator,
+   NVIDIA DRA driver, AWS Neuron device plugin), and `addons-agent-operator` (the
+   operator itself).
+5. `agent-iam` — the operator IRSA role (path-scoped, boundary-gated), the tenant
    permissions boundary + baseline policies, and the SSM params the operator
    reads (`/eks-agent-platform/<env>/agent-iam/*`).
-5. Per tenant, `<app>-platform` (e.g. `competitive-intelligence-platform`) for
+6. Per tenant, `<app>-platform` (e.g. `competitive-intelligence-platform`) for
    Aurora / per-tenant IRSA / Secrets. OIDC is wired from the `cluster`
    dependency automatically.
 
