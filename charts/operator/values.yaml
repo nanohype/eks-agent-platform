@@ -183,13 +183,18 @@ evalRuntime:
     enabled: false
 
 # ── operator SLO ─────────────────────────────────────────────────────────────
-# The operator's own observability: recording rules + alerts (PrometheusRule),
-# the kube-state-metrics CustomResourceState config that makes kube_customresource_*
-# metrics exist, and the persona alert routing (AlertmanagerConfig).
+# The operator's own SLO recording rules + burn-rate alerts as a PrometheusRule,
+# plus the persona alert routing (AlertmanagerConfig).
 #
-# Requires the prometheus-operator CRDs (eks-gitops bootstrap wave 0).
+# Off by default: a PrometheusRule is inert without a Prometheus Operator to
+# evaluate it, and this platform runs none (grafana-agent → Amazon Managed
+# Prometheus, alerts in Amazon Managed Grafana). The live operator SLO alerting
+# is the GrafanaAlertRuleGroup in eks-gitops (dashboards/base/alerting/
+# agent-operator.yaml); the kube_customresource_* metrics come from the
+# eks-gitops kube-state-metrics CustomResourceState, not this block. Enable on a
+# cluster that runs an operator (e.g. local kx with kube-prometheus-stack).
 slo:
-  enabled: true
+  enabled: false
   createNamespace: true
   namespace: eks-agent-platform-monitoring
   # The namespace the operator runs in — used in the PromQL metric selectors.
