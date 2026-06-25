@@ -49,11 +49,8 @@ spec:
             - --batch-poll-interval={{ .Values.reconcilers.batch.pollInterval }}
             - --environment={{ .Values.config.environment }}
             - --region={{ .Values.config.region }}
-            {{- with .Values.config.oidc.providerArn }}
-            - --oidc-provider-arn={{ . }}
-            {{- end }}
-            {{- with .Values.config.oidc.issuerHost }}
-            - --oidc-issuer-host={{ . }}
+            {{- with .Values.config.clusterName }}
+            - --cluster-name={{ . }}
             {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
@@ -85,12 +82,8 @@ spec:
             - name: AGENTS_COMPLIANCE
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.config.oidc.providerArn }}
-            - name: AGENTS_OIDC_PROVIDER_ARN
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.config.oidc.issuerHost }}
-            - name: AGENTS_OIDC_ISSUER_HOST
+            {{- with .Values.config.clusterName }}
+            - name: AGENTS_CLUSTER_NAME
               value: {{ . | quote }}
             {{- end }}
           ports:

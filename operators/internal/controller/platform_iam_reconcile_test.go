@@ -8,10 +8,14 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -335,8 +339,7 @@ func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: baseline,
-		OIDCProviderARN:         "arn:aws:iam::123:oidc-provider/example.com/eks",
-		OIDCIssuerHost:          "example.com/eks",
+		ClusterName:             "production-cluster",
 		Environment:             "production",
 	}
 	platform := newPlatform("slack-knowledge-bot", "protohype")
@@ -371,8 +374,7 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: baseline,
-		OIDCProviderARN:         "arn:aws:iam::123:oidc-provider/example.com/eks",
-		OIDCIssuerHost:          "example.com/eks",
+		ClusterName:             "production-cluster",
 		Environment:             "production",
 	}
 	platform := newPlatform("slack-knowledge-bot", "protohype")
@@ -398,5 +400,136 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 	}
 	if len(f.attachCalls) != 0 {
 		t.Errorf("expected no attach calls when suspended, got %d", len(f.attachCalls))
+	}
+}
+
+// fakeEKS is a minimal in-memory awsclients.EKS covering the Pod Identity
+// association the operator binds the tenant ServiceAccount with.
+type fakeEKS struct {
+	associations map[string]string // "namespace/serviceAccount" -> association id
+	createCalls  []eks.CreatePodIdentityAssociationInput
+	deleteCalls  []eks.DeletePodIdentityAssociationInput
+	nextID       int
+}
+
+func newFakeEKS() *fakeEKS {
+	return &fakeEKS{associations: map[string]string{}}
+}
+
+func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
+	key := aws.ToString(params.Namespace) + "/" + aws.ToString(params.ServiceAccount)
+	out := &eks.ListPodIdentityAssociationsOutput{}
+	if id, ok := f.associations[key]; ok {
+		out.Associations = []ekstypes.PodIdentityAssociationSummary{{
+			AssociationId:  aws.String(id),
+			Namespace:      params.Namespace,
+			ServiceAccount: params.ServiceAccount,
+		}}
+	}
+	return out, nil
+}
+
+func (f *fakeEKS) CreatePodIdentityAssociation(_ context.Context, params *eks.CreatePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error) {
+	f.createCalls = append(f.createCalls, *params)
+	f.nextID++
+	id := fmt.Sprintf("a-%d", f.nextID)
+	f.associations[aws.ToString(params.Namespace)+"/"+aws.ToString(params.ServiceAccount)] = id
+	return &eks.CreatePodIdentityAssociationOutput{}, nil
+}
+
+func (f *fakeEKS) DeletePodIdentityAssociation(_ context.Context, params *eks.DeletePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DeletePodIdentityAssociationOutput, error) {
+	f.deleteCalls = append(f.deleteCalls, *params)
+	for k, id := range f.associations {
+		if id == aws.ToString(params.AssociationId) {
+			delete(f.associations, k)
+		}
+	}
+	return &eks.DeletePodIdentityAssociationOutput{}, nil
+}
+
+func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
+	f := newFakeIAM()
+	fe := newFakeEKS()
+	r := &PlatformReconciler{IAM: f, EKS: fe}
+	cfg := IAMConfig{
+		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
+		ClusterName:             "production-cluster",
+		Environment:             "production",
+	}
+	platform := newPlatform("slack-knowledge-bot", "protohype")
+
+	got, err := r.ensureIamRole(context.Background(), platform, cfg)
+	if err != nil {
+		t.Fatalf("ensureIamRole: %v", err)
+	}
+
+	// The role trusts the EKS Pod Identity service principal, not an OIDC provider.
+	if len(f.createCalls) != 1 {
+		t.Fatalf("expected one CreateRole, got %d", len(f.createCalls))
+	}
+	trust := aws.ToString(f.createCalls[0].AssumeRolePolicyDocument)
+	if !strings.Contains(trust, "pods.eks.amazonaws.com") {
+		t.Errorf("trust policy missing pods.eks.amazonaws.com principal: %s", trust)
+	}
+	if strings.Contains(trust, "AssumeRoleWithWebIdentity") {
+		t.Errorf("trust policy must not use the IRSA web-identity action: %s", trust)
+	}
+
+	// A Pod Identity association binds the tenant SA (tenant-runtime) to the role.
+	if len(fe.createCalls) != 1 {
+		t.Fatalf("expected one CreatePodIdentityAssociation, got %d", len(fe.createCalls))
+	}
+	assoc := fe.createCalls[0]
+	if aws.ToString(assoc.ClusterName) != "production-cluster" {
+		t.Errorf("association cluster: got %q", aws.ToString(assoc.ClusterName))
+	}
+	if aws.ToString(assoc.ServiceAccount) != tenantSAName {
+		t.Errorf("association SA: got %q want %q", aws.ToString(assoc.ServiceAccount), tenantSAName)
+	}
+	if aws.ToString(assoc.Namespace) != PlatformNamespace(platform) {
+		t.Errorf("association namespace: got %q want %q", aws.ToString(assoc.Namespace), PlatformNamespace(platform))
+	}
+	if aws.ToString(assoc.RoleArn) != got.RoleARN {
+		t.Errorf("association role: got %q want %q", aws.ToString(assoc.RoleArn), got.RoleARN)
+	}
+
+	// Idempotent: a second reconcile finds the existing association, no duplicate.
+	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
+		t.Fatalf("second ensureIamRole: %v", err)
+	}
+	if len(fe.createCalls) != 1 {
+		t.Errorf("association creation not idempotent: got %d creates", len(fe.createCalls))
+	}
+
+	// deleteIamRole removes the association before the role.
+	if err := r.deleteIamRole(context.Background(), platform, cfg); err != nil {
+		t.Fatalf("deleteIamRole: %v", err)
+	}
+	if len(fe.deleteCalls) != 1 {
+		t.Errorf("expected one DeletePodIdentityAssociation, got %d", len(fe.deleteCalls))
+	}
+}
+
+func TestEnsurePodIdentityAssociation_RequiresClusterName(t *testing.T) {
+	r := &PlatformReconciler{EKS: newFakeEKS()}
+	err := r.ensurePodIdentityAssociation(context.Background(), IAMConfig{}, "tenants-x", tenantSAName, "arn:aws:iam::123:role/x")
+	if err == nil {
+		t.Fatal("expected an error when ClusterName is empty and the EKS client is wired")
+	}
+	if !strings.Contains(err.Error(), "ClusterName") {
+		t.Errorf("error should name the missing ClusterName: %v", err)
+	}
+}
+
+func TestDeletePodIdentityAssociation_ToleratesMissing(t *testing.T) {
+	fe := newFakeEKS()
+	r := &PlatformReconciler{EKS: fe}
+	// No association seeded — the finalizer delete must be a safe no-op so re-runs
+	// (and Platforms whose association was never created) don't error.
+	if err := r.deletePodIdentityAssociation(context.Background(), IAMConfig{ClusterName: "production-cluster"}, "tenants-x", tenantSAName); err != nil {
+		t.Fatalf("delete with no association should be a no-op: %v", err)
+	}
+	if len(fe.deleteCalls) != 0 {
+		t.Errorf("expected no DeletePodIdentityAssociation calls, got %d", len(fe.deleteCalls))
 	}
 }

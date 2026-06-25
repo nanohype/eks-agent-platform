@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/athena"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
@@ -31,6 +32,7 @@ import (
 // (envtest, dev clusters without IRSA, partial-config dev/staging).
 type Clients struct {
 	IAM         IAM
+	EKS         EKS
 	SSM         SSM
 	KMS         KMS
 	S3          S3
@@ -65,6 +67,7 @@ func New(ctx context.Context, region string) (*Clients, error) {
 	}
 	return &Clients{
 		IAM:         iam.NewFromConfig(cfg),
+		EKS:         eks.NewFromConfig(cfg),
 		SSM:         ssm.NewFromConfig(cfg),
 		KMS:         kms.NewFromConfig(cfg),
 		S3:          s3.NewFromConfig(cfg),

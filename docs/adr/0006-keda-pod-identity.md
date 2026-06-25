@@ -9,16 +9,16 @@ Accepted (2026-05-16).
 The KEDA SQS scaler needs AWS credentials with `sqs:GetQueueAttributes` on the per-tenant queue to read queue depth and decide scaling. KEDA supports three identity modes for AWS scalers:
 
 1. **Operator IRSA** — KEDA's own operator pod has IRSA, single role granting `sqs:GetQueueAttributes` across all queues.
-2. **Pod identity (`identityOwner: pod`)** — KEDA uses the workload's existing IRSA token. The workload's SA needs the SQS permission.
+2. **Pod identity (`identityOwner: pod`)** — KEDA uses the workload's EKS Pod Identity credentials. The workload's SA needs the SQS permission.
 3. **Static credentials** — access key + secret in a Secret. Rejected on principle.
 
 ## Decision
 
-Pod identity. The `ScaledObject` has `identityOwner: pod`; a paired `TriggerAuthentication` declares `podIdentity.provider: aws`. KEDA uses the workload's existing IRSA token (the `tenant-runtime` SA the operator provisions). The agent-iam baseline policy grants `sqs:GetQueueAttributes` + `sqs:ListQueueTags` on `*` with `aws:RequestedRegion` ABAC.
+Pod identity. The `ScaledObject` has `identityOwner: pod`; a paired `TriggerAuthentication` declares `podIdentity.provider: aws`. KEDA uses the workload's EKS Pod Identity credentials (the `tenant-runtime` SA the operator binds via a Pod Identity association). The agent-iam baseline policy grants `sqs:GetQueueAttributes` + `sqs:ListQueueTags` on `*` with `aws:RequestedRegion` ABAC.
 
 ## Why pod-identity over operator-IRSA
 
-1. **Single source of truth for tenant IAM.** Every tenant gets one IRSA role. `agent-iam` already maintains the baseline policy for Bedrock + CloudWatch Logs + (now) SQS read. Adding KEDA-SQS to the baseline keeps tenant IAM in one place.
+1. **Single source of truth for tenant IAM.** Every tenant gets one IAM role. `agent-iam` already maintains the baseline policy for Bedrock + CloudWatch Logs + (now) SQS read. Adding KEDA-SQS to the baseline keeps tenant IAM in one place.
 2. **Per-tenant blast radius.** With operator-IRSA, KEDA's single role would need queue-read on every tenant's queue (`*` resource is the only viable scope; per-queue would mean updating KEDA's role on every tenant onboard). Compromising the KEDA operator pod means cluster-wide SQS read. With pod-identity, compromising a single tenant's pod means only that tenant's SQS access.
 3. **Kill-switch consistency.** When the kill-switch fires, it detaches the baseline policy from the tenant role — this includes the SQS read. KEDA stops being able to read queue depth → scales to zero (or stays at zero). With operator-IRSA, the kill-switch would not affect KEDA's read capability; KEDA would keep scaling pods that immediately AccessDenied on Bedrock. Pod-identity makes the suspension story coherent.
 4. **No extra IAM role to manage.** The KEDA chart values can stay default; we don't need to provision a KEDA operator IRSA role at all.

@@ -74,11 +74,10 @@ func main() {
 	// from SSM under /eks-agent-platform/<environment>/.
 	var environment string
 	var region string
-	var oidcProviderARN string
-	var oidcIssuerHost string
+	var clusterName string
 	var disableAWS bool
 
-	// Org-dimension tag values stamped on tenant IRSA roles (resource-tagging
+	// Org-dimension tag values stamped on tenant roles (resource-tagging
 	// standard). Env-level constants for the cluster the operator serves;
 	// tenantRoleTags falls back to landing-zone env.hcl defaults when unset.
 	var costCenter string
@@ -105,12 +104,11 @@ func main() {
 	flag.StringVar(&shimImage, "shim-image", os.Getenv("AGENTS_SHIM_IMAGE"), "Operator image used for the SandboxPool KEDA metrics bridge. Empty disables queue-depth autoscaling.")
 	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (dev/staging/production). Drives SSM-config path.")
 	flag.StringVar(&region, "region", os.Getenv("AGENTS_REGION"), "AWS region. Defaults to credential-chain region if empty.")
-	flag.StringVar(&oidcProviderARN, "oidc-provider-arn", os.Getenv("AGENTS_OIDC_PROVIDER_ARN"), "EKS cluster OIDC provider ARN; used in tenant IRSA trust policies.")
-	flag.StringVar(&oidcIssuerHost, "oidc-issuer-host", os.Getenv("AGENTS_OIDC_ISSUER_HOST"), "EKS OIDC issuer host (oidc.eks.<region>.amazonaws.com/id/<id>).")
-	flag.StringVar(&costCenter, "cost-center", os.Getenv("AGENTS_COST_CENTER"), "Org cost-center tag stamped on tenant IRSA roles (resource-tagging standard).")
-	flag.StringVar(&businessUnit, "business-unit", os.Getenv("AGENTS_BUSINESS_UNIT"), "Org business-unit tag stamped on tenant IRSA roles.")
-	flag.StringVar(&dataClassification, "data-classification", os.Getenv("AGENTS_DATA_CLASSIFICATION"), "Org data-classification tag stamped on tenant IRSA roles.")
-	flag.StringVar(&compliance, "compliance", os.Getenv("AGENTS_COMPLIANCE"), "Org compliance tag stamped on tenant IRSA roles.")
+	flag.StringVar(&clusterName, "cluster-name", os.Getenv("AGENTS_CLUSTER_NAME"), "EKS cluster name; used to create the tenant Pod Identity associations that bind tenant ServiceAccounts to their roles.")
+	flag.StringVar(&costCenter, "cost-center", os.Getenv("AGENTS_COST_CENTER"), "Org cost-center tag stamped on tenant roles (resource-tagging standard).")
+	flag.StringVar(&businessUnit, "business-unit", os.Getenv("AGENTS_BUSINESS_UNIT"), "Org business-unit tag stamped on tenant roles.")
+	flag.StringVar(&dataClassification, "data-classification", os.Getenv("AGENTS_DATA_CLASSIFICATION"), "Org data-classification tag stamped on tenant roles.")
+	flag.StringVar(&compliance, "compliance", os.Getenv("AGENTS_COMPLIANCE"), "Org compliance tag stamped on tenant roles.")
 	flag.BoolVar(&disableAWS, "disable-aws", false, "Skip AWS client init + SSM config load (k8s-side reconciliation only).")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -164,14 +162,14 @@ func main() {
 	}
 	if awsClients != nil {
 		platformReconciler.IAM = awsClients.IAM
+		platformReconciler.EKS = awsClients.EKS
 		platformReconciler.KMS = awsClients.KMS
 		platformReconciler.S3 = awsClients.S3
 		platformReconciler.IAMCfg = controller.IAMConfig{
 			TenantIAMPath:                opConfig.TenantIAMPath,
 			TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,
 			TenantPermissionsBoundaryARN: opConfig.TenantPermissionsBoundaryARN,
-			OIDCProviderARN:              oidcProviderARN,
-			OIDCIssuerHost:               oidcIssuerHost,
+			ClusterName:                  clusterName,
 			Environment:                  environment,
 			CostCenter:                   costCenter,
 			BusinessUnit:                 businessUnit,

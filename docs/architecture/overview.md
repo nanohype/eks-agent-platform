@@ -19,7 +19,7 @@ flowchart TD
     end
 
     subgraph tenantns["namespace: tenants-acme-mesh-support"]
-      SA["ServiceAccount<br/>tenant-runtime<br/>(IRSA annotated)"]
+      SA["ServiceAccount<br/>tenant-runtime<br/>(Pod Identity)"]
       NP["NetworkPolicy<br/>egress: agtgw + DNS + OTel"]
       AgentCR["kagent.dev Agent<br/>+ ModelConfig"]
       Pods["Agent pods<br/>(KEDA-scaled)"]
@@ -60,7 +60,7 @@ flowchart LR
   PR --> KMS["KMS grant on cmk-data<br/>EncryptionContext: PlatformId"]
   PR --> S3["S3 bucket policy<br/>statements for tenant prefix"]
 
-  IAM -. "trust" .- OIDC["EKS OIDC provider"]
+  IAM -. "trust" .- EKSPI["EKS Pod Identity<br/>pods.eks.amazonaws.com"]
   KMS -. "scoped to" .- DataKey["cmk-data<br/>(landing-zone)"]
   S3 -. "writes" .- Artifacts["artifacts bucket<br/>(model-artifacts)"]
 ```
@@ -70,7 +70,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant Pod as Tenant agent pod
-  participant SA as IRSA token
+  participant SA as Pod Identity creds
   participant AGW as agentgateway
   participant BR as AWS Bedrock
   participant CW as CloudWatch Logs
