@@ -16,9 +16,6 @@ dependency "bedrock" {
 }
 
 inputs = {
-  data_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-data"
-  logs_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-logs"
-
   cur_report_name              = "eks-agent-platform-dev"
   bedrock_invocation_log_group = dependency.bedrock.outputs.invocation_log_group_name
 }

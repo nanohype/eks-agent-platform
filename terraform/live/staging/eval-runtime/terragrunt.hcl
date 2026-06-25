@@ -25,8 +25,6 @@ inputs = {
   bedrock_invoke_resource_arns = ["*"]
   allowed_regions              = ["us-west-2", "us-east-1"]
 
-  data_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-data"
-  logs_kms_key_arn = "arn:aws:kms:us-west-2:REPLACE:key/REPLACE-cmk-logs"
 
   log_retention_days = 90
 }

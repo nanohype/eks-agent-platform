@@ -17,7 +17,7 @@ OpenTofu + Terragrunt for the platform's AWS-side substrate. Sits on top of [`la
 ## Dependency graph
 
 ```
-landing-zone (external) ──▶ cluster outputs: VPC, subnets, RTBs, cluster SG, OIDC issuer, CMK ARNs
+landing-zone (external) ──▶ cluster outputs: VPC, subnets, RTBs, cluster SG, CMK ARNs
                                                    │
                                                    ▼
                             ┌──────────────────────────────────────────────┐
@@ -53,7 +53,7 @@ model-artifacts → agent-iam → bedrock + agent-egress + accelerator-pools →
 
 ## Wiring `landing-zone` outputs
 
-Today the `terragrunt.hcl` files in `live/<env>/<component>/` reference landing-zone-supplied values as placeholder strings (`REPLACE_WITH_*`). For now, edit those by hand per environment. Once `landing-zone` publishes a stable per-environment output contract to SSM (`/landing-zone/<env>/cluster/*`), the `inputs` here will switch to `aws_ssm_parameter` data sources inside the components, removing the placeholder dance.
+Across all environments, the landing-zone-supplied infrastructure identifiers — KMS key ARNs, VPC/subnet IDs, route tables, the cluster security group, and the Karpenter node-role name — are passed in as `TF_VAR_*` environment variables by the orchestrator (the leaf `variables.tf` declares them; the `terragrunt.hcl` files don't pin them). For a manual run, `export` them alongside `AWS_ACCOUNT_ID`. Operator-side values — the operator role and tenant baseline — are read in-component from landing-zone's `agent-iam` SSM contract; the accelerator and eval-runner roles bind to their ServiceAccounts via EKS Pod Identity associations, so no OIDC issuer is consumed here. A future step may replace the `TF_VAR_*` handoff with `aws_ssm_parameter` data sources reading a stable `/landing-zone/<env>/*` output contract.
 
 ## Outputs
 
