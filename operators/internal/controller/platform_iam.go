@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/smithy-go"
@@ -84,22 +85,19 @@ func tenantRoleName(env string, p *platformv1alpha1.Platform) string {
 	return fmt.Sprintf("%s%s-%08x%s", prefix, p.Name[:budget], h&0xffffffff, suffix)
 }
 
-// assumeRolePolicyForOIDC returns a trust policy JSON for an IRSA role.
-// The federated principal is the EKS cluster's OIDC provider; the sub
-// claim is constrained to the tenant ServiceAccount (one SA per Platform).
-func assumeRolePolicyForOIDC(oidcProviderARN, oidcIssuerHost, namespace, serviceAccount string) (string, error) {
+// assumeRolePolicyForPodIdentity returns the trust policy JSON for a role
+// assumed through EKS Pod Identity. The principal is the EKS service; the Pod
+// Identity agent vends this role's credentials to pods whose ServiceAccount is
+// bound to it by a PodIdentityAssociation (see ensurePodIdentityAssociation).
+// The (namespace, service-account) constraint lives in the association, not the
+// trust policy — so the trust policy itself is fixed.
+func assumeRolePolicyForPodIdentity() (string, error) {
 	doc := map[string]any{
 		"Version": "2012-10-17",
 		"Statement": []map[string]any{{
 			"Effect":    "Allow",
-			"Principal": map[string]any{"Federated": oidcProviderARN},
-			"Action":    "sts:AssumeRoleWithWebIdentity",
-			"Condition": map[string]any{
-				"StringEquals": map[string]any{
-					oidcIssuerHost + ":sub": "system:serviceaccount:" + namespace + ":" + serviceAccount,
-					oidcIssuerHost + ":aud": "sts.amazonaws.com",
-				},
-			},
+			"Principal": map[string]any{"Service": "pods.eks.amazonaws.com"},
+			"Action":    []string{"sts:AssumeRole", "sts:TagSession"},
 		}},
 	}
 	b, err := json.Marshal(doc)
@@ -121,11 +119,14 @@ type IAMConfig struct {
 	// Platform CR requests. The operator's own IAM policy requires this
 	// boundary on CreateRole/Attach, so it must be set on real clusters.
 	TenantPermissionsBoundaryARN string
-	OIDCProviderARN              string
-	OIDCIssuerHost               string // e.g. oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE
-	Environment                  string
+	// ClusterName is the EKS cluster the tenant Pod Identity association
+	// targets. The operator binds the tenant ServiceAccount to its role with a
+	// PodIdentityAssociation on this cluster, so it must be set on real clusters
+	// (the EKS client errors without it).
+	ClusterName string
+	Environment string
 
-	// Org-dimension tag values for tenant IRSA roles (resource-tagging
+	// Org-dimension tag values for tenant roles (resource-tagging
 	// standard, required tier). Sourced from the operator's deploy config
 	// (AGENTS_COST_CENTER / _BUSINESS_UNIT / _DATA_CLASSIFICATION / _COMPLIANCE).
 	// tenantRoleTags falls back to the landing-zone env.hcl defaults when these
@@ -144,7 +145,7 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// tenantRoleTags builds the IAM tag set for a tenant IRSA role.
+// tenantRoleTags builds the IAM tag set for a tenant role.
 //
 // It preserves the keys the rest of the system depends on and must not rename:
 // PlatformId (the BudgetPolicy reconciler groups Cost Explorer by it), Tenant,
@@ -176,10 +177,10 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 	}
 }
 
-// ensureIamRole creates (or no-ops if already present) the tenant IRSA
-// role for a Platform, attaches the baseline policy, and returns the
-// role ARN. The role's trust policy permits assumption only from the
-// tenant ServiceAccount in the tenant workload namespace.
+// ensureIamRole creates (or no-ops if already present) the tenant role
+// for a Platform, attaches the baseline policy, binds the tenant
+// ServiceAccount to it via a Pod Identity association, and returns the
+// role ARN.
 //
 // Idempotent: re-runs on the same Platform observe the role's existence
 // via GetRole and skip CreateRole. Reads the kill-switch suspension tag
@@ -193,10 +194,6 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		// Skip silently — AWS-side callers explicitly check IAM != nil.
 		return platformSuspension{}, nil
 	}
-	if cfg.OIDCProviderARN == "" || cfg.OIDCIssuerHost == "" {
-		return platformSuspension{}, fmt.Errorf("ensureIamRole: OIDCProviderARN and OIDCIssuerHost must be set in IAMConfig")
-	}
-
 	name := tenantRoleName(cfg.Environment, p)
 	path := cfg.TenantIAMPath
 	if path == "" {
@@ -206,12 +203,10 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		path += "/"
 	}
 
-	// SA name convention: 'tenant-runtime' inside the tenant workload ns.
-	// The AgentFleet reconciler creates that ServiceAccount when fleet
-	// pods land; this function just establishes the trust contract so
-	// pods using the SA can immediately AssumeRoleWithWebIdentity.
-	const tenantSA = "tenant-runtime"
-	trust, err := assumeRolePolicyForOIDC(cfg.OIDCProviderARN, cfg.OIDCIssuerHost, PlatformNamespace(p), tenantSA)
+	// The tenant ServiceAccount (tenantSAName, created by the AgentFleet /
+	// AgentSandbox reconcilers) is bound to this role by a Pod Identity
+	// association below; the trust policy itself is the fixed EKS-service trust.
+	trust, err := assumeRolePolicyForPodIdentity()
 	if err != nil {
 		return platformSuspension{}, err
 	}
@@ -230,6 +225,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
+		if err := r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName, arn); err != nil {
+			return platformSuspension{RoleARN: arn}, err
+		}
 		return platformSuspension{RoleARN: arn}, nil
 	}
 	if !isIAMNotFound(getErr) {
@@ -240,7 +238,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		RoleName:                 aws.String(name),
 		Path:                     aws.String(path),
 		AssumeRolePolicyDocument: aws.String(trust),
-		Description:              aws.String(fmt.Sprintf("Tenant IRSA role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
+		Description:              aws.String(fmt.Sprintf("Tenant role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
 		Tags:                     tenantRoleTags(p, cfg),
 	}
 	if cfg.TenantPermissionsBoundaryARN != "" {
@@ -256,7 +254,71 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
 		return platformSuspension{RoleARN: arn}, err
 	}
+	if err := r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName, arn); err != nil {
+		return platformSuspension{RoleARN: arn}, err
+	}
 	return platformSuspension{RoleARN: arn}, nil
+}
+
+// ensurePodIdentityAssociation binds the tenant ServiceAccount to its IAM role
+// through EKS Pod Identity, so pods using the SA receive the role's credentials
+// with no role-arn annotation. Idempotent: it lists associations for the
+// (namespace, serviceAccount) on the cluster first and creates one only when
+// none exists. A nil EKS client (envtest / dev without AWS) is a silent no-op,
+// mirroring the IAM-nil short-circuit.
+func (r *PlatformReconciler) ensurePodIdentityAssociation(ctx context.Context, cfg IAMConfig, namespace, serviceAccount, roleARN string) error {
+	if r.EKS == nil {
+		return nil
+	}
+	if cfg.ClusterName == "" {
+		return fmt.Errorf("ensurePodIdentityAssociation: ClusterName must be set in IAMConfig")
+	}
+	listOut, err := r.EKS.ListPodIdentityAssociations(ctx, &eks.ListPodIdentityAssociationsInput{
+		ClusterName:    aws.String(cfg.ClusterName),
+		Namespace:      aws.String(namespace),
+		ServiceAccount: aws.String(serviceAccount),
+	})
+	if err != nil {
+		return fmt.Errorf("eks ListPodIdentityAssociations: %w", err)
+	}
+	if len(listOut.Associations) > 0 {
+		return nil
+	}
+	if _, err := r.EKS.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
+		ClusterName:    aws.String(cfg.ClusterName),
+		Namespace:      aws.String(namespace),
+		ServiceAccount: aws.String(serviceAccount),
+		RoleArn:        aws.String(roleARN),
+	}); err != nil {
+		return fmt.Errorf("eks CreatePodIdentityAssociation: %w", err)
+	}
+	return nil
+}
+
+// deletePodIdentityAssociation removes the Pod Identity association for the
+// tenant ServiceAccount so the binding doesn't outlive the role. Tolerates a
+// nil EKS client and a missing association so finalizer re-runs are safe.
+func (r *PlatformReconciler) deletePodIdentityAssociation(ctx context.Context, cfg IAMConfig, namespace, serviceAccount string) error {
+	if r.EKS == nil || cfg.ClusterName == "" {
+		return nil
+	}
+	listOut, err := r.EKS.ListPodIdentityAssociations(ctx, &eks.ListPodIdentityAssociationsInput{
+		ClusterName:    aws.String(cfg.ClusterName),
+		Namespace:      aws.String(namespace),
+		ServiceAccount: aws.String(serviceAccount),
+	})
+	if err != nil {
+		return fmt.Errorf("eks ListPodIdentityAssociations: %w", err)
+	}
+	for _, a := range listOut.Associations {
+		if _, err := r.EKS.DeletePodIdentityAssociation(ctx, &eks.DeletePodIdentityAssociationInput{
+			ClusterName:   aws.String(cfg.ClusterName),
+			AssociationId: a.AssociationId,
+		}); err != nil {
+			return fmt.Errorf("eks DeletePodIdentityAssociation: %w", err)
+		}
+	}
+	return nil
 }
 
 // reconcileManagedPolicies makes the set of attached managed policies on
@@ -316,10 +378,14 @@ func (r *PlatformReconciler) reconcileManagedPolicies(ctx context.Context, roleN
 	return nil
 }
 
-// deleteIamRole is the finalizer counterpart: detach all policies and
-// delete the tenant role. Tolerates NotFound so re-runs are safe.
-func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alpha1.Platform, environment string) error {
-	return r.detachAndDeleteRole(ctx, tenantRoleName(environment, p))
+// deleteIamRole is the finalizer counterpart: remove the Pod Identity
+// association, detach all policies, and delete the tenant role. Tolerates a
+// missing association and NotFound so re-runs are safe.
+func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) error {
+	if err := r.deletePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName); err != nil {
+		return err
+	}
+	return r.detachAndDeleteRole(ctx, tenantRoleName(cfg.Environment, p))
 }
 
 // detachAndDeleteRole detaches every managed policy from a role and deletes

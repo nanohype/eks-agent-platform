@@ -30,7 +30,7 @@ import (
 //   - the per-Platform tenant Namespace (with Pod Security Standards label),
 //   - ResourceQuota + LimitRange + default-deny NetworkPolicy in that ns,
 //   - the ArgoCD AppProject scoped to that namespace + Platform source repos,
-//   - the per-Platform IRSA role, KMS grant, and S3 bucket policy.
+//   - the per-Platform tenant IAM role, KMS grant, and S3 bucket policy.
 //
 // The k8s-side reconciliation runs first and unconditionally; AWS-side
 // state is reconciled behind interface-injected clients (IAM/KMS/S3) that
@@ -43,12 +43,12 @@ type PlatformReconciler struct {
 	// AWS — wired by main.go from operatorconfig + awsclients. May be nil
 	// in unit-test paths that exercise only k8s-side reconciliation.
 	IAM awsclients.IAM
+	EKS awsclients.EKS
 	KMS awsclients.KMS
 	S3  awsclients.S3
 
 	// IAMCfg carries the SSM-resolved values the IAM step needs:
-	// TenantIAMPath, TenantBaselinePolicyARN, OIDCProviderARN,
-	// OIDCIssuerHost, Environment.
+	// TenantIAMPath, TenantBaselinePolicyARN, ClusterName, Environment.
 	IAMCfg IAMConfig
 	// AWSCfg carries the SSM-resolved values the KMS + S3 steps need:
 	// DataKMSKeyARN, ArtifactsBucketName, Environment.
@@ -103,7 +103,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				logger.Error(err, "bucket policy cleanup failed; will retry")
 				return ctrl.Result{}, err
 			}
-			if err := r.deleteIamRole(ctx, platform, r.IAMCfg.Environment); err != nil {
+			if err := r.deleteIamRole(ctx, platform, r.IAMCfg); err != nil {
 				logger.Error(err, "IAM role cleanup failed; will retry")
 				return ctrl.Result{}, err
 			}
@@ -166,7 +166,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// AWS-side: tenant IRSA role. If r.IAM is nil (unit-test path), the
+	// AWS-side: tenant role. If r.IAM is nil (unit-test path), the
 	// helper returns ({}, nil) and we leave status.IamRoleArn empty.
 	susp, err := r.ensureIamRole(ctx, platform, r.IAMCfg)
 	if err != nil {
@@ -199,9 +199,10 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	platform.Status.ObservedGeneration = platform.Generation
 
-	// Create the tenant-runtime ServiceAccount (IRSA-annotated with the role just
-	// minted). It is a Platform-level identity primitive: the tenant IRSA role's
-	// trust is scoped to exactly system:serviceaccount:<ns>:tenant-runtime, so the
+	// Create the tenant-runtime ServiceAccount (no role-arn annotation — its IAM
+	// role is bound by the Pod Identity association ensureIamRole created). It is a
+	// Platform-level identity primitive: the association targets exactly
+	// system:serviceaccount:<ns>:tenant-runtime, so the
 	// SA must exist whenever the Platform is Ready — independent of whether the
 	// tenant has an AgentFleet yet. The AgentFleet/AgentSandbox reconcilers also
 	// ensure it; CreateOrUpdate is idempotent so the duplicate call is harmless.
@@ -211,7 +212,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Per-session human attribution (optional). Provision the session role
-	// (assumable by the tenant IRSA role with the operator as STS
+	// (assumable by the tenant role with the operator as STS
 	// SourceIdentity) + the apiserver impersonate RBAC. Reconciles in both
 	// directions: removing spec.attribution tears the pair back down. The
 	// session role honors the kill-switch via the susp.Suspended flag (baseline
@@ -255,7 +256,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			Type:               "Suspended",
 			Status:             metav1.ConditionTrue,
 			Reason:             "KillSwitchActive",
-			Message:            fmt.Sprintf("tenant IRSA tagged suspended (%s); baseline policy not reattached", susp.Reason),
+			Message:            fmt.Sprintf("tenant role tagged suspended (%s); baseline policy not reattached", susp.Reason),
 			LastTransitionTime: metav1.Now(),
 			ObservedGeneration: platform.Generation,
 		})
@@ -276,7 +277,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			Type:               "Suspended",
 			Status:             metav1.ConditionFalse,
 			Reason:             "NotSuspended",
-			Message:            "kill-switch tag not set on tenant IRSA",
+			Message:            "kill-switch tag not set on the tenant role",
 			LastTransitionTime: metav1.Now(),
 			ObservedGeneration: platform.Generation,
 		})

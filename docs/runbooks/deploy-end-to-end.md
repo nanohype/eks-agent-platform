@@ -64,7 +64,7 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
 3. `cluster-bootstrap` — installs cilium (ENI mode, replaces VPC-CNI) + ArgoCD +
    an app-of-apps pointing at `eks-gitops/applicationsets`. It also registers the
    cluster as an ArgoCD cluster Secret carrying the `eks-agent-platform/enabled=true`
-   label and the OIDC/role-arn annotations the operator ApplicationSet reads. ArgoCD
+   label and the cluster-name + role-arn annotations the operator ApplicationSet reads. ArgoCD
    then syncs the addon catalog onto every labeled cluster: `addons-ai-platform`
    (kagent + agentgateway), `addons-argo-platform` (argo-workflows/rollouts/events),
    the `accelerators` category (gpu-operator, NVIDIA DRA driver, AWS Neuron device
@@ -86,7 +86,7 @@ eval-runtime, … Synced/Healthy).
 The operator syncs itself. The `addons-agent-operator` ApplicationSet in
 eks-gitops git-sources `charts/operator` and targets every cluster carrying
 `eks-agent-platform/enabled=true`. It injects the per-cluster bits the chart
-can't hardcode — the operator IRSA role ARN, the OIDC provider ARN + issuer
+can't hardcode — the operator IAM role ARN, the cluster name,
 host, and the eval-runner role ARN + eval-reports bucket — from the annotations
 `cluster-bootstrap` publishes on the ArgoCD cluster Secret. So once B1 step 3
 landed, the operator (with the AWS reconcile ON and its eval-runtime + SLO
@@ -116,8 +116,7 @@ helm upgrade --install eks-agent-platform eks-agent-platform/charts/operator \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=<agent-iam operator role ARN> \
   --set config.environment=<env> --set config.region=<r> \
   --set config.ssmPathPrefix=/eks-agent-platform \
-  --set config.oidc.providerArn=<cluster oidc_provider_arn> \
-  --set config.oidc.issuerHost=<cluster oidc_issuer> \
+  --set config.clusterName=<env-cluster name> \
   --set evalRuntime.serviceAccount.roleArn=<eval-runner role ARN> \
   --set evalRuntime.evalReportsBucket=<eval-reports bucket> \
   --set webhooks.certManager.installSelfSignedIssuer=true \

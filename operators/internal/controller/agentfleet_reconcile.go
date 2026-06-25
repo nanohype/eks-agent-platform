@@ -42,8 +42,8 @@ var (
 )
 
 // tenantSAName is the ServiceAccount tenant pods run under; matches the
-// trust policy in platform_iam.go (system:serviceaccount:tenants-<p>:
-// tenant-runtime).
+// Pod Identity association ensureIamRole creates in platform_iam.go, which
+// binds tenants-<p>:tenant-runtime to the tenant IAM role.
 const tenantSAName = "tenant-runtime"
 
 // resolvePlatform fetches the AgentFleet's referenced Platform.
@@ -59,10 +59,11 @@ func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agent
 	return &p, nil
 }
 
-// ensureTenantServiceAccount creates the IRSA-annotated ServiceAccount
-// tenant pods assume — both AgentFleet agent pods and AgentSandbox session
-// pods. SA name + namespace match the trust policy in platform_iam.go:
-// system:serviceaccount:tenants-<platform>:tenant-runtime.
+// ensureTenantServiceAccount creates the ServiceAccount tenant pods assume —
+// both AgentFleet agent pods and AgentSandbox session pods. SA name + namespace
+// match the Pod Identity association the operator creates in platform_iam.go
+// (tenants-<platform>:tenant-runtime), which binds it to the tenant IAM role.
+// The SA carries no role-arn annotation: Pod Identity is the binding.
 func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platformv1alpha1.Platform) error {
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -71,12 +72,6 @@ func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platfor
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, c, sa, func() error {
-		if sa.Annotations == nil {
-			sa.Annotations = map[string]string{}
-		}
-		if p.Status.IamRoleArn != "" {
-			sa.Annotations["eks.amazonaws.com/role-arn"] = p.Status.IamRoleArn
-		}
 		sa.Labels = map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  p.Name,
@@ -291,7 +286,7 @@ func awsRegionFromQueueURL(url string) string {
 // ensureKEDAScaledObject emits a KEDA ScaledObject per fleet (not per
 // agent) when scaling.enabled. When fleet.spec.scaling.queueUrl is set
 // (the production path) we emit an aws-sqs-queue trigger paired with a
-// TriggerAuthentication CR that points KEDA at the tenant IRSA role.
+// TriggerAuthentication CR that points KEDA at the tenant role.
 // Without a queue URL we fall back to a CPU-utilization placeholder so
 // the fleet scales sensibly during onboarding before a queue is wired.
 func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {

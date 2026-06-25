@@ -63,13 +63,11 @@ config:
     businessUnit: ""
     dataClassification: ""
     compliance: ""
-  # EKS OIDC wiring — required by PlatformReconciler.ensureIamRole to mint
-  # tenant IRSA trust policies. Set per-env values; the ApplicationSet
-  # passes them in via the values-<env>.yaml file resolved from the
-  # eks-gitops 'values' source.
-  oidc:
-    providerArn: "" # arn:aws:iam::ACCOUNT:oidc-provider/oidc.eks.<region>.amazonaws.com/id/<id>
-    issuerHost: "" # oidc.eks.<region>.amazonaws.com/id/<id>  (no scheme)
+  # EKS cluster name — required by PlatformReconciler.ensureIamRole to create
+  # the tenant Pod Identity associations that bind tenant ServiceAccounts to
+  # their roles. Set per-env; the ApplicationSet passes it in via the
+  # values-<env>.yaml file resolved from the eks-gitops 'values' source.
+  clusterName: "" # <env>-<cluster> (e.g. production-eks)
   killSwitch:
     eventBusName: ""
   bedrock:
