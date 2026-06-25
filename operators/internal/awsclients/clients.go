@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	smithymiddleware "github.com/aws/smithy-go/middleware"
 )
 
 // Clients holds the AWS service interfaces the operator depends on. Each
@@ -51,12 +52,38 @@ type Clients struct {
 // path bounds its own multi-call loop separately (budget_reconcile.go).
 const awsHTTPTimeout = 30 * time.Second
 
+// awsOpTimeout bounds a whole AWS operation — the call plus all of its automatic
+// retries — not just a single HTTP request the way awsHTTPTimeout does. Without
+// it, a method that keeps failing transiently could retry up to the SDK's
+// attempt cap (~3 × awsHTTPTimeout + backoff) before returning, outlasting the
+// reconcile it runs inside. Applied as an Initialize-step middleware so it
+// covers every operation on every client from one place. It's a ceiling: a
+// caller that passes a shorter deadline still wins.
+const awsOpTimeout = 60 * time.Second
+
+// withOperationTimeout returns an API-options hook that wraps each operation's
+// context with a deadline. Initialize runs once per operation, before the retry
+// loop, so the deadline spans every attempt.
+func withOperationTimeout(d time.Duration) func(*smithymiddleware.Stack) error {
+	return func(stack *smithymiddleware.Stack) error {
+		return stack.Initialize.Add(smithymiddleware.InitializeMiddlewareFunc(
+			"OperationTimeout",
+			func(ctx context.Context, in smithymiddleware.InitializeInput, next smithymiddleware.InitializeHandler) (smithymiddleware.InitializeOutput, smithymiddleware.Metadata, error) {
+				ctx, cancel := context.WithTimeout(ctx, d)
+				defer cancel()
+				return next.HandleInitialize(ctx, in)
+			},
+		), smithymiddleware.Before)
+	}
+}
+
 // New builds a Clients backed by the default credential chain (IRSA via
 // fromContainerCredentials → fromEnv → fromInstanceProfile). Region is
 // resolved from the same chain unless explicitly passed.
 func New(ctx context.Context, region string) (*Clients, error) {
 	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithHTTPClient(awshttp.NewBuildableClient().WithTimeout(awsHTTPTimeout)),
+		awsconfig.WithAPIOptions([]func(*smithymiddleware.Stack) error{withOperationTimeout(awsOpTimeout)}),
 	}
 	if region != "" {
 		opts = append(opts, awsconfig.WithRegion(region))
