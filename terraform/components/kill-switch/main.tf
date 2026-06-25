@@ -1,6 +1,21 @@
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
+# The operator role, tenant IAM path, and tenant baseline policy live in
+# landing-zone's canonical agent-iam component. Read them from the SSM contract
+# it publishes rather than carrying a duplicate agent-iam in this tree.
+data "aws_ssm_parameter" "operator_role_arn" {
+  name = "/eks-agent-platform/${var.environment}/agent-iam/operator_role_arn"
+}
+
+data "aws_ssm_parameter" "tenant_iam_path" {
+  name = "/eks-agent-platform/${var.environment}/agent-iam/tenant_iam_path"
+}
+
+data "aws_ssm_parameter" "tenant_baseline_policy_arn" {
+  name = "/eks-agent-platform/${var.environment}/agent-iam/tenant_baseline_policy_arn"
+}
+
 locals {
   prefix = "${var.environment}-${var.cluster_name}-killswitch"
   tags = merge(var.tags, {
@@ -82,7 +97,7 @@ resource "aws_iam_role_policy" "sfn" {
           "iam:TagRole",
           "iam:UntagRole"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role${var.tenant_iam_path}*"
+        Resource = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role${data.aws_ssm_parameter.tenant_iam_path.value}*"
       },
       {
         Sid      = "NotifyOperator"
@@ -158,7 +173,7 @@ resource "aws_sfn_state_machine" "killswitch" {
           # via Step Functions States.Format. This pattern is a CONTRACT
           # with the operator's PlatformReconciler — see the variable doc.
           "RoleName.$" = "States.Format('${replace(var.tenant_role_name_pattern, "<env>", var.environment)}', $.detail.platformId)"
-          PolicyArn    = var.tenant_baseline_policy_arn
+          PolicyArn    = data.aws_ssm_parameter.tenant_baseline_policy_arn.value
         }
         Retry = [{
           ErrorEquals     = ["States.TaskFailed"]
@@ -272,7 +287,7 @@ resource "aws_cloudwatch_event_bus_policy" "operator_put" {
     Statement = [{
       Sid       = "OperatorPutEvents"
       Effect    = "Allow"
-      Principal = { AWS = var.operator_role_arn }
+      Principal = { AWS = data.aws_ssm_parameter.operator_role_arn.value }
       Action    = "events:PutEvents"
       Resource  = aws_cloudwatch_event_bus.killswitch.arn
     }]

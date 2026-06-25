@@ -18,16 +18,6 @@ variable "data_kms_key_arn" {
   type        = string
 }
 
-variable "operator_role_arn" {
-  description = "Operator IRSA role ARN — used in CUR bucket policy"
-  type        = string
-}
-
-variable "operator_role_name" {
-  description = "Operator IRSA role name — used to attach the cost policy"
-  type        = string
-}
-
 variable "cur_report_name" {
   description = "Name of the Cost & Usage Report. Must be unique across the account."
   type        = string

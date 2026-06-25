@@ -8,21 +8,6 @@ variable "cluster_name" {
   type        = string
 }
 
-variable "tenant_iam_path" {
-  description = "IAM path under which tenant roles live — kill-switch needs DetachRolePolicy here"
-  type        = string
-}
-
-variable "tenant_baseline_policy_arn" {
-  description = "The Bedrock-invoke policy ARN that gets detached on breach"
-  type        = string
-}
-
-variable "operator_role_arn" {
-  description = "Operator IRSA role — receives EventBridge invocation events to patch AgentRuntime.spec.scaling.enabled=false"
-  type        = string
-}
-
 variable "logs_kms_key_arn" {
   description = "cmk-logs for Step Functions execution history encryption"
   type        = string
