@@ -14,13 +14,12 @@ Every event is archived to an EventBridge archive with 365-day retention for com
 
 ## Inputs
 
-| Variable                                | Description                                   |
-| --------------------------------------- | --------------------------------------------- |
-| `environment`, `region`, `cluster_name` | identifying                                   |
-| `tenant_iam_path`                       | from agent-iam                                |
-| `tenant_baseline_policy_arn`            | from agent-iam — the policy to detach         |
-| `operator_role_arn`                     | from agent-iam — granted PutEvents on the bus |
-| `logs_kms_key_arn`                      | cmk-logs                                      |
+| Variable                                | Description |
+| --------------------------------------- | ----------- |
+| `environment`, `region`, `cluster_name` | identifying |
+| `logs_kms_key_arn`                      | cmk-logs    |
+
+The operator role ARN (granted PutEvents on the bus), the tenant IAM path (DetachRolePolicy scope), and the tenant baseline policy ARN (detached on breach) are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<env>/agent-iam/*`), not passed as inputs.
 
 ## Outputs
 

@@ -31,15 +31,16 @@ Spend visibility for `BudgetPolicy` reconciliation.
 
 ## Inputs
 
-| Variable                                  | Description                                       |
-| ----------------------------------------- | ------------------------------------------------- |
-| `environment`, `region`, `cluster_name`   | identifying                                       |
-| `data_kms_key_arn`, `logs_kms_key_arn`    | cmk-data, cmk-logs                                |
-| `operator_role_arn`, `operator_role_name` | from `agent-iam`                                  |
-| `bedrock_invocation_log_group`            | from `bedrock` outputs — Lambda subscribes here   |
-| `cur_report_name`                         | unique per account (default `eks-agent-platform`) |
-| `cur_crawler_schedule`                    | cron expression for the CUR Crawler               |
-| `athena_results_retention_days`           | per-env: dev 30, staging 90, prod 365+            |
+| Variable                                | Description                                       |
+| --------------------------------------- | ------------------------------------------------- |
+| `environment`, `region`, `cluster_name` | identifying                                       |
+| `data_kms_key_arn`, `logs_kms_key_arn`  | cmk-data, cmk-logs                                |
+| `bedrock_invocation_log_group`          | from `bedrock` outputs — Lambda subscribes here   |
+| `cur_report_name`                       | unique per account (default `eks-agent-platform`) |
+| `cur_crawler_schedule`                  | cron expression for the CUR Crawler               |
+| `athena_results_retention_days`         | per-env: dev 30, staging 90, prod 365+            |
+
+The operator role ARN and name are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<env>/agent-iam/operator_role_{arn,name}`), not passed as inputs.
 
 ## Outputs
 

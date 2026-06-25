@@ -1,6 +1,17 @@
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
+# The operator role lives in landing-zone's canonical agent-iam component. Read
+# its ARN and name from the SSM contract that component publishes, rather than
+# carrying a duplicate agent-iam in this tree.
+data "aws_ssm_parameter" "operator_role_arn" {
+  name = "/eks-agent-platform/${var.environment}/agent-iam/operator_role_arn"
+}
+
+data "aws_ssm_parameter" "operator_role_name" {
+  name = "/eks-agent-platform/${var.environment}/agent-iam/operator_role_name"
+}
+
 locals {
   prefix = "${var.environment}-${var.cluster_name}-cost"
   tags = merge(var.tags, {
@@ -155,7 +166,7 @@ resource "aws_s3_bucket_policy" "cur" {
       {
         Sid       = "OperatorRead"
         Effect    = "Allow"
-        Principal = { AWS = var.operator_role_arn }
+        Principal = { AWS = data.aws_ssm_parameter.operator_role_arn.value }
         Action = [
           "s3:GetObject",
           "s3:ListBucket"
@@ -354,7 +365,7 @@ resource "aws_iam_policy" "operator_cost" {
 }
 
 resource "aws_iam_role_policy_attachment" "operator_cost" {
-  role       = var.operator_role_name
+  role       = data.aws_ssm_parameter.operator_role_name.value
   policy_arn = aws_iam_policy.operator_cost.arn
 }
 

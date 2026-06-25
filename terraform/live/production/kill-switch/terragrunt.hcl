@@ -6,22 +6,8 @@ terraform {
   source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/kill-switch"
 }
 
-dependency "agent_iam" {
-  config_path = "../agent-iam"
-
-  mock_outputs = {
-    operator_role_arn          = "arn:aws:iam::000000000000:role/mock-operator"
-    tenant_iam_path            = "/eks-agent-platform/tenants/"
-    tenant_baseline_policy_arn = "arn:aws:iam::000000000000:policy/mock-baseline"
-  }
-  mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
-}
-
-# Required inputs sourced from the orchestrator (portal workspace
-# variables for the production deploy):
-#   - logs_kms_key_arn  (from lz-secrets)
-inputs = {
-  tenant_iam_path            = dependency.agent_iam.outputs.tenant_iam_path
-  tenant_baseline_policy_arn = dependency.agent_iam.outputs.tenant_baseline_policy_arn
-  operator_role_arn          = dependency.agent_iam.outputs.operator_role_arn
-}
+# All inputs are sourced from the orchestrator (portal workspace variables for
+# the production deploy): logs_kms_key_arn (from lz-secrets) as TF_VAR; the
+# operator role / tenant IAM path / tenant baseline policy from landing-zone's
+# agent-iam SSM contract, read in-component.
+inputs = {}
