@@ -4,52 +4,29 @@ OpenTofu + Terragrunt for the platform's AWS-side substrate. Sits on top of [`la
 
 ## Components
 
-| Component           | Owns                                                                                |
-| ------------------- | ----------------------------------------------------------------------------------- |
-| `bedrock`           | Invocation logging (S3 + Object Lock + CloudWatch Logs) + baseline Guardrail        |
-| `model-artifacts`   | KMS-encrypted S3 buckets for LoRA/adapter weights and eval reports                  |
-| `agent-iam`         | Operator IRSA role + tenant-baseline policy + tenant IAM path                       |
-| `agent-egress`      | VPC interface + gateway endpoints + optional WAF on the agentgateway ALB            |
-| `accelerator-pools` | IRSA roles for NVIDIA GPU Operator + Neuron device plugin + pool catalog (SSM JSON) |
-| `kill-switch`       | EventBridge bus + Step Functions state machine for budget-breach detach             |
-| `cost-pipeline`     | CUR 2.0 + Athena workgroup + Glue database + operator cost-read policy              |
+| Component           | Owns                                                                                            |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| `bedrock`           | Invocation logging (S3 + Object Lock + CloudWatch Logs) + baseline Guardrail                    |
+| `model-artifacts`   | KMS-encrypted S3 buckets for LoRA/adapter weights and eval reports                              |
+| `agent-egress`      | VPC interface + gateway endpoints + optional WAF on the agentgateway ALB                        |
+| `accelerator-pools` | Pod Identity roles for the NVIDIA GPU Operator + Neuron device plugin + pool catalog (SSM JSON) |
+| `kill-switch`       | EventBridge bus + Step Functions state machine for budget-breach detach                         |
+| `cost-pipeline`     | CUR 2.0 + Athena workgroup + Glue database + operator cost-read policy                          |
 
 ## Dependency graph
 
+Every component reads landing-zone's outputs — the cluster VPC / subnet / route-table / security-group IDs and CMK ARNs (as `TF_VAR_*`), and the operator role + tenant baseline from the `agent-iam` SSM contract (`/eks-agent-platform/<env>/agent-iam/*`, owned by landing-zone, not this tree). Intra-tree dependencies are minimal:
+
 ```
-landing-zone (external) ──▶ cluster outputs: VPC, subnets, RTBs, cluster SG, CMK ARNs
-                                                   │
-                                                   ▼
-                            ┌──────────────────────────────────────────────┐
-                            │                                              │
-                            ▼                                              ▼
-                     model-artifacts                                 agent-egress
-                            │                                              │
-                            ▼                                              │
-                       agent-iam ◀──────────────────────────┐              │
-                       │   │   │                            │              │
-            ┌──────────┘   │   └──────────┐                 │              │
-            ▼              ▼              ▼                 │              │
-        bedrock      kill-switch    cost-pipeline    accelerator-pools     │
-            │              │              │                 │              │
-            └──────────────┴──────────────┴─────────────────┴──────────────┘
-                                          │
-                                          ▼
-                                  SSM Parameter Store
-                                  /eks-agent-platform/<env>/*
-                                          │
-                                          ▼
-                            consumed by operator (in-cluster)
-                                  and eks-gitops Helm values
+eval-runtime → model-artifacts   (eval-reports bucket)
+cost-pipeline → bedrock          (invocation log group)
 ```
+
+Everything else (`model-artifacts`, `bedrock`, `agent-egress`, `accelerator-pools`, `kill-switch`, `batch-runtime`) applies independently. Each component writes its outputs to SSM (`/eks-agent-platform/<env>/*`), consumed by the operator in-cluster and by eks-gitops Helm values.
 
 ## Apply order
 
-Each environment is its own Terragrunt root. `terragrunt run-all apply` resolves the dependency graph above. Manual order if you prefer one-at-a-time:
-
-```
-model-artifacts → agent-iam → bedrock + agent-egress + accelerator-pools → kill-switch + cost-pipeline
-```
+Each environment is its own Terragrunt root. `terragrunt run --all apply` resolves the dependency graph above; `agent-iam` is applied separately as a landing-zone component (this tree only reads its SSM outputs).
 
 ## Wiring `landing-zone` outputs
 
@@ -65,8 +42,8 @@ Every component publishes its outputs to SSM under:
 
 Consumers:
 
-- **Operator pod** reads SSM at startup for `agent-iam.operator_role_arn` (its own role), `agent-iam.tenant_iam_path`, `agent-iam.tenant_baseline_policy_arn`, `kill-switch.event_bus_name`, `cost-pipeline.athena_workgroup`, `cost-pipeline.athena_database`, `bedrock.baseline_guardrail_id`, `accelerator-pools.pool_catalog`, `model-artifacts.bucket_name`.
-- **eks-gitops accelerator values** (`eks-gitops/addons/accelerators/<addon>/values-<env>.yaml`) reference `accelerator-pools.neuron_role_arn` and `accelerator-pools.gpu_operator_role_arn` for IRSA annotations on the device plugin / operator ServiceAccounts.
+- **Operator pod** reads SSM at startup for `agent-iam.operator_role_arn` (its own role), `agent-iam.tenant_iam_path`, `agent-iam.tenant_baseline_policy_arn` (the `agent-iam.*` params are landing-zone's contract, not this tree's), `kill-switch.event_bus_name`, `cost-pipeline.athena_workgroup`, `cost-pipeline.athena_database`, `bedrock.baseline_guardrail_id`, `accelerator-pools.pool_catalog`, `model-artifacts.bucket_name`.
+- **accelerator roles** (`accelerator-pools.neuron_role_arn`, `accelerator-pools.gpu_operator_role_arn`) are bound to the device-plugin / operator ServiceAccounts by EKS Pod Identity associations created in this component — not by an annotation on the eks-gitops side.
 
 ## Backends
 
