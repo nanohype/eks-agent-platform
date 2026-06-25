@@ -169,11 +169,9 @@ evalRuntime:
   # and that component together, or IRSA breaks.
   namespace: eval-runner
   serviceAccount:
+    # Bound to its IAM role by an EKS Pod Identity association (created by
+    # terraform/components/eval-runtime) — no role-arn annotation.
     name: eval-runner
-    # IRSA role ARN — embeds the AWS account id, so it is injected per-cluster by
-    # the eks-gitops addons-agent-operator ApplicationSet from a cluster-Secret
-    # annotation, never committed here. Empty = no annotation rendered.
-    roleArn: ""
   # S3 bucket the eval workflow writes reports to (terraform eval-runtime output).
   # Injected per-cluster; empty in the base chart.
   evalReportsBucket: ""
