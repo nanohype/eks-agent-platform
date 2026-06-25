@@ -37,10 +37,6 @@ eks-agent-platform operator installed.
 ──────────────────────────────────────────────────────────────────────────────
 
   eval-runtime: {{ if .Values.evalRuntime.enabled }}enabled (ns {{ .Values.evalRuntime.namespace }}){{ else }}disabled{{ end }}
-{{- if and .Values.evalRuntime.enabled (not .Values.evalRuntime.serviceAccount.roleArn) }}
-    ⚠ evalRuntime.serviceAccount.roleArn is empty — eks-gitops injects it per-cluster
-      from the eks-agent-platform/eval-runner-role-arn annotation.
-{{- end }}
 {{- if and .Values.evalRuntime.enabled .Values.evalRuntime.rollouts.enabled }}
     AnalysisTemplate on — requires the Argo Rollouts CRD on the cluster.
 {{- end }}
