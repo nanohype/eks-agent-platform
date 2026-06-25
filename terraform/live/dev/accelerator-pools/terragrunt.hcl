@@ -7,9 +7,7 @@ terraform {
 }
 
 inputs = {
-  oidc_provider_arn      = "arn:aws:iam::REPLACE:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/REPLACE"
-  oidc_issuer            = "https://oidc.eks.us-west-2.amazonaws.com/id/REPLACE"
   node_role_name         = "eks-dev-karpenter-node"
-  neuron_addon_namespace = "kube-system"
+  neuron_addon_namespace = "aws-neuron"
   gpu_operator_namespace = "gpu-operator"
 }

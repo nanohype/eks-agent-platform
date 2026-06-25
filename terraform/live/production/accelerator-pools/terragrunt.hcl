@@ -8,10 +8,9 @@ terraform {
 
 # Required inputs sourced from the orchestrator (portal workspace
 # variables for the production deploy):
-#   - oidc_provider_arn, oidc_issuer  (from lz-cluster)
-#   - node_role_name                  (from lz-cluster.karpenter_node_role_name;
-#                                      timestamped, changes on cluster recreate)
+#   - node_role_name  (from lz-cluster.karpenter_node_role_name;
+#                      timestamped, changes on cluster recreate)
 inputs = {
-  neuron_addon_namespace = "kube-system"
+  neuron_addon_namespace = "aws-neuron"
   gpu_operator_namespace = "gpu-operator"
 }

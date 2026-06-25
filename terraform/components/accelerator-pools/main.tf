@@ -8,8 +8,6 @@ locals {
     Component = "accelerator-pools"
     Tier      = "platform"
   })
-
-  oidc_host = replace(var.oidc_issuer, "https://", "")
 }
 
 ################################################################################
@@ -57,16 +55,20 @@ resource "aws_iam_role" "neuron" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Federated = var.oidc_provider_arn }
-      Action    = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "${local.oidc_host}:sub" = "system:serviceaccount:${var.neuron_addon_namespace}:neuron-device-plugin"
-          "${local.oidc_host}:aud" = "sts.amazonaws.com"
-        }
-      }
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
     }]
   })
+}
+
+# EKS Pod Identity binds this role to the neuron-device-plugin ServiceAccount —
+# no IRSA annotation, no OIDC trust.
+resource "aws_eks_pod_identity_association" "neuron" {
+  cluster_name    = var.cluster_name
+  namespace       = var.neuron_addon_namespace
+  service_account = "neuron-device-plugin"
+  role_arn        = aws_iam_role.neuron.arn
+  tags            = local.tags
 }
 
 resource "aws_iam_role_policy" "neuron" {
@@ -95,16 +97,19 @@ resource "aws_iam_role" "gpu_operator" {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
-      Principal = { Federated = var.oidc_provider_arn }
-      Action    = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "${local.oidc_host}:sub" = "system:serviceaccount:${var.gpu_operator_namespace}:gpu-operator"
-          "${local.oidc_host}:aud" = "sts.amazonaws.com"
-        }
-      }
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
     }]
   })
+}
+
+# EKS Pod Identity binds this role to the gpu-operator ServiceAccount.
+resource "aws_eks_pod_identity_association" "gpu_operator" {
+  cluster_name    = var.cluster_name
+  namespace       = var.gpu_operator_namespace
+  service_account = "gpu-operator"
+  role_arn        = aws_iam_role.gpu_operator.arn
+  tags            = local.tags
 }
 
 resource "aws_iam_role_policy" "gpu_operator" {
