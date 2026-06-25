@@ -63,11 +63,9 @@ config:
     businessUnit: ""
     dataClassification: ""
     compliance: ""
-  # EKS cluster name — required by PlatformReconciler.ensureIamRole to create
-  # the tenant Pod Identity associations that bind tenant ServiceAccounts to
-  # their roles. Set per-env; the ApplicationSet passes it in via the
-  # values-<env>.yaml file resolved from the eks-gitops 'values' source.
-  clusterName: "" # <env>-<cluster> (e.g. production-eks)
+  # The EKS cluster name (used to create tenant Pod Identity associations) is
+  # read from SSM (/eks-agent-platform/<env>/cluster/name) by operatorconfig,
+  # alongside the operator's other AWS config — not injected as a Helm value.
   killSwitch:
     eventBusName: ""
   bedrock:
