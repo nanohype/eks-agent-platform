@@ -91,11 +91,20 @@ spec:
               containerPort: {{ .Values.webhooks.port }}
               protocol: TCP
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: probe
+            # Cold start = leader election + AWS client build + SSM config load +
+            # manager start. Allow up to 30 × 5s = 150s before liveness takes
+            # over, so a slow bootstrap never trips the restart loop this probe
+            # exists to prevent.
+            failureThreshold: 30
+            periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: probe
-            initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
             httpGet:
