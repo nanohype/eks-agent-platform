@@ -33,6 +33,10 @@ type AgentFleetReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
 	Concurrency int
+
+	// NetworkEngine ("cilium"|"kubernetes") — see PlatformReconciler. Selects a
+	// CiliumNetworkPolicy vs a vanilla NetworkPolicy for fleet egress.
+	NetworkEngine string
 }
 
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets,verbs=get;list;watch;update;patch

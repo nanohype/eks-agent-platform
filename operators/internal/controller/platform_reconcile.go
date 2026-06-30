@@ -183,6 +183,13 @@ func (r *PlatformReconciler) ensureLimitRange(ctx context.Context, p *platformv1
 //
 //nolint:dupl // intentionally similar to agentfleet_reconcile.go's fleet
 func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platformv1alpha1.Platform) error {
+	// On cilium the tenant egress policy is a CiliumNetworkPolicy
+	// (ensureTenantCiliumEgress) — a vanilla NetworkPolicy can't allow egress to
+	// the EKS Pod Identity creds endpoint (the reserved host entity). Emit this
+	// portable NetworkPolicy only on non-cilium clusters.
+	if r.NetworkEngine == NetworkEngineCilium {
+		return nil
+	}
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tenant-egress",
@@ -195,12 +202,25 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 	otlpGRPC := intstr.FromInt(4317)
 	otlpHTTP := intstr.FromInt(4318)
 	agentgatewayPort := intstr.FromInt(8080)
+	credsPort := intstr.FromInt(80)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = labelsForPlatform(p)
 		np.Spec = networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{}, // all pods in the tenant namespace
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					// EKS Pod Identity credential endpoint (169.254.170.23:80).
+					// On cilium this is the reserved host entity and needs a
+					// CiliumNetworkPolicy (ensureTenantCiliumEgress); on other
+					// CNIs the link-local /32 ipBlock works here.
+					To: []networkingv1.NetworkPolicyPeer{{
+						IPBlock: &networkingv1.IPBlock{CIDR: "169.254.170.23/32"},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Protocol: &tcp, Port: &credsPort},
+					},
+				},
 				{
 					// DNS: kube-dns in kube-system on UDP/TCP 53.
 					To: []networkingv1.NetworkPolicyPeer{{
@@ -244,6 +264,19 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 		return nil
 	})
 	return err
+}
+
+// ensureTenantCiliumEgress emits the tenant egress CiliumNetworkPolicy on
+// cilium clusters (the default). It carries the same allow-list as the k8s NP
+// PLUS egress to the EKS Pod Identity creds endpoint (169.254.170.23:80, the
+// reserved host entity a vanilla NetworkPolicy can't match) — without it every
+// tenant-runtime pod silently fails to obtain AWS credentials. No-op on the
+// kubernetes engine, where ensureNetworkPolicy's k8s NetworkPolicy applies.
+func (r *PlatformReconciler) ensureTenantCiliumEgress(ctx context.Context, p *platformv1alpha1.Platform) error {
+	if r.NetworkEngine != NetworkEngineCilium {
+		return nil
+	}
+	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "tenant-egress", map[string]interface{}{}, labelsForPlatform(p), false)
 }
 
 // ensureAppProject creates an ArgoCD AppProject scoped to the tenant

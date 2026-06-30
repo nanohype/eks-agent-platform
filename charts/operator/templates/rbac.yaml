@@ -50,6 +50,12 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # CiliumNetworkPolicy for tenant/fleet egress (networkPolicy.engine: cilium) —
+  # the only policy that can allow egress to the host-entity Pod Identity creds
+  # endpoint. Tolerated-absent in code, but the verb set must be granted.
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnetworkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["argoproj.io"]
     resources: ["appprojects", "applications", "workflows", "workflowtemplates", "cronworkflows", "analysisruns", "analysistemplates"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

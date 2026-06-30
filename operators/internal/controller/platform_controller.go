@@ -40,6 +40,11 @@ type PlatformReconciler struct {
 	Scheme      *runtime.Scheme
 	Concurrency int
 
+	// NetworkEngine ("cilium"|"kubernetes") selects whether tenant egress is a
+	// CiliumNetworkPolicy (required to allow the host-entity Pod Identity creds
+	// endpoint) or a vanilla NetworkPolicy. Wired by main.go from the chart.
+	NetworkEngine string
+
 	// AWS — wired by main.go from operatorconfig + awsclients. May be nil
 	// in unit-test paths that exercise only k8s-side reconciliation.
 	IAM awsclients.IAM
@@ -68,6 +73,7 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cilium.io,resources=ciliumnetworkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=appprojects,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=users,verbs=impersonate
@@ -152,6 +158,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		{"ensureQuota", r.ensureQuota},
 		{"ensureLimitRange", r.ensureLimitRange},
 		{"ensureNetworkPolicy", r.ensureNetworkPolicy},
+		{"ensureTenantCiliumEgress", r.ensureTenantCiliumEgress},
 		{"ensureAppProject", r.ensureAppProject},
 	}
 	for _, s := range steps {

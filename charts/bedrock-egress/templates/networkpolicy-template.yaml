@@ -1,6 +1,10 @@
 {{- if .Values.networkPolicy.enabled -}}
-# Stored as ConfigMap; the operator reads this template and applies a
-# customized NetworkPolicy per tenant namespace at Platform reconcile time.
+# Reference egress contract for tenant-runtime pods, stored as a ConfigMap for
+# documentation + auditing. The operator embeds the equivalent policy in Go and
+# applies it per tenant namespace at Platform reconcile time — on cilium (the
+# default) as a CiliumNetworkPolicy, the only kind that can allow egress to the
+# host-entity EKS Pod Identity creds endpoint; on other CNIs as the
+# NetworkPolicy shown here.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -22,6 +26,17 @@ data:
       policyTypes:
         - Egress
       egress:
+        # EKS Pod Identity credential endpoint. The agent SDK fetches AWS creds
+        # from 169.254.170.23:80; without this rule a Pod Identity association
+        # yields no credentials. On cilium this link-local address is the
+        # reserved `host` entity (an ipBlock CANNOT match it) — there the
+        # operator's CiliumNetworkPolicy uses `toEntities: [host]` on port 80.
+        - to:
+            - ipBlock:
+                cidr: 169.254.170.23/32
+          ports:
+            - port: 80
+              protocol: TCP
         - to:
             - namespaceSelector:
                 matchLabels:

@@ -93,6 +93,12 @@ func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platfor
 //
 //nolint:dupl // intentionally similar to platform_reconcile.go's tenant-egress
 func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+	// On cilium the fleet egress policy is a CiliumNetworkPolicy
+	// (ensureFleetCiliumEgress); emit this portable NetworkPolicy only on
+	// non-cilium clusters (see ensureNetworkPolicy for the rationale).
+	if r.NetworkEngine == NetworkEngineCilium {
+		return nil
+	}
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "fleet-" + fleet.Name,
@@ -105,6 +111,7 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 	otlpGRPC := intstr.FromInt(4317)
 	otlpHTTP := intstr.FromInt(4318)
 	agentgatewayPort := intstr.FromInt(8080)
+	credsPort := intstr.FromInt(80)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
@@ -117,6 +124,14 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress, networkingv1.PolicyTypeIngress},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					// EKS Pod Identity creds endpoint (169.254.170.23:80) — see
+					// ensureFleetCiliumEgress for the cilium host-entity variant.
+					To: []networkingv1.NetworkPolicyPeer{{
+						IPBlock: &networkingv1.IPBlock{CIDR: "169.254.170.23/32"},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &credsPort}},
+				},
 				{
 					To: []networkingv1.NetworkPolicyPeer{{
 						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
@@ -143,6 +158,22 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 		return nil
 	})
 	return err
+}
+
+// ensureFleetCiliumEgress emits the per-fleet egress CiliumNetworkPolicy on
+// cilium clusters — the shared tenant allow-list (including the host-entity Pod
+// Identity creds endpoint) plus deny-all ingress, matching the fleet k8s NP
+// twin. No-op on the kubernetes engine.
+func (r *AgentFleetReconciler) ensureFleetCiliumEgress(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+	if r.NetworkEngine != NetworkEngineCilium {
+		return nil
+	}
+	labels := map[string]string{
+		"app.kubernetes.io/managed-by": "eks-agent-platform",
+		LabelPlatform:                  p.Name,
+		LabelFleet:                     fleet.Name,
+	}
+	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "fleet-"+fleet.Name, map[string]interface{}{LabelFleet: fleet.Name}, labels, true)
 }
 
 // ensureKagentAgents emits, per AgentSpec in the fleet, a kagent ModelConfig
@@ -485,6 +516,9 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	}
 	if err := r.ensureFleetNetworkPolicy(ctx, fleet, platform); err != nil {
 		return "", 0, fmt.Errorf("ensure NetworkPolicy: %w", err)
+	}
+	if err := r.ensureFleetCiliumEgress(ctx, fleet, platform); err != nil {
+		return "", 0, fmt.Errorf("ensure CiliumNetworkPolicy: %w", err)
 	}
 	if err := r.ensureKagentAgents(ctx, fleet, platform); err != nil {
 		if errors.Is(err, errKagentNotInstalled) {

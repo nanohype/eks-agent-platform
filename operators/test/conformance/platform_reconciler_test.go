@@ -155,8 +155,23 @@ func TestPlatformReconciler_InstallsNetworkPolicy(t *testing.T) {
 	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
 		t.Errorf("policy types: got %+v want [Egress]", np.Spec.PolicyTypes)
 	}
-	if len(np.Spec.Egress) != 3 {
-		t.Errorf("expected 3 egress rules (DNS, agentgateway, OTel); got %d", len(np.Spec.Egress))
+	if len(np.Spec.Egress) != 4 {
+		t.Errorf("expected 4 egress rules (Pod Identity creds, DNS, agentgateway, OTel); got %d", len(np.Spec.Egress))
+	}
+	// The envtest reconciler runs the default (empty) network engine, i.e. the
+	// non-cilium path, so the Pod Identity creds endpoint (169.254.170.23:80) is
+	// allowed here via the link-local ipBlock. Under the cilium engine a
+	// CiliumNetworkPolicy carries this instead (covered by the unit tests).
+	var hasCreds bool
+	for _, rule := range np.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.IPBlock != nil && peer.IPBlock.CIDR == "169.254.170.23/32" {
+				hasCreds = true
+			}
+		}
+	}
+	if !hasCreds {
+		t.Error("tenant-egress must allow egress to the Pod Identity creds endpoint 169.254.170.23/32")
 	}
 }
 

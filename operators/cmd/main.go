@@ -74,6 +74,7 @@ func main() {
 	// from SSM under /eks-agent-platform/<environment>/.
 	var environment string
 	var region string
+	var networkEngine string
 	var disableAWS bool
 
 	// Org-dimension tag values stamped on tenant roles (resource-tagging
@@ -107,11 +108,15 @@ func main() {
 	flag.StringVar(&businessUnit, "business-unit", os.Getenv("AGENTS_BUSINESS_UNIT"), "Org business-unit tag stamped on tenant roles.")
 	flag.StringVar(&dataClassification, "data-classification", os.Getenv("AGENTS_DATA_CLASSIFICATION"), "Org data-classification tag stamped on tenant roles.")
 	flag.StringVar(&compliance, "compliance", os.Getenv("AGENTS_COMPLIANCE"), "Org compliance tag stamped on tenant roles.")
+	flag.StringVar(&networkEngine, "network-engine", os.Getenv("AGENTS_NETWORK_ENGINE"), "Network policy engine for tenant/fleet egress: cilium (default; required so Pod Identity creds-endpoint egress is allowed) or kubernetes.")
 	flag.BoolVar(&disableAWS, "disable-aws", false, "Skip AWS client init + SSM config load (k8s-side reconciliation only).")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	if networkEngine == "" {
+		networkEngine = controller.NetworkEngineCilium
+	}
 
 	// AWS client + SSM config bootstrap. If disable-aws is set (unit/dev
 	// path) we skip both; the reconcilers see r.IAM == nil and short-circuit
@@ -154,9 +159,10 @@ func main() {
 	}
 
 	platformReconciler := &controller.PlatformReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		Concurrency: platformWorkers,
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Concurrency:   platformWorkers,
+		NetworkEngine: networkEngine,
 	}
 	if awsClients != nil {
 		platformReconciler.IAM = awsClients.IAM
@@ -203,9 +209,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.AgentFleetReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		Concurrency: runtimeWorkers,
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Concurrency:   runtimeWorkers,
+		NetworkEngine: networkEngine,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "AgentFleet")
 		os.Exit(1)
