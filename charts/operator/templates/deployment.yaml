@@ -49,6 +49,7 @@ spec:
             - --batch-poll-interval={{ .Values.reconcilers.batch.pollInterval }}
             - --environment={{ .Values.config.environment }}
             - --region={{ .Values.config.region }}
+            - --network-engine={{ .Values.networkPolicy.engine }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -61,6 +62,8 @@ spec:
               value: {{ .Values.config.environment | quote }}
             - name: AGENTS_REGION
               value: {{ .Values.config.region | quote }}
+            - name: AGENTS_NETWORK_ENGINE
+              value: {{ .Values.networkPolicy.engine | quote }}
             - name: AGENTS_SSM_PATH_PREFIX
               value: {{ .Values.config.ssmPathPrefix | quote }}
             {{- with .Values.config.tags.costCenter }}
