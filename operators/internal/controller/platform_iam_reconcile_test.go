@@ -43,12 +43,15 @@ func newPlatform(name, tenant string) *platformv1alpha1.Platform {
 type fakeIAM struct {
 	roles    map[string]*iamtypes.Role
 	attached map[string]map[string]struct{} // roleName -> set of policy ARNs
+	inline   map[string]map[string]string   // roleName -> policyName -> document
 
 	listCalls         int
 	attachCalls       []iam.AttachRolePolicyInput
 	createCalls       []iam.CreateRoleInput
 	updateAssumeCalls []iam.UpdateAssumeRolePolicyInput
 	detachCalls       []iam.DetachRolePolicyInput
+	putInlineCalls    []iam.PutRolePolicyInput
+	deleteInlineCalls []iam.DeleteRolePolicyInput
 	listReturnsErr    error
 	attachReturnsErr  map[string]error // policyARN -> err
 	pageBoundary      int              // if > 0, paginate ListAttached at this size
@@ -58,6 +61,7 @@ func newFakeIAM() *fakeIAM {
 	return &fakeIAM{
 		roles:            map[string]*iamtypes.Role{},
 		attached:         map[string]map[string]struct{}{},
+		inline:           map[string]map[string]string{},
 		attachReturnsErr: map[string]error{},
 	}
 }
@@ -141,6 +145,54 @@ func (f *fakeIAM) DetachRolePolicy(_ context.Context, params *iam.DetachRolePoli
 	roleName := aws.ToString(params.RoleName)
 	delete(f.attached[roleName], aws.ToString(params.PolicyArn))
 	return &iam.DetachRolePolicyOutput{}, nil
+}
+
+func (f *fakeIAM) GetRolePolicy(_ context.Context, params *iam.GetRolePolicyInput, _ ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
+	roleName := aws.ToString(params.RoleName)
+	policyName := aws.ToString(params.PolicyName)
+	doc, ok := f.inline[roleName][policyName]
+	if !ok {
+		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role policy: " + roleName + "/" + policyName)}
+	}
+	return &iam.GetRolePolicyOutput{
+		RoleName:       params.RoleName,
+		PolicyName:     params.PolicyName,
+		PolicyDocument: aws.String(doc),
+	}, nil
+}
+
+func (f *fakeIAM) PutRolePolicy(_ context.Context, params *iam.PutRolePolicyInput, _ ...func(*iam.Options)) (*iam.PutRolePolicyOutput, error) {
+	f.putInlineCalls = append(f.putInlineCalls, *params)
+	roleName := aws.ToString(params.RoleName)
+	if _, ok := f.inline[roleName]; !ok {
+		f.inline[roleName] = map[string]string{}
+	}
+	f.inline[roleName][aws.ToString(params.PolicyName)] = aws.ToString(params.PolicyDocument)
+	return &iam.PutRolePolicyOutput{}, nil
+}
+
+func (f *fakeIAM) DeleteRolePolicy(_ context.Context, params *iam.DeleteRolePolicyInput, _ ...func(*iam.Options)) (*iam.DeleteRolePolicyOutput, error) {
+	f.deleteInlineCalls = append(f.deleteInlineCalls, *params)
+	roleName := aws.ToString(params.RoleName)
+	policyName := aws.ToString(params.PolicyName)
+	if _, ok := f.inline[roleName][policyName]; !ok {
+		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role policy: " + roleName + "/" + policyName)}
+	}
+	delete(f.inline[roleName], policyName)
+	return &iam.DeleteRolePolicyOutput{}, nil
+}
+
+func (f *fakeIAM) ListRolePolicies(_ context.Context, params *iam.ListRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+	roleName := aws.ToString(params.RoleName)
+	if _, ok := f.roles[roleName]; !ok {
+		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role: " + roleName)}
+	}
+	names := make([]string, 0, len(f.inline[roleName]))
+	for n := range f.inline[roleName] {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return &iam.ListRolePoliciesOutput{PolicyNames: names}, nil
 }
 
 func (f *fakeIAM) ListAttachedRolePolicies(_ context.Context, params *iam.ListAttachedRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {

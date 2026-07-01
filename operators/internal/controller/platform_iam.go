@@ -125,6 +125,10 @@ type IAMConfig struct {
 	// (the EKS client errors without it).
 	ClusterName string
 	Environment string
+	// Region is the operator's home region, used to mint the
+	// inference-profile ARN patterns in the bedrock-model-scoping policy
+	// (profiles are account+region resources). Empty wildcards the region.
+	Region string
 
 	// Org-dimension tag values for tenant roles (resource-tagging
 	// standard, required tier). Sourced from the operator's deploy config
@@ -178,16 +182,17 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 }
 
 // ensureIamRole creates (or no-ops if already present) the tenant role
-// for a Platform, attaches the baseline policy, binds the tenant
+// for a Platform, attaches the baseline policy, reconciles the
+// bedrock-model-scoping inline policy from spec.identity, binds the tenant
 // ServiceAccount to it via a Pod Identity association, and returns the
 // role ARN.
 //
 // Idempotent: re-runs on the same Platform observe the role's existence
 // via GetRole and skip CreateRole. Reads the kill-switch suspension tag
 // (platform.nanohype.dev/suspended); when present, returns
-// platformSuspension{Suspended: true} and SKIPS attachBaselineIfMissing
-// so the operator doesn't fight the kill-switch by reattaching the
-// baseline policy on every reconcile.
+// platformSuspension{Suspended: true} and SKIPS both the managed-policy
+// reconcile and the model-scoping policy write so the operator doesn't
+// fight the kill-switch by reattaching grants on every reconcile.
 func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) (platformSuspension, error) {
 	if r.IAM == nil {
 		// IAM client not wired (e.g., envtest path with no AWS creds).
@@ -218,11 +223,16 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		suspended, reason := suspensionFromTags(getOut.Role.Tags)
 		if suspended {
 			// Kill-switch fired (or ops manually tagged the role).
-			// Don't reattach the baseline — that would let the tenant
-			// keep invoking Bedrock until the next SFN execution.
+			// Don't reattach the baseline and don't touch the
+			// bedrock-model-scoping policy — the operator is observe-only
+			// on a suspended role; any policy write here would fight the
+			// kill-switch until the next SFN execution.
 			return platformSuspension{RoleARN: arn, Suspended: true, Reason: reason}, nil
 		}
 		if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
+			return platformSuspension{RoleARN: arn}, err
+		}
+		if err := r.ensureModelScopingPolicy(ctx, name, arn, p.Spec.Identity, cfg); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
 		if err := r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName, arn); err != nil {
@@ -252,6 +262,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 
 	// Fresh role can't be suspended yet — go straight to attach.
 	if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
+		return platformSuspension{RoleARN: arn}, err
+	}
+	if err := r.ensureModelScopingPolicy(ctx, name, arn, p.Spec.Identity, cfg); err != nil {
 		return platformSuspension{RoleARN: arn}, err
 	}
 	if err := r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName, arn); err != nil {
@@ -388,10 +401,11 @@ func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alp
 	return r.detachAndDeleteRole(ctx, tenantRoleName(cfg.Environment, p))
 }
 
-// detachAndDeleteRole detaches every managed policy from a role and deletes
-// it. Shared by the tenant-role and session-role finalizers. Tolerates
-// NotFound at every step so re-runs (and roles that were never created) are
-// safe no-ops.
+// detachAndDeleteRole detaches every managed policy from a role, deletes its
+// inline policies (IAM refuses DeleteRole while the bedrock-model-scoping
+// policy remains), and deletes it. Shared by the tenant-role and session-role
+// finalizers. Tolerates NotFound at every step so re-runs (and roles that
+// were never created) are safe no-ops.
 func (r *PlatformReconciler) detachAndDeleteRole(ctx context.Context, name string) error {
 	if r.IAM == nil {
 		return nil
@@ -420,6 +434,9 @@ func (r *PlatformReconciler) detachAndDeleteRole(ctx context.Context, name strin
 			break
 		}
 		marker = listOut.Marker
+	}
+	if err := r.deleteInlinePolicies(ctx, name); err != nil {
+		return err
 	}
 	if _, err := r.IAM.DeleteRole(ctx, &iam.DeleteRoleInput{RoleName: aws.String(name)}); err != nil && !isIAMNotFound(err) {
 		return fmt.Errorf("iam DeleteRole: %w", err)

@@ -695,7 +695,15 @@ _Appears in:_
 
 
 
-IdentitySpec wires the per-Platform IRSA role.
+IdentitySpec wires the per-Platform IRSA role. The controller reconciles a
+`bedrock-model-scoping` inline policy onto the tenant role (and the
+attribution session role, when spec.attribution is set) that denies the
+Bedrock model-invoke actions (InvokeModel, InvokeModelWithResponseStream,
+Converse, ConverseStream) on every resource outside the set that
+AllowedModels / AllowedModelFamilies expand to. The baseline policy's broad
+invoke grant is thereby narrowed to exactly the declared models; when
+neither field is set the policy denies all model invocation
+(deny-by-default).
 
 
 
@@ -704,8 +712,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `allowedModels` _string array_ | AllowedModels is the list of Bedrock model IDs (or inference-profile IDs)<br />the IRSA role can invoke. Mutually exclusive with AllowedModelFamilies. |  | Optional: \{\} <br /> |
-| `allowedModelFamilies` _string array_ | AllowedModelFamilies (e.g. ["anthropic", "meta", "amazon-nova"]) is<br />expanded by the controller into ARNs at reconcile time. |  | Optional: \{\} <br /> |
+| `allowedModels` _string array_ | AllowedModels is the list of Bedrock model IDs or cross-region<br />inference-profile IDs (e.g. "anthropic.claude-sonnet-4-6",<br />"us.anthropic.claude-sonnet-4-6-v1:0") the role may invoke. The<br />controller expands each entry into its foundation-model ARN pattern plus<br />the matching inference-profile ARN pattern (a `us.` profile fans out to<br />foundation models across regions, so both are granted together) and<br />reconciles them into the role's bedrock-model-scoping policy. Scopes<br />tighter than a family; mutually exclusive with AllowedModelFamilies. |  | Optional: \{\} <br /> |
+| `allowedModelFamilies` _string array_ | AllowedModelFamilies (e.g. ["anthropic", "amazon-nova"]) is expanded by<br />the controller at reconcile time into the family's foundation-model ARN<br />pattern (arn:<partition>:bedrock:*::foundation-model/<prefix>*) and, for<br />families with cross-region inference profiles (anthropic, amazon-nova,<br />meta, mistral), the `us.` inference-profile ARN pattern<br />(arn:<partition>:bedrock:<region>:<account>:inference-profile/us.<prefix>*),<br />then reconciled into the role's bedrock-model-scoping policy. Leaving<br />both this and AllowedModels empty denies all Bedrock model invocation<br />for the Platform's roles. |  | items:Enum: [anthropic amazon-nova amazon-titan meta mistral cohere stability] <br />Optional: \{\} <br /> |
 | `extraPolicyArns` _string array_ | ExtraPolicyArns are managed IAM policies attached on top of the baseline. |  | Optional: \{\} <br /> |
 
 

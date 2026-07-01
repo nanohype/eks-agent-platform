@@ -96,7 +96,8 @@ func sessionRoleMaxDuration(p *platformv1alpha1.Platform) int32 {
 // a Platform with spec.attribution set, and returns its ARN. The role is
 // assumable only by the tenant IRSA role, only while carrying one of the
 // Platform's operators as STS SourceIdentity, and is limited to the tenant
-// baseline policy (Bedrock invoke) — never broad sts:AssumeRole.
+// baseline policy (Bedrock invoke) clamped by the same bedrock-model-scoping
+// policy as the tenant role — never broad sts:AssumeRole.
 //
 // When suspended (kill-switch), the baseline is DETACHED rather than attached:
 // otherwise a suspended tenant could keep invoking Bedrock through the session
@@ -133,6 +134,9 @@ func (r *PlatformReconciler) ensureSessionRole(
 		if err := r.reconcileSessionBaseline(ctx, name, cfg.TenantBaselinePolicyARN, suspended); err != nil {
 			return arn, err
 		}
+		if err := r.reconcileSessionModelScoping(ctx, name, arn, p, suspended, cfg); err != nil {
+			return arn, err
+		}
 		return arn, nil
 	}
 	if !isIAMNotFound(getErr) {
@@ -165,6 +169,9 @@ func (r *PlatformReconciler) ensureSessionRole(
 	if err := r.reconcileSessionBaseline(ctx, name, cfg.TenantBaselinePolicyARN, suspended); err != nil {
 		return arn, err
 	}
+	if err := r.reconcileSessionModelScoping(ctx, name, arn, p, suspended, cfg); err != nil {
+		return arn, err
+	}
 	return arn, nil
 }
 
@@ -185,6 +192,18 @@ func (r *PlatformReconciler) reconcileSessionBaseline(ctx context.Context, roleN
 		return nil
 	}
 	return r.reconcileManagedPolicies(ctx, roleName, baselineARN, nil)
+}
+
+// reconcileSessionModelScoping applies the same bedrock-model-scoping inline
+// policy the tenant role carries to the attribution session role. Without it,
+// a session identity — which attaches the same broad baseline — would be a
+// bypass around the Platform's allowedModelFamilies/allowedModels boundary.
+// Skipped while suspended (observe-only, matching ensureIamRole).
+func (r *PlatformReconciler) reconcileSessionModelScoping(ctx context.Context, roleName, roleARN string, p *platformv1alpha1.Platform, suspended bool, cfg IAMConfig) error {
+	if suspended {
+		return nil
+	}
+	return r.ensureModelScopingPolicy(ctx, roleName, roleARN, p.Spec.Identity, cfg)
 }
 
 // deleteSessionRole is the finalizer counterpart: detach policies + delete the

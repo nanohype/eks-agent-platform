@@ -85,16 +85,38 @@ type BudgetRef struct {
 	Name string `json:"name"`
 }
 
-// IdentitySpec wires the per-Platform IRSA role.
+// IdentitySpec wires the per-Platform IRSA role. The controller reconciles a
+// `bedrock-model-scoping` inline policy onto the tenant role (and the
+// attribution session role, when spec.attribution is set) that denies the
+// Bedrock model-invoke actions (InvokeModel, InvokeModelWithResponseStream,
+// Converse, ConverseStream) on every resource outside the set that
+// AllowedModels / AllowedModelFamilies expand to. The baseline policy's broad
+// invoke grant is thereby narrowed to exactly the declared models; when
+// neither field is set the policy denies all model invocation
+// (deny-by-default).
 // +kubebuilder:validation:XValidation:rule="!(has(self.allowedModels) && size(self.allowedModels) > 0 && has(self.allowedModelFamilies) && size(self.allowedModelFamilies) > 0)",message="allowedModels and allowedModelFamilies are mutually exclusive"
 type IdentitySpec struct {
-	// AllowedModels is the list of Bedrock model IDs (or inference-profile IDs)
-	// the IRSA role can invoke. Mutually exclusive with AllowedModelFamilies.
+	// AllowedModels is the list of Bedrock model IDs or cross-region
+	// inference-profile IDs (e.g. "anthropic.claude-sonnet-4-6",
+	// "us.anthropic.claude-sonnet-4-6-v1:0") the role may invoke. The
+	// controller expands each entry into its foundation-model ARN pattern plus
+	// the matching inference-profile ARN pattern (a `us.` profile fans out to
+	// foundation models across regions, so both are granted together) and
+	// reconciles them into the role's bedrock-model-scoping policy. Scopes
+	// tighter than a family; mutually exclusive with AllowedModelFamilies.
 	// +optional
 	AllowedModels []string `json:"allowedModels,omitempty"`
 
-	// AllowedModelFamilies (e.g. ["anthropic", "meta", "amazon-nova"]) is
-	// expanded by the controller into ARNs at reconcile time.
+	// AllowedModelFamilies (e.g. ["anthropic", "amazon-nova"]) is expanded by
+	// the controller at reconcile time into the family's foundation-model ARN
+	// pattern (arn:<partition>:bedrock:*::foundation-model/<prefix>*) and, for
+	// families with cross-region inference profiles (anthropic, amazon-nova,
+	// meta, mistral), the `us.` inference-profile ARN pattern
+	// (arn:<partition>:bedrock:<region>:<account>:inference-profile/us.<prefix>*),
+	// then reconciled into the role's bedrock-model-scoping policy. Leaving
+	// both this and AllowedModels empty denies all Bedrock model invocation
+	// for the Platform's roles.
+	// +kubebuilder:validation:items:Enum=anthropic;amazon-nova;amazon-titan;meta;mistral;cohere;stability
 	// +optional
 	AllowedModelFamilies []string `json:"allowedModelFamilies,omitempty"`
 
