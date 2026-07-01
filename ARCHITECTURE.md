@@ -57,7 +57,7 @@ Keeping these in the chart means the operator's eval gating and its own SLO arri
 
 ### Bedrock-only model plane in v1
 
-`@eks-agent/sdk` ships a `BedrockAdapter` with per-family submodules (Anthropic, Meta, Mistral, Cohere, Titan, Nova, Stability) — uniform call shape, family-accurate pricing, family-accurate error taxonomy. Adding a non-Bedrock provider later is a new `ProviderAdapter` implementation, not an architecture change.
+`@eks-agent/sdk` ships a `BedrockAdapter` base with a family registry (`packages/sdk/src/factory.ts`); two family adapters are registered — Anthropic and Amazon Nova — each with uniform call shape, family-accurate pricing, family-accurate error taxonomy. Adding a Bedrock family is a `BedrockAdapter` subclass plus a registry insert; adding a non-Bedrock provider later is a new `ProviderAdapter` implementation, not an architecture change.
 
 ### Two CMKs per platform
 

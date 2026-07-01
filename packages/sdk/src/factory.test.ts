@@ -20,9 +20,11 @@ describe('createBedrockAdapter', () => {
   });
 
   it.each(['meta', 'mistral', 'cohere', 'amazon-titan', 'stability'] as const)(
-    'throws with a Phase-2 hint for unshipped family %s',
+    'throws naming the shipped families and the extension point for unshipped family %s',
     (family) => {
-      expect(() => createBedrockAdapter(family, opts)).toThrow(/Phase 2/);
+      expect(() => createBedrockAdapter(family, opts)).toThrow(/no BedrockAdapter registered/);
+      expect(() => createBedrockAdapter(family, opts)).toThrow(/Shipped: anthropic, amazon-nova/);
+      expect(() => createBedrockAdapter(family, opts)).toThrow(/register the constructor in REGISTRY/);
     },
   );
 });

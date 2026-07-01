@@ -24,7 +24,7 @@ export function createBedrockAdapter(family: ModelFamily, opts: BedrockAdapterOp
   const ctor = REGISTRY[family];
   if (!ctor) {
     throw new Error(
-      `no BedrockAdapter registered for model family '${family}'. Shipped: ${Object.keys(REGISTRY).join(', ')}. Phase 2 adds meta, mistral, cohere, amazon-titan, stability.`,
+      `no BedrockAdapter registered for model family '${family}'. Shipped: ${Object.keys(REGISTRY).join(', ')}. To support another family, subclass BedrockAdapter and register the constructor in REGISTRY (packages/sdk/src/factory.ts).`,
     );
   }
   return new ctor(opts);
