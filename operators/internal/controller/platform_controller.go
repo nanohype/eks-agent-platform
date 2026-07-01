@@ -30,7 +30,9 @@ import (
 //   - the per-Platform tenant Namespace (with Pod Security Standards label),
 //   - ResourceQuota + LimitRange + default-deny NetworkPolicy in that ns,
 //   - the ArgoCD AppProject scoped to that namespace + Platform source repos,
-//   - the per-Platform tenant IAM role, KMS grant, and S3 bucket policy.
+//   - the per-Platform tenant IAM role (baseline attachment + the
+//     bedrock-model-scoping inline policy reconciled from spec.identity),
+//     KMS grant, and S3 bucket policy.
 //
 // The k8s-side reconciliation runs first and unconditionally; AWS-side
 // state is reconciled behind interface-injected clients (IAM/KMS/S3) that
@@ -271,6 +273,19 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		platform.Status.Phase = phaseReady
 		platform.Status.SuspendedAt = nil
 		platform.Status.SuspendedReason = ""
+		// Surface the reconciled Bedrock model boundary. Only written when the
+		// IAM client is wired — otherwise no bedrock-model-scoping policy
+		// exists on any role and the condition would overclaim.
+		if r.IAM != nil {
+			upsertCondition(&platform.Status.Conditions, metav1.Condition{
+				Type:               "ModelAccessScoped",
+				Status:             metav1.ConditionTrue,
+				Reason:             modelScopeConditionReason(platform.Spec.Identity),
+				Message:            modelScopeConditionMessage(platform.Spec.Identity),
+				LastTransitionTime: metav1.Now(),
+				ObservedGeneration: platform.Generation,
+			})
+		}
 		upsertCondition(&platform.Status.Conditions, metav1.Condition{
 			Type:               "NamespaceReady",
 			Status:             metav1.ConditionTrue,

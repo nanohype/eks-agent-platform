@@ -175,6 +175,7 @@ func main() {
 			TenantPermissionsBoundaryARN: opConfig.TenantPermissionsBoundaryARN,
 			ClusterName:                  opConfig.ClusterName,
 			Environment:                  environment,
+			Region:                       opConfig.Region,
 			CostCenter:                   costCenter,
 			BusinessUnit:                 businessUnit,
 			DataClassification:           dataClassification,

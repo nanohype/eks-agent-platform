@@ -83,7 +83,7 @@ The app's chart annotates its SA with the landing-zone role's ARN (via `aws.plat
    - `ResourceQuota` + `LimitRange` defaults
    - Default-deny `NetworkPolicy` plus egress allow-list (DNS, agentgateway, OTel collector)
    - ArgoCD `AppProject` scoped to the tenant namespace
-   - IRSA role `<env>-<app>-tenant` with trust policy targeting `tenant-runtime` SA; attaches baseline Bedrock policy + everything in `spec.identity.extraPolicyArns`
+   - IRSA role `<env>-<app>-tenant` with trust policy targeting `tenant-runtime` SA; attaches baseline Bedrock policy + everything in `spec.identity.extraPolicyArns`, and reconciles a `bedrock-model-scoping` inline policy that limits Bedrock invoke to the ARNs `spec.identity.allowedModelFamilies` / `allowedModels` expand to (both unset = all model invoke denied)
 4. Status reaches `Ready`; the app's ApplicationSet entry can start syncing.
 
 ## Ship an agent fleet

@@ -38,7 +38,10 @@ platform:
     soc2: true
 
 identity:
-  # Either pick model families or specific models. Family expands at reconcile.
+  # Either pick model families or specific models. The operator expands the
+  # choice into Bedrock foundation-model + cross-region inference-profile ARNs
+  # and reconciles a bedrock-model-scoping policy that denies invoke on
+  # everything outside that set.
   allowedModelFamilies:
     - anthropic
     - amazon-nova

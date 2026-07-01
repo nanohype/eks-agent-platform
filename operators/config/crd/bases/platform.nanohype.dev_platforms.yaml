@@ -131,15 +131,36 @@ spec:
                 properties:
                   allowedModelFamilies:
                     description: |-
-                      AllowedModelFamilies (e.g. ["anthropic", "meta", "amazon-nova"]) is
-                      expanded by the controller into ARNs at reconcile time.
+                      AllowedModelFamilies (e.g. ["anthropic", "amazon-nova"]) is expanded by
+                      the controller at reconcile time into the family's foundation-model ARN
+                      pattern (arn:<partition>:bedrock:*::foundation-model/<prefix>*) and, for
+                      families with cross-region inference profiles (anthropic, amazon-nova,
+                      meta, mistral), the `us.` inference-profile ARN pattern
+                      (arn:<partition>:bedrock:<region>:<account>:inference-profile/us.<prefix>*),
+                      then reconciled into the role's bedrock-model-scoping policy. Leaving
+                      both this and AllowedModels empty denies all Bedrock model invocation
+                      for the Platform's roles.
                     items:
+                      enum:
+                      - anthropic
+                      - amazon-nova
+                      - amazon-titan
+                      - meta
+                      - mistral
+                      - cohere
+                      - stability
                       type: string
                     type: array
                   allowedModels:
                     description: |-
-                      AllowedModels is the list of Bedrock model IDs (or inference-profile IDs)
-                      the IRSA role can invoke. Mutually exclusive with AllowedModelFamilies.
+                      AllowedModels is the list of Bedrock model IDs or cross-region
+                      inference-profile IDs (e.g. "anthropic.claude-sonnet-4-6",
+                      "us.anthropic.claude-sonnet-4-6-v1:0") the role may invoke. The
+                      controller expands each entry into its foundation-model ARN pattern plus
+                      the matching inference-profile ARN pattern (a `us.` profile fans out to
+                      foundation models across regions, so both are granted together) and
+                      reconciles them into the role's bedrock-model-scoping policy. Scopes
+                      tighter than a family; mutually exclusive with AllowedModelFamilies.
                     items:
                       type: string
                     type: array
