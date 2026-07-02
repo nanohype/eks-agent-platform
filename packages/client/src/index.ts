@@ -93,7 +93,12 @@ export class EksAgentClient {
   }
 
   async deletePlatform(name: string): Promise<void> {
-    await this.api.deleteClusterCustomObject({ group: GROUPS.platform, version: VERSION, plural: 'platforms', name });
+    await this.api.deleteClusterCustomObject({
+      group: GROUPS.platform,
+      version: VERSION,
+      plural: 'platforms',
+      name,
+    });
   }
 
   async listModelGateways(namespace: string): Promise<ModelGateway[]> {

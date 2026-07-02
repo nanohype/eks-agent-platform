@@ -24,7 +24,9 @@ describe('createBedrockAdapter', () => {
     (family) => {
       expect(() => createBedrockAdapter(family, opts)).toThrow(/no BedrockAdapter registered/);
       expect(() => createBedrockAdapter(family, opts)).toThrow(/Shipped: anthropic, amazon-nova/);
-      expect(() => createBedrockAdapter(family, opts)).toThrow(/register the constructor in REGISTRY/);
+      expect(() => createBedrockAdapter(family, opts)).toThrow(
+        /register the constructor in REGISTRY/,
+      );
     },
   );
 });

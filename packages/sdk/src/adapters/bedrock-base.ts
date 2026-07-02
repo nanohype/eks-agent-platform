@@ -13,10 +13,22 @@ import {
   ModelStreamErrorException,
 } from '@aws-sdk/client-bedrock-runtime';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-import { AgentError, type CallEvent, type ErrorClass, type ModelFamily, type TokenUsage } from '@eks-agent/core';
+import {
+  AgentError,
+  type CallEvent,
+  type ErrorClass,
+  type ModelFamily,
+  type TokenUsage,
+} from '@eks-agent/core';
 import { priceModel } from '@eks-agent/pricing';
 
-import type { Message, MessagesParams, MessagesResponse, ProviderAdapter, ProviderId } from '../types.js';
+import type {
+  Message,
+  MessagesParams,
+  MessagesResponse,
+  ProviderAdapter,
+  ProviderId,
+} from '../types.js';
 
 export interface BedrockAdapterOptions {
   region: string;
@@ -157,9 +169,11 @@ export abstract class BedrockAdapter implements ProviderAdapter {
   emitCallEvent?(event: CallEvent): void;
 
   classifyError(err: unknown): ErrorClass {
-    if (err instanceof ThrottlingException || err instanceof ServiceQuotaExceededException) return 'RateLimit';
+    if (err instanceof ThrottlingException || err instanceof ServiceQuotaExceededException)
+      return 'RateLimit';
     if (err instanceof ServiceUnavailableException) return 'Overloaded';
-    if (err instanceof ValidationException || err instanceof ResourceNotFoundException) return 'BadRequest';
+    if (err instanceof ValidationException || err instanceof ResourceNotFoundException)
+      return 'BadRequest';
     if (err instanceof AccessDeniedException) return 'AuthFailure';
     if (
       err instanceof InternalServerException ||

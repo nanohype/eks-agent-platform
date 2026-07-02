@@ -49,7 +49,13 @@ describe('CorrelationId', () => {
   });
 
   it('produces distinct values on each call', () => {
-    const set = new Set([CorrelationId(), CorrelationId(), CorrelationId(), CorrelationId(), CorrelationId()]);
+    const set = new Set([
+      CorrelationId(),
+      CorrelationId(),
+      CorrelationId(),
+      CorrelationId(),
+      CorrelationId(),
+    ]);
     expect(set.size).toBe(5);
   });
 });
