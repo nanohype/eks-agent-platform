@@ -121,6 +121,6 @@ See [README.md](./README.md#what-you-get).
 ## What this repo deliberately does NOT do
 
 - **Not a model host.** Bedrock runs inference outside the cluster. This platform does not change that. Self-hosted models on Neuron/NVIDIA via `AgentFleet.spec.compute` + DRA are possible but not v1.
-- **Not multi-cloud.** EKS only. A GKE / AKS port could share the operator + CRDs by abstracting the IRSA layer, but that's a separate project.
+- **Not multi-cloud.** EKS only.
 - **Not a replacement for kagent or agentgateway.** It composes them.
 - **Not a cluster bootstrap.** The cluster + ArgoCD must already exist (via `landing-zone` OpenTofu or equivalent).

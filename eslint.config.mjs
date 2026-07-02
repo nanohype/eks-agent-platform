@@ -1,8 +1,8 @@
-import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import importX from 'eslint-plugin-import-x';
 import security from 'eslint-plugin-security';
 import prettier from 'eslint-config-prettier';
+import base from './eslint.base.mjs';
 
 export default tseslint.config(
   {
@@ -20,8 +20,12 @@ export default tseslint.config(
       'scripts/**',
     ],
   },
-  js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
+  // Org base — vendored byte-identical from nanohype library/config
+  // (drift-gated by scripts/sync-vendored.mjs): @eslint/js recommended +
+  // typescript-eslint strict + the shared rule options.
+  ...base,
+  // Type-checked layers on top of the strict base.
+  ...tseslint.configs.recommendedTypeCheckedOnly,
   ...tseslint.configs.stylisticTypeChecked,
   security.configs.recommended,
   {
@@ -33,6 +37,8 @@ export default tseslint.config(
             '*.config.js',
             '*.config.cjs',
             '*.config.ts',
+            'vitest.base.ts',
+            'packages/*/vitest.config.ts',
             '.lintstagedrc.mjs',
             'scripts/*.mjs',
             'scripts/*.js',
@@ -46,10 +52,6 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': [
         'error',
         { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
-      ],
-      '@typescript-eslint/no-unused-vars': [
-        'error',
-        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
       '@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: false }],
       'import-x/order': ['warn', { 'newlines-between': 'always', alphabetize: { order: 'asc' } }],
