@@ -75,7 +75,13 @@ export interface PriceResult {
  * over estimateCost on metering paths so an unpriced model is observable
  * instead of silently zeroed.
  */
-export function priceModel({ modelId, tokens }: { modelId: string; tokens: TokenUsage }): PriceResult {
+export function priceModel({
+  modelId,
+  tokens,
+}: {
+  modelId: string;
+  tokens: TokenUsage;
+}): PriceResult {
   // Bedrock cross-region inference profile prefixes: us. eu. apac. ap. (and
   // future regional shorts). Strip any 2–5-char lowercase prefix before lookup
   // so profile IDs resolve to the base model price.
@@ -90,9 +96,13 @@ export function priceModel({ modelId, tokens }: { modelId: string; tokens: Token
   const input = (tokens.inputTokens / 1_000_000) * price.inputPerMillion;
   const output = (tokens.outputTokens / 1_000_000) * price.outputPerMillion;
   const cacheRead =
-    price.cacheReadPerMillion !== undefined ? (tokens.cacheReadTokens / 1_000_000) * price.cacheReadPerMillion : 0;
+    price.cacheReadPerMillion !== undefined
+      ? (tokens.cacheReadTokens / 1_000_000) * price.cacheReadPerMillion
+      : 0;
   const cacheWrite =
-    price.cacheWritePerMillion !== undefined ? (tokens.cacheWriteTokens / 1_000_000) * price.cacheWritePerMillion : 0;
+    price.cacheWritePerMillion !== undefined
+      ? (tokens.cacheWriteTokens / 1_000_000) * price.cacheWritePerMillion
+      : 0;
   return { costUsd: input + output + cacheRead + cacheWrite, priced: true };
 }
 

@@ -58,7 +58,11 @@ describe('NovaBedrockAdapter.buildRequestBody', () => {
 
   it('sets inferenceConfig with maxTokens, temperature, stopSequences', () => {
     const body = adapter.build({ ...baseParams, temperature: 0.2, stop: ['STOP'] });
-    expect(body.inferenceConfig).toEqual({ maxTokens: 64, temperature: 0.2, stopSequences: ['STOP'] });
+    expect(body.inferenceConfig).toEqual({
+      maxTokens: 64,
+      temperature: 0.2,
+      stopSequences: ['STOP'],
+    });
   });
 
   it('omits temperature + stopSequences when not provided', () => {
@@ -75,7 +79,12 @@ describe('NovaBedrockAdapter.parseResponseBody', () => {
       usage: { inputTokens: 10, outputTokens: 2 },
     });
     expect(parsed.text).toBe('pong');
-    expect(parsed.usage).toEqual({ inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    expect(parsed.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
     expect(parsed.stopReason).toBe('end_turn');
   });
 
@@ -97,7 +106,10 @@ describe('NovaBedrockAdapter.parseResponseBody', () => {
   });
 
   it('returns empty text when output.message is missing', () => {
-    const parsed = adapter.parse({ stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 1 } });
+    const parsed = adapter.parse({
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
     expect(parsed.text).toBe('');
   });
 
@@ -106,6 +118,11 @@ describe('NovaBedrockAdapter.parseResponseBody', () => {
       output: { message: { content: [{ text: 'x' }] } },
       stopReason: 'end_turn',
     });
-    expect(parsed.usage).toEqual({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    expect(parsed.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
   });
 });

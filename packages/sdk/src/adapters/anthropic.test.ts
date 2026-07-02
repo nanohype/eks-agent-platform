@@ -72,7 +72,12 @@ describe('AnthropicBedrockAdapter.parseResponseBody', () => {
       usage: { input_tokens: 10, output_tokens: 2 },
     });
     expect(parsed.text).toBe('pong');
-    expect(parsed.usage).toEqual({ inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    expect(parsed.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
     expect(parsed.stopReason).toBe('end_turn');
   });
 
@@ -92,7 +97,12 @@ describe('AnthropicBedrockAdapter.parseResponseBody', () => {
     const parsed = adapter.parse({
       content: [{ type: 'text', text: 'x' }],
       stop_reason: 'end_turn',
-      usage: { input_tokens: 5, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 50 },
+      usage: {
+        input_tokens: 5,
+        output_tokens: 5,
+        cache_read_input_tokens: 100,
+        cache_creation_input_tokens: 50,
+      },
     });
     expect(parsed.usage.cacheReadTokens).toBe(100);
     expect(parsed.usage.cacheWriteTokens).toBe(50);
@@ -117,7 +127,10 @@ describe('AnthropicBedrockAdapter.parseResponseBody', () => {
   });
 
   it('returns empty text when content is missing', () => {
-    const parsed = adapter.parse({ stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
+    const parsed = adapter.parse({
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
     expect(parsed.text).toBe('');
   });
 });

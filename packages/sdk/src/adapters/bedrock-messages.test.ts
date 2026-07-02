@@ -75,7 +75,9 @@ describe('BedrockAdapter.messages orchestration', () => {
     expect(events[0]?.correlationId).toBe('cid-123');
     expect(events[0]?.status).toBe('ok');
 
-    adapter.setSend(() => Promise.reject(new ThrottlingException({ $metadata: {}, message: 'slow down' })));
+    adapter.setSend(() =>
+      Promise.reject(new ThrottlingException({ $metadata: {}, message: 'slow down' })),
+    );
     await expect(adapter.messages(baseParams)).rejects.toBeInstanceOf(AgentError);
     expect(events).toHaveLength(1);
   });
@@ -94,8 +96,13 @@ describe('BedrockAdapter.messages orchestration', () => {
 
   it('wraps a ThrottlingException as a retryable RateLimit AgentError', async () => {
     const adapter = new FakeClientAdapter({ region: 'us-west-2' });
-    adapter.setSend(() => Promise.reject(new ThrottlingException({ $metadata: {}, message: 'slow' })));
+    adapter.setSend(() =>
+      Promise.reject(new ThrottlingException({ $metadata: {}, message: 'slow' })),
+    );
 
-    await expect(adapter.messages(baseParams)).rejects.toMatchObject({ class: 'RateLimit', retryable: true });
+    await expect(adapter.messages(baseParams)).rejects.toMatchObject({
+      class: 'RateLimit',
+      retryable: true,
+    });
   });
 });

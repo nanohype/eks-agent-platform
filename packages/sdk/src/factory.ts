@@ -19,7 +19,10 @@ const REGISTRY: Partial<Record<ModelFamily, AdapterCtor>> = {
  * Adding a new family is a registry insert here plus a new subclass; ADR
  * 0003 names this contract explicitly.
  */
-export function createBedrockAdapter(family: ModelFamily, opts: BedrockAdapterOptions): BedrockAdapter {
+export function createBedrockAdapter(
+  family: ModelFamily,
+  opts: BedrockAdapterOptions,
+): BedrockAdapter {
   // eslint-disable-next-line security/detect-object-injection
   const ctor = REGISTRY[family];
   if (!ctor) {

@@ -14,7 +14,9 @@ export class NovaBedrockAdapter extends BedrockAdapter {
   readonly modelFamily: ModelFamily = 'amazon-nova';
 
   protected buildRequestBody(params: MessagesParams): Record<string, unknown> {
-    const system = params.messages.filter((m) => m.role === 'system').map((m) => ({ text: m.content }));
+    const system = params.messages
+      .filter((m) => m.role === 'system')
+      .map((m) => ({ text: m.content }));
     const messages = params.messages
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role, content: [{ text: m.content }] }));

@@ -31,6 +31,7 @@ export const TenantId = (s: string): TenantId => brandSlug<TenantId>('TenantId',
 export const PlatformId = (s: string): PlatformId => brandSlug<PlatformId>('PlatformId', s);
 export const WorkspaceId = (s: string): WorkspaceId => brandSlug<WorkspaceId>('WorkspaceId', s);
 export const AgentId = (s: string): AgentId => brandSlug<AgentId>('AgentId', s);
-export const ModelRouteName = (s: string): ModelRouteName => brandSlug<ModelRouteName>('ModelRouteName', s);
+export const ModelRouteName = (s: string): ModelRouteName =>
+  brandSlug<ModelRouteName>('ModelRouteName', s);
 
 export const CorrelationId = (): CorrelationId => crypto.randomUUID() as unknown as CorrelationId;

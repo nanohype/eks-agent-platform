@@ -28,7 +28,13 @@ export interface MessagesParams {
 
 export interface MessagesResponse {
   text: string;
-  stopReason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | 'guardrail_intervened' | 'other';
+  stopReason:
+    | 'end_turn'
+    | 'max_tokens'
+    | 'stop_sequence'
+    | 'tool_use'
+    | 'guardrail_intervened'
+    | 'other';
   usage: TokenUsage;
   costUsd: number;
   latencyMs: number;

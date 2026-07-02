@@ -95,7 +95,10 @@ export function platformNew(opts: PlatformNewOpts): void {
       kind: 'Platform',
       metadata: {
         name: opts.name,
-        labels: { 'agents.nanohype.dev/persona': persona, 'agents.nanohype.dev/tenant': opts.tenant },
+        labels: {
+          'agents.nanohype.dev/persona': persona,
+          'agents.nanohype.dev/tenant': opts.tenant,
+        },
       },
       spec: {
         displayName: opts.name,
@@ -110,7 +113,10 @@ export function platformNew(opts: PlatformNewOpts): void {
     {
       apiVersion: 'governance.nanohype.dev/v1alpha1',
       kind: 'BudgetPolicy',
-      metadata: { name: `${opts.name}-budget`, labels: { 'agents.nanohype.dev/tenant': opts.tenant } },
+      metadata: {
+        name: `${opts.name}-budget`,
+        labels: { 'agents.nanohype.dev/tenant': opts.tenant },
+      },
       spec: {
         platformRef: { name: opts.name },
         monthlyUsd: String(opts.monthlyUsd),
@@ -124,7 +130,14 @@ export function platformNew(opts: PlatformNewOpts): void {
       metadata: { name: `${opts.name}-gateway` },
       spec: {
         platformRef: { name: opts.name },
-        routes: [{ name: 'primary', modelFamily: defaults.modelFamily, modelId: defaults.modelId, rateLimit: 60 }],
+        routes: [
+          {
+            name: 'primary',
+            modelFamily: defaults.modelFamily,
+            modelId: defaults.modelId,
+            rateLimit: 60,
+          },
+        ],
       },
     },
     {
@@ -134,7 +147,9 @@ export function platformNew(opts: PlatformNewOpts): void {
       spec: {
         platformRef: { name: opts.name },
         scaling: { enabled: true, min: 1, max: 5, queueDepthTrigger: 10 },
-        agents: [{ name: defaults.agentName, systemPrompt: defaults.systemPrompt, modelRoute: 'primary' }],
+        agents: [
+          { name: defaults.agentName, systemPrompt: defaults.systemPrompt, modelRoute: 'primary' },
+        ],
       },
     },
     {
@@ -146,7 +161,14 @@ export function platformNew(opts: PlatformNewOpts): void {
         agentFleetRef: { name: `${opts.name}-fleet` },
         schedule: '0 6 * * *',
         passThreshold: '0.85',
-        cases: [{ name: 'smoke-test', input: "Reply with 'pong'.", expectContains: ['pong'], maxLatencyMs: 5000 }],
+        cases: [
+          {
+            name: 'smoke-test',
+            input: "Reply with 'pong'.",
+            expectContains: ['pong'],
+            maxLatencyMs: 5000,
+          },
+        ],
       },
     },
   ];

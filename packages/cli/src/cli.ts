@@ -5,7 +5,10 @@ import { platformNew } from './commands/platform-new.js';
 
 const program = new Command();
 
-program.name('agentctl').description('CLI for declaring and managing eks-agent-platform tenants').version('0.0.0');
+program
+  .name('agentctl')
+  .description('CLI for declaring and managing eks-agent-platform tenants')
+  .version('0.0.0');
 
 const platform = program.command('platform').description('Manage Platform tenants');
 
@@ -21,9 +24,17 @@ platform
   )
   .option('--monthly-usd <usd>', 'Monthly USD budget', (v) => parseInt(v, 10), 500)
   .option('--output <dir>', 'Output directory', '.')
-  .action((opts: { name: string; tenant: string; persona: string; monthlyUsd: number; output: string }) => {
-    platformNew(opts);
-  });
+  .action(
+    (opts: {
+      name: string;
+      tenant: string;
+      persona: string;
+      monthlyUsd: number;
+      output: string;
+    }) => {
+      platformNew(opts);
+    },
+  );
 
 program.parseAsync().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

@@ -47,7 +47,10 @@ export default tseslint.config(
         'error',
         { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
       ],
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
       '@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: false }],
       'import-x/order': ['warn', { 'newlines-between': 'always', alphabetize: { order: 'asc' } }],
       'no-console': ['warn', { allow: ['warn', 'error'] }],

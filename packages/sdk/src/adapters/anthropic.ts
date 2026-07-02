@@ -39,8 +39,10 @@ export class AnthropicBedrockAdapter extends BedrockAdapter {
     const r = body as AnthropicResponse;
     const text = r.content?.map((c) => c.text).join('') ?? '';
     const usage: TokenUsage = {
-      inputTokens: r.usage?.input_tokens ?? r.amazon_bedrock_invocation_metrics?.inputTokenCount ?? 0,
-      outputTokens: r.usage?.output_tokens ?? r.amazon_bedrock_invocation_metrics?.outputTokenCount ?? 0,
+      inputTokens:
+        r.usage?.input_tokens ?? r.amazon_bedrock_invocation_metrics?.inputTokenCount ?? 0,
+      outputTokens:
+        r.usage?.output_tokens ?? r.amazon_bedrock_invocation_metrics?.outputTokenCount ?? 0,
       cacheReadTokens: r.usage?.cache_read_input_tokens ?? 0,
       cacheWriteTokens: r.usage?.cache_creation_input_tokens ?? 0,
     };
