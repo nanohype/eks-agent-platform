@@ -167,17 +167,21 @@ func (c *Config) assign(suffix, value string) {
 	}
 }
 
-// Validate returns a list of required-but-missing field names. Callers
-// decide whether a partial config is fatal (production should fail-fast on
-// missing tenant_baseline_policy_arn; dev may tolerate a missing baseline
-// guardrail).
+// Validate returns a list of required-but-missing field names. The required
+// set is the fields whose absence makes tenant IAM reconciliation unsafe
+// rather than merely degraded — in particular TenantPermissionsBoundaryARN:
+// without it the operator would mint tenant roles with no permissions
+// boundary, silently. A non-empty result must abort startup (see cmd/main.go);
+// optional integrations (guardrails, kill-switch, cost pipeline) are not in
+// this set and degrade per-reconciler instead.
 func (c *Config) Validate() []string {
 	missing := []string{}
 	required := map[string]string{
-		"OperatorRoleARN":         c.OperatorRoleARN,
-		"TenantIAMPath":           c.TenantIAMPath,
-		"TenantBaselinePolicyARN": c.TenantBaselinePolicyARN,
-		"ArtifactsBucketName":     c.ArtifactsBucketName,
+		"OperatorRoleARN":              c.OperatorRoleARN,
+		"TenantIAMPath":                c.TenantIAMPath,
+		"TenantBaselinePolicyARN":      c.TenantBaselinePolicyARN,
+		"TenantPermissionsBoundaryARN": c.TenantPermissionsBoundaryARN,
+		"ArtifactsBucketName":          c.ArtifactsBucketName,
 	}
 	for k, v := range required {
 		if v == "" {

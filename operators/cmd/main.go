@@ -137,7 +137,13 @@ func main() {
 			os.Exit(1)
 		}
 		if missing := opConfig.Validate(); len(missing) > 0 {
-			setupLog.Info("operator config has missing fields; reconcilers may degrade", "missing", missing)
+			// Fail closed: the required set is what makes tenant IAM
+			// reconciliation safe (permissions boundary, baseline policy,
+			// IAM path). Running without any of them would mint
+			// under-constrained tenant roles, silently.
+			setupLog.Error(nil, "operator config missing required fields; refusing to start",
+				"missing", missing, "ssmPrefix", "/eks-agent-platform/"+environment+"/")
+			os.Exit(1)
 		}
 		setupLog.Info("AWS substrate loaded", "environment", environment, "region", region,
 			"operatorRoleARN", opConfig.OperatorRoleARN, "tenantIAMPath", opConfig.TenantIAMPath)

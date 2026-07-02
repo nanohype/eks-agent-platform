@@ -39,16 +39,36 @@ export interface ModelGateway {
   status?: { phase?: string; endpoint?: string };
 }
 
+/**
+ * The slice of CustomObjectsApi the client actually calls. Injectable via
+ * ClientOptions.api so tests and embedders supply a fake at the client
+ * seam instead of module-mocking the kubernetes SDK.
+ */
+export type CustomObjectsClient = Pick<
+  CustomObjectsApi,
+  | 'listClusterCustomObject'
+  | 'getClusterCustomObject'
+  | 'createClusterCustomObject'
+  | 'deleteClusterCustomObject'
+  | 'listNamespacedCustomObject'
+>;
+
 export interface ClientOptions {
   /** Optional explicit kubeconfig path; defaults to KUBECONFIG env or in-cluster config. */
   kubeconfigPath?: string;
   context?: string;
+  /** Pre-built API client; when set, kubeconfig resolution is skipped entirely. */
+  api?: CustomObjectsClient;
 }
 
 export class EksAgentClient {
-  readonly api: CustomObjectsApi;
+  readonly api: CustomObjectsClient;
 
   constructor(opts: ClientOptions = {}) {
+    if (opts.api) {
+      this.api = opts.api;
+      return;
+    }
     const kc = new KubeConfig();
     if (opts.kubeconfigPath) {
       kc.loadFromFile(opts.kubeconfigPath);
