@@ -1,0 +1,6 @@
+{
+  "entries": [
+    { "src": "library/scripts/sync-vendored.mjs", "dest": "scripts/sync-vendored.mjs" },
+    { "src": "library/config/eslint.base.mjs", "dest": "eslint.base.mjs" }
+  ]
+}

@@ -28,7 +28,8 @@
     "clean": "rm -rf dist *.tsbuildinfo",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vitest run src"
+    "test": "vitest run src",
+    "test:coverage": "vitest run src --coverage"
   },
   "dependencies": {
     "@eks-agent/core": "workspace:*"

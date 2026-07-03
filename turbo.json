@@ -1,6 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": ["tsconfig.base.json", "pnpm-lock.yaml"],
+  "globalDependencies": ["tsconfig.base.json", "vitest.base.ts", "pnpm-lock.yaml"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -17,6 +17,11 @@
       "inputs": ["src/**", "eslint.config.mjs", "package.json"]
     },
     "test": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "inputs": ["src/**", "package.json", "tsconfig.json", "vitest.config.ts"]
+    },
+    "test:coverage": {
       "dependsOn": ["^build"],
       "outputs": [],
       "inputs": ["src/**", "package.json", "tsconfig.json", "vitest.config.ts"]
