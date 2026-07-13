@@ -7,7 +7,7 @@ type: application
 # OIDC provider/issuer inputs). The chart folds the eval-runtime (Argo
 # WorkflowTemplate/AnalysisTemplate) and operator SLO (PrometheusRule/
 # AlertmanagerConfig/CR-state metrics) behind evalRuntime.* / slo.* toggles.
-version: 0.3.0
+version: 0.3.1
 appVersion: "0.3.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
