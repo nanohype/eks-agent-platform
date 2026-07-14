@@ -242,6 +242,28 @@ func (r *PlatformReconciler) removeBucketPolicyStatements(ctx context.Context, p
 	if !changed {
 		return nil
 	}
+	// A bucket policy with no statements is not a valid bucket policy. S3 rejects it:
+	//
+	//	MalformedPolicy: Could not parse the policy: Statement is empty!
+	//
+	// When this Platform owns the only statements — which is the ordinary case, since a
+	// single-tenant cluster has exactly one — filtering them out leaves an empty list,
+	// and PutBucketPolicy fails. The finalizer then retries forever, the Platform hangs
+	// in Terminating, and everything downstream wedges with it: the agent-platform
+	// Application never leaves Progressing (so the convergence gate can never pass), and
+	// `rackctl destroy` stalls on `platforms.platform.nanohype.dev did not finalize`.
+	//
+	// The correct way to express "this bucket has no policy" is to DELETE the policy, not
+	// to write an empty one.
+	if len(filtered) == 0 {
+		if _, err := r.S3.DeleteBucketPolicy(ctx, &s3.DeleteBucketPolicyInput{
+			Bucket: aws.String(bucket),
+		}); err != nil {
+			return fmt.Errorf("s3 DeleteBucketPolicy (finalizer, last statement removed): %w", err)
+		}
+		return nil
+	}
+
 	currentDoc["Statement"] = filtered
 	newBytes, err := json.Marshal(currentDoc)
 	if err != nil {
