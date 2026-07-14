@@ -18,6 +18,10 @@ import (
 type S3 interface {
 	GetBucketPolicy(ctx context.Context, params *s3.GetBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error)
 	PutBucketPolicy(ctx context.Context, params *s3.PutBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.PutBucketPolicyOutput, error)
+	// DeleteBucketPolicy is how a bucket is left with NO policy. Writing a policy whose
+	// Statement list is empty is not the same thing — S3 rejects it outright with
+	// "MalformedPolicy: Statement is empty!".
+	DeleteBucketPolicy(ctx context.Context, params *s3.DeleteBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.DeleteBucketPolicyOutput, error)
 }
 
 var _ S3 = (*s3.Client)(nil)
