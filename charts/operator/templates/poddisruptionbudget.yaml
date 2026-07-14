@@ -1,4 +1,41 @@
 {{- if .Values.podDisruptionBudget.enabled -}}
+{{- $replicas := int .Values.replicaCount -}}
+{{- $minAvailable := int .Values.podDisruptionBudget.minAvailable -}}
+
+{{/*
+  A PodDisruptionBudget whose minAvailable equals the replica count allows ZERO
+  disruptions — forever. The pod can never be evicted, so the node it lands on can never
+  be drained.
+
+  That is not a theoretical concern. It deadlocked a real cluster: the operator ran as a
+  single replica (dev sets replicaCount: 1) while this chart's minAvailable stayed at 1,
+  so disruptionsAllowed was 0. Every attempt to roll the managed node group failed:
+
+      errorCode:    PodEvictionFailure
+      errorMessage: Reached max retries while trying to evict pods from nodes in
+                    node group dev-system-...
+
+  EKS retried, gave up, and ROLLED THE UPDATE BACK. The node group could not be resized,
+  could not be upgraded, and Karpenter could not consolidate the node — none of which
+  named the operator, or the PDB, or said the word "disruption" anywhere.
+
+  So the guard is structural, not advisory:
+
+    - Below 2 replicas a PDB can only ever deadlock, because minAvailable must be at
+      least 1 to mean anything and 1-of-1 is zero budget. A singleton controller should
+      be evictable: reconciliation is level-triggered, so it resumes on the new node. We
+      therefore render NO PDB, rather than rendering one that forbids every drain.
+
+    - At 2+ replicas we still refuse a minAvailable that consumes the whole budget,
+      because replicas: 2 with minAvailable: 2 is the identical deadlock wearing a
+      larger number.
+*/}}
+
+{{- if ge $minAvailable $replicas -}}
+{{- if ge $replicas 2 -}}
+{{- fail (printf "podDisruptionBudget.minAvailable (%d) must be LESS than replicaCount (%d): a PDB that keeps every replica available allows zero disruptions, so the operator can never be evicted and its node can never be drained. EKS node-group updates then fail with PodEvictionFailure and roll back." $minAvailable $replicas) -}}
+{{- end -}}
+{{- else -}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -6,7 +43,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels: {{- include "operator.labels" . | nindent 4 }}
 spec:
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ $minAvailable }}
   selector:
     matchLabels: {{- include "operator.selectorLabels" . | nindent 6 }}
+{{- end }}
 {{- end }}
