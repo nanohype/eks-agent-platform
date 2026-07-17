@@ -2,17 +2,17 @@
 
 ## Status
 
-Accepted (2026-07-17).
+Accepted and implemented (2026-07-17).
 
-This ADR is the design of record for `Platform.spec.isolation: vcluster`. The CRD
-already accepts the value (`operators/api/platform/v1alpha1/platform_types.go`),
-but the reconciler consumes it only once the code lands against this design. Until
-then the tier is **designed, not implemented**: the CRD field, `SECURITY.md`, and
-`docs/architecture/tenant-isolation-tiers.md` must describe it as a designed tier
-referencing this ADR — never as a working control — so a tenant declaring
-`vcluster` can never be told it received hard isolation when it received namespace
-isolation. Closing that gap (a fail-closed reconcile path plus conformance and kx
-validation) is the implementation that follows this ADR.
+This ADR is the design of record for `Platform.spec.isolation: vcluster`. The
+reconciler implements it: the CRD accepts the value
+(`operators/api/platform/v1alpha1/platform_types.go`), the fail-closed reconcile
+path (ArgoCD-declared install, client swap, synced-SA Pod Identity binding,
+finalizer-ordered teardown) is in place, and `SECURITY.md` and
+`docs/architecture/tenant-isolation-tiers.md` describe it as a real, reconciled
+tier. Conformance tests and validation against a live `kx` cluster confirm a
+tenant declaring `vcluster` receives API-server-level isolation, not namespace
+isolation silently substituted underneath it.
 
 ## Context
 
