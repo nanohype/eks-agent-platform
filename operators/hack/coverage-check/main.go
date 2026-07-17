@@ -22,10 +22,10 @@ import (
 //   - internal/controller and internal/operatorconfig — the substantive
 //     reconcile + config-loading logic — sit at the org floor.
 //   - internal/agentctl carries a lower, explicitly-documented floor: it is the
-//     CLI scaffolder, slated for consolidation with the TypeScript CLI, and its
-//     command-wiring surface is deliberately left for that work rather than
-//     pinned to tests a restructure would immediately break. The shared persona/
-//     scaffold fixtures it needs are already covered.
+//     agentctl CLI package, and much of its surface is cobra command wiring and
+//     controller-runtime cluster calls (tenant list/get/status) that only run
+//     against a live cluster. The scaffold logic it owns — persona defaults and
+//     the byte-for-byte `platform new` renderer — is covered by fixtures.
 //   - internal/awsclients is thin, generated-shaped SDK-client wiring (interface
 //     declarations + a constructor); there is no branching logic to exercise
 //     without a live AWS endpoint, so it carries a floor matching that reality.

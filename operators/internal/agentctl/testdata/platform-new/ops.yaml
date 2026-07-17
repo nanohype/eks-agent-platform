@@ -1,0 +1,84 @@
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: acme-assist
+  labels:
+    agents.nanohype.dev/persona: ops
+    agents.nanohype.dev/tenant: acme
+spec:
+  displayName: acme-assist
+  persona: ops
+  tenant: acme
+  isolation: namespace
+  budget:
+    name: acme-assist-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+  compliance:
+    soc2: true
+    hipaa: false
+---
+apiVersion: governance.nanohype.dev/v1alpha1
+kind: BudgetPolicy
+metadata:
+  name: acme-assist-budget
+  labels:
+    agents.nanohype.dev/tenant: acme
+spec:
+  platformRef:
+    name: acme-assist
+  monthlyUsd: "250"
+  alertThresholdsPercent:
+    - 50
+    - 80
+    - 100
+  killSwitchEnabled: true
+---
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: ModelGateway
+metadata:
+  name: acme-assist-gateway
+spec:
+  platformRef:
+    name: acme-assist
+  routes:
+    - name: primary
+      modelFamily: anthropic
+      modelId: us.anthropic.claude-sonnet-4-6
+      rateLimit: 60
+---
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: AgentFleet
+metadata:
+  name: acme-assist-fleet
+spec:
+  platformRef:
+    name: acme-assist
+  scaling:
+    enabled: true
+    min: 1
+    max: 5
+    queueDepthTrigger: 10
+  agents:
+    - name: oncall-summarizer
+      systemPrompt: You summarize on-call incidents into a runbook update candidate.
+      modelRoute: primary
+---
+apiVersion: governance.nanohype.dev/v1alpha1
+kind: EvalSuite
+metadata:
+  name: acme-assist-eval
+spec:
+  platformRef:
+    name: acme-assist
+  agentFleetRef:
+    name: acme-assist-fleet
+  schedule: 0 6 * * *
+  passThreshold: "0.85"
+  cases:
+    - name: smoke-test
+      input: Reply with 'pong'.
+      expectContains:
+        - pong
+      maxLatencyMs: 5000

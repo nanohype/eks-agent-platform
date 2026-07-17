@@ -189,12 +189,10 @@ jobs:
       - run: pnpm run docs
 
   # ── Generated-artifact drift gate ────────────────────────────────────────
-  # The Lambda cost-publisher price table (pricing_data.py) and the TypeScript
-  # scaffolder's model-default copy are generated from single sources of truth
-  # (packages/pricing/src/data/bedrock-pricing.json and
-  # operators/internal/agentctl/model_defaults.json). A hand-edit of a
-  # generated file, or a change to the source that wasn't regenerated, drifts
-  # the meter or the scaffold from the SSOT. Regenerate and diff so it can't.
+  # The Lambda cost-publisher price table (pricing_data.py) is generated from a
+  # single source of truth (packages/pricing/src/data/bedrock-pricing.json). A
+  # hand-edit of the generated file, or a change to the source that wasn't
+  # regenerated, drifts the meter from the SSOT. Regenerate and diff so it can't.
   generated:
     name: generated files in sync
     runs-on: ubuntu-latest
@@ -204,7 +202,6 @@ jobs:
         with:
           node-version-file: package.json
       - run: node scripts/gen-lambda-pricing.mjs --check
-      - run: node scripts/gen-model-defaults.mjs --check
 
   lambda:
     name: cost-pipeline lambda tests

@@ -4,7 +4,7 @@ This repo uses [changesets](https://github.com/changesets/changesets) to manage 
 
 ## When to add a changeset
 
-Add a changeset for any PR that touches a published package (`packages/core`, `packages/sdk`, `packages/pricing`, `packages/client`, `packages/cli`). The `[email protected]` GitHub Action on the release workflow will refuse to publish if a changed published package has no changeset entry covering it.
+Add a changeset for any PR that touches a published package (`packages/core`, `packages/sdk`, `packages/pricing`, `packages/client`). The `[email protected]` GitHub Action on the release workflow will refuse to publish if a changed published package has no changeset entry covering it.
 
 Skip the changeset for PRs that only touch:
 
@@ -23,7 +23,7 @@ Walk the prompts. Pick package(s) affected; pick version bump (`major` for break
 
 ## Linked packages
 
-The five `@eks-agent/*` packages are **linked** in `config.json` — any minor bump on one of them bumps all five together. They share a build matrix and an internal dep graph; releasing `sdk@0.3.0` without bumping `core` to the same minor would risk type-mismatch confusion for consumers. The CLI scope is part of the link group because `agentctl` ships against pinned `@eks-agent/core` types.
+The four `@eks-agent/*` packages are **linked** in `config.json` — any minor bump on one of them bumps all four together. They share a build matrix and an internal dep graph; releasing `sdk@0.3.0` without bumping `core` to the same minor would risk type-mismatch confusion for consumers.
 
 ## Commit-type convention
 

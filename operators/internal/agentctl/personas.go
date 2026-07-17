@@ -20,10 +20,10 @@ import (
 )
 
 // model_defaults.json is the source of truth for which model ids the persona
-// routes default to. Go embeds it here; the TypeScript scaffolder consumes a
-// drift-checked copy (packages/cli/src/data/model-defaults.json). The model
-// ids in personaCatalog are stamped from it at init, so there is exactly one
-// place to bump a default model.
+// routes default to. The agentctl CLI embeds it here and reads it from both
+// scaffolders (`tenant init` and `platform new`). The model ids in
+// personaCatalog are stamped from it at init, so there is exactly one place to
+// bump a default model.
 //
 //go:embed model_defaults.json
 var modelDefaultsJSON []byte
