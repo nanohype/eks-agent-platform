@@ -24,7 +24,7 @@
     "test": "turbo run lint typecheck test:coverage",
     "test:unit": "turbo run test",
     "test:coverage": "turbo run test:coverage",
-    "docs": "typedoc",
+    "docs": "pnpm build && typedoc",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
     "sync:vendored": "node scripts/sync-vendored.mjs",
