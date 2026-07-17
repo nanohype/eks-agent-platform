@@ -207,6 +207,7 @@ func newScopingReconciler(iamFake *memIAM) *controller.PlatformReconciler {
 		IAM:         iamFake,
 		IAMCfg: controller.IAMConfig{
 			TenantBaselinePolicyARN: "arn:aws:iam::123456789012:policy/eks-agent-platform/conformance-tenant-baseline",
+			ClusterName:             scopingEnv,
 			Environment:             scopingEnv,
 			Region:                  "us-west-2",
 		},
@@ -234,7 +235,7 @@ func reconcileIAM(ctx context.Context, t *testing.T, r *controller.PlatformRecon
 // shortScopingName derives a short (collision-hashed) Platform name from the
 // test name. Short deliberately: tenantRoleFor below restates the ADR 0003
 // role-name contract WITHOUT its 64-char hash-truncation branch, so the name
-// must keep <env>-<name>-tenant under IAM's 64-char role-name limit.
+// must keep <cluster-name>-<name>-tenant under IAM's 64-char role-name limit.
 func shortScopingName(t *testing.T) string {
 	h := uint64(1469598103934665603)
 	for i := 0; i < len(t.Name()); i++ {
@@ -263,7 +264,9 @@ func scopingPlatform(ctx context.Context, t *testing.T, identity platformv1alpha
 	return p
 }
 
-// tenantRoleFor mirrors the ADR 0003 role-name contract <env>-<platform>-tenant.
+// tenantRoleFor mirrors the ADR 0003 role-name contract
+// <cluster-name>-<platform>-tenant. scopingEnv doubles as the reconciler's
+// cluster name (IAMCfg.ClusterName above), so the tenant role is prefixed with it.
 func tenantRoleFor(p *platformv1alpha1.Platform) string {
 	return scopingEnv + "-" + p.Name + "-tenant"
 }
