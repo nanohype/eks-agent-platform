@@ -29,8 +29,12 @@ import (
 
 const sandboxPoolFinalizer = "agents.nanohype.dev/sandboxpool-finalizer"
 
-// defaultSandboxWorkerImage is used when SandboxPool.spec.image is empty.
-const defaultSandboxWorkerImage = "ghcr.io/nanohype/eks-agent-platform/sandbox-worker:latest"
+// defaultSandboxWorkerImage is used when SandboxPool.spec.image is empty. Pinned
+// to a released version, never a floating :latest — release.yaml publishes this
+// tag from the sandbox-worker-v* release trigger. Bump it in lockstep with a new
+// sandbox-worker release, the same way the eval-runner image tag is pinned in
+// charts/operator/values.yaml.
+const defaultSandboxWorkerImage = "ghcr.io/nanohype/eks-agent-platform/sandbox-worker:0.1.0"
 
 // metricsShimPort is the port the metrics-shim binary listens on; the KEDA
 // bridge Deployment, Service, and NetworkPolicy all reference it.
@@ -42,15 +46,7 @@ func ptrTo[T any](v T) *T { return &v }
 
 // resolveSandboxPlatform fetches the SandboxPool's referenced Platform.
 func (r *SandboxPoolReconciler) resolveSandboxPlatform(ctx context.Context, pool *agentsv1alpha1.SandboxPool) (*platformv1alpha1.Platform, error) {
-	var p platformv1alpha1.Platform
-	key := types.NamespacedName{Namespace: pool.Namespace, Name: pool.Spec.PlatformRef.Name}
-	if err := r.Get(ctx, key, &p); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, errPlatformNotFound
-		}
-		return nil, fmt.Errorf("get platform %s: %w", key, err)
-	}
-	return &p, nil
+	return getReferencedPlatform(ctx, r.Client, pool.Namespace, pool.Spec.PlatformRef.Name, errPlatformNotFound)
 }
 
 // sandboxResourceName names the per-pool Deployment, NetworkPolicy, and

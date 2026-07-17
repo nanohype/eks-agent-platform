@@ -16,6 +16,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -33,14 +36,24 @@ const (
 	anthropicBeta     = "managed-agents-2026-04-01"
 	upstreamTimeout   = 10 * time.Second
 	readHeaderTimeout = 5 * time.Second
+	shutdownTimeout   = 10 * time.Second
 	maxErrBodyBytes   = 512
 )
 
 func main() {
+	// run() owns the deferred cleanup (signal-relay stop, shutdown-context
+	// cancel); main keeps the only process-exiting call so those defers always
+	// run on the error path too.
+	if err := run(); err != nil {
+		log.Fatalf("metrics-shim: %v", err)
+	}
+}
+
+func run() error {
 	envID := os.Getenv("ANTHROPIC_ENVIRONMENT_ID")
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if envID == "" || apiKey == "" {
-		log.Fatal("metrics-shim: ANTHROPIC_ENVIRONMENT_ID and ANTHROPIC_API_KEY must both be set")
+		return errors.New("ANTHROPIC_ENVIRONMENT_ID and ANTHROPIC_API_KEY must both be set")
 	}
 
 	statsURL := fmt.Sprintf("%s/v1/environments/%s/work/stats", anthropicAPIBase, envID)
@@ -71,9 +84,37 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
-	// #nosec G706 -- envID is an operator-set config value, not request data.
-	log.Printf("metrics-shim: serving work-queue depth for environment %s on %s", envID, listenAddr)
-	log.Fatal(srv.ListenAndServe())
+
+	// Serve in the background so main can block on a shutdown signal. On
+	// SIGTERM (pod eviction / rollout) the server drains in-flight scrapes
+	// within the grace window instead of cutting KEDA's metrics read
+	// mid-response and briefly reporting a failed scrape.
+	serveErr := make(chan error, 1)
+	go func() {
+		// #nosec G706 -- envID is an operator-set config value, not request data.
+		log.Printf("metrics-shim: serving work-queue depth for environment %s on %s", envID, listenAddr)
+		serveErr <- srv.ListenAndServe()
+	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		stop() // restore default handling so a second signal force-quits
+		log.Print("metrics-shim: shutdown signal received; draining in-flight scrapes")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("graceful shutdown: %w", err)
+		}
+		log.Print("metrics-shim: drained; exiting")
+		return nil
+	}
 }
 
 // queueDepth calls the Managed Agents work-stats endpoint and returns the

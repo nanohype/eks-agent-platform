@@ -10,7 +10,6 @@ misconfigurations:
     paths:
       - "terraform/components/bedrock/main.tf"
       - "terraform/components/cost-pipeline/main.tf"
-      - "terraform/components/model-artifacts/main.tf"
     statement: "S3 server access logging destination buckets cannot use SSE-KMS (per AWS docs + the rule description itself). AES256 is the correct config."
 
   # ----------------------------------------------------------------------------
@@ -25,14 +24,12 @@ misconfigurations:
     paths:
       - "terraform/components/bedrock/main.tf"
       - "terraform/components/cost-pipeline/main.tf"
-      - "terraform/components/model-artifacts/main.tf"
     statement: "Access-logs destination buckets do not log themselves; retention is handled by the lifecycle expiration rule."
 
   - id: AVD-AWS-0090 # S3 versioning
     paths:
       - "terraform/components/bedrock/main.tf"
       - "terraform/components/cost-pipeline/main.tf"
-      - "terraform/components/model-artifacts/main.tf"
     statement: "Versioning on access-logs destination buckets adds storage without forensic value; logs are append-only and lifecycle-expired."
 
   # ----------------------------------------------------------------------------

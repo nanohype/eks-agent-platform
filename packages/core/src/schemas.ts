@@ -63,6 +63,55 @@ export const ModelRouteSpec = z.object({
 });
 export type ModelRouteSpec = z.infer<typeof ModelRouteSpec>;
 
+/**
+ * ObjectMeta subset the typed client surfaces. Unknown server-set fields
+ * (creationTimestamp, managedFields, …) are dropped by the strict parse — the
+ * client exposes a curated view, not the raw metadata.
+ */
+export const ResourceMeta = z.object({
+  name: z.string(),
+  namespace: z.string().optional(),
+  uid: z.string().optional(),
+  resourceVersion: z.string().optional(),
+  labels: z.record(z.string(), z.string()).optional(),
+  annotations: z.record(z.string(), z.string()).optional(),
+});
+export type ResourceMeta = z.infer<typeof ResourceMeta>;
+
+/**
+ * Full-object schemas for the CRs the client reads back from the cluster.
+ * These are the read-boundary contract: the client parses raw API responses
+ * through them rather than type-asserting, so a drifted or truncated response
+ * surfaces as a validation error instead of an unchecked cast.
+ */
+export const PlatformResource = z.object({
+  apiVersion: z.literal('platform.nanohype.dev/v1alpha1'),
+  kind: z.literal('Platform'),
+  metadata: ResourceMeta,
+  spec: PlatformSpec,
+  status: z
+    .object({
+      phase: z.string().optional(),
+      iamRoleArn: z.string().optional(),
+      namespace: z.string().optional(),
+    })
+    .optional(),
+});
+export type PlatformResource = z.infer<typeof PlatformResource>;
+
+export const ModelGatewayResource = z.object({
+  apiVersion: z.literal('agents.nanohype.dev/v1alpha1'),
+  kind: z.literal('ModelGateway'),
+  metadata: ResourceMeta,
+  spec: z.object({
+    platformRef: z.object({ name: z.string() }),
+    routes: z.array(ModelRouteSpec),
+    defaultGuardrailRef: z.object({ name: z.string() }).optional(),
+  }),
+  status: z.object({ phase: z.string().optional(), endpoint: z.string().optional() }).optional(),
+});
+export type ModelGatewayResource = z.infer<typeof ModelGatewayResource>;
+
 export const TokenUsage = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),

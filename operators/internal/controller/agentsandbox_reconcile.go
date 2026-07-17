@@ -31,15 +31,7 @@ const defaultAgentSandboxTTL int32 = 3600
 
 // resolveAgentSandboxPlatform fetches the AgentSandbox's referenced Platform.
 func (r *AgentSandboxReconciler) resolveAgentSandboxPlatform(ctx context.Context, box *agentsv1alpha1.AgentSandbox) (*platformv1alpha1.Platform, error) {
-	var p platformv1alpha1.Platform
-	key := types.NamespacedName{Namespace: box.Namespace, Name: box.Spec.PlatformRef.Name}
-	if err := r.Get(ctx, key, &p); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, errPlatformNotFound
-		}
-		return nil, fmt.Errorf("get platform %s: %w", key, err)
-	}
-	return &p, nil
+	return getReferencedPlatform(ctx, r.Client, box.Namespace, box.Spec.PlatformRef.Name, errPlatformNotFound)
 }
 
 // agentSandboxResourceName names the per-AgentSandbox session pod and its

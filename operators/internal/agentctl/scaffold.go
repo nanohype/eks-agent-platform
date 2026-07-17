@@ -93,7 +93,7 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 				Tenant:      opts.TenantName,
 				Isolation:   "namespace",
 				Budget:      platformv1alpha1.BudgetRef{Name: budgetName},
-				Identity:    platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{pdefs.PrimaryModelFamily}},
+				Identity:    platformv1alpha1.IdentitySpec{AllowedModelFamilies: allowedFamiliesFor(pdefs)},
 				Compliance:  pdefs.Compliance,
 			},
 		},
@@ -150,7 +150,10 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 }
 
 // routesFor builds the persona's ModelGateway routes — primary always,
-// secondary when defined.
+// secondary when defined. Each route's ModelFamily comes from that route's
+// own family in the SSOT: the secondary can be a different family from the
+// primary (e.g. an amazon-nova secondary under an anthropic primary), so it
+// must not inherit PrimaryModelFamily.
 func routesFor(p PersonaDefaults) []agentsv1alpha1.ModelRouteSpec {
 	routes := []agentsv1alpha1.ModelRouteSpec{{
 		Name: p.PrimaryRouteName, ModelFamily: p.PrimaryModelFamily,
@@ -158,11 +161,24 @@ func routesFor(p PersonaDefaults) []agentsv1alpha1.ModelRouteSpec {
 	}}
 	if p.SecondaryRouteName != "" {
 		routes = append(routes, agentsv1alpha1.ModelRouteSpec{
-			Name: p.SecondaryRouteName, ModelFamily: p.PrimaryModelFamily,
+			Name: p.SecondaryRouteName, ModelFamily: p.SecondaryModelFamily,
 			ModelID: p.SecondaryModelID, RateLimit: p.SecondaryRateLimit,
 		})
 	}
 	return routes
+}
+
+// allowedFamiliesFor is the set of Bedrock families the scaffolded tenant's
+// IRSA role must grant invoke on: every family its default ModelGateway routes
+// reference. Primary first, then the secondary family when it differs — so a
+// persona whose secondary route is amazon-nova can actually call it instead of
+// shipping a Platform that denies its own gateway's second route.
+func allowedFamiliesFor(p PersonaDefaults) []string {
+	families := []string{p.PrimaryModelFamily}
+	if p.SecondaryRouteName != "" && p.SecondaryModelFamily != "" && p.SecondaryModelFamily != p.PrimaryModelFamily {
+		families = append(families, p.SecondaryModelFamily)
+	}
+	return families
 }
 
 func int32Ptr(v int32) *int32 { return &v }

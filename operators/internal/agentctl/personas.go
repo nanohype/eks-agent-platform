@@ -39,6 +39,11 @@ type personaModelSpec struct {
 	Family           string `json:"family"`
 	PrimaryModelID   string `json:"primaryModelId"`
 	SecondaryModelID string `json:"secondaryModelId"`
+	// SecondaryFamily is the Bedrock family of the secondary route. It can
+	// differ from Family — several personas pair an anthropic primary with an
+	// amazon-nova secondary — so the scaffolder renders the secondary route's
+	// modelFamily from this rather than reusing the primary's.
+	SecondaryFamily string `json:"secondaryFamily"`
 }
 
 var parsedModelDefaults modelDefaults
@@ -55,9 +60,13 @@ func init() {
 		if spec.Family == "" || spec.PrimaryModelID == "" {
 			panic(fmt.Sprintf("agentctl: persona %q has an empty model default", name))
 		}
+		if spec.SecondaryModelID != "" && spec.SecondaryFamily == "" {
+			panic(fmt.Sprintf("agentctl: persona %q sets secondaryModelId without secondaryFamily", name))
+		}
 		p.PrimaryModelFamily = spec.Family
 		p.PrimaryModelID = spec.PrimaryModelID
 		p.SecondaryModelID = spec.SecondaryModelID
+		p.SecondaryModelFamily = spec.SecondaryFamily
 		personaCatalog[name] = p
 	}
 }
@@ -97,10 +106,13 @@ type PersonaDefaults struct {
 	PrimaryModelID     string
 
 	// SecondaryRouteName + model — empty when the persona only needs
-	// one route by default. SecondaryModelID is stamped from the SSOT.
-	SecondaryRouteName string
-	SecondaryModelID   string
-	SecondaryRateLimit int32
+	// one route by default. SecondaryModelID and SecondaryModelFamily are
+	// stamped from the SSOT; the family can differ from the primary's
+	// (e.g. an amazon-nova secondary under an anthropic primary).
+	SecondaryRouteName   string
+	SecondaryModelID     string
+	SecondaryModelFamily string
+	SecondaryRateLimit   int32
 
 	// DefaultAgents — one or two starter agents with system prompts
 	// pre-flexed for the persona. Users edit before applying.

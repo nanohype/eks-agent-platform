@@ -4,7 +4,6 @@ vars:
   CLUSTER: '{{.CLUSTER | default "development-platform"}}'
   REGION: '{{.REGION | default "us-west-2"}}'
   COMPONENT: '{{.COMPONENT | default "all"}}'
-  GO_VERSION: '{{.GO_VERSION | default "1.23"}}'
 
 tasks:
   default:
@@ -153,7 +152,7 @@ tasks:
     dir: operators
     cmds:
       - go run sigs.k8s.io/controller-tools/cmd/controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
-      - go run sigs.k8s.io/controller-tools/cmd/controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+      - go run sigs.k8s.io/controller-tools/cmd/controller-gen rbac:roleName=manager-role crd paths="./..." output:crd:artifacts:config=config/crd/bases
       - mkdir -p ../charts/operator/crds && cp config/crd/bases/*.yaml ../charts/operator/crds/
 
   operator:build:

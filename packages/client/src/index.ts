@@ -1,5 +1,13 @@
-import type { PlatformSpec, ModelRouteSpec } from '@eks-agent/core';
+import {
+  ModelGatewayResource,
+  PlatformResource,
+  type ModelGatewayResource as ModelGateway,
+  type PlatformResource as Platform,
+} from '@eks-agent/core';
 import { KubeConfig, CustomObjectsApi } from '@kubernetes/client-node';
+
+export type { ResourceMeta } from '@eks-agent/core';
+export type { ModelGateway, Platform };
 
 // The operator's CRDs are split across three capability groups under the
 // nanohype.dev domain. Each kind maps to the group that owns it.
@@ -10,34 +18,11 @@ const GROUPS = {
 } as const;
 const VERSION = 'v1alpha1';
 
-export interface ResourceMeta {
-  name: string;
-  namespace?: string;
-  uid?: string;
-  resourceVersion?: string;
-  labels?: Record<string, string>;
-  annotations?: Record<string, string>;
-}
+/** Default per-call deadline for CRD operations (ms). */
+const DEFAULT_TIMEOUT_MS = 30_000;
 
-export interface Platform {
-  apiVersion: `${typeof GROUPS.platform}/${typeof VERSION}`;
-  kind: 'Platform';
-  metadata: ResourceMeta;
-  spec: PlatformSpec;
-  status?: { phase?: string; iamRoleArn?: string; namespace?: string };
-}
-
-export interface ModelGateway {
-  apiVersion: `${typeof GROUPS.agents}/${typeof VERSION}`;
-  kind: 'ModelGateway';
-  metadata: ResourceMeta;
-  spec: {
-    platformRef: { name: string };
-    routes: ModelRouteSpec[];
-    defaultGuardrailRef?: { name: string };
-  };
-  status?: { phase?: string; endpoint?: string };
-}
+/** Page size for list pagination; the server may return fewer. */
+const LIST_PAGE_SIZE = 100;
 
 /**
  * The slice of CustomObjectsApi the client actually calls. Injectable via
@@ -59,6 +44,14 @@ export interface ClientOptions {
   context?: string;
   /** Pre-built API client; when set, kubeconfig resolution is skipped entirely. */
   api?: CustomObjectsClient;
+  /** Per-call deadline in ms applied to every CRD operation. Defaults to 30s. */
+  timeoutMs?: number;
+}
+
+/** Per-call options — a caller AbortSignal composed with the client deadline. */
+export interface CallOptions {
+  /** Caller cancellation, combined with the client's default deadline (earliest fire wins). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -96,58 +89,150 @@ export function resolveApi(
   return kc.makeApiClient(CustomObjectsApi);
 }
 
+/**
+ * Compose a bounded deadline for a call: the client's default request timeout is
+ * always applied, and a caller-supplied AbortSignal is combined with it (earliest
+ * fire wins). Mirrors the Bedrock adapter's timeout idiom so both layers cancel
+ * the same way.
+ */
+export function deadlineSignal(timeoutMs: number, caller?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return caller ? AbortSignal.any([caller, deadline]) : deadline;
+}
+
+/**
+ * Normalize an AbortSignal's reason to a throwable Error. `AbortSignal.timeout`
+ * yields a TimeoutError; a caller may pass any reason.
+ */
+function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new Error('aborted', { cause: reason });
+}
+
+/**
+ * Settle with the operation, or reject as soon as `signal` fires — whichever
+ * comes first. The `@kubernetes/client-node` CustomObjects methods take no
+ * per-call signal, so racing bounds the caller-visible latency: a hung API
+ * server can't stall a reconcile loop past the deadline, and a caller abort
+ * resolves promptly. `op`'s own rejection propagates unchanged, and it keeps a
+ * handler attached via the race so it never surfaces as an unhandled rejection.
+ */
+function abortable<T>(op: Promise<T>, signal: AbortSignal): Promise<T> {
+  // Already aborted (e.g. a caller passed a fired signal): reject deterministically
+  // rather than racing, so a fast-resolving op can't win over the abort.
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  const aborted = new Promise<never>((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(abortReason(signal)), { once: true });
+  });
+  return Promise.race([op, aborted]);
+}
+
+/** The list envelope shape: items plus the pagination continue token. */
+interface ListEnvelope {
+  items?: unknown[];
+  metadata?: { continue?: string };
+}
+
 export class EksAgentClient {
   readonly api: CustomObjectsClient;
+  private readonly timeoutMs: number;
 
   constructor(opts: ClientOptions = {}) {
     this.api = opts.api ?? resolveApi(opts);
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
-  async listPlatforms(): Promise<Platform[]> {
-    const r: unknown = await this.api.listClusterCustomObject({
-      group: GROUPS.platform,
-      version: VERSION,
-      plural: 'platforms',
-    });
-    return (r as { items?: Platform[] }).items ?? [];
+  /**
+   * Walk every page of a list call (following `metadata.continue`), parsing each
+   * raw item through its resource schema at the read boundary. The whole walk
+   * shares one deadline so pagination can't extend past the caller's timeout.
+   */
+  private async listAll<T>(
+    fetchPage: (cont: string | undefined) => Promise<unknown>,
+    parse: (raw: unknown) => T,
+    signal: AbortSignal,
+  ): Promise<T[]> {
+    const items: T[] = [];
+    let cont: string | undefined;
+    do {
+      const page = (await abortable(fetchPage(cont), signal)) as ListEnvelope;
+      for (const raw of page.items ?? []) items.push(parse(raw));
+      cont = page.metadata?.continue;
+    } while (cont);
+    return items;
   }
 
-  async getPlatform(name: string): Promise<Platform> {
-    const r: unknown = await this.api.getClusterCustomObject({
-      group: GROUPS.platform,
-      version: VERSION,
-      plural: 'platforms',
-      name,
-    });
-    return r as Platform;
+  async listPlatforms(opts: CallOptions = {}): Promise<Platform[]> {
+    const signal = deadlineSignal(this.timeoutMs, opts.signal);
+    return this.listAll(
+      (cont) =>
+        this.api.listClusterCustomObject({
+          group: GROUPS.platform,
+          version: VERSION,
+          plural: 'platforms',
+          limit: LIST_PAGE_SIZE,
+          ...(cont ? { _continue: cont } : {}),
+        }),
+      (raw) => PlatformResource.parse(raw),
+      signal,
+    );
   }
 
-  async applyPlatform(p: Platform): Promise<Platform> {
-    const r: unknown = await this.api.createClusterCustomObject({
-      group: GROUPS.platform,
-      version: VERSION,
-      plural: 'platforms',
-      body: p,
-    });
-    return r as Platform;
+  async getPlatform(name: string, opts: CallOptions = {}): Promise<Platform> {
+    const signal = deadlineSignal(this.timeoutMs, opts.signal);
+    const r: unknown = await abortable(
+      this.api.getClusterCustomObject({
+        group: GROUPS.platform,
+        version: VERSION,
+        plural: 'platforms',
+        name,
+      }),
+      signal,
+    );
+    return PlatformResource.parse(r);
   }
 
-  async deletePlatform(name: string): Promise<void> {
-    await this.api.deleteClusterCustomObject({
-      group: GROUPS.platform,
-      version: VERSION,
-      plural: 'platforms',
-      name,
-    });
+  async applyPlatform(p: Platform, opts: CallOptions = {}): Promise<Platform> {
+    const signal = deadlineSignal(this.timeoutMs, opts.signal);
+    const r: unknown = await abortable(
+      this.api.createClusterCustomObject({
+        group: GROUPS.platform,
+        version: VERSION,
+        plural: 'platforms',
+        body: p,
+      }),
+      signal,
+    );
+    return PlatformResource.parse(r);
   }
 
-  async listModelGateways(namespace: string): Promise<ModelGateway[]> {
-    const r: unknown = await this.api.listNamespacedCustomObject({
-      group: GROUPS.agents,
-      version: VERSION,
-      namespace,
-      plural: 'modelgateways',
-    });
-    return (r as { items?: ModelGateway[] }).items ?? [];
+  async deletePlatform(name: string, opts: CallOptions = {}): Promise<void> {
+    const signal = deadlineSignal(this.timeoutMs, opts.signal);
+    await abortable(
+      this.api.deleteClusterCustomObject({
+        group: GROUPS.platform,
+        version: VERSION,
+        plural: 'platforms',
+        name,
+      }),
+      signal,
+    );
+  }
+
+  async listModelGateways(namespace: string, opts: CallOptions = {}): Promise<ModelGateway[]> {
+    const signal = deadlineSignal(this.timeoutMs, opts.signal);
+    return this.listAll(
+      (cont) =>
+        this.api.listNamespacedCustomObject({
+          group: GROUPS.agents,
+          version: VERSION,
+          namespace,
+          plural: 'modelgateways',
+          limit: LIST_PAGE_SIZE,
+          ...(cont ? { _continue: cont } : {}),
+        }),
+      (raw) => ModelGatewayResource.parse(raw),
+      signal,
+    );
   }
 }

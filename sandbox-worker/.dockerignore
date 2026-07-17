@@ -1,0 +1,5 @@
+# BuildKit reads this for the sandbox-worker image (build context:
+# sandbox-worker/). The build COPYs nothing from the context — the userland is
+# apt-installed and the `ant` CLI is fetched at build time — so keep the context
+# empty. Nothing here should ever be shipped into the image.
+README.md

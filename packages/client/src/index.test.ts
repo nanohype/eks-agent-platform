@@ -16,13 +16,19 @@ function fakeApi(overrides: Partial<CustomObjectsClient> = {}): {
   const record =
     (name: string, result: unknown) =>
     (...args: unknown[]) => {
+      // eslint-disable-next-line security/detect-object-injection -- test-local record keyed by a literal method name
       calls[name] = args;
       return Promise.resolve(result);
     };
   const api = {
     listClusterCustomObject: record('listClusterCustomObject', { items: [] }),
     getClusterCustomObject: record('getClusterCustomObject', {}),
-    createClusterCustomObject: record('createClusterCustomObject', {}),
+    // The API server echoes the persisted object back on create; mirror that so
+    // the client's read-boundary parse has a real resource to validate.
+    createClusterCustomObject: (...args: unknown[]) => {
+      calls.createClusterCustomObject = args;
+      return Promise.resolve((args[0] as { body?: unknown }).body ?? {});
+    },
     deleteClusterCustomObject: record('deleteClusterCustomObject', {}),
     listNamespacedCustomObject: record('listNamespacedCustomObject', { items: [] }),
     ...overrides,
@@ -34,7 +40,13 @@ const platform = (name: string): Platform => ({
   apiVersion: 'platform.nanohype.dev/v1alpha1',
   kind: 'Platform',
   metadata: { name },
-  spec: {} as Platform['spec'],
+  spec: {
+    persona: 'ops',
+    tenant: 'acme',
+    budget: { name: `${name}-budget` },
+    identity: { allowedModels: [], allowedModelFamilies: ['anthropic'], extraPolicyArns: [] },
+    isolation: 'namespace',
+  },
 });
 
 describe('EksAgentClient', () => {
@@ -58,7 +70,35 @@ describe('EksAgentClient', () => {
       group: 'platform.nanohype.dev',
       version: 'v1alpha1',
       plural: 'platforms',
+      limit: 100,
     });
+  });
+
+  it('follows the continue token across pages', async () => {
+    let call = 0;
+    const seen: (string | undefined)[] = [];
+    const { api } = fakeApi({
+      listClusterCustomObject: (...args: unknown[]) => {
+        seen.push((args[0] as { _continue?: string })._continue);
+        call += 1;
+        return call === 1
+          ? Promise.resolve({ items: [platform('a')], metadata: { continue: 'tok' } })
+          : Promise.resolve({ items: [platform('b')] });
+      },
+    });
+    const client = new EksAgentClient({ api });
+    const platforms = await client.listPlatforms();
+    expect(platforms.map((p) => p.metadata.name)).toEqual(['a', 'b']);
+    // First page has no token, the second is fetched with the returned token.
+    expect(seen).toEqual([undefined, 'tok']);
+  });
+
+  it('parses read responses through the schema, rejecting a malformed CR', async () => {
+    const { api } = fakeApi({
+      getClusterCustomObject: () => Promise.resolve({ apiVersion: 'wrong', kind: 'Platform' }),
+    });
+    const client = new EksAgentClient({ api });
+    await expect(client.getPlatform('acme')).rejects.toThrow();
   });
 
   it('returns an empty list when the API response carries no items', async () => {
@@ -89,6 +129,23 @@ describe('EksAgentClient', () => {
       body: { metadata: { name: 'acme' } },
     });
     expect(calls.deleteClusterCustomObject?.[0]).toMatchObject({ name: 'acme' });
+  });
+
+  it('rejects when the caller-supplied signal is already aborted', async () => {
+    const { api } = fakeApi();
+    const client = new EksAgentClient({ api });
+    await expect(
+      client.listPlatforms({ signal: AbortSignal.abort(new Error('caller cancelled')) }),
+    ).rejects.toThrow(/caller cancelled/);
+  });
+
+  it('enforces the default deadline on a hung API call', async () => {
+    const { api } = fakeApi({
+      // A call that never settles — only the deadline can end it.
+      listClusterCustomObject: () => new Promise<never>(() => undefined),
+    });
+    const client = new EksAgentClient({ api, timeoutMs: 5 });
+    await expect(client.listPlatforms()).rejects.toThrow();
   });
 });
 

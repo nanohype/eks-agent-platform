@@ -1,0 +1,15 @@
+# BuildKit reads this for the operator image (build context: operators/). The
+# multi-stage build COPYs only go.mod/go.sum, api/, cmd/, and internal/ — keep
+# everything else out of the context so unrelated changes don't bust the layer
+# cache or bloat the upload. Test files never reach `go build`, so drop them too.
+bin/
+cover.out
+config/
+hack/
+test/
+Dockerfile
+Makefile
+PROJECT
+.golangci.yml
+**/*_test.go
+**/testdata/
