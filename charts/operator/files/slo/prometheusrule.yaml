@@ -112,6 +112,28 @@ spec:
             description: "Last reconcile {{ $value | humanizeDuration }} ago. Athena or CloudWatch may be erroring; check operator logs for the budget reconciler."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
 
+        # Kill-switch fired but the platform never suspended. The budget
+        # reconciler publishes a breach event that an EventBridge rule routes
+        # to a Step Functions machine which detaches the tenant's Bedrock
+        # policy. If that path is broken, the reconciler emits
+        # agents_killswitch_unrouted_total every tick the fault persists and
+        # re-fires on a bounded backoff. A rising counter means spend is
+        # uncapped — page finance immediately. The [2h] window comfortably
+        # spans the hourly budget tick so the alert stays lit through the
+        # outage and clears ~2h after suspension lands or a human recovers.
+        - alert: KillSwitchUnrouted
+          expr: |
+            increase(agents_killswitch_unrouted_total[2h]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            component: kill-switch
+            persona: finance
+          annotations:
+            summary: "Kill-switch for BudgetPolicy {{ $labels.budgetpolicy }} fired but never suspended {{ $labels.platform }}"
+            description: "A budget breach published a kill-switch event, but the platform is still not Suspended after the grace window. The EventBridge → Step Functions suspension path is likely broken and the tenant is still spending. Check the state machine execution history and the operator's budget reconciler logs."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md
+
         # Any Platform suspended — kill-switch fired. Page persona owner.
         - alert: PlatformSuspended
           expr: |

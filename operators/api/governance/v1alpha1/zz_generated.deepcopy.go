@@ -116,6 +116,10 @@ func (in *BudgetPolicyStatus) DeepCopyInto(out *BudgetPolicyStatus) {
 		in, out := &in.KillSwitchFiredAt, &out.KillSwitchFiredAt
 		*out = (*in).DeepCopy()
 	}
+	if in.KillSwitchLastRefireAt != nil {
+		in, out := &in.KillSwitchLastRefireAt, &out.KillSwitchLastRefireAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

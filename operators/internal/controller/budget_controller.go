@@ -57,6 +57,16 @@ type BudgetReconciler struct {
 	// SSM-resolved configuration.
 	AthenaCfg              AthenaConfig
 	KillSwitchEventBusName string
+
+	// KillSwitchGraceIntervals is how many RequeueIntervals the reconciler
+	// waits after firing before it treats an un-suspended platform as an
+	// unrouted breach (default 3). Gives the EventBridge→StepFunctions path
+	// time to land the suspension tag.
+	KillSwitchGraceIntervals int
+	// KillSwitchMaxRefires caps how many times a single breach is re-published
+	// when the suspension never lands (default 5). Past the cap the reconciler
+	// stops re-firing but keeps the KillSwitchUnrouted condition + metric set.
+	KillSwitchMaxRefires int
 }
 
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=budgetpolicies,verbs=get;list;watch;update;patch

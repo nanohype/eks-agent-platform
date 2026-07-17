@@ -128,3 +128,105 @@ func TestBudgetReconciler_ZeroSpendWithoutCostPipeline(t *testing.T) {
 		t.Error("missing BudgetReconciled condition")
 	}
 }
+
+// budgetWithFiredKillSwitch creates a Platform in the given phase and a
+// BudgetPolicy whose kill-switch already fired well outside the grace window,
+// so the reconciler runs its effect-verification path on the next tick.
+func budgetWithFiredKillSwitch(ctx context.Context, t *testing.T, phase string) *governancev1alpha1.BudgetPolicy {
+	t.Helper()
+	ensureNs(ctx, t)
+
+	pName := uniqueName(t, "platfo")
+	p := &platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: pName, Namespace: testNs},
+		Spec: platformv1alpha1.PlatformSpec{
+			Persona: "ops", Tenant: "acme",
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+		},
+	}
+	mustCreate(ctx, t, p)
+	p.Status.Phase = phase
+	p.Status.Namespace = controller.PlatformNamespace(p)
+	if err := k8sClient.Status().Update(ctx, p); err != nil {
+		t.Fatalf("force platform phase %s: %v", phase, err)
+	}
+
+	bp := &governancev1alpha1.BudgetPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "b"), Namespace: testNs},
+		Spec: governancev1alpha1.BudgetPolicySpec{
+			PlatformRef:       commonv1alpha1.LocalRef{Name: pName},
+			MonthlyUsd:        "2500",
+			KillSwitchEnabled: true,
+		},
+	}
+	mustCreate(ctx, t, bp)
+	firedAt := metav1.NewTime(time.Now().Add(-10 * time.Hour)) // past the default 3h grace
+	bp.Status.KillSwitchFiredAt = &firedAt
+	if err := k8sClient.Status().Update(ctx, bp); err != nil {
+		t.Fatalf("seed KillSwitchFiredAt: %v", err)
+	}
+	return bp
+}
+
+func killSwitchUnroutedCondition(bp *governancev1alpha1.BudgetPolicy) *metav1.Condition {
+	for i := range bp.Status.Conditions {
+		if bp.Status.Conditions[i].Type == "KillSwitchUnrouted" {
+			return &bp.Status.Conditions[i]
+		}
+	}
+	return nil
+}
+
+// TestBudgetReconciler_UnroutedWhenPlatformNeverSuspends proves the switch does
+// not record a false success: fired + platform never Suspended + grace elapsed
+// ⇒ a KillSwitchUnrouted=True condition and a bounded re-fire.
+func TestBudgetReconciler_UnroutedWhenPlatformNeverSuspends(t *testing.T) {
+	ctx := context.Background()
+	bp := budgetWithFiredKillSwitch(ctx, t, phaseReady)
+
+	reconcileBudget(ctx, t, bp)
+
+	var got governancev1alpha1.BudgetPolicy
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: bp.Name, Namespace: bp.Namespace}, &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	cond := killSwitchUnroutedCondition(&got)
+	if cond == nil {
+		t.Fatal("missing KillSwitchUnrouted condition")
+	}
+	if cond.Status != metav1.ConditionTrue || cond.Reason != "SuspensionNotObserved" {
+		t.Errorf("KillSwitchUnrouted = %s/%s; want True/SuspensionNotObserved", cond.Status, cond.Reason)
+	}
+	if got.Status.KillSwitchRefireCount != 1 {
+		t.Errorf("KillSwitchRefireCount = %d; want 1 (first re-fire)", got.Status.KillSwitchRefireCount)
+	}
+	if got.Status.KillSwitchLastRefireAt == nil {
+		t.Error("KillSwitchLastRefireAt = nil; want a timestamp after a re-fire")
+	}
+}
+
+// TestBudgetReconciler_LatchSettlesWhenSuspended proves the latch: once the
+// platform is observed Suspended, the fired switch neither re-fires nor flags
+// unrouted.
+func TestBudgetReconciler_LatchSettlesWhenSuspended(t *testing.T) {
+	ctx := context.Background()
+	bp := budgetWithFiredKillSwitch(ctx, t, phaseSuspended)
+
+	reconcileBudget(ctx, t, bp)
+
+	var got governancev1alpha1.BudgetPolicy
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: bp.Name, Namespace: bp.Namespace}, &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	cond := killSwitchUnroutedCondition(&got)
+	if cond == nil {
+		t.Fatal("missing KillSwitchUnrouted condition")
+	}
+	if cond.Status != metav1.ConditionFalse || cond.Reason != "SuspensionObserved" {
+		t.Errorf("KillSwitchUnrouted = %s/%s; want False/SuspensionObserved", cond.Status, cond.Reason)
+	}
+	if got.Status.KillSwitchRefireCount != 0 {
+		t.Errorf("KillSwitchRefireCount = %d; want 0 (no re-fire once suspended)", got.Status.KillSwitchRefireCount)
+	}
+}
