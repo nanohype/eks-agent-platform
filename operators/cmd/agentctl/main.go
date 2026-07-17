@@ -33,6 +33,7 @@ func main() {
 
 	root.AddCommand(
 		agentctl.NewTenantCmd(),
+		agentctl.NewPlatformCmd(),
 		agentctl.NewStatusCmd(),
 		agentctl.NewPersonaCmd(),
 		agentctl.NewVersionCmd(buildVersion),

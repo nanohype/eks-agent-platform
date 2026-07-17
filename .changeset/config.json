@@ -3,15 +3,7 @@
   "changelog": "@changesets/changelog-git",
   "commit": false,
   "fixed": [],
-  "linked": [
-    [
-      "@eks-agent/core",
-      "@eks-agent/sdk",
-      "@eks-agent/pricing",
-      "@eks-agent/client",
-      "@eks-agent/cli"
-    ]
-  ],
+  "linked": [["@eks-agent/core", "@eks-agent/sdk", "@eks-agent/pricing", "@eks-agent/client"]],
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",

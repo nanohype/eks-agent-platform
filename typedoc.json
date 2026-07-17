@@ -6,7 +6,6 @@
     "packages/sdk",
     "packages/pricing",
     "packages/client",
-    "packages/cli",
     "packages/eval-runner"
   ],
   "out": "docs/api",
