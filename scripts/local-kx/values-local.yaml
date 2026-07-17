@@ -37,9 +37,6 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-webhooks:
-  enabled: false # kx has cert-manager but skipping the webhook drops a moving part
-
 metrics:
   enabled: true
   port: 8080

@@ -167,7 +167,6 @@ helm upgrade --install eks-agent-platform eks-agent-platform/charts/operator \
   --set config.clusterName=<cluster> \
   --set evalRuntime.serviceAccount.roleArn=<eval-runner role ARN> \
   --set evalRuntime.evalReportsBucket=<eval-reports bucket> \
-  --set webhooks.certManager.installSelfSignedIssuer=true \
   --set networkPolicy.engine=cilium --wait
 ```
 

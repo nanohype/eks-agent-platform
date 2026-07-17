@@ -24,16 +24,6 @@ spec:
         - ports:
             - port: "{{ .Values.metrics.port }}"
               protocol: TCP
-    {{- if .Values.webhooks.enabled }}
-    # Webhook calls originate from the kube-apiserver (reserved identity),
-    # not from a pod, so they need fromEntities rather than fromEndpoints.
-    - fromEntities:
-        - kube-apiserver
-      toPorts:
-        - ports:
-            - port: "{{ .Values.webhooks.port }}"
-              protocol: TCP
-    {{- end }}
   egress:
     # DNS
     - toEndpoints:
@@ -103,14 +93,6 @@ spec:
       ports:
         - port: metrics
           protocol: TCP
-    # Webhook traffic from kube-apiserver — IPs vary; allow all egress sources
-    # for the webhook port specifically.
-    {{- if .Values.webhooks.enabled }}
-    - from: []
-      ports:
-        - port: webhook
-          protocol: TCP
-    {{- end }}
   egress:
     # DNS
     - to:

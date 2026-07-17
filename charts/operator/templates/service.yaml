@@ -14,20 +14,3 @@ spec:
       protocol: TCP
   selector: {{- include "operator.selectorLabels" . | nindent 4 }}
 {{- end }}
-{{- if .Values.webhooks.enabled }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "operator.fullname" . }}-webhook
-  namespace: {{ .Release.Namespace }}
-  labels: {{- include "operator.labels" . | nindent 4 }}
-spec:
-  type: ClusterIP
-  ports:
-    - port: 443
-      targetPort: webhook
-      name: webhook
-      protocol: TCP
-  selector: {{- include "operator.selectorLabels" . | nindent 4 }}
-{{- end }}

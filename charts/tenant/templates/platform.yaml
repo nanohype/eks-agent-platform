@@ -20,8 +20,9 @@ spec:
   identity:
     # allowedModels and allowedModelFamilies are mutually exclusive in the CRD —
     # emit exactly one, and fail the render rather than ship a Platform the
-    # operator's webhook rejects (or a both-empty identity that passes admission
-    # but fails the conformance audit).
+    # CRD's CEL rule (x-kubernetes-validations on spec.identity) rejects at
+    # admission (or a both-empty identity that passes admission but fails the
+    # conformance audit).
 {{- if and (gt (len .Values.identity.allowedModels) 0) (gt (len .Values.identity.allowedModelFamilies) 0) }}
 {{- fail "identity.allowedModels and identity.allowedModelFamilies are mutually exclusive; set only one" }}
 {{- else if gt (len .Values.identity.allowedModels) 0 }}

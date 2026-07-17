@@ -27,7 +27,6 @@ See [`values.yaml`](./values.yaml). Highlights:
 
 - `serviceAccount.annotations."eks.amazonaws.com/role-arn"` — required; the operator IRSA role from `terraform/components/agent-iam`
 - `reconcilers.budget.requeueInterval` — production: 1h, dev: 5m
-- `webhooks.enabled` — set false only for development; production requires admission webhooks
 - `metrics.serviceMonitor.enabled` — requires Prometheus operator CRDs (from `eks-gitops`)
 
 ### eval-runtime (`evalRuntime.*`)
@@ -49,8 +48,7 @@ The operator's own observability: recording rules + alerts and persona alert rou
 ## Required cluster capabilities
 
 - Kubernetes 1.32+ (DRA + structured authentication config)
-- cert-manager (for webhook serving cert)
 - Prometheus operator CRDs (for ServiceMonitor)
 - ArgoCD CRDs (`AppProject`) — operator reconciles these for tenant scoping
 
-All four are provided by `eks-gitops`.
+All three are provided by `eks-gitops`.

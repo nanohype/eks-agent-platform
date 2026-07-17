@@ -31,7 +31,7 @@ See [README.md](./README.md#what-you-get) and [ARCHITECTURE.md](./ARCHITECTURE.m
 
 1. Scaffold in `operators/api/v1alpha1/` via `kubebuilder create api`.
 2. Add a reconciler in `operators/internal/controller/`.
-3. Add validating/defaulting webhooks if needed in `operators/internal/webhook/`.
+3. Add cross-field validation as CEL `+kubebuilder:validation:XValidation` markers on the API types (CRD schema is the floor; CEL enforces the invariants at admission).
 4. Regenerate CRD manifests with `task operator:gen` — outputs to `operators/config/crd/bases/` and `charts/operator/crds/`.
 5. Regenerate the TS client in `packages/client/src/generated/` via `task client:gen`.
 6. Document the kind in `docs/crd-reference/<kind>.md`.
