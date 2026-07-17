@@ -23,12 +23,27 @@ This works because three things are already true:
 A tenant climbs these as count, compliance, or blast-radius needs grow. Earlier
 tiers are not "wrong" — they're the right default until a need forces the next.
 
-| Tier                  | Control plane (`controlPlaneNamespace`)                          | Workload (`Platform.isolation`) | When                                                                                                                            |
-| --------------------- | ---------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| **Shared** (default)  | `eks-agent-platform` — all tenants' CRs in one platform-owned ns | `namespace` → `tenants-<name>`  | Startup / few tenants. Lowest ceremony.                                                                                         |
-| **Dedicated CP ns**   | `eap-tenant-<name>` — per-tenant control-plane ns                | `namespace`                     | Many tenants; per-tenant GitOps Application granularity; per-tenant control-plane RBAC/quota.                                   |
-| **vcluster**          | `eap-tenant-<name>`                                              | `vcluster`                      | Hard workload isolation (noisy-neighbor, untrusted code) without a new cluster.                                                 |
-| **Dedicated cluster** | (that cluster's mgmt ns)                                         | n/a                             | Regulated / air-gapped / sovereignty. The cluster-scoped `Tenant` + the portal's multi-cluster watcher already anticipate this. |
+| Tier                                                      | Control plane (`controlPlaneNamespace`)                          | Workload (`Platform.isolation`) | When                                                                                                                            |
+| --------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Shared** (default)                                      | `eks-agent-platform` — all tenants' CRs in one platform-owned ns | `namespace` → `tenants-<name>`  | Startup / few tenants. Lowest ceremony.                                                                                         |
+| **Dedicated CP ns**                                       | `eap-tenant-<name>` — per-tenant control-plane ns                | `namespace`                     | Many tenants; per-tenant GitOps Application granularity; per-tenant control-plane RBAC/quota.                                   |
+| **vcluster** [†](#the-vcluster-rung-is-designed-adr-0009) | `eap-tenant-<name>`                                              | `vcluster`                      | Hard workload isolation (noisy-neighbor, untrusted code) without a new cluster.                                                 |
+| **Dedicated cluster**                                     | (that cluster's mgmt ns)                                         | n/a                             | Regulated / air-gapped / sovereignty. The cluster-scoped `Tenant` + the portal's multi-cluster watcher already anticipate this. |
+
+### The vcluster rung is designed (ADR 0009)
+
+Today the operator reconciles the **`namespace`** workload tier for real. The
+**`vcluster`** rung is designed in [ADR 0009](../adr/0009-vcluster-isolation-tier.md)
+— the reconcile model (the operator declares a per-Platform vcluster as an ArgoCD
+Application; workload CRDs reconcile through the vcluster API via a target-client
+swap; the host `ResourceQuota` / default-deny `NetworkPolicy` / PSS-`restricted` /
+`AppProject` contain the vcluster's pods from outside), the Pod Identity binding for
+the syncer-renamed host ServiceAccount, the ArgoCD cluster-Secret destination, the
+threat delta (it adds **API-server-level** isolation, not kernel-level — that needs
+the dedicated node pool or a dedicated cluster), and finalizer-first teardown. The
+reconcile path that makes `isolation: vcluster` change what the operator provisions
+lands against that ADR; until it does, a Platform must not be told it received hard
+isolation when it received namespace isolation.
 
 ## Why control-plane CRs default to the _shared management_ namespace
 
