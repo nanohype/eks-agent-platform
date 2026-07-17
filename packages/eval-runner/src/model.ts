@@ -78,7 +78,7 @@ export class GatewayBackend implements ModelBackend {
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: GatewayBackendOptions) {
-    this.gateway = opts.gateway.replace(/\/+$/, '');
+    this.gateway = trimTrailingSlashes(opts.gateway);
     this.platform = opts.platform;
     this.fleet = opts.fleet;
     this.fetchImpl = opts.fetchImpl ?? fetch;
@@ -155,6 +155,17 @@ export class GatewayBackend implements ModelBackend {
       ...(modelId !== undefined ? { modelId } : {}),
     };
   }
+}
+
+/**
+ * Strip trailing slashes from the gateway base URL without a backtracking
+ * regex. A quantifier-before-anchor pattern (`/\/+$/`) is a polynomial-ReDoS
+ * shape; this linear scan is not.
+ */
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return s.slice(0, end);
 }
 
 /** Classify a thrown fetch/abort error into the shared taxonomy. */
