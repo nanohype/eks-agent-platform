@@ -117,6 +117,13 @@ func TestAgentSandboxReconciler_SessionPodWhenPlatformReady(t *testing.T) {
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Errorf("pod automountServiceAccountToken: want false")
 	}
+	// The platform-tenant-contract OTel resource attributes must land on the
+	// operator-created session pod, sourced from the owning Platform.
+	assertOTelResourceAttrs(t, pod.Spec.Containers, "session", map[string]string{
+		"agents.tenant":       "acme",
+		"agents.platform":     p.Name,
+		"agents.model_family": "anthropic",
+	})
 	// The default-deny NetworkPolicy must exist alongside it.
 	var np networkingv1.NetworkPolicy
 	if err := k8sClient.Get(ctx, key, &np); err != nil {

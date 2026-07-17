@@ -153,6 +153,13 @@ spec:
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
+        # run-cases is the AI workload of the pipeline — it invokes the agent
+        # under test. Carry the platform-tenant-contract OTel resource
+        # attributes (agents.tenant / agents.platform) so eval-run telemetry
+        # attributes to the owning tenant, same as any other operator-run pod.
+        env:
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: "agents.tenant={{workflow.parameters.tenant}},agents.platform={{workflow.parameters.platform}}"
         source: |
           set -eu
           echo '{{inputs.parameters.cases-json}}' > /tmp/cases.json
