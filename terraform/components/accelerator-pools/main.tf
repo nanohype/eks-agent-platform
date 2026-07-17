@@ -3,7 +3,7 @@ data "aws_iam_role" "karpenter_node" {
 }
 
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-accel"
+  prefix = "${var.cluster_name}-accel"
   tags = merge(var.tags, {
     Component = "accelerator-pools"
     Tier      = "platform"
@@ -134,14 +134,14 @@ resource "aws_iam_role_policy" "gpu_operator" {
 ################################################################################
 
 resource "aws_ssm_parameter" "neuron_role_arn" {
-  name  = "/eks-agent-platform/${var.environment}/accelerator-pools/neuron_role_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/accelerator-pools/neuron_role_arn"
   type  = "String"
   value = aws_iam_role.neuron.arn
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "gpu_operator_role_arn" {
-  name  = "/eks-agent-platform/${var.environment}/accelerator-pools/gpu_operator_role_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/accelerator-pools/gpu_operator_role_arn"
   type  = "String"
   value = aws_iam_role.gpu_operator.arn
   tags  = local.tags
@@ -154,7 +154,7 @@ resource "aws_ssm_parameter" "gpu_operator_role_arn" {
 ################################################################################
 
 resource "aws_ssm_parameter" "pool_catalog" {
-  name = "/eks-agent-platform/${var.environment}/accelerator-pools/catalog"
+  name = "/eks-agent-platform/${var.cluster_name}/accelerator-pools/catalog"
   type = "String"
   tags = local.tags
 

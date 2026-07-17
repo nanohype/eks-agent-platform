@@ -1,5 +1,5 @@
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-evalrunner"
+  prefix = "${var.cluster_name}-evalrunner"
   tags = merge(var.tags, {
     Component = "eval-runtime"
     Tier      = "platform"
@@ -141,28 +141,28 @@ resource "aws_cloudwatch_log_group" "controller" {
 ################################################################################
 
 resource "aws_ssm_parameter" "eval_runner_role_arn" {
-  name  = "/eks-agent-platform/${var.environment}/eval-runtime/runner_role_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/runner_role_arn"
   type  = "String"
   value = aws_iam_role.eval_runner.arn
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "eval_runner_namespace" {
-  name  = "/eks-agent-platform/${var.environment}/eval-runtime/runner_namespace"
+  name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/runner_namespace"
   type  = "String"
   value = var.eval_runner_namespace
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "eval_runner_service_account" {
-  name  = "/eks-agent-platform/${var.environment}/eval-runtime/runner_service_account"
+  name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/runner_service_account"
   type  = "String"
   value = var.eval_runner_service_account
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "eval_reports_bucket" {
-  name  = "/eks-agent-platform/${var.environment}/eval-runtime/eval_reports_bucket"
+  name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/eval_reports_bucket"
   type  = "String"
   value = var.eval_reports_bucket_name
   tags  = local.tags

@@ -31,14 +31,14 @@ const defaultSessionRoleMaxDuration int32 = 3600
 //
 // Same 64-char cap + FNV-1a hash-truncation scheme as tenantRoleName, so the
 // two role names never collide and both stay within IAM's role-name limit.
-func sessionRoleName(env string, p *platformv1alpha1.Platform) string {
+func sessionRoleName(clusterName string, p *platformv1alpha1.Platform) string {
 	const suffix = "-session"
 	const maxLen = 64
-	full := env + "-" + p.Name + suffix
+	full := clusterName + "-" + p.Name + suffix
 	if len(full) <= maxLen {
 		return full
 	}
-	prefix := env + "-"
+	prefix := clusterName + "-"
 	budget := maxLen - len(prefix) - len(suffix) - 1 - 8
 	h := fnv1a64(p.Name)
 	return fmt.Sprintf("%s%s-%08x%s", prefix, p.Name[:budget], h&0xffffffff, suffix)
@@ -115,7 +115,7 @@ func (r *PlatformReconciler) ensureSessionRole(
 	if r.IAM == nil || p.Spec.Attribution == nil {
 		return "", nil
 	}
-	name := sessionRoleName(cfg.Environment, p)
+	name := sessionRoleName(cfg.ClusterName, p)
 	trust, err := sessionRoleTrustPolicy(tenantRoleARN, p.Spec.Attribution.Operators)
 	if err != nil {
 		return "", err
@@ -209,6 +209,6 @@ func (r *PlatformReconciler) reconcileSessionModelScoping(ctx context.Context, r
 // deleteSessionRole is the finalizer counterpart: detach policies + delete the
 // session role. Tolerates NotFound so non-attribution Platforms (which never
 // had a session role) and re-runs are safe.
-func (r *PlatformReconciler) deleteSessionRole(ctx context.Context, p *platformv1alpha1.Platform, environment string) error {
-	return r.detachAndDeleteRole(ctx, sessionRoleName(environment, p))
+func (r *PlatformReconciler) deleteSessionRole(ctx context.Context, p *platformv1alpha1.Platform, clusterName string) error {
+	return r.detachAndDeleteRole(ctx, sessionRoleName(clusterName, p))
 }

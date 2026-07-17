@@ -92,7 +92,7 @@ func TestTenantRoleTags(t *testing.T) {
 
 	// Explicit config wins over the defaults.
 	got = tagMap(tenantRoleTags(p, IAMConfig{
-		Environment: "dev", CostCenter: "research", BusinessUnit: "labs",
+		Environment: "development", CostCenter: "research", BusinessUnit: "labs",
 		DataClassification: "confidential", Compliance: "hipaa",
 	}))
 	if got["CostCenter"] != "research" || got["Compliance"] != "hipaa" {

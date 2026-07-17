@@ -1,7 +1,7 @@
 version: "3"
 
 vars:
-  ENVIRONMENT: '{{.ENVIRONMENT | default "dev"}}'
+  CLUSTER: '{{.CLUSTER | default "development-platform"}}'
   REGION: '{{.REGION | default "us-west-2"}}'
   COMPONENT: '{{.COMPONENT | default "all"}}'
   GO_VERSION: '{{.GO_VERSION | default "1.23"}}'
@@ -82,33 +82,33 @@ tasks:
         echo "All components valid."
 
   tofu:plan:
-    desc: "Plan a component (vars: ENVIRONMENT, REGION, COMPONENT)"
+    desc: "Plan a component (vars: CLUSTER, REGION, COMPONENT)"
     cmds:
       - |
         if [ "{{.COMPONENT}}" = "all" ]; then
-          cd terraform/live/{{.ENVIRONMENT}} && terragrunt run-all plan
+          cd terraform/live/{{.CLUSTER}} && terragrunt run-all plan
         else
-          cd terraform/live/{{.ENVIRONMENT}}/{{.COMPONENT}} && terragrunt plan
+          cd terraform/live/{{.CLUSTER}}/{{.COMPONENT}} && terragrunt plan
         fi
 
   tofu:apply:
-    desc: "Apply a component (vars: ENVIRONMENT, REGION, COMPONENT)"
+    desc: "Apply a component (vars: CLUSTER, REGION, COMPONENT)"
     cmds:
       - |
         if [ "{{.COMPONENT}}" = "all" ]; then
-          cd terraform/live/{{.ENVIRONMENT}} && terragrunt run-all apply
+          cd terraform/live/{{.CLUSTER}} && terragrunt run-all apply
         else
-          cd terraform/live/{{.ENVIRONMENT}}/{{.COMPONENT}} && terragrunt apply
+          cd terraform/live/{{.CLUSTER}}/{{.COMPONENT}} && terragrunt apply
         fi
 
   tofu:destroy:
-    desc: "Destroy a component (vars: ENVIRONMENT, REGION, COMPONENT)"
+    desc: "Destroy a component (vars: CLUSTER, REGION, COMPONENT)"
     cmds:
       - |
         if [ "{{.COMPONENT}}" = "all" ]; then
-          cd terraform/live/{{.ENVIRONMENT}} && terragrunt run-all destroy
+          cd terraform/live/{{.CLUSTER}} && terragrunt run-all destroy
         else
-          cd terraform/live/{{.ENVIRONMENT}}/{{.COMPONENT}} && terragrunt destroy
+          cd terraform/live/{{.CLUSTER}}/{{.COMPONENT}} && terragrunt destroy
         fi
 
   # === Helm ===
@@ -211,6 +211,6 @@ tasks:
       - |
         echo ""
         echo "Usage:"
-        echo "  task <target> [ENVIRONMENT=dev|staging|production] [REGION=us-west-2] [COMPONENT=bedrock|all]"
+        echo "  task <target> [CLUSTER=development-platform|staging-platform|production-platform] [REGION=us-west-2] [COMPONENT=bedrock|all]"
         echo ""
         task --list

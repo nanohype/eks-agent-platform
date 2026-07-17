@@ -1,7 +1,7 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-bedrock"
+  prefix = "${var.cluster_name}-bedrock"
   tags = merge(var.tags, {
     Component = "bedrock"
     Tier      = "platform"
@@ -358,14 +358,14 @@ resource "aws_bedrock_guardrail" "baseline" {
 ################################################################################
 
 resource "aws_ssm_parameter" "invocation_bucket" {
-  name  = "/eks-agent-platform/${var.environment}/bedrock/invocation_bucket_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/invocation_bucket_arn"
   type  = "String"
   value = aws_s3_bucket.invocations.arn
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "invocation_log_group" {
-  name  = "/eks-agent-platform/${var.environment}/bedrock/invocation_log_group"
+  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/invocation_log_group"
   type  = "String"
   value = aws_cloudwatch_log_group.invocations.name
   tags  = local.tags
@@ -373,7 +373,7 @@ resource "aws_ssm_parameter" "invocation_log_group" {
 
 resource "aws_ssm_parameter" "baseline_guardrail_id" {
   count = local.enable_guardrail ? 1 : 0
-  name  = "/eks-agent-platform/${var.environment}/bedrock/baseline_guardrail_id"
+  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_id"
   type  = "String"
   value = aws_bedrock_guardrail.baseline[0].guardrail_id
   tags  = local.tags

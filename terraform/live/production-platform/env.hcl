@@ -1,7 +1,7 @@
 locals {
   environment   = "production"
   region        = "us-west-2"
-  cluster_name  = "production-eks"
+  cluster_name  = "production-platform"
   cost_center   = "engineering"
   business_unit = "platform"
 

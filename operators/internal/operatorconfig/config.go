@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 
 // Package operatorconfig loads runtime configuration from SSM Parameter
 // Store at operator startup. Outputs from terraform/components/* are
-// published to /eks-agent-platform/<env>/<component>/<key>; this package
+// published to /eks-agent-platform/<cluster-name>/<component>/<key>; this package
 // fetches them once and caches them in the Config struct.
 package operatorconfig
 
@@ -27,8 +27,12 @@ type Config struct {
 	Environment string
 	Region      string
 
-	// cluster outputs (written by cluster-bootstrap). ClusterName is the EKS
-	// cluster the operator creates tenant Pod Identity associations on.
+	// ClusterName is the full EKS cluster name this operator serves (e.g.
+	// dev-analytics). Injected at startup (AGENTS_CLUSTER_NAME) — it is the key
+	// of this cluster's SSM subtree and the prefix of every resource name the
+	// operator mints (tenant/session roles), so co-located sibling clusters in
+	// one account never collide. Also the cluster the operator creates tenant
+	// Pod Identity associations on.
 	ClusterName string
 
 	// agent-iam outputs
@@ -72,16 +76,17 @@ type Config struct {
 	BatchServiceRoleARN string
 }
 
-// Load fetches every parameter under /eks-agent-platform/<environment>/
+// Load fetches every parameter under /eks-agent-platform/<cluster-name>/
 // in a single GetParametersByPath sweep (pagination-aware) and decodes
 // the well-known keys into a Config. Unknown keys are ignored — adding a
-// new SSM output is non-breaking.
-func Load(ctx context.Context, ssmClient awsclients.SSM, environment, region string) (*Config, error) {
-	if environment == "" {
-		return nil, fmt.Errorf("operatorconfig: environment is required")
+// new SSM output is non-breaking. The SSM subtree is keyed by the full
+// cluster name so co-located sibling clusters get isolated substrates.
+func Load(ctx context.Context, ssmClient awsclients.SSM, clusterName, environment, region string) (*Config, error) {
+	if clusterName == "" {
+		return nil, fmt.Errorf("operatorconfig: cluster name is required")
 	}
-	cfg := &Config{Environment: environment, Region: region}
-	prefix := "/eks-agent-platform/" + environment + "/"
+	cfg := &Config{ClusterName: clusterName, Environment: environment, Region: region}
+	prefix := "/eks-agent-platform/" + clusterName + "/"
 
 	var nextToken *string
 	for {
@@ -112,8 +117,6 @@ func Load(ctx context.Context, ssmClient awsclients.SSM, environment, region str
 // Config field. Unknown keys silently no-op — they aren't errors.
 func (c *Config) assign(suffix, value string) {
 	switch suffix {
-	case "cluster/name":
-		c.ClusterName = value
 	case "agent-iam/operator_role_arn":
 		c.OperatorRoleARN = value
 	case "agent-iam/tenant_iam_path":

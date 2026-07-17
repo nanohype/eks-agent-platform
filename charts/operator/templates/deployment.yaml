@@ -60,12 +60,12 @@ spec:
                   fieldPath: metadata.namespace
             - name: AGENTS_ENVIRONMENT
               value: {{ .Values.config.environment | quote }}
+            - name: AGENTS_CLUSTER_NAME
+              value: {{ .Values.config.clusterName | quote }}
             - name: AGENTS_REGION
               value: {{ .Values.config.region | quote }}
             - name: AGENTS_NETWORK_ENGINE
               value: {{ .Values.networkPolicy.engine | quote }}
-            - name: AGENTS_SSM_PATH_PREFIX
-              value: {{ .Values.config.ssmPathPrefix | quote }}
             {{- with .Values.config.tags.costCenter }}
             - name: AGENTS_COST_CENTER
               value: {{ . | quote }}

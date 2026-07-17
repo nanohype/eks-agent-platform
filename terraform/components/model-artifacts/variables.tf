@@ -1,11 +1,11 @@
-variable "environment" {
-  description = "Environment name"
-  type        = string
-}
-
 variable "cluster_name" {
   description = "EKS cluster name"
   type        = string
+
+  validation {
+    condition     = length(var.cluster_name) <= 27
+    error_message = "cluster_name (<environment>-<base>) must be <= 27 chars: it prefixes cluster-scoped S3 bucket names (e.g. <cluster_name>-artifacts-eval-reports-<account>) that must stay within S3's 63-char limit."
+  }
 }
 
 variable "data_kms_key_arn" {

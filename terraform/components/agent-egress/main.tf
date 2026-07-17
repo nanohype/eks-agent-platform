@@ -1,5 +1,5 @@
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-egress"
+  prefix = "${var.cluster_name}-egress"
   tags = merge(var.tags, {
     Component = "agent-egress"
     Tier      = "platform"
@@ -171,7 +171,7 @@ resource "aws_wafv2_web_acl_association" "agentgateway" {
 ################################################################################
 
 resource "aws_ssm_parameter" "endpoint_sg_id" {
-  name  = "/eks-agent-platform/${var.environment}/agent-egress/endpoint_sg_id"
+  name  = "/eks-agent-platform/${var.cluster_name}/agent-egress/endpoint_sg_id"
   type  = "String"
   value = aws_security_group.endpoints.id
   tags  = local.tags

@@ -71,8 +71,9 @@ func main() {
 	// AWS substrate config — these resolve to operatorconfig.Config and the
 	// AWS SDK clients at startup. environment + region come from flags or
 	// AGENTS_ENVIRONMENT / AGENTS_REGION env vars; everything else flows
-	// from SSM under /eks-agent-platform/<environment>/.
+	// from SSM under /eks-agent-platform/<cluster-name>/.
 	var environment string
+	var clusterName string
 	var region string
 	var networkEngine string
 	var disableAWS bool
@@ -102,7 +103,8 @@ func main() {
 	flag.IntVar(&tenantWorkers, "tenant-workers", 1, "MaxConcurrentReconciles for the Tenant reconciler.")
 	flag.DurationVar(&tenantRequeueInterval, "tenant-requeue-interval", 5*time.Minute, "How often the Tenant reconciler re-aggregates owned Platforms.")
 	flag.StringVar(&shimImage, "shim-image", os.Getenv("AGENTS_SHIM_IMAGE"), "Operator image used for the SandboxPool KEDA metrics bridge. Empty disables queue-depth autoscaling.")
-	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (dev/staging/production). Drives SSM-config path.")
+	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (dev/staging/production). Stamped on tenant resources as deployment.environment.")
+	flag.StringVar(&clusterName, "cluster-name", os.Getenv("AGENTS_CLUSTER_NAME"), "Full EKS cluster name this operator serves (e.g. dev-analytics). Keys the SSM-config subtree and prefixes every resource the operator mints, isolating co-located sibling clusters.")
 	flag.StringVar(&region, "region", os.Getenv("AGENTS_REGION"), "AWS region. Defaults to credential-chain region if empty.")
 	flag.StringVar(&costCenter, "cost-center", os.Getenv("AGENTS_COST_CENTER"), "Org cost-center tag stamped on tenant roles (resource-tagging standard).")
 	flag.StringVar(&businessUnit, "business-unit", os.Getenv("AGENTS_BUSINESS_UNIT"), "Org business-unit tag stamped on tenant roles.")
@@ -131,9 +133,9 @@ func main() {
 			setupLog.Error(awsErr, "unable to build AWS clients")
 			os.Exit(1)
 		}
-		opConfig, awsErr = operatorconfig.Load(ctx, awsClients.SSM, environment, region)
+		opConfig, awsErr = operatorconfig.Load(ctx, awsClients.SSM, clusterName, environment, region)
 		if awsErr != nil {
-			setupLog.Error(awsErr, "unable to load operator config from SSM", "environment", environment)
+			setupLog.Error(awsErr, "unable to load operator config from SSM", "clusterName", clusterName)
 			os.Exit(1)
 		}
 		if missing := opConfig.Validate(); len(missing) > 0 {
@@ -142,14 +144,14 @@ func main() {
 			// IAM path). Running without any of them would mint
 			// under-constrained tenant roles, silently.
 			setupLog.Error(nil, "operator config missing required fields; refusing to start",
-				"missing", missing, "ssmPrefix", "/eks-agent-platform/"+environment+"/")
+				"missing", missing, "ssmPrefix", "/eks-agent-platform/"+clusterName+"/")
 			os.Exit(1)
 		}
-		setupLog.Info("AWS substrate loaded", "environment", environment, "region", region,
+		setupLog.Info("AWS substrate loaded", "clusterName", clusterName, "environment", environment, "region", region,
 			"operatorRoleARN", opConfig.OperatorRoleARN, "tenantIAMPath", opConfig.TenantIAMPath)
 	} else {
 		setupLog.Info("--disable-aws set; running without AWS clients (k8s-side only)")
-		opConfig = &operatorconfig.Config{Environment: environment, Region: region}
+		opConfig = &operatorconfig.Config{ClusterName: clusterName, Environment: environment, Region: region}
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{

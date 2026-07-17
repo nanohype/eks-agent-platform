@@ -5,15 +5,15 @@ data "aws_partition" "current" {}
 # its ARN and name from the SSM contract that component publishes, rather than
 # carrying a duplicate agent-iam in this tree.
 data "aws_ssm_parameter" "operator_role_arn" {
-  name = "/eks-agent-platform/${var.environment}/agent-iam/operator_role_arn"
+  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/operator_role_arn"
 }
 
 data "aws_ssm_parameter" "operator_role_name" {
-  name = "/eks-agent-platform/${var.environment}/agent-iam/operator_role_name"
+  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/operator_role_name"
 }
 
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-cost"
+  prefix = "${var.cluster_name}-cost"
   tags = merge(var.tags, {
     Component = "cost-pipeline"
     Tier      = "platform"
@@ -714,42 +714,42 @@ resource "aws_cloudwatch_log_subscription_filter" "invocations" {
 ################################################################################
 
 resource "aws_ssm_parameter" "cur_bucket" {
-  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/cur_bucket"
+  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/cur_bucket"
   type  = "String"
   value = aws_s3_bucket.cur.id
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "athena_workgroup" {
-  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/athena_workgroup"
+  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_workgroup"
   type  = "String"
   value = aws_athena_workgroup.cost.name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "athena_database" {
-  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/athena_database"
+  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_database"
   type  = "String"
   value = aws_glue_catalog_database.cost.name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "cur_table_name" {
-  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/cur_table_name"
+  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/cur_table_name"
   type  = "String"
   value = local.cur_table_name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "estimate_table_name" {
-  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/estimate_table_name"
+  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/estimate_table_name"
   type  = "String"
   value = local.estimate_table_name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "reconciliation_view" {
-  name  = "/eks-agent-platform/${var.environment}/cost-pipeline/reconciliation_view"
+  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/reconciliation_view"
   type  = "String"
   value = local.reconciliation_view
   tags  = local.tags

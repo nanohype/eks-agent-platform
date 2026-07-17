@@ -2,7 +2,7 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-batchrunner"
+  prefix = "${var.cluster_name}-batchrunner"
   tags = merge(var.tags, {
     Component = "batch-runtime"
     Tier      = "platform"
@@ -94,7 +94,7 @@ resource "aws_iam_role_policy" "batch" {
 ################################################################################
 
 resource "aws_ssm_parameter" "service_role_arn" {
-  name  = "/eks-agent-platform/${var.environment}/batch-runtime/service_role_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/batch-runtime/service_role_arn"
   type  = "String"
   value = aws_iam_role.batch.arn
   tags  = local.tags
