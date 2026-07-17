@@ -6,15 +6,15 @@
 
 The system organizes around nine bounded contexts. Each gets a CRD, a reconciler in the operator binary, and (where it makes sense) an OpenTofu component and a Helm chart.
 
-| Context           | CRD            | Reconciler | OpenTofu component             | Helm chart       | What it owns                                                                                                                                                                                                                            |
-| ----------------- | -------------- | ---------- | ------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Tenancy**       | `Tenant`       | `tenant`   | —                              | `tenant`         | Cluster-scoped aggregate of a team's `Platform`s; rolls up readiness, spend, and suspension into a single dashboard surface                                                                                                             |
-| **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IRSA role + KMS grant + S3 bucket policy                                         |
-| **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | agentgateway `Route` per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attachment, per-route rate limits                                                                                                                |
-| **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`            | —                | kagent `Agent` + `ModelConfig` per agent, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, tenant `ServiceAccount` annotated for IRSA, optional DRA `AcceleratorClaim` for NVIDIA/Neuron                              |
-| **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                       |
-| **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`              | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore` |
-| **Observability** | —              | —          | —                              | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family`, `agents.model_id` resource attrs; Bedrock invocation spans + per-invocation cost                                                   |
+| Context           | CRD            | Reconciler | OpenTofu component             | Helm chart       | What it owns                                                                                                                                                                                                                              |
+| ----------------- | -------------- | ---------- | ------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tenancy**       | `Tenant`       | `tenant`   | —                              | `tenant`         | Cluster-scoped aggregate of a team's `Platform`s; rolls up readiness, spend, and suspension into a single dashboard surface                                                                                                               |
+| **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IRSA role + KMS grant + S3 bucket policy                                           |
+| **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | agentgateway `Route` per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attachment, per-route rate limits                                                                                                                  |
+| **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`            | —                | kagent `Agent` + `ModelConfig` per agent, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, tenant `ServiceAccount` bound to the tenant IAM role via EKS Pod Identity, optional DRA `AcceleratorClaim` for NVIDIA/Neuron |
+| **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                         |
+| **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`              | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore`   |
+| **Observability** | —              | —          | —                              | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family`, `agents.model_id` resource attrs; Bedrock invocation spans + per-invocation cost                                                     |
 
 The CRDs are split across three capability groups under the `nanohype.dev` domain, all at version `v1alpha1`:
 
@@ -59,12 +59,14 @@ Keeping these in the chart means the operator's eval gating and its own SLO arri
 
 `@eks-agent/sdk` ships a `BedrockAdapter` base with a family registry (`packages/sdk/src/factory.ts`); two family adapters are registered — Anthropic and Amazon Nova — each with uniform call shape, family-accurate pricing, family-accurate error taxonomy. Adding a Bedrock family is a `BedrockAdapter` subclass plus a registry insert; adding a non-Bedrock provider later is a new `ProviderAdapter` implementation, not an architecture change.
 
-### Two CMKs per platform
+### Two CMKs per cluster, isolated by grant
 
-- **`cmk-data`** encrypts the platform's model-artifact bucket, the audit S3 bucket, and the EventBridge archive. Auditor role has **no** decrypt permission.
+Each cluster carries two customer-managed keys, provisioned once by landing-zone — not one pair per Platform. Tenant isolation is a scoped grant, not a dedicated key.
+
+- **`cmk-data`** encrypts the model-artifact bucket, the audit S3 bucket, and the EventBridge archive. The operator issues each tenant role a KMS grant on this key constrained to `EncryptionContext={PlatformId: <platform>}`, so tenant A's role cannot decrypt tenant B's objects — B's data is encrypted under a context A was never granted. The auditor role has **no** decrypt permission.
 - **`cmk-logs`** encrypts CloudWatch log groups and the Bedrock invocation logging bucket. Auditor role has decrypt **only on this key**.
 
-A breach of the auditor role surfaces audit history (an acceptable disclosure for oversight) but does not unlock data-plane content.
+A breach of the auditor role surfaces audit history (an acceptable disclosure for oversight) but does not unlock data-plane content, and a breach of one tenant role reaches only that tenant's encryption context.
 
 ### Kill-switch is human-recovery only
 
@@ -87,6 +89,12 @@ agent pod → OTLP (localhost:4317) → OTel Collector
    → batch
    → exporters: awscloudwatch (always) + datadog (optional, gated on values)
 ```
+
+#### Resource-attribute coverage
+
+The platform-tenant contract requires `agents.tenant` and `agents.platform` (plus `agents.model_family` / `agents.model_id` for AI workloads) on every pod. The operator honors this on the pods it builds itself — AgentSandbox session pods, SandboxPool workers, and the eval-runner workflow step all get `OTEL_RESOURCE_ATTRIBUTES` stamped from the owning Platform (`operators/internal/controller/otel.go`), with `agents.model_family` added when the Platform pins exactly one family.
+
+AgentFleet and ModelGateway runtime pods are a deliberate exception, and it is a real limitation rather than a gap papered over. The operator emits a kagent `Agent` (+ `ModelConfig`) and agentgateway `Gateway` / `HTTPRoute` / `Backend` CR; kagent and agentgateway render the actual Deployments and pods. The operator never builds those PodSpecs, and neither the kagent `Agent` v1alpha2 declarative schema nor the agentgateway backend schema exposes an env or pod-template passthrough, so the env-var mechanism cannot reach them. What the operator does stamp is `agents.platform` / `agents.fleet` / `agents.agent` labels on the CRs it emits — the hook a collector-side attribution processor keys on — so these pods are attributable by label, just not by the env-var self-report. Closing the gap fully is upstream work on the kagent / agentgateway CRDs (a pod-template or resource-attribute field); the platform does not reintroduce a mutating webhook to force it.
 
 Per-persona Grafana dashboards live in `eks-gitops` (`dashboards/`, rendered by the grafana-operator as `GrafanaDashboard` CRs):
 

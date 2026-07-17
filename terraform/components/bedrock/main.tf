@@ -262,7 +262,8 @@ resource "aws_bedrock_model_invocation_logging_configuration" "this" {
 ################################################################################
 # Baseline Guardrail
 #
-# Tenants override or extend via GuardrailPolicy CRs reconciled by the operator.
+# Tenants override or extend per route via ModelGateway.spec.routes[].guardrailRef
+# (operator-reconciled); this baseline is the account-wide default.
 #
 # Region availability: Bedrock Guardrails are available in a subset of regions
 # (us-east-1, us-west-2, eu-central-1, ap-northeast-1, ap-southeast-1, +
@@ -285,8 +286,8 @@ locals {
     "ap-southeast-2",
   ]
   # Only enable the guardrail when the user-set toggle is true AND the region
-  # supports Bedrock Guardrails. SSM output and consumers (operator,
-  # GuardrailPolicy CRs) handle baseline_guardrail_id being null gracefully.
+  # supports Bedrock Guardrails. SSM output and consumers (the operator, and
+  # ModelGateway routes) handle baseline_guardrail_id being null gracefully.
   enable_guardrail = var.enable_guardrails_baseline && contains(local.guardrail_supported_regions, data.aws_region.current.region)
 }
 
@@ -294,7 +295,7 @@ resource "aws_bedrock_guardrail" "baseline" {
   count = local.enable_guardrail ? 1 : 0
 
   name                      = "${local.prefix}-baseline"
-  description               = "Platform baseline — denied topics + PII redaction. Tenants extend via GuardrailPolicy CRs."
+  description               = "Platform baseline — denied topics + PII redaction. Tenants extend per route via ModelGateway guardrailRef."
   blocked_input_messaging   = "I can't help with that."
   blocked_outputs_messaging = "I'm not able to share that."
 

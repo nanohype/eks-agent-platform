@@ -67,7 +67,7 @@ spec:
   routes:
     - name: primary
       modelFamily: anthropic
-      modelId: us.anthropic.claude-3-5-sonnet-20241022-v2:0
+      modelId: us.anthropic.claude-sonnet-4-6
       rateLimit: 30
 ---
 apiVersion: agents.nanohype.dev/v1alpha1

@@ -1,0 +1,11 @@
+{
+  "name": "@eks-agent-example/agent-fleet",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-agent Platform with KEDA SQS autoscaling and kagent tools.",
+  "scripts": {
+    "apply": "kubectl apply -f platform.yaml",
+    "destroy": "kubectl delete -f platform.yaml"
+  }
+}

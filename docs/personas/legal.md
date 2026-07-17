@@ -8,7 +8,7 @@ agentctl platform new --name legal --tenant acme --persona legal --monthly-usd 1
 
 - `Platform.spec.compliance.hipaa = true` — Object Lock compliance mode on the artifacts bucket, no cross-region inference, mandatory PII Guardrail
 - `BudgetPolicy.spec.killSwitchEnabled = true` — non-negotiable
-- Mandatory `GuardrailPolicy` with PII detection (block, not anonymize) on output
+- A mandatory guardrail on every route — `ModelGateway.spec.routes[].guardrailRef` (or the gateway's `defaultGuardrailRef`) — with PII detection set to block, not anonymize, on output
 
 Default agent `policy-reviewer` reads policy text and flags clauses that conflict with jurisdiction-specific requirements (configure jurisdiction in the system prompt).
 
