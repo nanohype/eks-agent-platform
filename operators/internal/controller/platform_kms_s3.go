@@ -131,10 +131,34 @@ func (r *PlatformReconciler) revokeKmsGrant(ctx context.Context, p *platformv1al
 	return nil
 }
 
+// baselineDenyTLSSid is the Sid of the always-present statement that denies
+// non-TLS access to the artifacts bucket. It is distinct from the per-tenant
+// Sids so the per-tenant rewrite and the finalizer both preserve it.
+const baselineDenyTLSSid = "DenyInsecureTransport"
+
+// baselineDenyInsecureTransport is the operator-owned in-transit-TLS guard for
+// the artifacts bucket. terraform does not own this bucket's policy (the
+// operator does), so the baseline lives here rather than in agent-iam.
+func baselineDenyInsecureTransport(bucket string) map[string]any {
+	return map[string]any{
+		"Sid":       baselineDenyTLSSid,
+		"Effect":    "Deny",
+		"Principal": "*",
+		"Action":    "s3:*",
+		"Resource": []string{
+			"arn:aws:s3:::" + bucket,
+			"arn:aws:s3:::" + bucket + "/*",
+		},
+		"Condition": map[string]any{
+			"Bool": map[string]any{"aws:SecureTransport": "false"},
+		},
+	}
+}
+
 // ensureBucketPolicy extends the artifacts bucket policy with a per-tenant
-// statement granting r/w on tenants/<platform>/* to the tenant role ARN.
-// Idempotent: rewrites the full policy each pass with a deterministic
-// statement Sid per platform.
+// statement granting r/w on tenants/<platform>/* to the tenant role ARN, and
+// seeds a stable non-TLS deny baseline. Idempotent: rewrites the full policy
+// each pass with a deterministic statement Sid per platform.
 func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platformv1alpha1.Platform, roleARN string, cfg PlatformAWSConfig) error {
 	if r.S3 == nil || cfg.ArtifactsBucketName == "" || roleARN == "" {
 		return nil
@@ -179,15 +203,28 @@ func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platform
 		return err
 	}
 	statements, _ := currentDoc["Statement"].([]any)
-	// Drop any prior statements with the same Sid (idempotent rewrite).
+	// Drop any prior statements with this platform's Sid (idempotent rewrite),
+	// noting whether the TLS-deny baseline is already present so it isn't added
+	// twice.
 	filtered := statements[:0]
+	hasBaseline := false
 	for _, s := range statements {
 		if m, ok := s.(map[string]any); ok {
-			if existingSid, _ := m["Sid"].(string); existingSid == sid || existingSid == sid+"-List" {
+			existingSid, _ := m["Sid"].(string)
+			if existingSid == sid || existingSid == sid+"-List" {
 				continue
+			}
+			if existingSid == baselineDenyTLSSid {
+				hasBaseline = true
 			}
 		}
 		filtered = append(filtered, s)
+	}
+	// Seed the non-TLS deny baseline if absent. Once seeded it survives every
+	// per-tenant rewrite and the finalizer, so the bucket always denies non-TLS
+	// access even after the last Platform is torn down.
+	if !hasBaseline {
+		filtered = append(filtered, baselineDenyInsecureTransport(bucket))
 	}
 	filtered = append(filtered, tenantStmt, listStmt)
 	currentDoc["Statement"] = filtered

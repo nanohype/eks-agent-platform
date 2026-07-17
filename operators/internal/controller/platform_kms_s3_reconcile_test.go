@@ -193,6 +193,9 @@ func TestEnsureBucketPolicy_AddsTenantStatementsToEmptyPolicy(t *testing.T) {
 	if countSid(sids, "TenantAccess-acme") != 1 || countSid(sids, "TenantAccess-acme-List") != 1 {
 		t.Fatalf("expected both tenant statements exactly once, got sids=%v", sids)
 	}
+	if countSid(sids, baselineDenyTLSSid) != 1 {
+		t.Fatalf("the TLS-deny baseline must be seeded on an empty policy, got sids=%v", sids)
+	}
 }
 
 func TestEnsureBucketPolicy_PreservesForeignReplacesOwn(t *testing.T) {
@@ -230,8 +233,13 @@ func TestEnsureBucketPolicy_IdempotentAcrossRuns(t *testing.T) {
 		}
 	}
 	sids := sidsOf(t, s.puts[len(s.puts)-1])
-	if len(sids) != 2 {
+	// The TLS-deny baseline plus the two tenant statements — and none of them
+	// accumulates across re-runs.
+	if len(sids) != 3 {
 		t.Fatalf("re-running must not accumulate statements, got sids=%v", sids)
+	}
+	if countSid(sids, baselineDenyTLSSid) != 1 {
+		t.Fatalf("the TLS-deny baseline must be seeded exactly once, got sids=%v", sids)
 	}
 }
 
