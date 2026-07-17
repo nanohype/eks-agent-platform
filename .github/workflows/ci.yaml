@@ -133,7 +133,8 @@ jobs:
       - run: pnpm test
 
   operator:
-    name: go test + coverage gate (envtest)
+    # Keep this job name stable — it is a required status check on main.
+    name: go test (envtest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
