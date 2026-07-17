@@ -1,0 +1,15 @@
+# BuildKit reads this per-Dockerfile ignore (the image builds with the repo
+# root as context, so keep the heavy + irrelevant trees out). examples/ and
+# every packages/*/package.json stay in — pnpm --frozen-lockfile validates the
+# lockfile against every declared workspace package.
+**/node_modules
+**/dist
+**/.turbo
+**/*.tsbuildinfo
+.git
+.github
+terraform
+docs
+sandbox-worker
+**/*.test.ts
+**/testdata

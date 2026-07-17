@@ -133,6 +133,31 @@ importers:
         specifier: ^4.1.6
         version: 4.1.6(@types/node@25.8.0)(@vitest/coverage-v8@4.1.6)(vite@8.0.16(@types/node@25.8.0)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.22.0)(yaml@2.9.0))
 
+  packages/eval-runner:
+    dependencies:
+      '@eks-agent/core':
+        specifier: workspace:*
+        version: link:../core
+      '@eks-agent/pricing':
+        specifier: workspace:*
+        version: link:../pricing
+      '@eks-agent/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.8.0)(@vitest/coverage-v8@4.1.6)(vite@8.0.16(@types/node@25.8.0)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.22.0)(yaml@2.9.0))
+
   packages/pricing:
     dependencies:
       '@eks-agent/core':

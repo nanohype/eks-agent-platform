@@ -178,6 +178,12 @@ evalRuntime:
   evalReportsBucket: ""
   # ModelGateway endpoint every fleet routes through.
   gatewayUrl: http://agentgateway.agentgateway.svc.cluster.local:8080
+  # The eval-runner image the WorkflowTemplate's run/score/writeback steps run.
+  # Built + cosign-signed + SBOM-attested by release.yaml on an eval-runner-v*
+  # tag; the tag here is the released version, never a floating :latest.
+  image:
+    repository: ghcr.io/nanohype/eks-agent-platform/eval-runner
+    tag: "0.1.0"
   rollouts:
     # The Argo Rollouts AnalysisTemplate (eval-suite-gate). Off by default: it
     # needs the Argo Rollouts CRD, which is not guaranteed on every cluster.

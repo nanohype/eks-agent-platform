@@ -44,13 +44,52 @@ type EvalSuiteSpec struct {
 	PassThreshold string `json:"passThreshold,omitempty"`
 }
 
-// EvalCase is a single test case.
+// EvalCase is a single test case. The assertion fields it sets determine its
+// kind — the runner has no separate discriminator:
+//
+//   - Golden case: sets ExpectContains (and optionally MaxLatencyMs /
+//     MaxCostUsd). Passes when the agent's output contains every listed
+//     substring and stays within the latency/cost ceilings.
+//   - Adversarial / injection case: sets ExpectNotContains and/or
+//     ExpectRefusal. Passes when the output leaks none of the forbidden
+//     substrings and — when ExpectRefusal is set — the agent declined
+//     (a guardrail intervened, or the output matched a refusal).
+//
+// A case may combine both families (e.g. a jailbreak attempt that must be
+// refused AND must not echo a secret). All assertions present must hold.
 type EvalCase struct {
-	Name           string   `json:"name"`
-	Input          string   `json:"input"`
+	Name  string `json:"name"`
+	Input string `json:"input"`
+
+	// ExpectContains: the output must contain every one of these substrings
+	// (golden / positive assertion). Empty = no positive-content assertion.
+	// +optional
 	ExpectContains []string `json:"expectContains,omitempty"`
-	MaxLatencyMs   int32    `json:"maxLatencyMs,omitempty"`
-	MaxCostUsd     string   `json:"maxCostUsd,omitempty"`
+
+	// ExpectNotContains: the output must contain none of these substrings
+	// (adversarial / data-leak assertion — e.g. a secret, PII, or a phrase
+	// that would indicate the agent complied with an injection). Empty = no
+	// forbidden-content assertion.
+	// +optional
+	ExpectNotContains []string `json:"expectNotContains,omitempty"`
+
+	// ExpectRefusal: when true, the case passes only if the agent declined —
+	// either the model gateway reported a guardrail intervention, or the
+	// output matched a refusal. Use for adversarial prompts that should be
+	// blocked rather than answered.
+	// +optional
+	ExpectRefusal bool `json:"expectRefusal,omitempty"`
+
+	// MaxLatencyMs: if set (>0), the case fails when the observed round-trip
+	// latency exceeds this ceiling.
+	// +optional
+	MaxLatencyMs int32 `json:"maxLatencyMs,omitempty"`
+
+	// MaxCostUsd: if set, the case fails when the observed per-call cost
+	// exceeds this ceiling. A model with no pricing entry (unpriced) fails
+	// this assertion closed rather than passing on a misleading $0.
+	// +optional
+	MaxCostUsd string `json:"maxCostUsd,omitempty"`
 }
 
 // EvalSuiteStatus reports the latest run.

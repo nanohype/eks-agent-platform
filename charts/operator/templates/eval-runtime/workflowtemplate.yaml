@@ -9,6 +9,7 @@
 {{ .Files.Get "files/eval-runtime/workflow-template.yaml"
    | replace "REPLACE_BY_APPLICATIONSET" .Values.evalRuntime.evalReportsBucket
    | replace "http://agentgateway.agentgateway.svc.cluster.local:8080" .Values.evalRuntime.gatewayUrl
+   | replace "ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0" (printf "%s:%s" .Values.evalRuntime.image.repository .Values.evalRuntime.image.tag)
    | replace "namespace: eval-runner" (printf "namespace: %s" .Values.evalRuntime.namespace)
    | replace "serviceAccountName: eval-runner" (printf "serviceAccountName: %s" .Values.evalRuntime.serviceAccount.name) }}
 {{- end }}

@@ -3,6 +3,11 @@ charts/*/templates/**/*.yaml
 charts/*/templates/**/*.yml
 charts/*/templates/**/*.tpl
 
+# Golden contract fixtures are byte-pinned to the operator's compact wire
+# output (regenerated via UPDATE_GOLDEN=1 on the Go side); reformatting them
+# would fight that and thrash on the next regeneration.
+**/testdata/
+
 # Auto-generated
 **/dist/**
 **/node_modules/**

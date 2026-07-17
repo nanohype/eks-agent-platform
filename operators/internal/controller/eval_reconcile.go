@@ -163,11 +163,13 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 // JSON output is the runner's expected schema (jq paths in
 // eval-runner reference .name, .input, etc.).
 type inlineCase struct {
-	Name           string   `json:"name"`
-	Input          string   `json:"input"`
-	ExpectContains []string `json:"expectContains"`
-	MaxLatencyMs   int32    `json:"maxLatencyMs"`
-	MaxCostUsd     string   `json:"maxCostUsd"`
+	Name              string   `json:"name"`
+	Input             string   `json:"input"`
+	ExpectContains    []string `json:"expectContains"`
+	ExpectNotContains []string `json:"expectNotContains"`
+	ExpectRefusal     bool     `json:"expectRefusal"`
+	MaxLatencyMs      int32    `json:"maxLatencyMs"`
+	MaxCostUsd        string   `json:"maxCostUsd"`
 }
 
 // buildInlineCasesParam renders the inline cases as a JSON string the
@@ -183,9 +185,11 @@ func buildInlineCasesParam(cases []governancev1alpha1.EvalCase) (string, error) 
 	for i, c := range cases {
 		wire[i] = inlineCase{
 			Name: c.Name, Input: c.Input,
-			ExpectContains: c.ExpectContains,
-			MaxLatencyMs:   c.MaxLatencyMs,
-			MaxCostUsd:     c.MaxCostUsd,
+			ExpectContains:    c.ExpectContains,
+			ExpectNotContains: c.ExpectNotContains,
+			ExpectRefusal:     c.ExpectRefusal,
+			MaxLatencyMs:      c.MaxLatencyMs,
+			MaxCostUsd:        c.MaxCostUsd,
 		}
 	}
 	b, err := json.Marshal(wire)
