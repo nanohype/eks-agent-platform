@@ -36,10 +36,26 @@ import (
 // the contract documented in ADR 0003.
 const killSwitchBreachPercent int32 = 120
 
-// budgetEventSource is the EventBridge `Source` value the kill-switch
-// rule subscribes to. Keep stable — changing it requires a coordinated
-// terraform/components/kill-switch update.
-const budgetEventSource = "governance.nanohype.dev/budget"
+// budgetEventSource, budgetEventDetailType, and budgetEventSeverity are the
+// exact EventBridge match fields the kill-switch rule
+// (terraform/components/kill-switch/main.tf) subscribes to. EventBridge
+// matching is exact, so changing any of them on this side without the
+// terraform side dead-ends the kill-switch. Keep stable — the seam is pinned
+// by budget_killswitch_contract_test.go, which fails the build on drift.
+const (
+	budgetEventSource     = "governance.nanohype.dev/budget"
+	budgetEventDetailType = "BudgetBreach"
+	budgetEventSeverity   = "critical"
+)
+
+// killSwitch grace/backoff defaults. Fields on BudgetReconciler override the
+// grace-interval count and re-fire cap; these are the fallbacks and the
+// backoff ceiling.
+const (
+	killSwitchDefaultGraceIntervals = 3
+	killSwitchDefaultMaxRefires     = 5
+	killSwitchMaxRefireBackoff      = 6 * time.Hour
+)
 
 // bedrockInvocationCostMetric is the per-minute CloudWatch metric the
 // Bedrock invocation logger publishes via the cost-pipeline component.
@@ -334,7 +350,7 @@ func (r *BudgetReconciler) fireKillSwitch(ctx context.Context, bp *governancev1a
 		"monthlyUsd":      bp.Spec.MonthlyUsd,
 		"currentSpendUsd": spend,
 		"percentOfBudget": pct,
-		"severity":        "critical",
+		"severity":        budgetEventSeverity,
 		"reason":          "budget-exceeded",
 	}
 	payload, err := json.Marshal(detail)
@@ -345,7 +361,7 @@ func (r *BudgetReconciler) fireKillSwitch(ctx context.Context, bp *governancev1a
 		Entries: []eventbridgetypes.PutEventsRequestEntry{{
 			EventBusName: aws.String(r.KillSwitchEventBusName),
 			Source:       aws.String(budgetEventSource),
-			DetailType:   aws.String("BudgetBreach"),
+			DetailType:   aws.String(budgetEventDetailType),
 			Detail:       aws.String(string(payload)),
 			Time:         aws.Time(time.Now().UTC()),
 		}},
@@ -379,6 +395,94 @@ type budgetReading struct {
 	alertThreshold  int32
 	killSwitchFired bool
 	platformReady   bool
+
+	// Effect-verification signals for an already-fired kill-switch.
+	killSwitchActive   bool // KillSwitchFiredAt is (or becomes) set this tick
+	killSwitchRefired  bool // the breach event was re-published this tick
+	killSwitchUnrouted bool // fired, grace elapsed, platform still not Suspended
+	platformSuspended  bool // platform observed in the Suspended phase
+}
+
+// killSwitchEffect is the decision the reconciler reaches about an
+// already-fired kill-switch given the platform's observed suspension state.
+// Publishing an event is not success; the platform being Suspended is. When
+// it isn't, we re-publish on a bounded exponential backoff instead of
+// latching on a false "published" success.
+type killSwitchEffect struct {
+	unrouted bool // grace elapsed and the platform is still not Suspended
+	refire   bool // re-publish the breach event this tick
+}
+
+// killSwitchGraceWindow is how long after firing the reconciler waits before
+// declaring an un-suspended platform "unrouted": KillSwitchGraceIntervals ×
+// RequeueInterval, defaulting to 3 × the tick.
+func (r *BudgetReconciler) killSwitchGraceWindow() time.Duration {
+	n := r.KillSwitchGraceIntervals
+	if n <= 0 {
+		n = killSwitchDefaultGraceIntervals
+	}
+	interval := r.RequeueInterval
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	return time.Duration(n) * interval
+}
+
+// killSwitchMaxRefires is the bounded number of re-publishes for one breach.
+func (r *BudgetReconciler) killSwitchMaxRefires() int {
+	if r.KillSwitchMaxRefires <= 0 {
+		return killSwitchDefaultMaxRefires
+	}
+	return r.KillSwitchMaxRefires
+}
+
+// killSwitchRefireBackoff returns the minimum wait before the next re-publish:
+// the grace window doubled once per prior re-fire, capped at
+// killSwitchMaxRefireBackoff so backoff can't run away.
+func (r *BudgetReconciler) killSwitchRefireBackoff(refireCount int32) time.Duration {
+	d := r.killSwitchGraceWindow()
+	for i := int32(0); i < refireCount; i++ {
+		d *= 2
+		if d >= killSwitchMaxRefireBackoff {
+			return killSwitchMaxRefireBackoff
+		}
+	}
+	if d > killSwitchMaxRefireBackoff {
+		return killSwitchMaxRefireBackoff
+	}
+	return d
+}
+
+// killSwitchEffect evaluates the effect-verification state for a BudgetPolicy
+// whose kill-switch has already fired. It is pure over its inputs so the
+// grace/backoff/bound logic is unit-testable without a cluster.
+func (r *BudgetReconciler) killSwitchEffect(bp *governancev1alpha1.BudgetPolicy, platformSuspended bool, now time.Time) killSwitchEffect {
+	if bp.Status.KillSwitchFiredAt == nil {
+		// Never fired — nothing to verify.
+		return killSwitchEffect{}
+	}
+	if platformSuspended {
+		// Effect confirmed; the latch settles.
+		return killSwitchEffect{}
+	}
+	if now.Sub(bp.Status.KillSwitchFiredAt.Time) < r.killSwitchGraceWindow() {
+		// Still inside the grace window; give the state machine time to run.
+		return killSwitchEffect{}
+	}
+	eff := killSwitchEffect{unrouted: true}
+	if int(bp.Status.KillSwitchRefireCount) >= r.killSwitchMaxRefires() {
+		// Bounded: stop re-publishing, but keep reporting unrouted so the
+		// alert stays lit until a human intervenes.
+		return eff
+	}
+	anchor := bp.Status.KillSwitchFiredAt.Time
+	if bp.Status.KillSwitchLastRefireAt != nil {
+		anchor = bp.Status.KillSwitchLastRefireAt.Time
+	}
+	if now.Sub(anchor) >= r.killSwitchRefireBackoff(bp.Status.KillSwitchRefireCount) {
+		eff.refire = true
+	}
+	return eff
 }
 
 func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1alpha1.BudgetPolicy) (budgetReading, error) {
@@ -423,20 +527,49 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 	thresholds := bp.Spec.AlertThresholdsPercent
 	alertAt := shouldAlertAt(thresholds, bp.Status.PercentOfBudget, pct)
 
+	platformSuspended := platform.Status.Phase == phaseSuspended
+
 	fired := false
-	if pct >= killSwitchBreachPercent && bp.Spec.KillSwitchEnabled && bp.Status.KillSwitchFiredAt == nil {
-		if err := r.fireKillSwitch(ctx, bp, totalSpend, pct); err != nil {
-			return budgetReading{}, err
+	refired := false
+	unrouted := false
+	if bp.Spec.KillSwitchEnabled {
+		if bp.Status.KillSwitchFiredAt == nil {
+			// First breach at/above the kill-switch threshold: publish once.
+			if pct >= killSwitchBreachPercent {
+				if err := r.fireKillSwitch(ctx, bp, totalSpend, pct); err != nil {
+					return budgetReading{}, err
+				}
+				fired = true
+			}
+		} else {
+			// Already fired. Publishing the event was not the goal — the
+			// platform being Suspended is. Verify the effect; if the
+			// suspension path is broken, re-publish (bounded) and flag it so
+			// the latch can't record a false success.
+			eff := r.killSwitchEffect(bp, platformSuspended, time.Now())
+			if eff.unrouted {
+				unrouted = true
+				killSwitchUnroutedTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name).Inc()
+			}
+			if eff.refire {
+				if err := r.fireKillSwitch(ctx, bp, totalSpend, pct); err != nil {
+					return budgetReading{}, err
+				}
+				refired = true
+			}
 		}
-		fired = true
 	}
 
 	return budgetReading{
-		spendUsd:        totalSpend,
-		pct:             pct,
-		alertThreshold:  alertAt,
-		killSwitchFired: fired,
-		platformReady:   platform.Status.Phase == phaseReady,
+		spendUsd:           totalSpend,
+		pct:                pct,
+		alertThreshold:     alertAt,
+		killSwitchFired:    fired,
+		killSwitchActive:   fired || bp.Status.KillSwitchFiredAt != nil,
+		killSwitchRefired:  refired,
+		killSwitchUnrouted: unrouted,
+		platformSuspended:  platformSuspended,
+		platformReady:      platform.Status.Phase == phaseReady,
 	}, nil
 }
 
@@ -468,9 +601,53 @@ func (r *BudgetReconciler) applyBudgetStatus(ctx context.Context, bp *governance
 		cond.Reason = "KillSwitchFired"
 		cond.Message = fmt.Sprintf("budget breach at %d%%; kill-switch event published to %s", reading.pct, r.KillSwitchEventBusName)
 	}
+	if reading.killSwitchRefired {
+		bp.Status.KillSwitchRefireCount++
+		bp.Status.KillSwitchLastRefireAt = &now
+	}
 	upsertCondition(&bp.Status.Conditions, cond)
 
+	// Effect-verification condition: only meaningful once the switch has
+	// fired. Tri-state so operators can tell "took effect" from "still
+	// routing" from "broken".
+	if reading.killSwitchActive {
+		r.applyKillSwitchEffectCondition(bp, reading, now)
+	}
+
 	return r.Status().Update(ctx, bp)
+}
+
+// applyKillSwitchEffectCondition upserts the KillSwitchUnrouted condition
+// describing whether a fired kill-switch actually suspended the platform.
+//   - SuspensionObserved (False): the platform is Suspended — success.
+//   - AwaitingSuspension (False): fired, still inside the grace window.
+//   - SuspensionNotObserved (True): grace elapsed and the platform is still
+//     not Suspended — the EventBridge→StepFunctions path is broken.
+func (r *BudgetReconciler) applyKillSwitchEffectCondition(bp *governancev1alpha1.BudgetPolicy, reading budgetReading, now metav1.Time) {
+	cond := metav1.Condition{
+		Type:               "KillSwitchUnrouted",
+		LastTransitionTime: now,
+		ObservedGeneration: bp.Generation,
+	}
+	switch {
+	case reading.platformSuspended:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "SuspensionObserved"
+		cond.Message = "kill-switch fired and the platform is observed Suspended"
+	case reading.killSwitchUnrouted:
+		firedAt := "an earlier tick"
+		if bp.Status.KillSwitchFiredAt != nil {
+			firedAt = bp.Status.KillSwitchFiredAt.Time.UTC().Format(time.RFC3339)
+		}
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "SuspensionNotObserved"
+		cond.Message = fmt.Sprintf("kill-switch fired at %s but the platform is not Suspended after the grace window; breach re-published %d time(s). The EventBridge→StepFunctions suspension path is likely broken — see the kill-switch runbook.", firedAt, bp.Status.KillSwitchRefireCount)
+	default:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "AwaitingSuspension"
+		cond.Message = "kill-switch fired; awaiting platform suspension within the grace window"
+	}
+	upsertCondition(&bp.Status.Conditions, cond)
 }
 
 // applyBudgetStatusError records a BudgetReconciled=False condition so

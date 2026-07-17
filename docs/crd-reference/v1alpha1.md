@@ -526,7 +526,9 @@ _Appears in:_
 | `currentSpendUsd` _string_ | CurrentSpendUsd is the most recent spend snapshot. |  | Optional: \{\} <br /> |
 | `percentOfBudget` _integer_ | PercentOfBudget — 0..200+. |  | Optional: \{\} <br /> |
 | `lastReconciled` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastReconciled timestamp. |  | Optional: \{\} <br /> |
-| `killSwitchFiredAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | KillSwitchFiredAt — non-null if the kill-switch fired and the platform<br />is currently suspended. |  | Optional: \{\} <br /> |
+| `killSwitchFiredAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | KillSwitchFiredAt — non-null once the kill-switch has published a<br />breach event. Firing is not the same as taking effect: the platform is<br />suspended by an out-of-band EventBridge→StepFunctions path, and the<br />reconciler confirms the effect (platform observed Suspended) before it<br />treats the switch as done. See KillSwitchRefireCount and the<br />KillSwitchUnrouted condition. |  | Optional: \{\} <br /> |
+| `killSwitchRefireCount` _integer_ | KillSwitchRefireCount is how many times the breach event has been<br />re-published because the platform was not observed Suspended within the<br />grace window. Bounded — after the cap the reconciler stops re-publishing<br />but keeps the KillSwitchUnrouted condition set so the alert stays lit. |  | Optional: \{\} <br /> |
+| `killSwitchLastRefireAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | KillSwitchLastRefireAt is the timestamp of the most recent re-publish.<br />It anchors the exponential backoff between re-fires. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
 
 

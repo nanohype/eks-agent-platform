@@ -52,10 +52,26 @@ type BudgetPolicyStatus struct {
 	// +optional
 	LastReconciled *metav1.Time `json:"lastReconciled,omitempty"`
 
-	// KillSwitchFiredAt — non-null if the kill-switch fired and the platform
-	// is currently suspended.
+	// KillSwitchFiredAt — non-null once the kill-switch has published a
+	// breach event. Firing is not the same as taking effect: the platform is
+	// suspended by an out-of-band EventBridge→StepFunctions path, and the
+	// reconciler confirms the effect (platform observed Suspended) before it
+	// treats the switch as done. See KillSwitchRefireCount and the
+	// KillSwitchUnrouted condition.
 	// +optional
 	KillSwitchFiredAt *metav1.Time `json:"killSwitchFiredAt,omitempty"`
+
+	// KillSwitchRefireCount is how many times the breach event has been
+	// re-published because the platform was not observed Suspended within the
+	// grace window. Bounded — after the cap the reconciler stops re-publishing
+	// but keeps the KillSwitchUnrouted condition set so the alert stays lit.
+	// +optional
+	KillSwitchRefireCount int32 `json:"killSwitchRefireCount,omitempty"`
+
+	// KillSwitchLastRefireAt is the timestamp of the most recent re-publish.
+	// It anchors the exponential backoff between re-fires.
+	// +optional
+	KillSwitchLastRefireAt *metav1.Time `json:"killSwitchLastRefireAt,omitempty"`
 
 	// +optional
 	// +listType=map

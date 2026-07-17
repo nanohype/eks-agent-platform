@@ -47,6 +47,8 @@ func main() {
 	var enableLeaderElection bool
 	var leaderElectionID string
 	var budgetRequeueInterval time.Duration
+	var killSwitchGraceIntervals int
+	var killSwitchMaxRefires int
 	// Per-reconciler worker concurrency. Each value is wired into the
 	// corresponding reconciler's SetupWithManager via MaxConcurrentReconciles
 	// so the operator chart's values.yaml — reconcilers.<x>.concurrent —
@@ -91,6 +93,8 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", true, "Enable leader election.")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "eks-agent-platform.nanohype.dev", "Leader election lock name.")
 	flag.DurationVar(&budgetRequeueInterval, "budget-requeue-interval", time.Hour, "How often the budget reconciler ticks.")
+	flag.IntVar(&killSwitchGraceIntervals, "killswitch-grace-intervals", 3, "How many budget-requeue-intervals to wait after firing before treating an un-suspended platform as an unrouted breach.")
+	flag.IntVar(&killSwitchMaxRefires, "killswitch-max-refires", 5, "Maximum times a single unrouted breach is re-published before the reconciler stops re-firing (the KillSwitchUnrouted condition + alert stay set).")
 	flag.IntVar(&platformWorkers, "platform-workers", 3, "MaxConcurrentReconciles for the Platform reconciler.")
 	flag.IntVar(&gatewayWorkers, "gateway-workers", 3, "MaxConcurrentReconciles for the ModelGateway reconciler.")
 	flag.IntVar(&runtimeWorkers, "runtime-workers", 5, "MaxConcurrentReconciles for the AgentFleet (runtime) reconciler.")
@@ -244,10 +248,12 @@ func main() {
 		os.Exit(1)
 	}
 	budgetReconciler := &controller.BudgetReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		Concurrency:     budgetWorkers,
-		RequeueInterval: budgetRequeueInterval,
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		Concurrency:              budgetWorkers,
+		RequeueInterval:          budgetRequeueInterval,
+		KillSwitchGraceIntervals: killSwitchGraceIntervals,
+		KillSwitchMaxRefires:     killSwitchMaxRefires,
 	}
 	if awsClients != nil {
 		budgetReconciler.Athena = awsClients.Athena

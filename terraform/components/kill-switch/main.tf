@@ -27,9 +27,13 @@ locals {
 ################################################################################
 # EventBridge bus + rule
 #
-# The budget-controller emits a custom event (source = "eks-agent-platform.budget",
+# The budget-controller emits a custom event (source = "governance.nanohype.dev/budget",
 # detail-type = "BudgetBreach") when SpendReport.spend >= BudgetPolicy.threshold * 1.20.
-# This rule routes the event to the Step Functions state machine.
+# This rule routes the event to the Step Functions state machine. The source string
+# is a cross-language contract with the operator's budgetEventSource constant;
+# EventBridge source matching is exact, so a drift on either side dead-ends the
+# kill-switch. A Go contract test (budget_killswitch_contract_test.go) parses the
+# event_pattern below and fails the build if the two ever disagree.
 ################################################################################
 
 resource "aws_cloudwatch_event_bus" "killswitch" {
@@ -51,7 +55,7 @@ resource "aws_cloudwatch_event_rule" "breach" {
   tags           = local.tags
 
   event_pattern = jsonencode({
-    source        = ["eks-agent-platform.budget"]
+    source        = ["governance.nanohype.dev/budget"]
     "detail-type" = ["BudgetBreach"]
     detail = {
       severity = ["critical"]
@@ -100,10 +104,13 @@ resource "aws_iam_role_policy" "sfn" {
         Resource = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role${data.aws_ssm_parameter.tenant_iam_path.value}*"
       },
       {
-        Sid      = "NotifyOperator"
-        Effect   = "Allow"
-        Action   = "events:PutEvents"
-        Resource = "*"
+        Sid    = "NotifyOperator"
+        Effect = "Allow"
+        Action = "events:PutEvents"
+        # Scoped to the kill-switch bus the machine actually publishes the
+        # ScaleToZero event onto — the state machine never PutEvents anywhere
+        # else, so a wildcard here would be unearned standing authority.
+        Resource = aws_cloudwatch_event_bus.killswitch.arn
       },
       {
         Sid    = "Logging"
@@ -217,6 +224,12 @@ resource "aws_sfn_state_machine" "killswitch" {
           ResultPath  = "$.error"
         }]
       }
+      # Publish a ScaleToZero notification for the operator to drain
+      # AgentFleets. The IAM detach + suspension tag already landed in the
+      # prior states, so this is the last action — but a transient
+      # PutEvents failure must not go unrecorded: retry on backoff, then
+      # route to RecordFailure (which surfaces in the execution history the
+      # KillSwitchStepFailures alarm watches) rather than dropping silently.
       NotifyOperator = {
         Type     = "Task"
         Resource = "arn:${data.aws_partition.current.partition}:states:::events:putEvents"
@@ -228,6 +241,17 @@ resource "aws_sfn_state_machine" "killswitch" {
             "Detail.$"     = "States.JsonToString($.detail)"
           }]
         }
+        Retry = [{
+          ErrorEquals     = ["States.TaskFailed"]
+          IntervalSeconds = 2
+          MaxAttempts     = 3
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          Next        = "RecordFailure"
+          ResultPath  = "$.error"
+        }]
         End = true
       }
       RecordFailure = {
