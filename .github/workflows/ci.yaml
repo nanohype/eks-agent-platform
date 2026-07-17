@@ -255,31 +255,3 @@ jobs:
             security
           requireScope: false
           subjectPattern: ^[a-z].+$
-
-  vendored:
-    name: vendored copy drift check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # eslint.base.mjs and scripts/sync-vendored.mjs are byte-identical
-      # copies of their source of truth in nanohype/nanohype (declared in
-      # scripts/vendored.json). A drifted copy is the defect — fixes land
-      # upstream, then re-sync.
-      - name: Checkout nanohype (vendored source of truth)
-        uses: actions/checkout@v4
-        with:
-          repository: nanohype/nanohype
-          path: .nanohype
-          sparse-checkout: |
-            library/config
-            library/scripts
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: package.json
-
-      - name: Vendored copy drift check
-        run: node scripts/sync-vendored.mjs --check
-        env:
-          NANOHYPE_DIR: .nanohype

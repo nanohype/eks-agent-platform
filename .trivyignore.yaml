@@ -51,3 +51,19 @@ misconfigurations:
       - "operators/config/rbac/role.yaml"
       - "charts/operator/templates/rbac.yaml"
     statement: "Operator owns per-tenant NetworkPolicies (egress isolation to agentgateway + OTel only). See docs/adr/0003-threat-model.md."
+
+  # ----------------------------------------------------------------------------
+  # Operator ClusterRole — reconciles tenant Secrets by design
+  # ----------------------------------------------------------------------------
+  # KSV-0041 flags any ClusterRole with secrets access as cluster-admin-adjacent.
+  # The operator drives the vcluster hard-isolation tier: it reads each
+  # vcluster's generated kubeconfig Secret to reconcile workload CRDs through the
+  # vcluster API server, and creates/deletes the ArgoCD cluster-registration
+  # Secret that scopes tenant Applications to the vcluster. Both are inherent to
+  # the tier; the blast radius is analysed in the threat model.
+
+  - id: KSV041
+    paths:
+      - "operators/config/rbac/role.yaml"
+      - "charts/operator/templates/rbac.yaml"
+    statement: "Operator reconciles the vcluster kubeconfig Secret and the ArgoCD cluster-registration Secret for the hard-isolation tier. See docs/adr/0009-vcluster-isolation-tier.md + docs/adr/0003-threat-model.md."
