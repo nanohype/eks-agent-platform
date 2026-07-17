@@ -67,7 +67,9 @@ func sessionRoleTrustPolicy(tenantRoleARN string, operators []string) (string, e
 	}
 	b, err := json.Marshal(doc)
 	if err != nil {
-		return "", fmt.Errorf("marshal session trust policy: %w", err)
+		// The document is built from strings and string slices only; marshal
+		// cannot fail. Defensive, unreachable, excluded from the floor.
+		return "", fmt.Errorf("marshal session trust policy: %w", err) //coverage:ignore unreachable — static policy document
 	}
 	return string(b), nil
 }
@@ -118,7 +120,9 @@ func (r *PlatformReconciler) ensureSessionRole(
 	name := sessionRoleName(cfg.ClusterName, p)
 	trust, err := sessionRoleTrustPolicy(tenantRoleARN, p.Spec.Attribution.Operators)
 	if err != nil {
-		return "", err
+		// sessionRoleTrustPolicy only errors on a marshal that cannot fail
+		// (static document); unreachable, excluded from the floor.
+		return "", err //coverage:ignore unreachable — see sessionRoleTrustPolicy
 	}
 
 	// Idempotency: GetRole first; if present, refresh trust + converge baseline.

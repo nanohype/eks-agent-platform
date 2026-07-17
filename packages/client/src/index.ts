@@ -61,26 +61,46 @@ export interface ClientOptions {
   api?: CustomObjectsClient;
 }
 
+/**
+ * The subset of `@kubernetes/client-node`'s KubeConfig the client drives to
+ * resolve an API client. Declaring it lets tests exercise the resolution
+ * precedence (explicit path → KUBECONFIG → in-cluster → default) with a fake
+ * KubeConfig, instead of leaving the constructor's branch uncovered because it
+ * needs a real kubeconfig file or in-cluster env.
+ */
+export type KubeConfigLoader = Pick<
+  KubeConfig,
+  'loadFromFile' | 'loadFromCluster' | 'loadFromDefault' | 'setCurrentContext' | 'makeApiClient'
+>;
+
+/**
+ * Resolves the CustomObjects API client from a kubeconfig, honoring the
+ * precedence explicit path → `KUBECONFIG` env → in-cluster → default, then an
+ * optional context override. The KubeConfig is injectable so the resolution
+ * branches are unit-tested hermetically; production passes a fresh KubeConfig.
+ */
+export function resolveApi(
+  opts: ClientOptions,
+  kc: KubeConfigLoader = new KubeConfig(),
+): CustomObjectsClient {
+  if (opts.kubeconfigPath) {
+    kc.loadFromFile(opts.kubeconfigPath);
+  } else if (process.env.KUBECONFIG) {
+    kc.loadFromFile(process.env.KUBECONFIG);
+  } else if (process.env.KUBERNETES_SERVICE_HOST) {
+    kc.loadFromCluster();
+  } else {
+    kc.loadFromDefault();
+  }
+  if (opts.context) kc.setCurrentContext(opts.context);
+  return kc.makeApiClient(CustomObjectsApi);
+}
+
 export class EksAgentClient {
   readonly api: CustomObjectsClient;
 
   constructor(opts: ClientOptions = {}) {
-    if (opts.api) {
-      this.api = opts.api;
-      return;
-    }
-    const kc = new KubeConfig();
-    if (opts.kubeconfigPath) {
-      kc.loadFromFile(opts.kubeconfigPath);
-    } else if (process.env.KUBECONFIG) {
-      kc.loadFromFile(process.env.KUBECONFIG);
-    } else if (process.env.KUBERNETES_SERVICE_HOST) {
-      kc.loadFromCluster();
-    } else {
-      kc.loadFromDefault();
-    }
-    if (opts.context) kc.setCurrentContext(opts.context);
-    this.api = kc.makeApiClient(CustomObjectsApi);
+    this.api = opts.api ?? resolveApi(opts);
   }
 
   async listPlatforms(): Promise<Platform[]> {

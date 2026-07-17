@@ -103,7 +103,9 @@ func assumeRolePolicyForPodIdentity() (string, error) {
 	}
 	b, err := json.Marshal(doc)
 	if err != nil {
-		return "", fmt.Errorf("marshal trust policy: %w", err)
+		// json.Marshal of this statically-typed map (strings + string slices)
+		// cannot fail; the branch is defensive, unreachable, and excluded.
+		return "", fmt.Errorf("marshal trust policy: %w", err) //coverage:ignore unreachable — static policy document
 	}
 	return string(b), nil
 }
@@ -214,7 +216,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	// association below; the trust policy itself is the fixed EKS-service trust.
 	trust, err := assumeRolePolicyForPodIdentity()
 	if err != nil {
-		return platformSuspension{}, err
+		// assumeRolePolicyForPodIdentity only errors on a marshal that cannot
+		// fail (fixed document); unreachable, excluded from the floor.
+		return platformSuspension{}, err //coverage:ignore unreachable — see assumeRolePolicyForPodIdentity
 	}
 
 	// Idempotency: GetRole first; if NotFound, CreateRole.

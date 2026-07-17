@@ -26,9 +26,17 @@ type fakeKMS struct {
 	created      []kms.CreateGrantInput
 	revoked      []string
 	pageBoundary int // if > 0, paginate ListGrants at this size
+
+	// Error-injection hooks (default nil = no error).
+	listReturnsErr   error
+	createReturnsErr error
+	revokeReturnsErr error
 }
 
 func (f *fakeKMS) ListGrants(_ context.Context, params *kms.ListGrantsInput, _ ...func(*kms.Options)) (*kms.ListGrantsOutput, error) {
+	if f.listReturnsErr != nil {
+		return nil, f.listReturnsErr
+	}
 	if f.pageBoundary > 0 && len(f.grants) > f.pageBoundary {
 		if params.Marker == nil {
 			return &kms.ListGrantsOutput{Grants: f.grants[:f.pageBoundary], Truncated: true, NextMarker: aws.String("page-2")}, nil
@@ -39,6 +47,9 @@ func (f *fakeKMS) ListGrants(_ context.Context, params *kms.ListGrantsInput, _ .
 }
 
 func (f *fakeKMS) CreateGrant(_ context.Context, params *kms.CreateGrantInput, _ ...func(*kms.Options)) (*kms.CreateGrantOutput, error) {
+	if f.createReturnsErr != nil {
+		return nil, f.createReturnsErr
+	}
 	f.created = append(f.created, *params)
 	id := "grant-" + aws.ToString(params.Name)
 	f.grants = append(f.grants, kmstypes.GrantListEntry{Name: params.Name, GrantId: aws.String(id)})
@@ -46,6 +57,9 @@ func (f *fakeKMS) CreateGrant(_ context.Context, params *kms.CreateGrantInput, _
 }
 
 func (f *fakeKMS) RevokeGrant(_ context.Context, params *kms.RevokeGrantInput, _ ...func(*kms.Options)) (*kms.RevokeGrantOutput, error) {
+	if f.revokeReturnsErr != nil {
+		return nil, f.revokeReturnsErr
+	}
 	f.revoked = append(f.revoked, aws.ToString(params.GrantId))
 	return &kms.RevokeGrantOutput{}, nil
 }
@@ -55,9 +69,17 @@ type fakeS3 struct {
 	policy  *string // nil => GetBucketPolicy returns NoSuchBucketPolicy
 	puts    []string
 	deletes []string
+
+	// Error-injection hooks (default nil = no error).
+	getReturnsErr    error
+	putReturnsErr    error
+	deleteReturnsErr error
 }
 
 func (f *fakeS3) GetBucketPolicy(_ context.Context, _ *s3.GetBucketPolicyInput, _ ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error) {
+	if f.getReturnsErr != nil {
+		return nil, f.getReturnsErr
+	}
 	if f.policy == nil {
 		return nil, &smithy.GenericAPIError{Code: "NoSuchBucketPolicy", Message: "no policy set"}
 	}
@@ -65,6 +87,9 @@ func (f *fakeS3) GetBucketPolicy(_ context.Context, _ *s3.GetBucketPolicyInput, 
 }
 
 func (f *fakeS3) PutBucketPolicy(_ context.Context, params *s3.PutBucketPolicyInput, _ ...func(*s3.Options)) (*s3.PutBucketPolicyOutput, error) {
+	if f.putReturnsErr != nil {
+		return nil, f.putReturnsErr
+	}
 	doc := aws.ToString(params.Policy)
 
 	// S3 rejects a policy whose Statement list is empty, and the fake must too — a fake
@@ -88,6 +113,9 @@ func (f *fakeS3) PutBucketPolicy(_ context.Context, params *s3.PutBucketPolicyIn
 }
 
 func (f *fakeS3) DeleteBucketPolicy(_ context.Context, params *s3.DeleteBucketPolicyInput, _ ...func(*s3.Options)) (*s3.DeleteBucketPolicyOutput, error) {
+	if f.deleteReturnsErr != nil {
+		return nil, f.deleteReturnsErr
+	}
 	f.policy = nil
 	f.deletes = append(f.deletes, aws.ToString(params.Bucket))
 	return &s3.DeleteBucketPolicyOutput{}, nil

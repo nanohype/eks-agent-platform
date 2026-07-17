@@ -42,8 +42,14 @@ vet: ## go vet
 	go vet ./...
 
 .PHONY: test
-test: generate fmt vet ## Unit + conformance tests with envtest
-	@KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test ./... -coverprofile=cover.out
+test: generate fmt vet ## Unit + conformance tests with envtest (merged coverage profile)
+	@KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" \
+	  go test ./... -coverpkg=./internal/... -coverprofile=cover.out
+	@go tool cover -func=cover.out | tail -1
+
+.PHONY: coverage-check
+coverage-check: test ## Enforce per-package + security-critical coverage floors
+	go run ./hack/coverage-check cover.out
 
 .PHONY: test-conformance
 test-conformance: generate ## Just the conformance suite (no race detector, fast feedback)

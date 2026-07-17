@@ -1,0 +1,21 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPointStrategy": "packages",
+  "entryPoints": [
+    "packages/core",
+    "packages/sdk",
+    "packages/pricing",
+    "packages/client",
+    "packages/cli",
+    "packages/eval-runner"
+  ],
+  "out": "docs/api",
+  "readme": "none",
+  "githubPages": false,
+  "excludeInternal": true,
+  "validation": {
+    "notExported": false,
+    "invalidLink": true,
+    "notDocumented": false
+  }
+}

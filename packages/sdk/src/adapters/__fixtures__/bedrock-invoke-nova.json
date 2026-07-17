@@ -1,0 +1,14 @@
+{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{ "text": "Amazon Nova is a family of foundation models." }]
+    }
+  },
+  "stopReason": "end_turn",
+  "usage": {
+    "inputTokens": 20,
+    "outputTokens": 9,
+    "totalTokens": 29
+  }
+}
