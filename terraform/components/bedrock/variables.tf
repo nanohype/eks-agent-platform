@@ -42,7 +42,7 @@ variable "access_logs_retention_days" {
 }
 
 variable "enable_guardrails_baseline" {
-  description = "Create a baseline Bedrock Guardrail that the operator can reference. Tenant-specific guardrails are managed by GuardrailPolicy CRs at reconcile time."
+  description = "Create a baseline Bedrock Guardrail that the operator can reference. Tenant-specific guardrails attach per route via ModelGateway guardrailRef at reconcile time."
   type        = bool
   default     = true
 }

@@ -1,0 +1,102 @@
+# bedrock-rag — a retrieval-augmented tenant.
+#
+# The Platform + gateway declare two routes: a Sonnet 4.6 primary and a Haiku 4.5
+# fallback. The rag-agent fleet answers grounded in a retrieved corpus, and the
+# accompanying rag-client.ts shows the SDK side — a [primary, fallback] router
+# with a cached corpus prefix, plus a streaming variant.
+#
+# The namespaced CRs live in the eks-agent-platform management namespace; the
+# operator creates the tenant workload namespace (tenants-docs-rag) at reconcile
+# time. Retrieval runs through the SDK against Bedrock; no Knowledge Base is
+# provisioned by this manifest set.
+---
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Tenant
+metadata:
+  name: ragco
+spec:
+  displayName: RAG Co
+  primaryPersona: eng
+  aggregateMonthlyBudgetUsd: "800"
+  contact:
+    billingEmail: platform@example.com
+    slackChannel: "#rag-platform"
+  compliance:
+    soc2: true
+    hipaa: false
+---
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: docs-rag
+  namespace: eks-agent-platform
+  labels:
+    agents.nanohype.dev/persona: eng
+    agents.nanohype.dev/tenant: ragco
+spec:
+  displayName: Docs RAG
+  persona: eng
+  tenant: ragco
+  isolation: namespace
+  budget:
+    name: docs-rag-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+  compliance:
+    soc2: true
+    hipaa: false
+---
+apiVersion: governance.nanohype.dev/v1alpha1
+kind: BudgetPolicy
+metadata:
+  name: docs-rag-budget
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: docs-rag
+  monthlyUsd: "800"
+  alertThresholdsPercent: [50, 80, 100]
+  killSwitchEnabled: true
+---
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: ModelGateway
+metadata:
+  name: docs-rag-gateway
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: docs-rag
+  routes:
+    # Primary answer model.
+    - name: primary
+      modelFamily: anthropic
+      modelId: us.anthropic.claude-sonnet-4-6
+      rateLimit: 60
+    # Fallback the router walks to when the primary is throttled/overloaded.
+    - name: fallback
+      modelFamily: anthropic
+      modelId: us.anthropic.claude-haiku-4-5-20251001-v1:0
+      rateLimit: 120
+---
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: AgentFleet
+metadata:
+  name: docs-rag
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: docs-rag
+  scaling:
+    enabled: true
+    min: 1
+    max: 4
+    queueDepthTrigger: 10
+  agents:
+    - name: rag-agent
+      systemPrompt: |
+        Answer strictly from the retrieved context. Cite the source ids you used.
+        If the answer is not in the context, say you don't know.
+      modelRoute: primary
+      tools:
+        - name: doc-retriever

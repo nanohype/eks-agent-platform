@@ -28,9 +28,9 @@ Two workload-isolation tiers, dialed per Platform by `spec.isolation` and immuta
 
 ### Encryption
 
-- Two CMKs per Platform — `cmk-data` and `cmk-logs`. Auditor role has decrypt on `cmk-logs` only.
-- All S3 buckets enforce SSE-KMS with the Platform's `cmk-data`.
-- CloudWatch log groups encrypted with `cmk-logs`.
+- Two customer-managed keys back every cluster — `cmk-data` and `cmk-logs` — provisioned once by landing-zone, not one pair per Platform. Per-Platform isolation is a scoped KMS grant, not a dedicated key: the operator issues each tenant role a grant on `cmk-data` constrained to `EncryptionContext={PlatformId: <platform>}`, so a tenant role can only decrypt objects written under its own PlatformId. A breach of one tenant role reaches only that tenant's encryption context.
+- All S3 buckets enforce SSE-KMS with `cmk-data`, keyed per Platform by that encryption context.
+- CloudWatch log groups are encrypted with `cmk-logs`. The auditor role has decrypt on `cmk-logs` only.
 
 ### Egress
 
@@ -46,11 +46,11 @@ Two workload-isolation tiers, dialed per Platform by `spec.isolation` and immuta
 
 ### Kill-switch
 
-`BudgetPolicy` breach at ≥120% detaches Bedrock-invoke from the tenant IRSA role and scales `AgentRuntime`s to zero. Recovery requires SSO permission-set elevation with MFA + approver. No API path back without elevation.
+A `BudgetPolicy` breach at ≥120% publishes a `BudgetBreach` event that an EventBridge rule routes to a Step Functions state machine; the machine detaches the Bedrock-invoke baseline policy from the tenant role and tags it `platform.nanohype.dev/suspended=true`. The Platform reconciler reads that tag, moves the Platform to `Suspended`, and the fleet reconciler tears its agents down to zero. Publishing the event is not treated as success — the budget reconciler effect-verifies the suspension and, if the platform is still not `Suspended` after a grace window, re-fires the breach (bounded backoff) and raises a `KillSwitchUnrouted` alert, so a broken suspension path can never latch as a false success. Recovery requires SSO permission-set elevation with MFA + approver; there is no API path back without elevation.
 
 ## Known limitations
 
-- Bedrock Guardrails coverage varies by model family. The `GuardrailPolicy.spec.modelFamilies` field reflects current support; the controller refuses to attach an unsupported policy.
+- Bedrock Guardrails are region-gated: the `bedrock` component creates the baseline Guardrail only where the service is available and publishes a null id elsewhere, and a route runs without a guardrail rather than failing when none resolves. Guardrails attach per route through `ModelGateway.spec.routes[].guardrailRef` (falling back to the gateway's `defaultGuardrailRef`, then the account baseline); the gateway reconciler stamps the resolved `{identifier, version}` onto the agentgateway Bedrock backend, which enforces it on input and output.
 - DRA is beta in Kubernetes; behavior depends on the `featureGates` enabled in your EKS cluster version.
 - The `vcluster` tier adds API-server-level isolation, not compute isolation — synced pods share the host's nodes and kernel. Pair it with the tainted sandbox node pool when node-level separation is required. It also depends on ArgoCD and a vcluster-internal naming algorithm; the operator discovers the syncer-renamed host ServiceAccount by label and cross-checks it against a byte-identical replica of vcluster's algorithm, so an upstream naming change on upgrade fails loud rather than binding Pod Identity to the wrong name.
 

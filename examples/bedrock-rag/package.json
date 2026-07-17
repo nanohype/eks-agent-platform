@@ -1,0 +1,19 @@
+{
+  "name": "@eks-agent-example/bedrock-rag",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Retrieval-augmented tenant on @eks-agent/sdk: cached corpus prefix, fallback router, streaming.",
+  "scripts": {
+    "apply": "kubectl apply -f platform.yaml",
+    "destroy": "kubectl delete -f platform.yaml",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@eks-agent/core": "workspace:*",
+    "@eks-agent/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

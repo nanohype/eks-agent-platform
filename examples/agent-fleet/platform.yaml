@@ -1,0 +1,115 @@
+# agent-fleet — a multi-agent Platform with KEDA SQS autoscaling and tools.
+#
+# Two routes (a light triage model + a heavier resolver model), two agents that
+# each pin one of them, and a fleet that scales on SQS queue depth. Model ids are
+# the org defaults (nanohype/standards/llm-policy.json): Sonnet 4.6 for the
+# resolver, Haiku 4.5 for triage.
+#
+# The namespaced CRs live in the eks-agent-platform management namespace; the
+# operator creates the tenant workload namespace (tenants-support-desk) at
+# reconcile time, and the fleet's pods run there under the tenant-runtime
+# ServiceAccount bound to the operator-minted IAM role via EKS Pod Identity.
+---
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Tenant
+metadata:
+  name: supportco
+spec:
+  displayName: Support Co
+  primaryPersona: support
+  aggregateMonthlyBudgetUsd: "1500"
+  contact:
+    billingEmail: platform@example.com
+    slackChannel: "#support-platform"
+  compliance:
+    soc2: true
+    hipaa: false
+---
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: support-desk
+  namespace: eks-agent-platform
+  labels:
+    agents.nanohype.dev/persona: support
+    agents.nanohype.dev/tenant: supportco
+spec:
+  displayName: Support desk
+  persona: support
+  tenant: supportco
+  isolation: namespace
+  budget:
+    name: support-desk-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+  compliance:
+    soc2: true
+    hipaa: false
+---
+apiVersion: governance.nanohype.dev/v1alpha1
+kind: BudgetPolicy
+metadata:
+  name: support-desk-budget
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: support-desk
+  monthlyUsd: "1500"
+  alertThresholdsPercent: [50, 80, 100]
+  killSwitchEnabled: true
+---
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: ModelGateway
+metadata:
+  name: support-desk-gateway
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: support-desk
+  routes:
+    # Light, cheap model for first-line triage/classification.
+    - name: triage
+      modelFamily: anthropic
+      modelId: us.anthropic.claude-haiku-4-5-20251001-v1:0
+      rateLimit: 120
+    # Heavier model for drafting the actual customer reply.
+    - name: resolve
+      modelFamily: anthropic
+      modelId: us.anthropic.claude-sonnet-4-6
+      rateLimit: 60
+---
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: AgentFleet
+metadata:
+  name: support-desk
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: support-desk
+  # KEDA scales the fleet on SQS depth. The tenant IAM role gets
+  # sqs:GetQueueAttributes on this queue via the agent-iam baseline; swap the
+  # placeholder account id / queue name for the real work queue.
+  scaling:
+    enabled: true
+    min: 1
+    max: 8
+    queueDepthTrigger: 20
+    queueUrl: https://sqs.us-west-2.amazonaws.com/111111111111/support-desk-work
+  agents:
+    # First-line classifier on the cheap route, no tools.
+    - name: triage-bot
+      systemPrompt: |
+        Classify the incoming support message by intent (billing, bug, how-to,
+        account) and urgency (low, normal, high). Reply with only the two labels.
+      modelRoute: triage
+    # Resolver on the heavier route, with a knowledge-base lookup tool. The tool
+    # names reference kagent ToolServer CRs delivered separately (addons-ai-platform
+    # + External Secrets); the fleet only references them by name.
+    - name: resolver
+      systemPrompt: |
+        Draft a customer reply grounded in the knowledge base. Cite the article id
+        you used. If nothing matches, escalate to a human and say so.
+      modelRoute: resolve
+      tools:
+        - name: knowledge-base-search

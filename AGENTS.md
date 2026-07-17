@@ -6,17 +6,17 @@ You're an AI client (or the author of one) about to declare a tenant on an EKS c
 
 A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, IRSA, KMS grants, network policies, and runtime resources. Nine CRDs (version `v1alpha1`) split across three capability groups under the `nanohype.dev` domain — `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite):
 
-| CRD            | What it owns                                                                                                                                                                  |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Tenant`       | Cluster-scoped aggregate of a team's Platforms. Rolls up readiness, spend, and suspension state                                                                               |
-| `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IRSA role + KMS grant + S3 bucket policy                             |
-| `ModelGateway` | agentgateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                                                |
-| `AgentFleet`   | kagent Agent + ModelConfig per agent, KEDA ScaledObject, per-fleet NetworkPolicy, tenant ServiceAccount with IRSA, optional DRA AcceleratorClaim                              |
-| `SandboxPool`  | Pull-based pool of always-on Managed Agents sandbox workers — a worker Deployment, default-deny NetworkPolicy, and a KEDA-autoscaled metrics bridge keyed on work-queue depth |
-| `AgentSandbox` | Single-use hardened pod for one agent role-session — push-dispatched, Platform-gated, default-deny networked, garbage-collected after a TTL                                   |
-| `BatchJob`     | Amazon Bedrock batch-inference job (CreateModelInvocationJob) — S3 JSONL in, S3 JSONL out; one CR per run, idempotent on spec, no schedule                                    |
-| `BudgetPolicy` | Hourly Athena rollup of CUR + CloudWatch in-flight estimate. Writes spend / percent / conditions to status. Publishes BudgetBreach to EventBridge at ≥120%                    |
-| `EvalSuite`    | Argo CronWorkflow per suite. Gates Argo Rollouts via AnalysisTemplate on `status.lastScore`                                                                                   |
+| CRD            | What it owns                                                                                                                                                                             |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Tenant`       | Cluster-scoped aggregate of a team's Platforms. Rolls up readiness, spend, and suspension state                                                                                          |
+| `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IRSA role + KMS grant + S3 bucket policy                                        |
+| `ModelGateway` | agentgateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                                                           |
+| `AgentFleet`   | kagent Agent + ModelConfig per agent, KEDA ScaledObject, per-fleet NetworkPolicy, tenant ServiceAccount bound to the tenant IAM role via EKS Pod Identity, optional DRA AcceleratorClaim |
+| `SandboxPool`  | Pull-based pool of always-on Managed Agents sandbox workers — a worker Deployment, default-deny NetworkPolicy, and a KEDA-autoscaled metrics bridge keyed on work-queue depth            |
+| `AgentSandbox` | Single-use hardened pod for one agent role-session — push-dispatched, Platform-gated, default-deny networked, garbage-collected after a TTL                                              |
+| `BatchJob`     | Amazon Bedrock batch-inference job (CreateModelInvocationJob) — S3 JSONL in, S3 JSONL out; one CR per run, idempotent on spec, no schedule                                               |
+| `BudgetPolicy` | Hourly Athena rollup of CUR + CloudWatch in-flight estimate. Writes spend / percent / conditions to status. Publishes BudgetBreach to EventBridge at ≥120%                               |
+| `EvalSuite`    | Argo CronWorkflow per suite. Gates Argo Rollouts via AnalysisTemplate on `status.lastScore`                                                                                              |
 
 Plus:
 
@@ -63,16 +63,16 @@ spec:
   killSwitchEnabled: true # at 120% the operator detaches the baseline IAM policy
 ```
 
-### The two-role IRSA picture
+### The two-role identity picture
 
-A Platform tenant ends up with **two** IRSA roles serving different workload classes. This is intentional, not duplication:
+A Platform tenant ends up with **two** IAM roles serving different workload classes. This is intentional, not duplication. Both are bound to their ServiceAccount by an **EKS Pod Identity association**, never a role-arn annotation — no chart carries a role ARN (the [platform-tenant contract](https://github.com/nanohype/nanohype/blob/main/standards/platform-tenant-contract.json) forbids it):
 
-| Role                   | Owner                                        | Trust subject                                         | Used by                                                           |
-| ---------------------- | -------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------- |
-| `<env>-<app>-platform` | `landing-zone/components/aws/<app>-platform` | `system:serviceaccount:tenants-<team>:<app>`          | The application's chart pods (the one shipped via `<app>/chart/`) |
-| `<env>-<app>-tenant`   | This operator                                | `system:serviceaccount:tenants-<team>:tenant-runtime` | AgentFleet pods landing in this Platform's namespace              |
+| Role                     | Owner                                        | Bound ServiceAccount (Pod Identity association) | Used by                                                           |
+| ------------------------ | -------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------- |
+| `<app>-platform`         | `landing-zone/components/aws/<app>-platform` | `tenants-<team>:<app>`                          | The application's chart pods (the one shipped via `<app>/chart/`) |
+| `<cluster>-<app>-tenant` | This operator                                | `tenants-<team>:tenant-runtime`                 | AgentFleet pods landing in this Platform's namespace              |
 
-The app's chart annotates its SA with the landing-zone role's ARN (via `aws.platformRoleArn` Helm value). AgentFleet pods use the operator-created role with the baseline + `extraPolicyArns`.
+The landing-zone `<app>-platform` component creates the Pod Identity association binding the app's ServiceAccount to its role; the chart just pins `serviceAccount.name` to the app name so the association matches. The operator creates the association for `tenant-runtime` → `<cluster>-<app>-tenant`, which carries the baseline Bedrock policy + `extraPolicyArns`. The tenant role name is cluster-keyed (not env-keyed) so two clusters can host a Platform of the same name without their roles colliding.
 
 ## Declare a tenant
 
@@ -83,7 +83,7 @@ The app's chart annotates its SA with the landing-zone role's ARN (via `aws.plat
    - `ResourceQuota` + `LimitRange` defaults
    - Default-deny `NetworkPolicy` plus egress allow-list (DNS, agentgateway, OTel collector)
    - ArgoCD `AppProject` scoped to the tenant namespace
-   - IRSA role `<env>-<app>-tenant` with trust policy targeting `tenant-runtime` SA; attaches baseline Bedrock policy + everything in `spec.identity.extraPolicyArns`, and reconciles a `bedrock-model-scoping` inline policy that limits Bedrock invoke to the ARNs `spec.identity.allowedModelFamilies` / `allowedModels` expand to (both unset = all model invoke denied)
+   - IAM role `<cluster>-<app>-tenant` bound to the `tenant-runtime` SA via an EKS Pod Identity association; attaches baseline Bedrock policy + everything in `spec.identity.extraPolicyArns`, and reconciles a `bedrock-model-scoping` inline policy that limits Bedrock invoke to the ARNs `spec.identity.allowedModelFamilies` / `allowedModels` expand to (both unset = all model invoke denied)
 4. Status reaches `Ready`; the app's ApplicationSet entry can start syncing.
 
 ## Ship an agent fleet
@@ -91,7 +91,7 @@ The app's chart annotates its SA with the landing-zone role's ARN (via `aws.plat
 1. Confirm the tenant Platform is `Ready`.
 2. Apply a `ModelGateway` CR (optional but recommended) declaring the model routes the agents will hit.
 3. Apply an `AgentFleet` CR referencing the Platform. The operator reconciles kagent `Agent` + `ModelConfig` + `ToolServer` resources plus the KEDA scaler.
-4. Fleet pods run as `tenant-runtime` SA, picking up the operator-created IRSA role.
+4. Fleet pods run as the `tenant-runtime` SA; the Pod Identity association the operator created vends the tenant IAM role's credentials to them.
 
 ## Kill-switch
 
