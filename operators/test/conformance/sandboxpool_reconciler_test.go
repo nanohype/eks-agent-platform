@@ -8,6 +8,7 @@ package conformance
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -140,6 +141,49 @@ func TestSandboxPoolReconciler_ReadyWhenPlatformReady(t *testing.T) {
 	// The runtimeClassName hardening dial must reach the worker pod spec.
 	if rc := dep.Spec.Template.Spec.RuntimeClassName; rc == nil || *rc != runtimeClass {
 		t.Errorf("worker RuntimeClassName: got %v want %q", rc, runtimeClass)
+	}
+	// The platform-tenant-contract OTel resource attributes must land on the
+	// operator-created worker fleet pod, sourced from the owning Platform: the
+	// operator honors on its own pods the same contract it enforces on tenants.
+	assertOTelResourceAttrs(t, dep.Spec.Template.Spec.Containers, "worker", map[string]string{
+		"agents.tenant":       "acme",
+		"agents.platform":     p.Name,
+		"agents.model_family": "anthropic", // Platform pins a single family
+	})
+}
+
+// assertOTelResourceAttrs fails unless the named container carries an
+// OTEL_RESOURCE_ATTRIBUTES env var whose comma-list contains every expected
+// key=value pair. Shared by the SandboxPool worker and AgentSandbox session
+// pod checks — the two pod specs the operator builds directly.
+func assertOTelResourceAttrs(t *testing.T, containers []corev1.Container, name string, want map[string]string) {
+	t.Helper()
+	var value string
+	var found bool
+	for _, c := range containers {
+		if c.Name != name {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == "OTEL_RESOURCE_ATTRIBUTES" {
+				value, found = e.Value, true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("container %q has no OTEL_RESOURCE_ATTRIBUTES env var", name)
+	}
+	attrs := map[string]string{}
+	for _, kv := range strings.Split(value, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		if ok {
+			attrs[k] = v
+		}
+	}
+	for k, v := range want {
+		if attrs[k] != v {
+			t.Errorf("OTEL_RESOURCE_ATTRIBUTES[%s] on %q: got %q want %q (full: %q)", k, name, attrs[k], v, value)
+		}
 	}
 }
 

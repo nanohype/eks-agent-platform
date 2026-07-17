@@ -142,12 +142,16 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 				Containers: []corev1.Container{{
 					Name:  "worker",
 					Image: workerImage(pool),
-					Env: []corev1.EnvVar{
+					// The always-on worker fleet runs Managed Agents sandboxes;
+					// stamp the platform-tenant-contract OTel resource attributes
+					// so worker telemetry attributes to the owning tenant/app.
+					// model_family comes from the Platform when it pins one.
+					Env: withOTelResourceAttrs([]corev1.EnvVar{
 						{Name: "ANTHROPIC_ENVIRONMENT_ID", Value: pool.Spec.EnvironmentID},
 						{Name: "ANTHROPIC_ENVIRONMENT_KEY", ValueFrom: &corev1.EnvVarSource{
 							SecretKeyRef: &envKeyRef,
 						}},
-					},
+					}, p, platformModelFamily(p)),
 					Resources:       pool.Spec.Resources,
 					SecurityContext: restrictedContainerSecurityContext(),
 					VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
@@ -269,12 +273,15 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 					Name:    "metrics-shim",
 					Image:   r.ShimImage,
 					Command: []string{"/metrics-shim"},
-					Env: []corev1.EnvVar{
+					// Operator-infra pod, not an AI workload — carries the
+					// required tenant/platform OTel attributes (no model attrs)
+					// so its telemetry still attributes to the owning tenant.
+					Env: withOTelResourceAttrs([]corev1.EnvVar{
 						{Name: "ANTHROPIC_ENVIRONMENT_ID", Value: pool.Spec.EnvironmentID},
 						{Name: "ANTHROPIC_API_KEY", ValueFrom: &corev1.EnvVarSource{
 							SecretKeyRef: pool.Spec.APIKeySecret,
 						}},
-					},
+					}, p, ""),
 					Ports: []corev1.ContainerPort{{
 						Name:          "http",
 						ContainerPort: metricsShimPort,

@@ -92,11 +92,17 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client
 			Tolerations:                  sandboxTolerations(),
 			SecurityContext:              restrictedPodSecurityContext(),
 			Containers: []corev1.Container{{
-				Name:            "session",
-				Image:           box.Spec.Image,
-				Command:         box.Spec.Command,
-				Args:            box.Spec.Args,
-				Env:             box.Spec.Env,
+				Name:    "session",
+				Image:   box.Spec.Image,
+				Command: box.Spec.Command,
+				Args:    box.Spec.Args,
+				// Stamp the platform-tenant-contract OTel resource attributes so
+				// the session's telemetry attributes to the owning tenant/app —
+				// the operator honors the same contract on the pods it builds as
+				// it holds tenants to. model_family comes from the Platform when
+				// it pins a single family; the session picks its own model, so
+				// model_id is left to the runtime.
+				Env:             withOTelResourceAttrs(box.Spec.Env, p, platformModelFamily(p)),
 				Resources:       box.Spec.Resources,
 				SecurityContext: restrictedContainerSecurityContext(),
 				VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},

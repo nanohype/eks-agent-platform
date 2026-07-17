@@ -1,6 +1,7 @@
 import {
   BedrockRuntimeClient,
   InvokeModelCommand,
+  InvokeModelWithResponseStreamCommand,
   ThrottlingException,
   ModelTimeoutException,
   ModelErrorException,
@@ -23,12 +24,25 @@ import {
 import { priceModel } from '@eks-agent/pricing';
 
 import type {
-  Message,
   MessagesParams,
   MessagesResponse,
   ProviderAdapter,
   ProviderId,
+  StreamHandlers,
 } from '../types.js';
+
+/**
+ * Per-family reducer over a model's response-stream events. The base adapter
+ * decodes each `InvokeModelWithResponseStream` chunk to JSON and feeds it to
+ * `push`; the subclass maps the family's event shape onto accumulated text,
+ * token usage, and a stop reason. `push` returns any text delta the event
+ * carried (empty string when it carried none) so the base can forward it to
+ * `StreamHandlers.onText`.
+ */
+export interface StreamAccumulator {
+  push(event: unknown): string;
+  result(): { text: string; usage: TokenUsage; stopReason: MessagesResponse['stopReason'] };
+}
 
 export interface BedrockAdapterOptions {
   region: string;
@@ -90,6 +104,12 @@ export abstract class BedrockAdapter implements ProviderAdapter {
     usage: TokenUsage;
     stopReason: MessagesResponse['stopReason'];
   };
+  /**
+   * Construct the family's response-stream reducer. Called once per
+   * {@link messagesStream} invocation; the base feeds it decoded chunks and
+   * reads the accumulated result once the stream terminates.
+   */
+  protected abstract streamAccumulator(): StreamAccumulator;
 
   async messages(params: MessagesParams): Promise<MessagesResponse> {
     const started = Date.now();
@@ -99,71 +119,137 @@ export abstract class BedrockAdapter implements ProviderAdapter {
         contentType: 'application/json',
         accept: 'application/json',
         body: JSON.stringify(this.buildRequestBody(params)),
-        ...(params.guardrailId
-          ? {
-              guardrailIdentifier: params.guardrailId,
-              guardrailVersion: params.guardrailVersion ?? 'DRAFT',
-            }
-          : {}),
+        ...this.guardrailFields(params),
       });
-
-      // Every InvokeModel call gets a bounded deadline regardless of caller
-      // diligence: a default request timeout is always applied, and a
-      // caller-supplied AbortSignal is combined with it (earliest fire wins)
-      // so both in-flight cancellation and the safety-net deadline hold. The
-      // default-deadline fire surfaces as a TimeoutError (classified Network,
-      // retryable); a caller abort surfaces as AbortError (Cancelled).
-      const deadline = AbortSignal.timeout(this.requestTimeoutMs);
-      const abortSignal = params.signal ? AbortSignal.any([params.signal, deadline]) : deadline;
-      const out = await this.client.send(cmd, { abortSignal });
+      const out = await this.client.send(cmd, { abortSignal: this.deadlineSignal(params) });
       const body = JSON.parse(new TextDecoder().decode(out.body)) as unknown;
-      const parsed = this.parseResponseBody(body);
-      const { costUsd, priced } = priceModel({
+      return this.finalize(params, this.parseResponseBody(body), started);
+    } catch (err) {
+      throw this.asAgentError(params, err);
+    }
+  }
+
+  async messagesStream(
+    params: MessagesParams,
+    handlers?: StreamHandlers,
+  ): Promise<MessagesResponse> {
+    const started = Date.now();
+    try {
+      const cmd = new InvokeModelWithResponseStreamCommand({
+        modelId: params.modelId,
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify(this.buildRequestBody(params)),
+        ...this.guardrailFields(params),
+      });
+      const out = await this.client.send(cmd, { abortSignal: this.deadlineSignal(params) });
+      const acc = this.streamAccumulator();
+      if (out.body) {
+        for await (const event of out.body) {
+          // A mid-stream error surfaces as a modeled union member. Rethrow it
+          // so it lands in the catch and is classified by the same taxonomy as
+          // a synchronous failure — the SDK's own deserializer throws these
+          // too, but checking the members keeps the behavior deterministic.
+          const streamErr =
+            event.internalServerException ??
+            event.modelStreamErrorException ??
+            event.throttlingException ??
+            event.validationException ??
+            event.serviceUnavailableException ??
+            event.modelTimeoutException;
+          if (streamErr) throw streamErr;
+          const bytes = event.chunk?.bytes;
+          if (!bytes) continue;
+          const delta = acc.push(JSON.parse(new TextDecoder().decode(bytes)));
+          if (delta && handlers?.onText) handlers.onText(delta);
+        }
+      }
+      // Cost + CallEvent fire once here, after the stream terminates and the
+      // full usage (input + cache + output tokens) is finally known.
+      return this.finalize(params, acc.result(), started);
+    } catch (err) {
+      throw this.asAgentError(params, err);
+    }
+  }
+
+  /** Guardrail identifier/version fields, present only when a guardrail is set. */
+  private guardrailFields(
+    params: MessagesParams,
+  ): { guardrailIdentifier: string; guardrailVersion: string } | Record<string, never> {
+    if (!params.guardrailId) return {};
+    return {
+      guardrailIdentifier: params.guardrailId,
+      guardrailVersion: params.guardrailVersion ?? 'DRAFT',
+    };
+  }
+
+  /**
+   * Every Bedrock call gets a bounded deadline regardless of caller diligence:
+   * a default request timeout is always applied, and a caller-supplied
+   * AbortSignal is combined with it (earliest fire wins) so both in-flight
+   * cancellation and the safety-net deadline hold. The default-deadline fire
+   * surfaces as a TimeoutError (classified Network, retryable); a caller abort
+   * surfaces as AbortError (Cancelled).
+   */
+  private deadlineSignal(params: MessagesParams): AbortSignal {
+    const deadline = AbortSignal.timeout(this.requestTimeoutMs);
+    return params.signal ? AbortSignal.any([params.signal, deadline]) : deadline;
+  }
+
+  /**
+   * Price the parsed result, assemble the MessagesResponse, and emit the
+   * success CallEvent. Shared by the synchronous and streaming paths so cost
+   * accounting and telemetry are identical whichever transport was used.
+   */
+  private finalize(
+    params: MessagesParams,
+    parsed: { text: string; usage: TokenUsage; stopReason: MessagesResponse['stopReason'] },
+    started: number,
+  ): MessagesResponse {
+    const { costUsd, priced } = priceModel({ modelId: params.modelId, tokens: parsed.usage });
+    const response: MessagesResponse = {
+      text: parsed.text,
+      stopReason: parsed.stopReason,
+      usage: parsed.usage,
+      costUsd,
+      latencyMs: Date.now() - started,
+      correlationId: params.correlationId,
+    };
+    // Telemetry hook — subclasses or DI can wire emitCallEvent to push to
+    // OTel / Datadog. We only call it on success; failures throw and the
+    // caller sees the AgentError directly.
+    if (this.emitCallEvent) {
+      this.emitCallEvent({
+        correlationId: params.correlationId,
+        platform: this.platform,
+        tenant: this.tenant,
+        modelFamily: this.modelFamily,
         modelId: params.modelId,
         tokens: parsed.usage,
-      });
-      const response: MessagesResponse = {
-        text: parsed.text,
-        stopReason: parsed.stopReason,
-        usage: parsed.usage,
         costUsd,
-        latencyMs: Date.now() - started,
-        correlationId: params.correlationId,
-      };
-
-      // Telemetry hook — subclasses or DI can wire emitCallEvent to push to
-      // OTel / Datadog. We only call it on success; failures throw and the
-      // caller sees the AgentError directly.
-      if (this.emitCallEvent) {
-        const event: CallEvent = {
-          correlationId: params.correlationId,
-          platform: this.platform,
-          tenant: this.tenant,
-          modelFamily: this.modelFamily,
-          modelId: params.modelId,
-          tokens: parsed.usage,
-          costUsd,
-          ...(priced ? {} : { unpriced: true }),
-          latencyMs: response.latencyMs,
-          status: 'ok',
-          timestamp: new Date().toISOString(),
-          ...(this.workspace !== undefined ? { workspace: this.workspace } : {}),
-        };
-        this.emitCallEvent(event);
-      }
-
-      return response;
-    } catch (err) {
-      // Don't double-wrap: if a subclass's parseResponseBody already threw
-      // an AgentError with a precise classification, preserve it.
-      if (err instanceof AgentError) throw err;
-      throw new AgentError({
-        class: this.classifyError(err),
-        message: err instanceof Error ? err.message : String(err),
-        cause: err,
-        correlationId: params.correlationId,
+        ...(priced ? {} : { unpriced: true }),
+        latencyMs: response.latencyMs,
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        ...(this.workspace !== undefined ? { workspace: this.workspace } : {}),
       });
     }
+    return response;
+  }
+
+  /**
+   * Normalize a thrown error into an AgentError. Don't double-wrap: if a
+   * subclass's parseResponseBody already threw an AgentError with a precise
+   * classification, preserve it.
+   */
+  private asAgentError(params: MessagesParams, err: unknown): AgentError {
+    if (err instanceof AgentError) return err;
+    return new AgentError({
+      class: this.classifyError(err),
+      message: err instanceof Error ? err.message : String(err),
+      cause: err,
+      correlationId: params.correlationId,
+    });
   }
 
   emitCallEvent?(event: CallEvent): void;
@@ -192,19 +278,5 @@ export abstract class BedrockAdapter implements ProviderAdapter {
       if (name === 'GuardrailIntervenedException') return 'GuardrailBlock';
     }
     return 'Server';
-  }
-
-  protected toAnthropicMessages(messages: Message[]): {
-    system?: string;
-    messages: { role: 'user' | 'assistant'; content: string }[];
-  } {
-    const sys = messages
-      .filter((m) => m.role === 'system')
-      .map((m) => m.content)
-      .join('\n\n');
-    const others = messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-    return { ...(sys ? { system: sys } : {}), messages: others };
   }
 }
