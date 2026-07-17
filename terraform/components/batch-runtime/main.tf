@@ -12,6 +12,14 @@ locals {
   batch_prefix = "batch"
 }
 
+# The model-artifacts bucket is owned by landing-zone's agent-iam component (the
+# sole writer, published under the per-cluster SSM contract); read its ARN here
+# rather than through a terraform input so this component depends only on the
+# SSM contract, not on a sibling terraform state.
+data "aws_ssm_parameter" "artifacts_bucket_arn" {
+  name = "/eks-agent-platform/${var.cluster_name}/model-artifacts/bucket_arn"
+}
+
 ################################################################################
 # Bedrock batch service role
 #
@@ -60,13 +68,13 @@ resource "aws_iam_role_policy" "batch" {
         Sid      = "ReadWriteBatchPrefix"
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject"]
-        Resource = ["${var.artifacts_bucket_arn}/${local.batch_prefix}/*"]
+        Resource = ["${data.aws_ssm_parameter.artifacts_bucket_arn.value}/${local.batch_prefix}/*"]
       },
       {
         Sid      = "ListBatchPrefix"
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
-        Resource = [var.artifacts_bucket_arn]
+        Resource = [data.aws_ssm_parameter.artifacts_bucket_arn.value]
         Condition = {
           StringLike = {
             "s3:prefix" = ["${local.batch_prefix}/*"]
