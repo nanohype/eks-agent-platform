@@ -334,7 +334,7 @@ _Appears in:_
 | `modelFamily` _string_ | ModelFamily: anthropic \| meta \| mistral \| cohere \| amazon-titan \|<br />amazon-nova \| stability. |  | Enum: [anthropic meta mistral cohere amazon-titan amazon-nova stability] <br /> |
 | `modelId` _string_ | ModelId is the canonical Bedrock model ID or inference profile ID. |  |  |
 | `crossRegionProfile` _string_ | CrossRegionProfile enables a Bedrock cross-region inference profile. |  | Optional: \{\} <br /> |
-| `rateLimit` _integer_ | RateLimit (requests per minute) is enforced at the gateway. |  | Optional: \{\} <br /> |
+| `rateLimit` _integer_ | RateLimit caps requests per minute (not tokens) on this route. The<br />operator renders it into an agentgateway local rate-limit policy with<br />unit=Minutes; 0 or unset disables rate limiting for the route. |  | Optional: \{\} <br /> |
 | `guardrailRef` _[LocalRef](#localref)_ | GuardrailRef overrides the gateway's default guardrail. |  | Optional: \{\} <br /> |
 
 

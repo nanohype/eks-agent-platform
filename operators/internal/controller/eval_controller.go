@@ -65,6 +65,9 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
 			}
 		}
+		// Drop the suite's score series so a deleted suite leaves no stale
+		// gauge behind.
+		evalSuiteScore.DeleteLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name)
 		return ctrl.Result{}, nil
 	}
 	if !controllerutil.ContainsFinalizer(&suite, evalFinalizer) {

@@ -1,9 +1,19 @@
 # PrometheusRule for the eks-agent-platform operator.
 #
-# Three groups:
-#   1. recordings — useful pre-computed aggregates dashboards consume
-#   2. operator-health — reconcile latency / error / leadership alerts
-#   3. domain-events — Platform/Tenant/Budget/EvalSuite-level alerts
+# Availability SLO: 99% of controller reconciles succeed over a rolling 30d
+# window (error budget = 1%). The SLI is the reconcile error ratio
+# (controller_runtime_reconcile_errors_total / _reconcile_total) aggregated
+# across the operator's controllers. Burn-rate alerts fire on the rate that
+# budget is consumed, not on an instantaneous error ratio.
+#
+# Five groups:
+#   1. recordings     — pre-computed aggregates dashboards consume
+#   2. slo-recordings — <metric>:sli_error:ratio_rate<window> SLI series the
+#                       burn-rate alerts reference (one per burn-rate window)
+#   3. slo-burn-rate  — multi-window multi-burn-rate SLO alerts (Google SRE):
+#                       14.4x/6x page pairs, 3x/1x ticket pairs
+#   4. operator-health — reconcile latency / leadership alerts
+#   5. domain-events   — Platform/Tenant/Budget/EvalSuite-level alerts
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -52,6 +62,129 @@ spec:
               1
             )
 
+    - name: agents.slo-recordings
+      interval: 30s
+      rules:
+        # SLI: reconcile error ratio (errors / total) aggregated across the
+        # operator's controllers, recorded over each burn-rate window. The
+        # metric name follows the observability-slo convention
+        # <metric>:sli_error:ratio_rate<window>, where <metric> is the
+        # OTLP→Prometheus form of the system name (eks-agent-platform →
+        # eks_agent_platform). Burn-rate alerts reference these instead of
+        # recomputing the ratio inline. The denominator is clamped so an idle
+        # operator (no reconciles) records 0, not NaN.
+        - record: eks_agent_platform:sli_error:ratio_rate5m
+          expr: |
+            sum(rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[5m]))
+            /
+            clamp_min(sum(rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[5m])), 0.001)
+        - record: eks_agent_platform:sli_error:ratio_rate30m
+          expr: |
+            sum(rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[30m]))
+            /
+            clamp_min(sum(rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[30m])), 0.001)
+        - record: eks_agent_platform:sli_error:ratio_rate1h
+          expr: |
+            sum(rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[1h]))
+            /
+            clamp_min(sum(rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[1h])), 0.001)
+        - record: eks_agent_platform:sli_error:ratio_rate2h
+          expr: |
+            sum(rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[2h]))
+            /
+            clamp_min(sum(rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[2h])), 0.001)
+        - record: eks_agent_platform:sli_error:ratio_rate6h
+          expr: |
+            sum(rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[6h]))
+            /
+            clamp_min(sum(rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[6h])), 0.001)
+        - record: eks_agent_platform:sli_error:ratio_rate1d
+          expr: |
+            sum(rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[1d]))
+            /
+            clamp_min(sum(rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[1d])), 0.001)
+        - record: eks_agent_platform:sli_error:ratio_rate3d
+          expr: |
+            sum(rate(controller_runtime_reconcile_errors_total{namespace="eks-agent-platform"}[3d]))
+            /
+            clamp_min(sum(rate(controller_runtime_reconcile_total{namespace="eks-agent-platform"}[3d])), 0.001)
+
+    - name: agents.slo-burn-rate
+      rules:
+        # Multi-window, multi-burn-rate alerts on the 99% reconcile-availability
+        # SLO (error budget = 1 - 0.99 = 0.01). Each alert fires only when BOTH
+        # a long and a short window exceed the burn-rate factor, which catches
+        # fast burns quickly while suppressing flapping on one-off spikes. A
+        # burn rate of 14.4 exhausts 2% of the 30d budget in 1h.
+        #
+        # Page pair 1 — fast burn: 1h + 5m windows at 14.4x (2% budget in 1h).
+        - alert: ReconcileErrorBudgetFastBurn
+          expr: |
+            eks_agent_platform:sli_error:ratio_rate1h > (14.4 * 0.01)
+            and
+            eks_agent_platform:sli_error:ratio_rate5m > (14.4 * 0.01)
+          for: 2m
+          labels:
+            severity: critical
+            component: operator
+            persona: ops
+            slo: reconcile-availability
+          annotations:
+            summary: "operator reconcile error budget burning fast (14.4x, 1h+5m)"
+            description: "Reconcile error ratio is {{ $value | humanizePercentage }} over 1h and 5m — burning 2% of the 30d error budget per hour. Probable cause: AWS-side outage or an operator IAM regression. Check CloudTrail for the operator role."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
+
+        # Page pair 2 — 6h + 30m windows at 6x (5% budget in 6h).
+        - alert: ReconcileErrorBudgetBurn
+          expr: |
+            eks_agent_platform:sli_error:ratio_rate6h > (6 * 0.01)
+            and
+            eks_agent_platform:sli_error:ratio_rate30m > (6 * 0.01)
+          for: 15m
+          labels:
+            severity: critical
+            component: operator
+            persona: ops
+            slo: reconcile-availability
+          annotations:
+            summary: "operator reconcile error budget burning (6x, 6h+30m)"
+            description: "Reconcile error ratio is {{ $value | humanizePercentage }} over 6h and 30m — burning 5% of the 30d error budget per 6h. Check the operator's downstream AWS calls (IAM / KMS / Athena / EventBridge)."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
+
+        # Ticket pair 1 — 1d + 2h windows at 3x (10% budget in 1d).
+        - alert: ReconcileErrorBudgetSlowBurn
+          expr: |
+            eks_agent_platform:sli_error:ratio_rate1d > (3 * 0.01)
+            and
+            eks_agent_platform:sli_error:ratio_rate2h > (3 * 0.01)
+          for: 1h
+          labels:
+            severity: warning
+            component: operator
+            persona: ops
+            slo: reconcile-availability
+          annotations:
+            summary: "operator reconcile error budget slow-burning (3x, 1d+2h)"
+            description: "Reconcile error ratio is {{ $value | humanizePercentage }} over 1d and 2h — consuming 10% of the 30d error budget per day. Open a ticket; investigate the erroring controller before the budget is exhausted."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
+
+        # Ticket pair 2 — 3d + 6h windows at 1x (budget-window pace).
+        - alert: ReconcileErrorBudgetLowBurn
+          expr: |
+            eks_agent_platform:sli_error:ratio_rate3d > (1 * 0.01)
+            and
+            eks_agent_platform:sli_error:ratio_rate6h > (1 * 0.01)
+          for: 3h
+          labels:
+            severity: warning
+            component: operator
+            persona: ops
+            slo: reconcile-availability
+          annotations:
+            summary: "operator reconcile error budget burning at budget pace (1x, 3d+6h)"
+            description: "Reconcile error ratio is {{ $value | humanizePercentage }} over 3d and 6h — at this pace the whole 30d error budget is consumed over the SLO window. Open a ticket; a persistent low-grade error source is eroding the budget."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
+
     - name: agents.operator-health
       rules:
         # Reconcile p99 over the SLO ceiling (1s) for 10m sustained.
@@ -67,19 +200,6 @@ spec:
             summary: "{{ $labels.controller }} reconcile p99 above 1s for 10m"
             description: "Sustained p99 = {{ $value | humanizeDuration }}. SLO is 1s; investigate the controller's downstream calls (IAM / KMS / Athena / EventBridge)."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-latency.md
-
-        # Error rate over 5% for 15m → page ops.
-        - alert: ReconcileErrorRateHigh
-          expr: agents:reconcile_error_rate:5m > 0.05
-          for: 15m
-          labels:
-            severity: critical
-            component: operator
-            persona: ops
-          annotations:
-            summary: "{{ $labels.controller }} error rate above 5% for 15m"
-            description: "{{ $value | humanizePercentage }} of reconciles erroring. Probable cause: AWS-side outage or operator IAM regression. Check CloudTrail for the operator role."
-            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/reconcile-errors.md
 
         # Operator leader lost; pages ops.
         - alert: OperatorLeaderMissing

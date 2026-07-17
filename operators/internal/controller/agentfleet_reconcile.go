@@ -179,7 +179,7 @@ func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, tc client
 	ns := PlatformNamespace(p)
 	gwHost := fmt.Sprintf("%s-gateway.%s.svc.cluster.local:%d", p.Name, agentgatewayNamespace, gatewayListenerPort)
 	for _, agent := range fleet.Spec.Agents {
-		base := fleet.Name + "-" + agent.Name
+		base := kagentAgentName(fleet, agent.Name)
 		configName := base + "-config"
 		labels := map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
@@ -305,16 +305,22 @@ func awsRegionFromQueueURL(url string) string {
 	return rest[:dot]
 }
 
-// ensureKEDAScaledObject emits a KEDA ScaledObject per fleet (not per
-// agent) when scaling.enabled. When fleet.spec.scaling.queueUrl is set
-// (the production path) we emit an aws-sqs-queue trigger paired with a
-// TriggerAuthentication CR that points KEDA at the tenant role.
-// Without a queue URL we fall back to a CPU-utilization placeholder so
-// the fleet scales sensibly during onboarding before a queue is wired.
-func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
-	if !fleet.Spec.Scaling.Enabled {
-		return nil
-	}
+// kagentAgentName is the name kagent gives the workload it renders from a
+// fleet agent. The operator creates one kagent Agent per AgentSpec named
+// <fleet>-<agent> (ensureKagentAgents), and kagent's translator sets the
+// Deployment's metadata.name to the Agent's name verbatim — no prefix, no
+// suffix. A KEDA ScaledObject's scaleTargetRef must resolve to this exact
+// name; anything else points at a Deployment nothing creates and autoscaling
+// silently never fires.
+func kagentAgentName(fleet *agentsv1alpha1.AgentFleet, agentName string) string {
+	return fleet.Name + "-" + agentName
+}
+
+// fleetScalingMinMax resolves the (min, max) replica bounds for one agent.
+// min is the agent's own floor (AgentSpec.Replicas) when set, else the fleet
+// scaling minimum (default 1); max is the fleet ceiling (default 10) raised to
+// min when a per-agent floor exceeds it so KEDA never sees max < min.
+func fleetScalingMinMax(fleet *agentsv1alpha1.AgentFleet, agent *agentsv1alpha1.AgentSpec) (int32, int32) {
 	var minR, maxR int32 = 1, 10
 	if fleet.Spec.Scaling.Min != nil {
 		minR = *fleet.Spec.Scaling.Min
@@ -322,70 +328,112 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, tc cl
 	if fleet.Spec.Scaling.Max != nil {
 		maxR = *fleet.Spec.Scaling.Max
 	}
+	if agent.Replicas != nil {
+		minR = *agent.Replicas
+	}
+	if maxR < minR {
+		maxR = minR
+	}
+	return minR, maxR
+}
+
+// fleetScalingTriggers builds the KEDA trigger list shared by every agent in
+// the fleet: an aws-sqs-queue trigger on the fleet's work queue when
+// scaling.queueUrl is set (the production path), else a CPU-utilization
+// placeholder so the fleet scales sensibly during onboarding before a queue is
+// wired.
+func fleetScalingTriggers(fleet *agentsv1alpha1.AgentFleet, queueURL string) []any {
+	if queueURL == "" {
+		return []any{
+			map[string]any{
+				"type": "cpu",
+				"metadata": map[string]any{
+					"type":  "Utilization",
+					"value": "70",
+				},
+			},
+		}
+	}
+	region := awsRegionFromQueueURL(queueURL)
+	depth := fleet.Spec.Scaling.QueueDepthTrigger
+	if depth <= 0 {
+		depth = 10
+	}
+	return []any{
+		map[string]any{
+			"type": "aws-sqs-queue",
+			"metadata": map[string]any{
+				"queueURL":    queueURL,
+				"queueLength": fmt.Sprintf("%d", depth),
+				"awsRegion":   region,
+				// 'pod' identityOwner makes KEDA use the workload's own IRSA
+				// token (the tenant SA we provisioned via
+				// ensureTenantServiceAccount) rather than KEDA's own operator
+				// role — keeps per-tenant IAM clean.
+				"identityOwner": "pod",
+			},
+			"authenticationRef": map[string]any{
+				"name": "fleet-" + fleet.Name + "-aws",
+			},
+		},
+	}
+}
+
+// ensureKEDAScaledObject emits one KEDA ScaledObject per agent in the fleet,
+// each targeting the kagent-rendered Deployment for that agent
+// (kagentAgentName). kagent creates a Deployment per Agent, so a single
+// fleet-wide ScaledObject could only ever scale one of them — per-agent
+// ScaledObjects scale every agent's runtime. When scaling.queueUrl is set the
+// TriggerAuthentication is emitted once up front (all agents reference it);
+// without a queue URL each object carries a CPU-utilization placeholder.
+func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+	if !fleet.Spec.Scaling.Enabled {
+		return nil
+	}
 	queueURL := fleet.Spec.Scaling.QueueURL
 	if queueURL != "" {
-		// TriggerAuthentication has to land before the ScaledObject
-		// references it. KEDA's CreateOrUpdate semantics handle the
-		// order on its end, but we explicitly emit the TA first to
+		// TriggerAuthentication has to land before any ScaledObject
+		// references it. KEDA's CreateOrUpdate semantics handle the order on
+		// its end, but we explicitly emit the TA first (once per fleet) to
 		// avoid a transient ConfigMap-of-secret-not-found state.
 		if err := r.ensureKEDATriggerAuth(ctx, tc, fleet, p); err != nil {
 			return err
 		}
 	}
+	for i := range fleet.Spec.Agents {
+		if err := r.ensureAgentScaledObject(ctx, tc, fleet, &fleet.Spec.Agents[i], p, queueURL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureAgentScaledObject emits the ScaledObject for a single agent, targeting
+// the kagent Deployment (kagentAgentName) — the workload kagent actually
+// creates from the Agent CR. Per-agent minReplicaCount honors
+// AgentSpec.Replicas; maxReplicaCount is the fleet-wide ceiling.
+func (r *AgentFleetReconciler) ensureAgentScaledObject(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, agent *agentsv1alpha1.AgentSpec, p *platformv1alpha1.Platform, queueURL string) error {
+	name := kagentAgentName(fleet, agent.Name)
+	minR, maxR := fleetScalingMinMax(fleet, agent)
 	so := &unstructured.Unstructured{}
 	so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
-	so.SetName("fleet-" + fleet.Name)
+	so.SetName(name)
 	so.SetNamespace(PlatformNamespace(p))
 	_, err := controllerutil.CreateOrUpdate(ctx, tc, so, func() error {
 		so.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  p.Name,
 			LabelFleet:                     fleet.Name,
+			LabelAgent:                     agent.Name,
 		})
-		var triggers []any
-		if queueURL != "" {
-			region := awsRegionFromQueueURL(queueURL)
-			depth := fleet.Spec.Scaling.QueueDepthTrigger
-			if depth <= 0 {
-				depth = 10
-			}
-			triggers = []any{
-				map[string]any{
-					"type": "aws-sqs-queue",
-					"metadata": map[string]any{
-						"queueURL":    queueURL,
-						"queueLength": fmt.Sprintf("%d", depth),
-						"awsRegion":   region,
-						// 'pod' identityOwner makes KEDA use the workload's
-						// own IRSA token (the tenant SA we provisioned via
-						// ensureTenantServiceAccount) rather than KEDA's
-						// own operator role — keeps per-tenant IAM clean.
-						"identityOwner": "pod",
-					},
-					"authenticationRef": map[string]any{
-						"name": "fleet-" + fleet.Name + "-aws",
-					},
-				},
-			}
-		} else {
-			triggers = []any{
-				map[string]any{
-					"type": "cpu",
-					"metadata": map[string]any{
-						"type":  "Utilization",
-						"value": "70",
-					},
-				},
-			}
-		}
 		spec := map[string]any{
 			"scaleTargetRef": map[string]any{
-				"name": "fleet-" + fleet.Name,
+				"name": name,
 				"kind": "Deployment",
 			},
 			"minReplicaCount": int64(minR),
 			"maxReplicaCount": int64(maxR),
-			"triggers":        triggers,
+			"triggers":        fleetScalingTriggers(fleet, queueURL),
 		}
 		return unstructured.SetNestedField(so.Object, spec, "spec")
 	})
@@ -393,7 +441,7 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, tc cl
 		if isNoKindMatch(err) {
 			return errKEDANotInstalled
 		}
-		return fmt.Errorf("KEDA ScaledObject %s: %w", fleet.Name, err)
+		return fmt.Errorf("KEDA ScaledObject %s: %w", name, err)
 	}
 	return nil
 }
@@ -441,7 +489,7 @@ func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, tc cli
 	// the namespace tier, the virtual cluster for the vcluster tier — so they are
 	// deleted through the same target client that created them.
 	for _, agent := range fleet.Spec.Agents {
-		base := fleet.Name + "-" + agent.Name
+		base := kagentAgentName(fleet, agent.Name)
 		for _, kind := range []string{"Agent", "ModelConfig"} {
 			suffix := "-config"
 			if kind == "Agent" {
@@ -455,16 +503,19 @@ func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, tc cli
 				return fmt.Errorf("delete kagent %s %s: %w", kind, o.GetName(), err)
 			}
 		}
+		// Per-agent KEDA ScaledObject (named after the kagent Deployment it
+		// scales). Delete it before the shared TriggerAuthentication below so
+		// KEDA can't try to re-resolve a TA we're about to remove.
+		so := &unstructured.Unstructured{}
+		so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
+		so.SetName(base)
+		so.SetNamespace(ns)
+		if err := tc.Delete(ctx, so); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
+			return fmt.Errorf("delete ScaledObject %s: %w", base, err)
+		}
 	}
-	// KEDA ScaledObject + TriggerAuthentication. Delete the SO first so
-	// KEDA can't try to re-resolve a TA we're about to remove.
-	so := &unstructured.Unstructured{}
-	so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
-	so.SetName("fleet-" + fleet.Name)
-	so.SetNamespace(ns)
-	if err := tc.Delete(ctx, so); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
-		return fmt.Errorf("delete ScaledObject: %w", err)
-	}
+	// Fleet-wide TriggerAuthentication (one per fleet, referenced by every
+	// per-agent SQS ScaledObject above).
 	ta := &unstructured.Unstructured{}
 	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "TriggerAuthentication"})
 	ta.SetName("fleet-" + fleet.Name + "-aws")
@@ -562,6 +613,7 @@ func (r *AgentFleetReconciler) applyFleetStatus(ctx context.Context, fleet *agen
 	fleet.Status.Phase = phase
 	fleet.Status.ReadyAgents = readyAgents
 	fleet.Status.ObservedGeneration = fleet.Generation
+	fleetReadyAgents.WithLabelValues(fleet.Namespace, fleet.Spec.PlatformRef.Name, fleet.Name).Set(float64(readyAgents))
 	cond := metav1.Condition{
 		Type:               "AgentsReconciled",
 		Status:             metav1.ConditionTrue,

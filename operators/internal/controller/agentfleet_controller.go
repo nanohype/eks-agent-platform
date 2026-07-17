@@ -81,6 +81,9 @@ func (r *AgentFleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
 			}
 		}
+		// Drop the fleet's readiness series so a deleted fleet leaves no stale
+		// gauge behind.
+		fleetReadyAgents.DeleteLabelValues(fleet.Namespace, fleet.Spec.PlatformRef.Name, fleet.Name)
 		return ctrl.Result{}, nil
 	}
 	if !controllerutil.ContainsFinalizer(&fleet, agentFleetFinalizer) {
