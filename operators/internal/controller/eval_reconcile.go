@@ -276,6 +276,14 @@ func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *governancev
 		cond.Reason = phase
 		cond.Message = "waiting on Platform/AgentFleet readiness or Argo CRDs"
 	}
+	// Surface the last observed mean score as an operator-emitted gauge (the
+	// eval-runner writes it back into status; we mirror it as a real series so
+	// the eval-quality dashboard has a first-class metric, not only a KSM
+	// projection). Skip when the suite has not completed a run yet.
+	if v, ok := parseDecimal(suite.Status.LastScore); ok {
+		f, _ := v.Float64()
+		evalSuiteScore.WithLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name).Set(f)
+	}
 	upsertCondition(&suite.Status.Conditions, cond)
 	return r.Status().Update(ctx, suite)
 }

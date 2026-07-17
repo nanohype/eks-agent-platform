@@ -43,7 +43,9 @@ type ModelRouteSpec struct {
 	// +optional
 	CrossRegionProfile string `json:"crossRegionProfile,omitempty"`
 
-	// RateLimit (requests per minute) is enforced at the gateway.
+	// RateLimit caps requests per minute (not tokens) on this route. The
+	// operator renders it into an agentgateway local rate-limit policy with
+	// unit=Minutes; 0 or unset disables rate limiting for the route.
 	// +optional
 	RateLimit int32 `json:"rateLimit,omitempty"`
 

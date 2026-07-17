@@ -17,6 +17,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
@@ -388,11 +389,21 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Periodic re-queue so we pick up out-of-band kill-switch tag changes
 	// (no Platform CR write to trigger us otherwise). Skip when r.IAM is
 	// nil — envtest/dev path has nothing to detect, and the unit-test
-	// drivers treat RequeueAfter == 0 as the convergence signal.
+	// drivers treat RequeueAfter == 0 as the convergence signal. Jittered so
+	// many Platforms created together don't re-poll the IAM ListRoleTags path
+	// in lockstep (a synchronized thundering herd against the AWS API).
 	if r.IAM != nil {
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: requeueJitter(60 * time.Second)}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// requeueJitter spreads a fixed poll interval across a window so reconcilers
+// that would otherwise re-queue on the same cadence (e.g. many Platforms
+// admitted in one burst) desynchronize their AWS polls. Adds up to +20% to the
+// base interval.
+func requeueJitter(base time.Duration) time.Duration {
+	return wait.Jitter(base, 0.2)
 }
 
 // setVClusterReady upserts the VClusterReady condition on a Platform. A single

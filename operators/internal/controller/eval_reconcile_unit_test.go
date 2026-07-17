@@ -11,6 +11,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -87,6 +88,23 @@ func TestResolveEvalRefs(t *testing.T) {
 			t.Fatalf("both present: got (%v, %v, %v)", gotP, gotF, err)
 		}
 	})
+}
+
+func TestApplyEvalStatusEmitsScoreGauge(t *testing.T) {
+	ctx := context.Background()
+	s := evalScheme(t)
+	suite := evalSuite()
+	suite.Status.LastScore = "0.91"
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(suite).WithStatusSubresource(suite).Build()
+	r := &EvalReconciler{Client: cl, Scheme: s}
+	if err := r.applyEvalStatus(ctx, suite, phaseReady); err != nil {
+		t.Fatalf("applyEvalStatus: %v", err)
+	}
+	g := evalSuiteScore.WithLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name)
+	if got := testutil.ToFloat64(g); got < 0.9099 || got > 0.9101 {
+		t.Errorf("agents_eval_suite_score = %v; want ~0.91", got)
+	}
+	evalSuiteScore.DeleteLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name)
 }
 
 func TestReconcileEval_PendingUntilBothReady(t *testing.T) {

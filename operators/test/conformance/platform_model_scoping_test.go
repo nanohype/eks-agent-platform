@@ -215,9 +215,10 @@ func newScopingReconciler(iamFake *memIAM) *controller.PlatformReconciler {
 }
 
 // reconcileIAM drives Reconcile to convergence for a reconciler with a wired
-// IAM client. Unlike reconcileOnce, convergence is the periodic 60s requeue
+// IAM client. Unlike reconcileOnce, convergence is the periodic poll requeue
 // (the reconciler always re-queues to poll for out-of-band kill-switch tag
-// changes when IAM != nil).
+// changes when IAM != nil). The poll is jittered off a 60s base to desync many
+// Platforms, so convergence is any requeue in the [60s, 72s] jitter window.
 func reconcileIAM(ctx context.Context, t *testing.T, r *controller.PlatformReconciler, p *platformv1alpha1.Platform) {
 	t.Helper()
 	for i := 0; i < 5; i++ {
@@ -225,7 +226,7 @@ func reconcileIAM(ctx context.Context, t *testing.T, r *controller.PlatformRecon
 		if err != nil {
 			t.Fatalf("reconcile attempt %d: %v", i+1, err)
 		}
-		if res.RequeueAfter == 60*time.Second {
+		if res.RequeueAfter >= 60*time.Second && res.RequeueAfter <= 72*time.Second {
 			return
 		}
 	}

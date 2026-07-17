@@ -26,6 +26,32 @@ var killSwitchUnroutedTotal = prometheus.NewCounterVec(
 	[]string{"namespace", "budgetpolicy", "platform"},
 )
 
+// fleetReadyAgents is the operator's first-class view of AgentFleet readiness:
+// the number of agents the reconciler last observed Ready in a fleet. It is
+// the domain metric behind the persona dashboards' fleet-runtime panels — a
+// real operator-emitted series, distinct from the KSM projection of
+// AgentFleet.status.readyAgents. Set on every fleet status write and cleared
+// when the fleet is deleted so no stale series lingers.
+var fleetReadyAgents = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "agents_fleet_ready_agents",
+		Help: "Agents last observed Ready in an AgentFleet, by fleet.",
+	},
+	[]string{"namespace", "platform", "fleet"},
+)
+
+// evalSuiteScore is the operator's view of an EvalSuite's most recent mean
+// score (0..1), the domain metric behind the eval-quality dashboard's score
+// panels. Emitted whenever a status write observes a parseable
+// EvalSuite.status.lastScore and cleared when the suite is deleted.
+var evalSuiteScore = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "agents_eval_suite_score",
+		Help: "Most recent mean EvalSuite score (0..1), by suite.",
+	},
+	[]string{"namespace", "platform", "suite"},
+)
+
 func init() {
-	ctrlmetrics.Registry.MustRegister(killSwitchUnroutedTotal)
+	ctrlmetrics.Registry.MustRegister(killSwitchUnroutedTotal, fleetReadyAgents, evalSuiteScore)
 }
