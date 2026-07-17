@@ -1,15 +1,18 @@
 import type { TokenUsage } from '@eks-agent/core';
 
+import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };
+
 /**
  * Bedrock on-demand prices per million tokens.
  *
- * MAINTENANCE: this table is hand-curated and is NOT Renovate-managed
- * (Renovate bumps package deps, not PRICES content). An automated refresh from
- * the AWS Pricing API (scripts/refresh-pricing.mjs) is Phase-2 and currently a
- * fail-loud scaffold. Until then, update values by hand from the Bedrock
- * pricing page — never from memory, since Bedrock pricing changes regularly. A
- * model id missing from this table prices as an unmetered 0 (priced:false via
- * priceModel), so add new models here before they bill.
+ * The price table is the single source of truth in
+ * `src/data/bedrock-pricing.json`. This module imports it directly; the
+ * Lambda cost publisher's Python table is generated from the same file
+ * (`scripts/gen-lambda-pricing.mjs`) and a CI drift gate fails the build if
+ * the two diverge. Refresh the JSON from the AWS Pricing API with
+ * `scripts/refresh-pricing.mjs` (documented weekly cadence). A model id
+ * missing from the table prices as an unmetered 0 (priced:false via
+ * {@link priceModel}), so add new models to the JSON before they bill.
  *
  * Prices are USD per 1,000,000 tokens.
  */
@@ -20,44 +23,32 @@ export interface ModelPrice {
   cacheWritePerMillion?: number;
 }
 
-export const PRICES: Record<string, ModelPrice> = {
-  // Anthropic Claude (Bedrock)
-  'anthropic.claude-3-5-sonnet-20241022-v2:0': {
-    inputPerMillion: 3.0,
-    outputPerMillion: 15.0,
-    cacheReadPerMillion: 0.3,
-    cacheWritePerMillion: 3.75,
-  },
-  'us.anthropic.claude-3-5-sonnet-20241022-v2:0': {
-    inputPerMillion: 3.0,
-    outputPerMillion: 15.0,
-    cacheReadPerMillion: 0.3,
-    cacheWritePerMillion: 3.75,
-  },
-  'anthropic.claude-3-5-haiku-20241022-v1:0': {
-    inputPerMillion: 0.8,
-    outputPerMillion: 4.0,
-    cacheReadPerMillion: 0.08,
-    cacheWritePerMillion: 1.0,
-  },
-  'anthropic.claude-3-opus-20240229-v1:0': { inputPerMillion: 15.0, outputPerMillion: 75.0 },
+interface PricingEntry extends ModelPrice {
+  family: string;
+}
 
-  // Amazon Nova
-  'amazon.nova-pro-v1:0': { inputPerMillion: 0.8, outputPerMillion: 3.2 },
-  'amazon.nova-lite-v1:0': { inputPerMillion: 0.06, outputPerMillion: 0.24 },
-  'amazon.nova-micro-v1:0': { inputPerMillion: 0.035, outputPerMillion: 0.14 },
+const PRICING_DATA = bedrockPricing.models as Record<string, PricingEntry>;
 
-  // Meta Llama 3 (representative)
-  'meta.llama3-1-70b-instruct-v1:0': { inputPerMillion: 0.99, outputPerMillion: 0.99 },
-  'meta.llama3-1-8b-instruct-v1:0': { inputPerMillion: 0.22, outputPerMillion: 0.22 },
+export const PRICES: Record<string, ModelPrice> = Object.fromEntries(
+  Object.entries(PRICING_DATA).map(([id, { family: _family, ...price }]) => [id, price]),
+);
 
-  // Mistral
-  'mistral.mistral-large-2407-v1:0': { inputPerMillion: 2.0, outputPerMillion: 6.0 },
-
-  // Cohere
-  'cohere.command-r-plus-v1:0': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
-  'cohere.command-r-v1:0': { inputPerMillion: 0.5, outputPerMillion: 1.5 },
-};
+/**
+ * Strip a Bedrock cross-region inference-profile prefix (`us.`, `eu.`,
+ * `jp.`, `ap.`, `apac.`, `global.`, …) from a model id, leaving the bare
+ * `<provider>.<model>` id. Removes exactly one leading lowercase segment and
+ * only when a `<provider>.<model>` id remains (i.e. the remainder still
+ * contains a dot), so a bare provider id like
+ * `anthropic.claude-3-opus-20240229-v1:0` is left untouched. Pattern-based —
+ * no hardcoded geo list — so future regional shorts resolve automatically.
+ */
+export function bareModel(modelId: string): string {
+  const dot = modelId.indexOf('.');
+  if (dot > 0 && /^[a-z]+$/.test(modelId.slice(0, dot)) && modelId.slice(dot + 1).includes('.')) {
+    return modelId.slice(dot + 1);
+  }
+  return modelId;
+}
 
 export interface PriceResult {
   /** Estimated USD cost. 0 when the model id has no entry in PRICES. */
@@ -82,10 +73,7 @@ export function priceModel({
   modelId: string;
   tokens: TokenUsage;
 }): PriceResult {
-  // Bedrock cross-region inference profile prefixes: us. eu. apac. ap. (and
-  // future regional shorts). Strip any 2–5-char lowercase prefix before lookup
-  // so profile IDs resolve to the base model price.
-  const key = modelId.replace(/^[a-z]{2,5}\./, '');
+  const key = bareModel(modelId);
   // PRICES is a static, hand-curated record. Bracket lookup is safe — no
   // prototype-pollution surface, no method invocation, no user-controlled
   // writes. The security/detect-object-injection rule is a false positive

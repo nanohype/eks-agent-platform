@@ -1,0 +1,107 @@
+{
+  "$comment": "Single source of truth for Bedrock on-demand model prices. TypeScript imports this file directly (packages/pricing/src/index.ts); the Lambda cost publisher's table (terraform/components/cost-pipeline/lambda/pricing_data.py) is generated from it by scripts/gen-lambda-pricing.mjs and drift-checked in CI. Refresh from the AWS Pricing API with scripts/refresh-pricing.mjs. Never hand-edit prices from memory — Bedrock pricing changes regularly and stale numbers silently undercount spend.",
+  "currency": "USD",
+  "unit": "per_million_tokens",
+  "cacheModel": "Anthropic prompt-caching multipliers: cache write = 1.25x input (5-minute TTL), cache read = 0.10x input.",
+  "models": {
+    "anthropic.claude-sonnet-4-6": {
+      "family": "anthropic",
+      "inputPerMillion": 3.0,
+      "outputPerMillion": 15.0,
+      "cacheReadPerMillion": 0.3,
+      "cacheWritePerMillion": 3.75
+    },
+    "anthropic.claude-sonnet-5": {
+      "family": "anthropic",
+      "inputPerMillion": 3.0,
+      "outputPerMillion": 15.0,
+      "cacheReadPerMillion": 0.3,
+      "cacheWritePerMillion": 3.75
+    },
+    "anthropic.claude-opus-4-8": {
+      "family": "anthropic",
+      "inputPerMillion": 5.0,
+      "outputPerMillion": 25.0,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 6.25
+    },
+    "anthropic.claude-opus-4-6-v1": {
+      "family": "anthropic",
+      "inputPerMillion": 5.0,
+      "outputPerMillion": 25.0,
+      "cacheReadPerMillion": 0.5,
+      "cacheWritePerMillion": 6.25
+    },
+    "anthropic.claude-haiku-4-5-20251001-v1:0": {
+      "family": "anthropic",
+      "inputPerMillion": 1.0,
+      "outputPerMillion": 5.0,
+      "cacheReadPerMillion": 0.1,
+      "cacheWritePerMillion": 1.25
+    },
+    "anthropic.claude-3-5-sonnet-20241022-v2:0": {
+      "family": "anthropic",
+      "inputPerMillion": 3.0,
+      "outputPerMillion": 15.0,
+      "cacheReadPerMillion": 0.3,
+      "cacheWritePerMillion": 3.75
+    },
+    "anthropic.claude-3-5-haiku-20241022-v1:0": {
+      "family": "anthropic",
+      "inputPerMillion": 0.8,
+      "outputPerMillion": 4.0,
+      "cacheReadPerMillion": 0.08,
+      "cacheWritePerMillion": 1.0
+    },
+    "anthropic.claude-3-opus-20240229-v1:0": {
+      "family": "anthropic",
+      "inputPerMillion": 15.0,
+      "outputPerMillion": 75.0
+    },
+    "anthropic.claude-3-haiku-20240307-v1:0": {
+      "family": "anthropic",
+      "inputPerMillion": 0.25,
+      "outputPerMillion": 1.25
+    },
+    "amazon.nova-pro-v1:0": {
+      "family": "amazon",
+      "inputPerMillion": 0.8,
+      "outputPerMillion": 3.2
+    },
+    "amazon.nova-lite-v1:0": {
+      "family": "amazon",
+      "inputPerMillion": 0.06,
+      "outputPerMillion": 0.24
+    },
+    "amazon.nova-micro-v1:0": {
+      "family": "amazon",
+      "inputPerMillion": 0.035,
+      "outputPerMillion": 0.14
+    },
+    "meta.llama3-1-70b-instruct-v1:0": {
+      "family": "meta",
+      "inputPerMillion": 0.99,
+      "outputPerMillion": 0.99
+    },
+    "meta.llama3-1-8b-instruct-v1:0": {
+      "family": "meta",
+      "inputPerMillion": 0.22,
+      "outputPerMillion": 0.22
+    },
+    "mistral.mistral-large-2407-v1:0": {
+      "family": "mistral",
+      "inputPerMillion": 2.0,
+      "outputPerMillion": 6.0
+    },
+    "cohere.command-r-plus-v1:0": {
+      "family": "cohere",
+      "inputPerMillion": 3.0,
+      "outputPerMillion": 15.0
+    },
+    "cohere.command-r-v1:0": {
+      "family": "cohere",
+      "inputPerMillion": 0.5,
+      "outputPerMillion": 1.5
+    }
+  }
+}

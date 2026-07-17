@@ -9,6 +9,8 @@ Licensed under the Apache License, Version 2.0 (the "License");
 package agentctl
 
 import (
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +18,59 @@ import (
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
+
+// model_defaults.json is the source of truth for which model ids the persona
+// routes default to. Go embeds it here; the TypeScript scaffolder consumes a
+// drift-checked copy (packages/cli/src/data/model-defaults.json). The model
+// ids in personaCatalog are stamped from it at init, so there is exactly one
+// place to bump a default model.
+//
+//go:embed model_defaults.json
+var modelDefaultsJSON []byte
+
+type modelDefaults struct {
+	// Tiers names the org LLM-policy models (default / light / escalation).
+	Tiers map[string]string `json:"tiers"`
+	// Personas maps a persona key to the model ids its routes default to.
+	Personas map[string]personaModelSpec `json:"personas"`
+}
+
+type personaModelSpec struct {
+	Family           string `json:"family"`
+	PrimaryModelID   string `json:"primaryModelId"`
+	SecondaryModelID string `json:"secondaryModelId"`
+}
+
+var parsedModelDefaults modelDefaults
+
+func init() {
+	if err := json.Unmarshal(modelDefaultsJSON, &parsedModelDefaults); err != nil {
+		panic(fmt.Sprintf("agentctl: parse model_defaults.json: %v", err))
+	}
+	for name, p := range personaCatalog {
+		spec, ok := parsedModelDefaults.Personas[name]
+		if !ok {
+			panic(fmt.Sprintf("agentctl: persona %q missing from model_defaults.json", name))
+		}
+		if spec.Family == "" || spec.PrimaryModelID == "" {
+			panic(fmt.Sprintf("agentctl: persona %q has an empty model default", name))
+		}
+		p.PrimaryModelFamily = spec.Family
+		p.PrimaryModelID = spec.PrimaryModelID
+		p.SecondaryModelID = spec.SecondaryModelID
+		personaCatalog[name] = p
+	}
+}
+
+// ModelTiers returns the org LLM-policy model tiers (default / light /
+// escalation) from the embedded SSOT.
+func ModelTiers() map[string]string {
+	out := make(map[string]string, len(parsedModelDefaults.Tiers))
+	for k, v := range parsedModelDefaults.Tiers {
+		out[k] = v
+	}
+	return out
+}
 
 // PersonaDefaults describes the persona-flexed defaults the
 // 'agentctl tenant init' command emits when scaffolding a Platform.
@@ -36,13 +91,13 @@ type PersonaDefaults struct {
 	// specific (e.g. 'triage' for support, 'research' for sales-ops).
 	PrimaryRouteName string
 
-	// PrimaryModelFamily defaults — typically 'anthropic' but personas
-	// with image work (marketing) get 'amazon-nova' on the side.
+	// PrimaryModelFamily / PrimaryModelID are stamped at init from the
+	// model-default SSOT (model_defaults.json) — do not set them inline.
 	PrimaryModelFamily string
 	PrimaryModelID     string
 
 	// SecondaryRouteName + model — empty when the persona only needs
-	// one route by default.
+	// one route by default. SecondaryModelID is stamped from the SSOT.
 	SecondaryRouteName string
 	SecondaryModelID   string
 	SecondaryRateLimit int32
@@ -68,15 +123,14 @@ type PersonaDefaults struct {
 
 // personaCatalog is the source of truth for persona-flexed defaults.
 // Keys must match the PlatformSpec.Persona enum. New personas added
-// here automatically surface in `agentctl persona list`.
+// here automatically surface in `agentctl persona list`. Model ids are
+// stamped from model_defaults.json at init (see above).
 var personaCatalog = map[string]PersonaDefaults{
 	"sales-ops": {
 		Name: "sales-ops", DisplayLabel: "Sales Operations",
-		PrimaryRouteName: "research", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:     "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName:   "research",
 		PrimaryRateLimit:   60,
 		SecondaryRouteName: "enrichment",
-		SecondaryModelID:   "us.amazon.nova-lite-v1:0",
 		SecondaryRateLimit: 120,
 		MonthlyBudgetUsd:   "2500",
 		FleetMin:           1, FleetMax: 6,
@@ -90,11 +144,9 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"support": {
 		Name: "support", DisplayLabel: "Customer Support",
-		PrimaryRouteName: "triage", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:     "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+		PrimaryRouteName:   "triage",
 		PrimaryRateLimit:   120,
 		SecondaryRouteName: "escalation",
-		SecondaryModelID:   "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
 		SecondaryRateLimit: 30,
 		MonthlyBudgetUsd:   "1500",
 		FleetMin:           1, FleetMax: 5,
@@ -109,8 +161,7 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"finance": {
 		Name: "finance", DisplayLabel: "Finance",
-		PrimaryRouteName: "analysis", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:   "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName: "analysis",
 		PrimaryRateLimit: 20,
 		MonthlyBudgetUsd: "1000",
 		FleetMin:         1, FleetMax: 2,
@@ -125,8 +176,7 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"ops": {
 		Name: "ops", DisplayLabel: "Operations / Platform",
-		PrimaryRouteName: "incident", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:   "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName: "incident",
 		PrimaryRateLimit: 30,
 		MonthlyBudgetUsd: "1500",
 		FleetMin:         1, FleetMax: 3,
@@ -141,11 +191,9 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"founder": {
 		Name: "founder", DisplayLabel: "Founder / Exec",
-		PrimaryRouteName: "deep", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:     "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName:   "deep",
 		PrimaryRateLimit:   30,
 		SecondaryRouteName: "fast",
-		SecondaryModelID:   "us.anthropic.claude-3-5-haiku-20241022-v1:0",
 		SecondaryRateLimit: 60,
 		MonthlyBudgetUsd:   "500",
 		FleetMin:           0, FleetMax: 1,
@@ -159,8 +207,7 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"eng": {
 		Name: "eng", DisplayLabel: "Engineering",
-		PrimaryRouteName: "primary", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:   "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName: "primary",
 		PrimaryRateLimit: 60,
 		MonthlyBudgetUsd: "2000",
 		FleetMin:         1, FleetMax: 4,
@@ -174,11 +221,9 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"marketing": {
 		Name: "marketing", DisplayLabel: "Marketing",
-		PrimaryRouteName: "copy", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:     "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName:   "copy",
 		PrimaryRateLimit:   60,
 		SecondaryRouteName: "image",
-		SecondaryModelID:   "us.amazon.nova-pro-v1:0",
 		SecondaryRateLimit: 10,
 		MonthlyBudgetUsd:   "1500",
 		FleetMin:           1, FleetMax: 4,
@@ -192,8 +237,7 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"legal": {
 		Name: "legal", DisplayLabel: "Legal",
-		PrimaryRouteName: "review", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:   "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName: "review",
 		PrimaryRateLimit: 15,
 		MonthlyBudgetUsd: "800",
 		FleetMin:         0, FleetMax: 2,
@@ -208,8 +252,7 @@ var personaCatalog = map[string]PersonaDefaults{
 	},
 	"generic": {
 		Name: "generic", DisplayLabel: "Generic",
-		PrimaryRouteName: "primary", PrimaryModelFamily: "anthropic",
-		PrimaryModelID:   "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+		PrimaryRouteName: "primary",
 		PrimaryRateLimit: 30,
 		MonthlyBudgetUsd: "1000",
 		FleetMin:         1, FleetMax: 3,

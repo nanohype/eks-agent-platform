@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseAllDocuments } from 'yaml';
 
+import modelDefaults from '../data/model-defaults.json' with { type: 'json' };
+
 import { platformNew } from './platform-new.js';
 
 describe('platformNew', () => {
@@ -65,7 +67,8 @@ describe('platformNew', () => {
     const gateway = docs[2] as { spec: { routes: { name: string; modelId: string }[] } };
     const fleet = docs[3] as { spec: { agents: { modelRoute: string }[] } };
     expect(gateway.spec.routes[0]?.name).toBe('primary');
-    expect(gateway.spec.routes[0]?.modelId).toContain('llama');
+    // The route model comes from the shared model-default SSOT.
+    expect(gateway.spec.routes[0]?.modelId).toBe(modelDefaults.personas.support.primaryModelId);
     expect(fleet.spec.agents[0]?.modelRoute).toBe('primary');
   });
 

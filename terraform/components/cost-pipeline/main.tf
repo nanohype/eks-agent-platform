@@ -583,10 +583,14 @@ resource "aws_athena_named_query" "spend_reconciliation" {
 # lag by ~24h).
 ################################################################################
 
+# Package the whole lambda/ directory so the generated pricing_data.py ships
+# alongside the handler. Tests and bytecode caches are excluded — they never
+# run in Lambda.
 data "archive_file" "invocation_cost_publisher" {
   type        = "zip"
-  source_file = "${path.module}/lambda/invocation_cost_publisher.py"
+  source_dir  = "${path.module}/lambda"
   output_path = "${path.module}/build/invocation_cost_publisher.zip"
+  excludes    = ["test_invocation_cost_publisher.py", "__pycache__", "requirements-test.txt"]
 }
 
 resource "aws_iam_role" "invocation_cost_publisher" {

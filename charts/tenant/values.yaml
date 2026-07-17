@@ -58,8 +58,9 @@ modelGateway:
   defaultRoute:
     name: primary
     modelFamily: anthropic
-    modelId: us.anthropic.claude-3-5-sonnet-20241022-v2:0
-    crossRegionProfile: "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    # llm-policy default tier. This is already a us. cross-region inference
+    # profile, so no separate crossRegionProfile is needed.
+    modelId: us.anthropic.claude-sonnet-4-6
     rateLimit: 60
 
 agentFleet:
