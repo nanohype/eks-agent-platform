@@ -8,18 +8,27 @@ log group as JSON records (one per invocation). We:
   1. gunzip + base64-decode the CloudWatch payload,
   2. parse each invocation record,
   3. compute estimated USD cost from input/output token counts plus the
-     per-model pricing table below,
+     per-model pricing table (``pricing_data.PRICING``),
   4. emit a PutMetricData call to CloudWatch under
      ``namespace=agents/Bedrock`` / ``MetricName=EstimatedInvocationCostUsd``,
      dimensioned by PlatformId (extracted from the invocation's tags or
      headers, falling back to "unknown").
 
-The Budget reconciler reads this metric to estimate in-flight cost
-incurred since the most recent CUR partition (which lags by ~24h).
+An invocation on a model that isn't in the pricing table is **not** priced
+against a borrowed rate — that would silently undercount spend on a new or
+mistyped model id. Instead it is published as an explicit ``UnpricedInvocations``
+count dimensioned by PlatformId + ModelId, so unpriced traffic is observable
+and the pricing table can be extended before the next billing cycle.
 
-Pricing table is conservative and rounded; the metric is intended for
-threshold/alerting decisions, not finance-grade reporting. The CUR-based
-view is authoritative for billing.
+The pricing table is generated from the same JSON source of truth the
+TypeScript ``@eks-agent/pricing`` package imports
+(``packages/pricing/src/data/bedrock-pricing.json``); a CI drift gate keeps the
+two in lockstep. Prices are USD per 1,000,000 tokens.
+
+The Budget reconciler reads the cost metric to estimate in-flight cost
+incurred since the most recent CUR partition (which lags by ~24h). The metric
+is intended for threshold/alerting decisions, not finance-grade reporting; the
+CUR-based view is authoritative for billing.
 """
 
 from __future__ import annotations
@@ -36,6 +45,8 @@ from typing import Any
 
 import boto3
 
+from pricing_data import PRICING
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -45,6 +56,7 @@ NAMESPACE = "agents/Bedrock"
 METRIC_NAME = "EstimatedInvocationCostUsd"
 TOKENS_IN_METRIC = "TokensIn"
 TOKENS_OUT_METRIC = "TokensOut"
+UNPRICED_METRIC = "UnpricedInvocations"
 
 # Estimate export → S3 (Hive-partitioned NDJSON under usage_date=<d>/) feeds
 # the Athena `invocation_cost_estimates` table, which the
@@ -56,80 +68,82 @@ ESTIMATE_PREFIX = os.environ.get("ESTIMATE_PREFIX", "estimates")
 ESTIMATE_KMS_KEY_ID = os.environ.get("ESTIMATE_KMS_KEY_ID", "")
 
 
-# USD per 1K tokens. Rough; rounded conservatively upward so the
-# metric trips alerts slightly before the CUR confirms.
-# Bedrock-specific identifiers (cross-region inference profile prefixes
-# like 'us.' get stripped before lookup).
-PRICING: dict[str, dict[str, float]] = {
-    # Anthropic
-    "anthropic.claude-3-5-sonnet-20241022-v2:0": {"input": 0.003,  "output": 0.015},
-    "anthropic.claude-3-5-haiku-20241022-v1:0":  {"input": 0.001,  "output": 0.005},
-    "anthropic.claude-3-opus-20240229-v1:0":     {"input": 0.015,  "output": 0.075},
-    "anthropic.claude-3-haiku-20240307-v1:0":    {"input": 0.00025, "output": 0.00125},
-    # Amazon Nova
-    "amazon.nova-pro-v1:0":   {"input": 0.0008,  "output": 0.0032},
-    "amazon.nova-lite-v1:0":  {"input": 0.00006, "output": 0.00024},
-    "amazon.nova-micro-v1:0": {"input": 0.000035, "output": 0.00014},
-    # Meta Llama
-    "meta.llama3-1-70b-instruct-v1:0": {"input": 0.00072, "output": 0.00072},
-    "meta.llama3-1-8b-instruct-v1:0":  {"input": 0.00022, "output": 0.00022},
-}
-
-# Fallback when modelId isn't in the table. Tuned to be roughly mid-range —
-# alerts on unknown models will be slightly off but not silent.
-FALLBACK_PRICING = {"input": 0.003, "output": 0.015}
-
-
 def _bare_model(model_id: str) -> str:
-    # Strip cross-region prefixes like 'us.' / 'eu.' that AWS prepends to
-    # inference profile IDs, leaving the bare Bedrock model id.
-    return model_id.split(".", 1)[1] if "." in model_id and len(model_id.split(".", 1)[0]) <= 3 else model_id
-
-
-def _model_pricing(model_id: str) -> dict[str, float]:
-    return PRICING.get(_bare_model(model_id), FALLBACK_PRICING)
-
-
-def _estimate_cost(record: dict[str, Any]) -> tuple[float, str, str, int, int]:
     """
-    Returns (cost_usd, platform_id, model_id, in_tokens, out_tokens) for one
-    invocation log record.
+    Strip a Bedrock cross-region inference-profile prefix (``us.``, ``eu.``,
+    ``jp.``, ``ap.``, ``apac.``, ``global.`` …) from a model id, leaving the
+    bare ``<provider>.<model>`` id used as the pricing-table key.
+
+    Removes exactly one leading lowercase-alpha segment, and only when a
+    ``<provider>.<model>`` id remains (the remainder still contains a dot), so
+    a bare provider id like ``anthropic.claude-3-opus-20240229-v1:0`` is left
+    untouched. Pattern-based — no hardcoded prefix list — so future regional
+    shorts of any length resolve automatically.
+    """
+    head, sep, tail = model_id.partition(".")
+    if sep and head.isalpha() and head.islower() and "." in tail:
+        return tail
+    return model_id
+
+
+def _price_for(model_id: str) -> dict[str, float] | None:
+    """Return the price row for a model id, or None when it isn't priced."""
+    return PRICING.get(_bare_model(model_id))
+
+
+def _extract_platform(identity_arn: str) -> str:
+    """Recover the PlatformId from an assumed-role ARN's role name.
+
+    The tenant role naming contract (see ADR 0004) embeds the platform name in
+    the ``${env}-${platform}-tenant`` role, so the role name is the source of
+    truth. Returns "unknown" when the ARN doesn't match the tenant shape.
+    """
+    if ":assumed-role/" not in identity_arn:
+        return "unknown"
+    role_part = identity_arn.split(":assumed-role/", 1)[1].split("/", 1)[0]
+    suffix = "-tenant"
+    if not role_part.endswith(suffix):
+        return "unknown"
+    stripped = role_part[: -len(suffix)]
+    env_prefix = os.environ.get("AGENTS_ENVIRONMENT", "")
+    if env_prefix and stripped.startswith(env_prefix + "-"):
+        return stripped[len(env_prefix) + 1 :]
+    return stripped
+
+
+def _estimate_cost(record: dict[str, Any]) -> tuple[float, str, str, int, int, bool]:
+    """
+    Returns (cost_usd, platform_id, model_id, in_tokens, out_tokens, priced)
+    for one invocation log record.
 
     Bedrock invocation log shape (abridged):
       {
-        "modelId": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "modelId": "us.anthropic.claude-sonnet-4-6",
         "input": {"inputTokenCount": 142, ...},
         "output": {"outputTokenCount": 87, ...},
         "requestId": "...",
         "identity": {"arn": "arn:aws:sts:::assumed-role/<env>-<platform>-tenant/..."}
       }
 
-    The PlatformId is recovered from the assumed-role ARN's session name
-    — the tenant role naming contract (see ADR 0004) embeds the platform
-    name there. The role-name itself is the source of truth.
+    ``priced`` is False when the model id has no pricing-table entry; the cost
+    is then an unmetered 0 rather than a borrowed rate, and the caller surfaces
+    it as an UnpricedInvocations count.
     """
     model = record.get("modelId") or record.get("model") or "unknown"
     bare = _bare_model(model)
     in_tokens = (record.get("input") or {}).get("inputTokenCount", 0) or 0
     out_tokens = (record.get("output") or {}).get("outputTokenCount", 0) or 0
-    pricing = PRICING.get(bare, FALLBACK_PRICING)
-    cost = (in_tokens / 1000.0) * pricing["input"] + (out_tokens / 1000.0) * pricing["output"]
 
-    platform_id = "unknown"
-    identity_arn = (record.get("identity") or {}).get("arn", "")
-    # Tenant role pattern: ${env}-${platform}-tenant
-    # ARN looks like arn:aws:sts::123:assumed-role/dev-acme-tenant/<session>
-    if ":assumed-role/" in identity_arn:
-        role_part = identity_arn.split(":assumed-role/", 1)[1].split("/", 1)[0]
-        env_prefix = os.environ.get("AGENTS_ENVIRONMENT", "")
-        suffix = "-tenant"
-        if role_part.endswith(suffix):
-            stripped = role_part[: -len(suffix)]
-            if env_prefix and stripped.startswith(env_prefix + "-"):
-                platform_id = stripped[len(env_prefix) + 1 :]
-            else:
-                platform_id = stripped
-    return cost, platform_id, bare, int(in_tokens), int(out_tokens)
+    price = PRICING.get(bare)
+    priced = price is not None
+    cost = 0.0
+    if price is not None:
+        cost = (in_tokens / 1_000_000.0) * price["input"] + (
+            out_tokens / 1_000_000.0
+        ) * price["output"]
+
+    platform_id = _extract_platform((record.get("identity") or {}).get("arn", ""))
+    return cost, platform_id, bare, int(in_tokens), int(out_tokens), priced
 
 
 def _decode_payload(awslogs_data: str) -> dict[str, Any]:
@@ -189,6 +203,29 @@ def _emit_token_metrics(aggregates: dict[tuple[str, str], dict[str, float]]) -> 
         cloudwatch.put_metric_data(Namespace=NAMESPACE, MetricData=chunk)
 
 
+def _emit_unpriced(counts: dict[tuple[str, str], int]) -> None:
+    # One UnpricedInvocations count per (PlatformId, ModelId) for models with no
+    # pricing entry. Surfaces unpriced traffic as an observable miss instead of
+    # letting a borrowed price silently undercount spend. Alarm on this metric
+    # to catch a new or mistyped model id before it accrues unmetered cost.
+    data: list[dict[str, Any]] = [
+        {
+            "MetricName": UNPRICED_METRIC,
+            "Dimensions": [
+                {"Name": "PlatformId", "Value": platform_id},
+                {"Name": "ModelId", "Value": model_id},
+            ],
+            "Unit": "Count",
+            "Value": float(count),
+        }
+        for (platform_id, model_id), count in counts.items()
+    ]
+    while data:
+        chunk = data[:20]
+        data = data[20:]
+        cloudwatch.put_metric_data(Namespace=NAMESPACE, MetricData=chunk)
+
+
 def _write_estimates(aggregates: dict[tuple[str, str], dict[str, float]], usage_date: str) -> None:
     """
     Write one NDJSON object per log batch to the Hive-partitioned estimate
@@ -238,6 +275,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     per_platform: dict[str, float] = defaultdict(float)
     aggregates: dict[tuple[str, str], dict[str, float]] = {}
+    unpriced: dict[tuple[str, str], int] = defaultdict(int)
     parsed = 0
     skipped = 0
     for log_event in payload.get("logEvents", []):
@@ -246,7 +284,11 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         except (KeyError, json.JSONDecodeError):
             skipped += 1
             continue
-        cost, platform_id, model_id, in_tokens, out_tokens = _estimate_cost(record)
+        cost, platform_id, model_id, in_tokens, out_tokens, priced = _estimate_cost(record)
+        if not priced:
+            unpriced[(platform_id, model_id)] += 1
+            parsed += 1
+            continue
         if cost <= 0:
             skipped += 1
             continue
@@ -262,11 +304,20 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         _emit_metrics(dict(per_platform))
         _emit_token_metrics(aggregates)
         _write_estimates(aggregates, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    if unpriced:
+        _emit_unpriced(dict(unpriced))
 
     logger.info(
-        "processed log batch parsed=%d skipped=%d platforms=%d",
+        "processed log batch parsed=%d skipped=%d unpriced=%d platforms=%d",
         parsed,
         skipped,
+        sum(unpriced.values()),
         len(per_platform),
     )
-    return {"status": "ok", "parsed": parsed, "skipped": skipped, "platforms": len(per_platform)}
+    return {
+        "status": "ok",
+        "parsed": parsed,
+        "skipped": skipped,
+        "unpriced": sum(unpriced.values()),
+        "platforms": len(per_platform),
+    }

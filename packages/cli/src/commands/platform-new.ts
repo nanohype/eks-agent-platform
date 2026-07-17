@@ -5,6 +5,8 @@ import { PlatformPersona } from '@eks-agent/core';
 import chalk from 'chalk';
 import { stringify } from 'yaml';
 
+import modelDefaults from '../data/model-defaults.json' with { type: 'json' };
+
 interface PlatformNewOpts {
   name: string;
   tenant: string;
@@ -13,61 +15,44 @@ interface PlatformNewOpts {
   output: string;
 }
 
-const PERSONA_DEFAULTS: Record<
-  string,
-  { modelFamily: string; modelId: string; agentName: string; systemPrompt: string }
-> = {
+// Persona-specific scaffold copy (starter agent name + system prompt). The
+// model family/id come from the shared model-default SSOT
+// (../data/model-defaults.json, kept in sync with the Go agentctl catalog), so
+// there is one place to bump a default model.
+const SCAFFOLD: Record<string, { agentName: string; systemPrompt: string }> = {
   'sales-ops': {
-    modelFamily: 'anthropic',
-    modelId: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
     agentName: 'objection-handler',
     systemPrompt: 'You help sales-ops staff handle customer objections with cited references.',
   },
   support: {
-    modelFamily: 'meta',
-    modelId: 'meta.llama3-1-70b-instruct-v1:0',
     agentName: 'ticket-summarizer',
     systemPrompt: 'You summarize support tickets into a one-paragraph diagnosis + next step.',
   },
   finance: {
-    modelFamily: 'amazon-nova',
-    modelId: 'amazon.nova-pro-v1:0',
     agentName: 'financial-memo',
     systemPrompt: 'You draft financial memos. Always show your assumptions and cite sources.',
   },
   marketing: {
-    modelFamily: 'anthropic',
-    modelId: 'anthropic.claude-3-5-haiku-20241022-v1:0',
     agentName: 'campaign-brief',
     systemPrompt: 'You draft campaign briefs in 5 sections. Be concise and concrete.',
   },
   ops: {
-    modelFamily: 'mistral',
-    modelId: 'mistral.mistral-large-2407-v1:0',
     agentName: 'oncall-summarizer',
     systemPrompt: 'You summarize on-call incidents into a runbook update candidate.',
   },
   founder: {
-    modelFamily: 'anthropic',
-    modelId: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
     agentName: 'strategy-memo',
     systemPrompt: 'You help draft strategy memos. Push back on weak reasoning.',
   },
   eng: {
-    modelFamily: 'anthropic',
-    modelId: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
     agentName: 'adr-drafter',
     systemPrompt: 'You draft Architectural Decision Records. Show trade-offs explicitly.',
   },
   legal: {
-    modelFamily: 'anthropic',
-    modelId: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
     agentName: 'policy-reviewer',
     systemPrompt: 'You review policy text against jurisdiction-specific compliance requirements.',
   },
   generic: {
-    modelFamily: 'anthropic',
-    modelId: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
     agentName: 'assistant',
     systemPrompt: 'You are a helpful assistant.',
   },
@@ -75,9 +60,18 @@ const PERSONA_DEFAULTS: Record<
 
 export function platformNew(opts: PlatformNewOpts): void {
   const persona = PlatformPersona.parse(opts.persona);
-  // persona is constrained by PlatformPersona.parse above; the lookup is safe.
+  // persona is constrained by PlatformPersona.parse above, so it always indexes
+  // both exhaustive tables; the ?? guards a hypothetical table/enum drift.
   // eslint-disable-next-line security/detect-object-injection
-  const defaults = PERSONA_DEFAULTS[persona] ?? PERSONA_DEFAULTS.generic!;
+  const scaffold = SCAFFOLD[persona] ?? SCAFFOLD.generic!;
+  // eslint-disable-next-line security/detect-object-injection
+  const model = modelDefaults.personas[persona];
+  const defaults = {
+    modelFamily: model.family,
+    modelId: model.primaryModelId,
+    agentName: scaffold.agentName,
+    systemPrompt: scaffold.systemPrompt,
+  };
   const outDir = join(opts.output, opts.name);
   // CLI tool writes files the user explicitly asked for under --output. Path
   // traversal is not a meaningful concern here — the user runs this on their

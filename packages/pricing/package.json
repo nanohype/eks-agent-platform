@@ -2,7 +2,7 @@
   "name": "@eks-agent/pricing",
   "version": "0.0.0",
   "type": "module",
-  "description": "Bedrock model pricing tables (per-million-token) for cost estimation. Renovate-updated weekly.",
+  "description": "Bedrock model pricing tables (per-million-token) for cost estimation. Refreshed from the AWS Pricing API via scripts/refresh-pricing.mjs.",
   "license": "Apache-2.0",
   "author": "stxkxs",
   "publishConfig": {
@@ -24,7 +24,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && rm -rf dist/data && cp -R src/data dist/data",
     "clean": "rm -rf dist *.tsbuildinfo",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
