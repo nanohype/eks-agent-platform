@@ -39,9 +39,22 @@ type PlatformSpec struct {
 	// +optional
 	Compliance ComplianceSpec `json:"compliance,omitempty"`
 
-	// Isolation: namespace (default) or vCluster (hard isolation).
+	// Isolation is the workload-isolation tier:
+	//   - namespace (default): namespace RBAC + default-deny NetworkPolicy +
+	//     ResourceQuota + PSS-restricted, tenant workloads on the host API server.
+	//   - vcluster: the same host-side containment PLUS a per-Platform virtual
+	//     cluster, so tenant code that talks to the Kubernetes API talks to its own
+	//     API server, not the host's (API-server-level isolation — NOT kernel/node
+	//     isolation; see docs/adr/0009-vcluster-isolation-tier.md and SECURITY.md).
+	//
+	// Immutable: switching tiers on a live Platform is a migration (it would strand
+	// the virtual cluster and its synced host objects), so the tier is fixed at
+	// create time. Re-declare the Platform to change it. Enforced at admission by
+	// the CEL transition rule below — an invalid tier flip fails the apply rather
+	// than silently half-reconciling.
 	// +kubebuilder:validation:Enum=namespace;vcluster
 	// +kubebuilder:default=namespace
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="isolation is immutable; re-create the Platform to change its isolation tier"
 	// +optional
 	Isolation string `json:"isolation,omitempty"`
 

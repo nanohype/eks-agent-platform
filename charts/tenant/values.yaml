@@ -28,7 +28,16 @@ platform:
   tenant: "" # required
   persona: generic # one of: sales-ops, support, finance, ops, founder, eng, marketing, legal, generic
   displayName: ""
-  isolation: namespace # or vcluster
+  # Workload isolation tier. Immutable after create (changing it is a migration).
+  #   namespace (default): namespace RBAC + default-deny NetworkPolicy + quota +
+  #     PSS-restricted; tenant workloads share the host API server.
+  #   vcluster: the same host containment PLUS a per-Platform virtual cluster, so
+  #     tenant code that talks to the Kubernetes API talks to its own API server,
+  #     not the host's (API-server-level isolation — NOT kernel/node isolation).
+  #     Requires ArgoCD on the cluster (the operator declares the vcluster as an
+  #     ArgoCD Application); the tier fails closed if ArgoCD is absent. See
+  #     docs/adr/0009-vcluster-isolation-tier.md and docs/architecture/tenant-isolation-tiers.md.
+  isolation: namespace # namespace | vcluster
   # Emit the cluster-scoped Tenant CR this Platform belongs to. Default true
   # (one tenant = one Platform). Set false on additional Platforms that share an
   # already-created Tenant (one Tenant owns many Platforms).

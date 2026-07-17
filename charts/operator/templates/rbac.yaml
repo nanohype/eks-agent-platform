@@ -48,13 +48,15 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces", "resourcequotas", "limitranges", "events", "configmaps", "serviceaccounts", "services", "pods"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Secrets: read-only cluster-wide (so the operator can inspect existing
-  # tool-credential Secrets); ExternalSecretOperator owns secret writes
-  # into tenant namespaces. The operator never mutates Secret data
-  # directly — tenant credential plumbing flows through ESO.
+  # Secrets: read tool-credential Secrets (ExternalSecretsOperator owns tenant
+  # credential writes) and the vcluster kubeconfig Secret; WRITE the ArgoCD
+  # cluster-registration Secret the vcluster tier creates in the argocd namespace
+  # (argocd.argoproj.io/secret-type: cluster). The operator still never mutates
+  # tenant credential Secret DATA — that flows through ESO — but the vcluster
+  # cluster-registration Secret is operator-owned, so the verb set includes writes.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

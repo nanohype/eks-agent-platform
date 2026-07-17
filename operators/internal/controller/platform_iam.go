@@ -236,7 +236,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err := r.ensureModelScopingPolicy(ctx, name, arn, p.Spec.Identity, cfg); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
-		if err := r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName, arn); err != nil {
+		if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
 		return platformSuspension{RoleARN: arn}, nil
@@ -268,10 +268,36 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	if err := r.ensureModelScopingPolicy(ctx, name, arn, p.Spec.Identity, cfg); err != nil {
 		return platformSuspension{RoleARN: arn}, err
 	}
-	if err := r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName, arn); err != nil {
+	if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {
 		return platformSuspension{RoleARN: arn}, err
 	}
 	return platformSuspension{RoleARN: arn}, nil
+}
+
+// ensureTenantPodIdentity binds the Platform's IAM role to the ServiceAccount
+// the tenant's pods actually run under, resolving the correct host name per
+// isolation tier:
+//
+//   - namespace tier: the host tenant-runtime SA, targeted directly.
+//   - vcluster tier: the SYNCED host ServiceAccount vcluster's syncer minted from
+//     the virtual tenant-runtime SA. Its host (namespace, serviceAccountName) is
+//     what EKS Pod Identity matches — the virtual "tenant-runtime" name would
+//     match no host pod. discoverSyncedHostSA returns errVClusterNotReady until
+//     the syncer has materialized it; reconcileVClusterTier gates on that before
+//     IAM runs, so by here the discovery succeeds and cross-checks the name.
+//
+// The IAM role name and the association's other arguments are identical across
+// tiers; only the serviceAccount argument moves. No new AWS primitive is needed.
+func (r *PlatformReconciler) ensureTenantPodIdentity(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig, roleARN string) error {
+	saName := tenantSAName
+	if p.Spec.Isolation == isolationVCluster {
+		synced, err := r.discoverSyncedHostSA(ctx, p)
+		if err != nil {
+			return err
+		}
+		saName = synced
+	}
+	return r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), saName, roleARN)
 }
 
 // ensurePodIdentityAssociation binds the tenant ServiceAccount to its IAM role

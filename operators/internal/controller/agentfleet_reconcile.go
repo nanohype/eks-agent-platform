@@ -184,7 +184,7 @@ func (r *AgentFleetReconciler) ensureFleetCiliumEgress(ctx context.Context, flee
 // key is set: the gateway does the auth, and the operator does not write
 // Secrets (tenant credentials flow through ExternalSecrets). Idempotent;
 // tolerates absent kagent CRDs (NoKindMatch → Pending).
-func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
 	gwHost := fmt.Sprintf("%s-gateway.%s.svc.cluster.local:%d", p.Name, agentgatewayNamespace, gatewayListenerPort)
 	for _, agent := range fleet.Spec.Agents {
@@ -206,7 +206,7 @@ func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, fleet *ag
 		mc.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: "ModelConfig"})
 		mc.SetName(configName)
 		mc.SetNamespace(ns)
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, mc, func() error {
+		if _, err := controllerutil.CreateOrUpdate(ctx, tc, mc, func() error {
 			mc.SetLabels(labels)
 			spec := map[string]any{
 				"provider": "OpenAI",
@@ -233,7 +233,7 @@ func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, fleet *ag
 		ag.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentAgentGV.Group, Version: kagentAgentGV.Version, Kind: "Agent"})
 		ag.SetName(base)
 		ag.SetNamespace(ns)
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ag, func() error {
+		if _, err := controllerutil.CreateOrUpdate(ctx, tc, ag, func() error {
 			ag.SetLabels(labels)
 			declarative := map[string]any{
 				"modelConfig":   configName,
@@ -320,7 +320,7 @@ func awsRegionFromQueueURL(url string) string {
 // TriggerAuthentication CR that points KEDA at the tenant role.
 // Without a queue URL we fall back to a CPU-utilization placeholder so
 // the fleet scales sensibly during onboarding before a queue is wired.
-func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	if !fleet.Spec.Scaling.Enabled {
 		return nil
 	}
@@ -337,7 +337,7 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet
 		// references it. KEDA's CreateOrUpdate semantics handle the
 		// order on its end, but we explicitly emit the TA first to
 		// avoid a transient ConfigMap-of-secret-not-found state.
-		if err := r.ensureKEDATriggerAuth(ctx, fleet, p); err != nil {
+		if err := r.ensureKEDATriggerAuth(ctx, tc, fleet, p); err != nil {
 			return err
 		}
 	}
@@ -345,7 +345,7 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet
 	so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
 	so.SetName("fleet-" + fleet.Name)
 	so.SetNamespace(PlatformNamespace(p))
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, so, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, tc, so, func() error {
 		so.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  p.Name,
@@ -412,12 +412,12 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, fleet
 // = aws means KEDA uses the workload's existing IRSA token (the
 // tenant SA we annotated with the role ARN) instead of KEDA's own
 // operator IAM identity.
-func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ta := &unstructured.Unstructured{}
 	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "TriggerAuthentication"})
 	ta.SetName("fleet-" + fleet.Name + "-aws")
 	ta.SetNamespace(PlatformNamespace(p))
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ta, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, tc, ta, func() error {
 		ta.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  p.Name,
@@ -444,9 +444,11 @@ func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, fleet 
 // cleanupFleetResources is the finalizer counterpart: deletes the
 // kagent Agents, ModelConfigs, KEDA ScaledObject, and fleet
 // NetworkPolicy. Tenant ServiceAccount is owned by Platform finalizer.
-func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
-	// kagent objects
+	// kagent + KEDA objects live wherever the fleet reconciled them — the host for
+	// the namespace tier, the virtual cluster for the vcluster tier — so they are
+	// deleted through the same target client that created them.
 	for _, agent := range fleet.Spec.Agents {
 		base := fleet.Name + "-" + agent.Name
 		for _, kind := range []string{"Agent", "ModelConfig"} {
@@ -458,7 +460,7 @@ func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, fleet 
 			o.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: kind})
 			o.SetName(base + suffix)
 			o.SetNamespace(ns)
-			if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
+			if err := tc.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
 				return fmt.Errorf("delete kagent %s %s: %w", kind, o.GetName(), err)
 			}
 		}
@@ -469,22 +471,35 @@ func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, fleet 
 	so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
 	so.SetName("fleet-" + fleet.Name)
 	so.SetNamespace(ns)
-	if err := r.Delete(ctx, so); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
+	if err := tc.Delete(ctx, so); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
 		return fmt.Errorf("delete ScaledObject: %w", err)
 	}
 	ta := &unstructured.Unstructured{}
 	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "TriggerAuthentication"})
 	ta.SetName("fleet-" + fleet.Name + "-aws")
 	ta.SetNamespace(ns)
-	if err := r.Delete(ctx, ta); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
+	if err := tc.Delete(ctx, ta); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
 		return fmt.Errorf("delete TriggerAuthentication: %w", err)
 	}
-	// NetworkPolicy
+	// NetworkPolicy is host containment — always deleted on the host client.
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "fleet-" + fleet.Name, Namespace: ns}}
 	if err := r.Delete(ctx, np); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete NetworkPolicy: %w", err)
 	}
 	return nil
+}
+
+// cleanupTargetClient resolves the client the fleet's teardown deletes through.
+// On the vcluster tier it is the virtual-cluster client; when the vcluster is
+// unreachable (already torn down during a Platform delete) it falls back to the
+// host client, so the host-side NetworkPolicy delete still runs and the
+// vcluster-object deletes NotFound harmlessly against the host.
+func (r *AgentFleetReconciler) cleanupTargetClient(ctx context.Context, p *platformv1alpha1.Platform) client.Client {
+	tc, err := targetClient(ctx, r.Client, r.VCluster, p)
+	if err != nil {
+		return r.Client
+	}
+	return tc
 }
 
 // reconcileFleetSelf is the orchestration: resolve Platform, gate on
@@ -502,7 +517,7 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	// cleared. The tenant SA + NetworkPolicy stay in place so a
 	// recovery doesn't have to recreate them.
 	if platform.Status.Phase == phaseSuspended {
-		if err := r.cleanupFleetResources(ctx, fleet, platform); err != nil {
+		if err := r.cleanupFleetResources(ctx, r.cleanupTargetClient(ctx, platform), fleet, platform); err != nil {
 			return "", 0, fmt.Errorf("suspend cleanup: %w", err)
 		}
 		return phaseSuspended, 0, nil
@@ -511,7 +526,21 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 		return phasePending, 0, nil
 	}
 
-	if err := ensureTenantServiceAccount(ctx, r.Client, platform); err != nil {
+	// Resolve the target client: the host client for the namespace tier, the
+	// Platform's virtual-cluster client for the vcluster tier. kagent + KEDA
+	// objects (which produce the fleet's pods) land through this client so the
+	// tenant's pods see the vcluster API; the fleet's host containment
+	// (NetworkPolicy/Cilium egress) always stays on the host client below.
+	tc, err := targetClient(ctx, r.Client, r.VCluster, platform)
+	if err != nil {
+		if errors.Is(err, errVClusterNotReady) {
+			// vcluster still installing — nothing to write into yet; requeue.
+			return phasePending, 0, nil
+		}
+		return "", 0, fmt.Errorf("resolve target client: %w", err)
+	}
+
+	if err := ensureTenantServiceAccount(ctx, tc, platform); err != nil {
 		return "", 0, fmt.Errorf("ensure ServiceAccount: %w", err)
 	}
 	if err := r.ensureFleetNetworkPolicy(ctx, fleet, platform); err != nil {
@@ -520,13 +549,13 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	if err := r.ensureFleetCiliumEgress(ctx, fleet, platform); err != nil {
 		return "", 0, fmt.Errorf("ensure CiliumNetworkPolicy: %w", err)
 	}
-	if err := r.ensureKagentAgents(ctx, fleet, platform); err != nil {
+	if err := r.ensureKagentAgents(ctx, tc, fleet, platform); err != nil {
 		if errors.Is(err, errKagentNotInstalled) {
 			return phasePending, 0, nil
 		}
 		return "", 0, err
 	}
-	if err := r.ensureKEDAScaledObject(ctx, fleet, platform); err != nil {
+	if err := r.ensureKEDAScaledObject(ctx, tc, fleet, platform); err != nil {
 		if errors.Is(err, errKEDANotInstalled) {
 			// KEDA absence isn't fatal — scaling is optional. Log and
 			// move on; the deployment runs at the static replica count.

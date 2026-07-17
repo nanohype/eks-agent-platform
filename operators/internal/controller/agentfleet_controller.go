@@ -37,6 +37,14 @@ type AgentFleetReconciler struct {
 	// NetworkEngine ("cilium"|"kubernetes") — see PlatformReconciler. Selects a
 	// CiliumNetworkPolicy vs a vanilla NetworkPolicy for fleet egress.
 	NetworkEngine string
+
+	// VCluster resolves the per-Platform virtual-cluster client for the vcluster
+	// isolation tier. nil in the namespace tier and k8s-only test paths. When the
+	// owning Platform is vcluster-tier, the fleet's kagent Agents/ModelConfigs and
+	// KEDA ScaledObject land in the virtual cluster's API through this client (the
+	// target-client swap); the fleet's host containment (NetworkPolicy) always
+	// stays on the host client.
+	VCluster VClusterClientFactory
 }
 
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets,verbs=get;list;watch;update;patch
@@ -64,7 +72,7 @@ func (r *AgentFleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if perr != nil && platform == nil {
 				logger.Info("platform gone; skipping fleet cleanup")
 			} else if perr == nil {
-				if err := r.cleanupFleetResources(ctx, &fleet, platform); err != nil {
+				if err := r.cleanupFleetResources(ctx, r.cleanupTargetClient(ctx, platform), &fleet, platform); err != nil {
 					return ctrl.Result{}, err
 				}
 			}

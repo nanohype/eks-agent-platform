@@ -32,6 +32,13 @@ type AgentSandboxReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
 	Concurrency int
+
+	// VCluster resolves the per-Platform virtual-cluster client for the vcluster
+	// isolation tier. nil in the namespace tier and k8s-only test paths. When the
+	// owning Platform is vcluster-tier, the session pod lands in the virtual
+	// cluster's API through this client; the sandbox's default-deny NetworkPolicy
+	// stays host-side containment.
+	VCluster VClusterClientFactory
 }
 
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentsandboxes,verbs=get;list;watch;update;patch;delete
@@ -56,7 +63,7 @@ func (r *AgentSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if perr != nil && platform == nil {
 				logger.Info("platform gone; skipping agent sandbox cleanup")
 			} else if perr == nil {
-				if err := r.cleanupAgentSandbox(ctx, &box, platform); err != nil {
+				if err := r.cleanupAgentSandbox(ctx, r.sandboxCleanupClient(ctx, platform), &box, platform); err != nil {
 					return ctrl.Result{}, err
 				}
 			}

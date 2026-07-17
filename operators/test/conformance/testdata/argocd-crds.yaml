@@ -1,0 +1,48 @@
+# Minimal ArgoCD CRDs (Application, AppProject) for envtest. Schemas are
+# intentionally permissive (x-kubernetes-preserve-unknown-fields) — the operator
+# writes these as unstructured objects and the conformance suite only round-trips
+# them, so the full upstream schema is unnecessary. Present so the vcluster tier
+# (which declares a vcluster as an ArgoCD Application and scopes an AppProject
+# destination) can be exercised against a real API server, and so ensureAppProject
+# creates rather than skips.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: applications.argoproj.io
+spec:
+  group: argoproj.io
+  names:
+    kind: Application
+    listKind: ApplicationList
+    plural: applications
+    singular: application
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: appprojects.argoproj.io
+spec:
+  group: argoproj.io
+  names:
+    kind: AppProject
+    listKind: AppProjectList
+    plural: appprojects
+    singular: appproject
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true

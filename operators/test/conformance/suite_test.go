@@ -32,6 +32,8 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -88,7 +90,13 @@ func TestMain(m *testing.M) {
 	utilruntime.Must(governancev1alpha1.AddToScheme(scheme))
 
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		// Operator CRDs + minimal ArgoCD CRDs (Application/AppProject) so the
+		// vcluster tier's ArgoCD declarations and the AppProject destination
+		// scoping are exercised against a real API server.
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("testdata", "argocd-crds.yaml"),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 
@@ -102,6 +110,16 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		_ = testEnv.Stop()
 		panic("client.New: " + err.Error())
+	}
+
+	// The AppProject / vcluster Application land in the argocd namespace; create
+	// it once so ensureAppProject / ensureVClusterApplication have somewhere to
+	// write now that the ArgoCD CRDs are installed.
+	if err := k8sClient.Create(context.Background(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "argocd"},
+	}); err != nil {
+		_ = testEnv.Stop()
+		panic("create argocd namespace: " + err.Error())
 	}
 
 	code := m.Run()

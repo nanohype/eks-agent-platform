@@ -295,22 +295,47 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *platformv1
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ap, func() error {
 		labels := labelsForPlatform(p)
 		ap.SetLabels(labels)
+		sourceRepos := []interface{}{
+			// Allow every nanohype org repo so a tenant Application can pull
+			// its own chart + values (github.com/nanohype/<app>.git) through
+			// this per-Platform AppProject, plus the operator's own charts.
+			"https://github.com/nanohype/*",
+			"oci://ghcr.io/nanohype/eks-agent-platform/charts/*",
+		}
+		destinations := []interface{}{
+			map[string]interface{}{
+				"namespace": PlatformNamespace(p),
+				"server":    "https://kubernetes.default.svc",
+			},
+		}
+		// The namespace tier grants no cluster-scoped resource rights — tenant apps
+		// are namespaced-only.
+		clusterResourceWhitelist := []interface{}{}
+		// vcluster tier: the operator-declared vcluster Application pulls the
+		// upstream vcluster chart, so its repo must be allow-listed here; and the
+		// tenant's own app targets the registered vcluster destination, scoped so
+		// this AppProject can deploy only into its own virtual cluster.
+		if p.Spec.Isolation == isolationVCluster && r.VClusterCfg.ChartRepoURL != "" {
+			sourceRepos = append(sourceRepos, r.VClusterCfg.ChartRepoURL)
+			destinations = append(destinations, map[string]interface{}{
+				"namespace": "*",
+				"server":    vclusterInClusterServer(p),
+			})
+			// The vcluster chart's only cluster-scoped resources are the syncer's
+			// ClusterRole + ClusterRoleBinding; the AppProject must permit exactly
+			// those two kinds or ArgoCD refuses the sync ("not permitted in
+			// project"). Deliberately narrow — no CRDs, no other cluster-scoped
+			// kinds — so the tier grants the minimum the vcluster install needs.
+			clusterResourceWhitelist = []interface{}{
+				map[string]interface{}{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole"},
+				map[string]interface{}{"group": "rbac.authorization.k8s.io", "kind": "ClusterRoleBinding"},
+			}
+		}
 		spec := map[string]interface{}{
-			"description": fmt.Sprintf("AppProject for Platform %s (tenant %s)", p.Name, p.Spec.Tenant),
-			"sourceRepos": []interface{}{
-				// Allow every nanohype org repo so a tenant Application can pull
-				// its own chart + values (github.com/nanohype/<app>.git) through
-				// this per-Platform AppProject, plus the operator's own charts.
-				"https://github.com/nanohype/*",
-				"oci://ghcr.io/nanohype/eks-agent-platform/charts/*",
-			},
-			"destinations": []interface{}{
-				map[string]interface{}{
-					"namespace": PlatformNamespace(p),
-					"server":    "https://kubernetes.default.svc",
-				},
-			},
-			"clusterResourceWhitelist":   []interface{}{},
+			"description":                fmt.Sprintf("AppProject for Platform %s (tenant %s)", p.Name, p.Spec.Tenant),
+			"sourceRepos":                sourceRepos,
+			"destinations":               destinations,
+			"clusterResourceWhitelist":   clusterResourceWhitelist,
 			"namespaceResourceWhitelist": []interface{}{map[string]interface{}{"group": "*", "kind": "*"}},
 		}
 		return unstructured.SetNestedField(ap.Object, spec, "spec")

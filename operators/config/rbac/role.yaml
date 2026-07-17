@@ -11,6 +11,7 @@ rules:
   - namespaces
   - pods
   - resourcequotas
+  - secrets
   - serviceaccounts
   - services
   verbs:
@@ -110,6 +111,7 @@ rules:
 - apiGroups:
   - argoproj.io
   resources:
+  - applications
   - appprojects
   - cronworkflows
   - workflows

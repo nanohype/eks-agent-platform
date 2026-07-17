@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
@@ -58,13 +59,28 @@ func agentSandboxLabels(box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Pl
 	}
 }
 
+// sandboxCleanupClient resolves the client the sandbox teardown deletes through.
+// On the vcluster tier it is the virtual-cluster client; when the vcluster is
+// unreachable (already torn down during a Platform delete) it falls back to the
+// host client so the host-side NetworkPolicy delete still runs and the pod delete
+// NotFounds harmlessly.
+func (r *AgentSandboxReconciler) sandboxCleanupClient(ctx context.Context, p *platformv1alpha1.Platform) client.Client {
+	tc, err := targetClient(ctx, r.Client, r.VCluster, p)
+	if err != nil {
+		return r.Client
+	}
+	return tc
+}
+
 // ensureSessionPod creates the hardened, single-use session pod. The pod is
 // create-only: a session runs once and a pod spec is immutable, so once it
-// exists the operator never rewrites it.
-func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
+// exists the operator never rewrites it. Writes go through the target client —
+// the host for the namespace tier, the virtual cluster for the vcluster tier, so
+// the tenant's session pod sees the vcluster API.
+func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client.Client, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
 	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: agentSandboxResourceName(box)}
 	var existing corev1.Pod
-	if err := r.Get(ctx, key, &existing); err == nil {
+	if err := tc.Get(ctx, key, &existing); err == nil {
 		return nil
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get session pod: %w", err)
@@ -99,7 +115,7 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, box *agen
 			}},
 		},
 	}
-	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := tc.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create session pod: %w", err)
 	}
 	return nil
@@ -133,21 +149,22 @@ func (r *AgentSandboxReconciler) ensureAgentSandboxNetworkPolicy(ctx context.Con
 }
 
 // deleteSessionPod removes the session pod — used by the finalizer and the
-// Platform-Suspended kill-switch branch.
-func (r *AgentSandboxReconciler) deleteSessionPod(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
+// Platform-Suspended kill-switch branch. Deletes through the target client (the
+// vcluster for the vcluster tier), where the pod actually lives.
+func (r *AgentSandboxReconciler) deleteSessionPod(ctx context.Context, tc client.Client, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: agentSandboxResourceName(box), Namespace: PlatformNamespace(p)},
 	}
-	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+	if err := tc.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete session pod: %w", err)
 	}
 	return nil
 }
 
 // cleanupAgentSandbox is the finalizer counterpart: removes the session pod
-// and the NetworkPolicy.
-func (r *AgentSandboxReconciler) cleanupAgentSandbox(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
-	if err := r.deleteSessionPod(ctx, box, p); err != nil {
+// (through the target client) and the NetworkPolicy (host containment).
+func (r *AgentSandboxReconciler) cleanupAgentSandbox(ctx context.Context, tc client.Client, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
+	if err := r.deleteSessionPod(ctx, tc, box, p); err != nil {
 		return err
 	}
 	np := &networkingv1.NetworkPolicy{
@@ -174,7 +191,7 @@ func (r *AgentSandboxReconciler) reconcileAgentSandboxSelf(ctx context.Context, 
 	// Platform Suspended: tear the session pod down until the kill-switch
 	// clears. The NetworkPolicy stays in place.
 	if platform.Status.Phase == phaseSuspended {
-		if err := r.deleteSessionPod(ctx, box, platform); err != nil {
+		if err := r.deleteSessionPod(ctx, r.sandboxCleanupClient(ctx, platform), box, platform); err != nil {
 			return "", nil, fmt.Errorf("suspend cleanup: %w", err)
 		}
 		return phaseSuspended, nil, nil
@@ -183,19 +200,30 @@ func (r *AgentSandboxReconciler) reconcileAgentSandboxSelf(ctx context.Context, 
 		return phasePending, nil, nil
 	}
 
-	if err := ensureTenantServiceAccount(ctx, r.Client, platform); err != nil {
+	// Resolve the target client: host for the namespace tier, the virtual cluster
+	// for the vcluster tier. The session pod + tenant SA land through it; the
+	// default-deny NetworkPolicy stays host-side containment.
+	tc, err := targetClient(ctx, r.Client, r.VCluster, platform)
+	if err != nil {
+		if errors.Is(err, errVClusterNotReady) {
+			return phasePending, nil, nil
+		}
+		return "", nil, fmt.Errorf("resolve target client: %w", err)
+	}
+
+	if err := ensureTenantServiceAccount(ctx, tc, platform); err != nil {
 		return "", nil, fmt.Errorf("ensure ServiceAccount: %w", err)
 	}
 	if err := r.ensureAgentSandboxNetworkPolicy(ctx, box, platform); err != nil {
 		return "", nil, err
 	}
-	if err := r.ensureSessionPod(ctx, box, platform); err != nil {
+	if err := r.ensureSessionPod(ctx, tc, box, platform); err != nil {
 		return "", nil, err
 	}
 
 	var pod corev1.Pod
 	key := types.NamespacedName{Namespace: PlatformNamespace(platform), Name: agentSandboxResourceName(box)}
-	if err := r.Get(ctx, key, &pod); err != nil {
+	if err := tc.Get(ctx, key, &pod); err != nil {
 		if apierrors.IsNotFound(err) {
 			return phasePending, nil, nil
 		}

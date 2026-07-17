@@ -8,6 +8,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -61,6 +62,14 @@ type PlatformReconciler struct {
 	// DataKMSKeyARN, ArtifactsBucketName, Environment.
 	AWSCfg PlatformAWSConfig
 
+	// VCluster builds the per-Platform virtual-cluster client for the vcluster
+	// isolation tier. nil in the namespace tier and in k8s-only test paths; the
+	// vcluster tier fails closed when it's nil (never silently downgrades). See
+	// docs/adr/0009-vcluster-isolation-tier.md.
+	VCluster VClusterClientFactory
+	// VClusterCfg pins the vcluster chart coordinates + in-vcluster init-charts.
+	VClusterCfg VClusterConfig
+
 	// bucketPolicyMu serializes the read-modify-write of the SHARED artifacts
 	// bucket policy across concurrent reconciles. That policy is one document
 	// holding a statement per tenant; with MaxConcurrentReconciles > 1 two
@@ -76,9 +85,15 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cilium.io,resources=ciliumnetworkpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=argoproj.io,resources=appprojects,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=argoproj.io,resources=appprojects;applications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=users,verbs=impersonate
+// vcluster tier: read the vcluster kubeconfig Secret + write the ArgoCD cluster-
+// registration Secret; discover the syncer-created host ServiceAccount + drain-
+// check synced Pods; create the tenant ServiceAccount on the host tier.
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile drives a Platform CR toward its desired state.
 func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -99,6 +114,17 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// the finalizer.
 	if !platform.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(platform, finalizerName) {
+			// vcluster tier: tear the virtual cluster down first (reverse of
+			// provisioning) and gate the finalizer on it being fully drained, so a
+			// deleted Platform can orphan neither the vcluster nor the host objects
+			// its syncer created (nor the synced-SA Pod Identity association on the
+			// AWS side, which a namespace delete alone will not reap).
+			if platform.Spec.Isolation == isolationVCluster {
+				if err := r.cleanupVClusterResources(ctx, platform, r.IAMCfg); err != nil {
+					logger.Error(err, "vcluster cleanup incomplete; will retry")
+					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+				}
+			}
 			if err := r.cleanupTenantResources(ctx, platform); err != nil {
 				logger.Error(err, "k8s cleanup failed; will retry")
 				return ctrl.Result{}, err
@@ -175,6 +201,43 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
+	// vcluster isolation tier: layer the per-Platform virtual cluster on top of
+	// the host-side provisioning above (which stays intact and load-bearing as the
+	// containment layer). Fails closed and requeues while converging, so the IAM
+	// binding below targets the syncer-created host ServiceAccount only once it
+	// actually exists. See docs/adr/0009-vcluster-isolation-tier.md.
+	if platform.Spec.Isolation == isolationVCluster {
+		ready, verr := r.reconcileVClusterTier(ctx, platform)
+		switch {
+		case errors.Is(verr, errArgoCDRequired):
+			logger.Error(verr, "vcluster tier requires ArgoCD; failing closed (no downgrade to namespace isolation)")
+			platform.Status.Phase = phaseFailed
+			setVClusterReady(platform, metav1.ConditionFalse, "ArgoCDRequired",
+				"isolation: vcluster requires ArgoCD; AppProject/Application CRDs are not installed on this cluster")
+			if serr := r.Status().Update(ctx, platform); serr != nil {
+				return ctrl.Result{}, serr
+			}
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		case verr != nil:
+			logger.Error(verr, "vcluster tier reconcile failed")
+			setVClusterReady(platform, metav1.ConditionFalse, "VClusterError", verr.Error())
+			if serr := r.Status().Update(ctx, platform); serr != nil {
+				logger.Error(serr, "status update after vcluster error")
+			}
+			return ctrl.Result{}, verr
+		case !ready:
+			logger.Info("vcluster tier converging; requeueing")
+			platform.Status.Phase = phaseProvisioning
+			setVClusterReady(platform, metav1.ConditionFalse, "Provisioning",
+				"virtual cluster installing; waiting on kubeconfig and the synced tenant ServiceAccount")
+			if serr := r.Status().Update(ctx, platform); serr != nil {
+				return ctrl.Result{}, serr
+			}
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+		// ready — VClusterReady=True is set in the Ready status block below.
+	}
+
 	// AWS-side: tenant role. If r.IAM is nil (unit-test path), the
 	// helper returns ({}, nil) and we leave status.IamRoleArn empty.
 	susp, err := r.ensureIamRole(ctx, platform, r.IAMCfg)
@@ -215,9 +278,17 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// SA must exist whenever the Platform is Ready — independent of whether the
 	// tenant has an AgentFleet yet. The AgentFleet/AgentSandbox reconcilers also
 	// ensure it; CreateOrUpdate is idempotent so the duplicate call is harmless.
-	if err := ensureTenantServiceAccount(ctx, r.Client, platform); err != nil {
-		logger.Error(err, "ensureTenantServiceAccount failed")
-		return ctrl.Result{}, err
+	//
+	// vcluster tier: the tenant SA lives INSIDE the virtual cluster (created by
+	// reconcileVClusterTier's bootstrap, then synced to the host under a
+	// translated name that the Pod Identity association targets). It is not
+	// created directly on the host — doing so would leave an unbound host
+	// tenant-runtime SA that no synced pod runs under.
+	if platform.Spec.Isolation != isolationVCluster {
+		if err := ensureTenantServiceAccount(ctx, r.Client, platform); err != nil {
+			logger.Error(err, "ensureTenantServiceAccount failed")
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Per-session human attribution (optional). Provision the session role
@@ -294,6 +365,12 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			LastTransitionTime: metav1.Now(),
 			ObservedGeneration: platform.Generation,
 		})
+		// vcluster tier reached Ready ⇒ the virtual cluster is up, the tenant SA
+		// has synced to the host, and Pod Identity binds the synced name.
+		if platform.Spec.Isolation == isolationVCluster {
+			setVClusterReady(platform, metav1.ConditionTrue, "Provisioned",
+				"virtual cluster installed; tenant ServiceAccount synced and bound via Pod Identity")
+		}
 		// Clear any prior Suspended condition that lingered.
 		upsertCondition(&platform.Status.Conditions, metav1.Condition{
 			Type:               "Suspended",
@@ -316,6 +393,20 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// setVClusterReady upserts the VClusterReady condition on a Platform. A single
+// helper so every vcluster-tier code path (converging, failed-closed, ready)
+// writes the condition the same way — and a PrometheusRule can alert on it.
+func setVClusterReady(p *platformv1alpha1.Platform, status metav1.ConditionStatus, reason, message string) {
+	upsertCondition(&p.Status.Conditions, metav1.Condition{
+		Type:               conditionVClusterReady,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: p.Generation,
+	})
 }
 
 // upsertCondition adds or replaces a Condition by Type, preserving
