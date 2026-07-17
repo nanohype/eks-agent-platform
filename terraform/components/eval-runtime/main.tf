@@ -6,6 +6,19 @@ locals {
   })
 }
 
+# The eval-reports bucket is owned by landing-zone's agent-iam component (the
+# sole model-artifacts writer, published under the per-cluster SSM contract).
+# The eval-runner IAM scope reads its ARN here rather than through a terraform
+# input, so this component depends only on the SSM contract, not on a sibling
+# terraform state.
+data "aws_ssm_parameter" "eval_reports_bucket_arn" {
+  name = "/eks-agent-platform/${var.cluster_name}/model-artifacts/eval_reports_bucket_arn"
+}
+
+data "aws_ssm_parameter" "eval_reports_bucket_name" {
+  name = "/eks-agent-platform/${var.cluster_name}/model-artifacts/eval_reports_bucket_name"
+}
+
 ################################################################################
 # IRSA role for the eval-runner ServiceAccount
 #
@@ -77,7 +90,7 @@ resource "aws_iam_role_policy" "eval_runner" {
         Sid      = "WriteEvalReports"
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
-        Resource = ["${var.eval_reports_bucket_arn}/*/runs/*"]
+        Resource = ["${data.aws_ssm_parameter.eval_reports_bucket_arn.value}/*/runs/*"]
       },
       {
         # ListBucketMultipartUploads is a bucket-level action; put it
@@ -87,19 +100,19 @@ resource "aws_iam_role_policy" "eval_runner" {
         Sid      = "ListMultipartUploadsBucket"
         Effect   = "Allow"
         Action   = ["s3:ListBucketMultipartUploads"]
-        Resource = [var.eval_reports_bucket_arn]
+        Resource = [data.aws_ssm_parameter.eval_reports_bucket_arn.value]
       },
       {
         Sid      = "ReadEvalManifests"
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:GetObjectVersion"]
-        Resource = ["${var.eval_reports_bucket_arn}/*/manifests/*"]
+        Resource = ["${data.aws_ssm_parameter.eval_reports_bucket_arn.value}/*/manifests/*"]
       },
       {
         Sid      = "ListEvalReports"
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
-        Resource = [var.eval_reports_bucket_arn]
+        Resource = [data.aws_ssm_parameter.eval_reports_bucket_arn.value]
       },
       {
         Sid    = "DecryptEvalData"
@@ -164,6 +177,6 @@ resource "aws_ssm_parameter" "eval_runner_service_account" {
 resource "aws_ssm_parameter" "eval_reports_bucket" {
   name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/eval_reports_bucket"
   type  = "String"
-  value = var.eval_reports_bucket_name
+  value = data.aws_ssm_parameter.eval_reports_bucket_name.value
   tags  = local.tags
 }

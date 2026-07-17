@@ -25,16 +25,6 @@ variable "eval_runner_service_account" {
   default     = "eval-runner"
 }
 
-variable "eval_reports_bucket_arn" {
-  description = "Eval reports S3 bucket ARN (from model-artifacts component) — eval-runner pods get scoped read+write here for HTML report uploads."
-  type        = string
-}
-
-variable "eval_reports_bucket_name" {
-  description = "Eval reports S3 bucket name (from model-artifacts component) — published to SSM for the reconciler."
-  type        = string
-}
-
 variable "bedrock_invoke_resource_arns" {
   description = "List of Bedrock model ARNs eval-runner pods can invoke. Defaults to '*' which is fine in dev; production should pass the specific cross-region inference profile ARNs the eval suites actually exercise."
   type        = list(string)

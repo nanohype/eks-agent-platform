@@ -91,13 +91,15 @@ eval-runtime, … Synced/Healthy).
 ### B1b. Agent-platform AWS substrate (`eks-agent-platform/terraform`)
 
 Apply once `agent-iam` (B1 step 5) and the cluster exist. This tree is the
-operator's own AWS substrate — `model-artifacts`, `bedrock`, `agent-egress`,
-`accelerator-pools`, `eval-runtime`, `cost-pipeline`, `kill-switch`,
-`batch-runtime` — and writes the SSM parameters the operator loads at startup
-(`/eks-agent-platform/<env>/{model-artifacts,bedrock,kill-switch,cost-pipeline,
-eval-runtime,batch-runtime}/*`). `agent-iam` is **not** here — landing-zone owns
-it (B1 step 5); this tree reads the operator role + tenant baseline from the
-`/eks-agent-platform/<env>/agent-iam/*` SSM contract.
+operator's own AWS substrate — `bedrock`, `agent-egress`, `accelerator-pools`,
+`eval-runtime`, `cost-pipeline`, `kill-switch`, `batch-runtime` — and writes the
+SSM parameters the operator loads at startup
+(`/eks-agent-platform/<env>/{bedrock,kill-switch,cost-pipeline,eval-runtime,
+batch-runtime}/*`). `agent-iam` is **not** here — landing-zone owns it (B1 step
+5), and it is also the sole owner of the model-artifacts + eval-reports buckets
+and their `/eks-agent-platform/<env>/model-artifacts/*` SSM keys; this tree reads
+the operator role, tenant baseline, and the eval-reports/model-artifacts buckets
+from that landing-zone SSM contract.
 
 **Prereq:** the `eks-pod-identity-agent` EKS addon must be installed — the
 accelerator (neuron, gpu-operator) and eval-runner roles bind via EKS Pod
