@@ -1,14 +1,16 @@
 # Architecture Decision Records
 
-| ADR                                      | Decision                                                                                                         | Status   |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------- |
-| [0001](./0001-monorepo.md)               | Monorepo over multi-repo                                                                                         | Accepted |
-| [0002](./0002-bedrock-only-v1.md)        | Bedrock-only model plane in v1                                                                                   | Accepted |
-| [0003](./0003-threat-model.md)           | Operator IAM blast radius, STRIDE, cross-component contracts (tenant role naming, kill-switch suspension marker) | Accepted |
-| [0004](./0004-suspension-via-iam-tag.md) | Kill-switch suspension propagated via IAM tag, not EventBridge→k8s bridge                                        | Accepted |
-| [0005](./0005-cost-publisher-lambda.md)  | In-flight Bedrock cost via Lambda republisher, not direct CloudWatch metric filter                               | Accepted |
-| [0006](./0006-keda-pod-identity.md)      | KEDA aws-sqs-queue uses pod-identity, not KEDA operator IRSA                                                     | Accepted |
-| [0007](./0007-eval-runtime-kustomize.md) | eval-runtime WorkflowTemplate ships via kustomize, not the operator chart                                        | Accepted |
+| ADR                                           | Decision                                                                                                         | Status                 |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| [0001](./0001-monorepo.md)                    | Monorepo over multi-repo                                                                                         | Accepted               |
+| [0002](./0002-bedrock-only-v1.md)             | Bedrock-only model plane in v1                                                                                   | Accepted               |
+| [0003](./0003-threat-model.md)                | Operator IAM blast radius, STRIDE, cross-component contracts (tenant role naming, kill-switch suspension marker) | Accepted               |
+| [0004](./0004-suspension-via-iam-tag.md)      | Kill-switch suspension propagated via IAM tag, not EventBridge→k8s bridge                                        | Accepted               |
+| [0005](./0005-cost-publisher-lambda.md)       | In-flight Bedrock cost via Lambda republisher, not direct CloudWatch metric filter                               | Accepted               |
+| [0006](./0006-keda-pod-identity.md)           | KEDA aws-sqs-queue uses pod-identity, not KEDA operator IRSA                                                     | Accepted               |
+| [0007](./0007-eval-runtime-kustomize.md)      | eval-runtime WorkflowTemplate ships via kustomize, not the operator chart                                        | Superseded by ADR-0008 |
+| [0008](./0008-eval-runtime-operator-chart.md) | eval-runtime + operator SLO ship in the operator chart, not a gitops overlay                                     | Accepted               |
+| [0009](./0009-vcluster-isolation-tier.md)     | vcluster hard-isolation tier: reconcile model, synced-SA Pod Identity, ArgoCD destination, containment, teardown | Accepted               |
 
 ## Template
 
