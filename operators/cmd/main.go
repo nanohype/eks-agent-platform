@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -80,6 +81,14 @@ func main() {
 	var networkEngine string
 	var disableAWS bool
 
+	// vcluster hard-isolation tier config. The operator declares a per-Platform
+	// vcluster as an ArgoCD Application pinned to this chart version; the
+	// init-charts JSON bootstraps kagent + KEDA inside each vcluster. See
+	// docs/adr/0009-vcluster-isolation-tier.md.
+	var vclusterChartRepo string
+	var vclusterChartVersion string
+	var vclusterInitChartsJSON string
+
 	// Org-dimension tag values stamped on tenant roles (resource-tagging
 	// standard). Env-level constants for the cluster the operator serves;
 	// tenantRoleTags falls back to landing-zone env.hcl defaults when unset.
@@ -116,6 +125,9 @@ func main() {
 	flag.StringVar(&compliance, "compliance", os.Getenv("AGENTS_COMPLIANCE"), "Org compliance tag stamped on tenant roles.")
 	flag.StringVar(&networkEngine, "network-engine", os.Getenv("AGENTS_NETWORK_ENGINE"), "Network policy engine for tenant/fleet egress: cilium (default; required so Pod Identity creds-endpoint egress is allowed) or kubernetes.")
 	flag.BoolVar(&disableAWS, "disable-aws", false, "Skip AWS client init + SSM config load (k8s-side reconciliation only).")
+	flag.StringVar(&vclusterChartRepo, "vcluster-chart-repo", os.Getenv("AGENTS_VCLUSTER_CHART_REPO"), "vcluster Helm chart repository the operator declares per vcluster-tier Platform (default https://charts.loft.sh).")
+	flag.StringVar(&vclusterChartVersion, "vcluster-chart-version", os.Getenv("AGENTS_VCLUSTER_CHART_VERSION"), "Pinned vcluster chart version (targetRevision). Renovate proposes bumps; a human reviews — never auto-upgraded.")
+	flag.StringVar(&vclusterInitChartsJSON, "vcluster-init-charts", os.Getenv("AGENTS_VCLUSTER_INIT_CHARTS"), "JSON array of Helm charts bootstrapped INSIDE each per-Platform vcluster (kagent, KEDA) via experimental.deploy.vcluster.helm. Empty ships a containment-only vcluster.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -170,11 +182,35 @@ func main() {
 		os.Exit(1)
 	}
 
+	// vcluster tier: build the config + the client factory shared by the Platform,
+	// AgentFleet, and AgentSandbox reconcilers. Defaults keep a fresh install on
+	// the current stable chart line; the factory is nil-safe for the namespace
+	// tier (it is only consulted when spec.isolation == vcluster).
+	if vclusterChartRepo == "" {
+		vclusterChartRepo = "https://charts.loft.sh"
+	}
+	if vclusterChartVersion == "" {
+		vclusterChartVersion = "0.35.2"
+	}
+	vclusterCfg := controller.VClusterConfig{
+		ChartRepoURL: vclusterChartRepo,
+		ChartVersion: vclusterChartVersion,
+	}
+	if vclusterInitChartsJSON != "" {
+		if err := json.Unmarshal([]byte(vclusterInitChartsJSON), &vclusterCfg.InitCharts); err != nil {
+			setupLog.Error(err, "invalid --vcluster-init-charts JSON; refusing to start")
+			os.Exit(1)
+		}
+	}
+	vclusterFactory := controller.NewVClusterClientFactory(mgr.GetClient(), mgr.GetScheme())
+
 	platformReconciler := &controller.PlatformReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Concurrency:   platformWorkers,
 		NetworkEngine: networkEngine,
+		VCluster:      vclusterFactory,
+		VClusterCfg:   vclusterCfg,
 	}
 	if awsClients != nil {
 		platformReconciler.IAM = awsClients.IAM
@@ -226,6 +262,7 @@ func main() {
 		Scheme:        mgr.GetScheme(),
 		Concurrency:   runtimeWorkers,
 		NetworkEngine: networkEngine,
+		VCluster:      vclusterFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "AgentFleet")
 		os.Exit(1)
@@ -243,6 +280,7 @@ func main() {
 		Client:      mgr.GetClient(),
 		Scheme:      mgr.GetScheme(),
 		Concurrency: agentSandboxWorkers,
+		VCluster:    vclusterFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "AgentSandbox")
 		os.Exit(1)

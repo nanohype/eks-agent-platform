@@ -58,6 +58,24 @@ spec:
         - ports:
             - port: "443"
               protocol: TCP
+    # vcluster isolation tier: the operator's target-client swap + ArgoCD cluster
+    # registration reach each per-Platform vcluster API server, which runs in the
+    # tenant namespaces the operator provisions (namespace label
+    # app.kubernetes.io/part-of: eks-agent-platform). Scoped to those namespaces —
+    # without it a vcluster-tier Platform can never reach VClusterReady on a cilium
+    # cluster. Port 8443 is the vcluster control-plane's own listen port: cilium
+    # enforces L4 policy on the translated pod port (targetPort 8443), not the
+    # Service port 443, so 8443 is the load-bearing one; 443 is kept for CNIs that
+    # match the Service port.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.cilium.k8s.namespace.labels.app.kubernetes.io/part-of: eks-agent-platform
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+            - port: "8443"
+              protocol: TCP
 {{- else }}
 # Vanilla NetworkPolicy — portable fallback for non-cilium clusters
 # (networkPolicy.engine: kubernetes). NOTE: under cilium this cannot allow
@@ -126,6 +144,19 @@ spec:
         - port: 443
           protocol: TCP
         - port: 6443
+          protocol: TCP
+    # vcluster isolation tier: reach each per-Platform vcluster API server in the
+    # tenant namespaces the operator provisions (label
+    # app.kubernetes.io/part-of: eks-agent-platform). 8443 is the vcluster
+    # control-plane's own port (Service targetPort); 443 the Service port.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: eks-agent-platform
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 8443
           protocol: TCP
 {{- end }}
 {{- end }}

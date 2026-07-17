@@ -11,6 +11,7 @@ Operational playbooks for the eks-agent-platform. Each runbook is referenced by 
 | [operator-down.md](./operator-down.md)           | `OperatorLeaderMissing`  | critical | ops               |
 | [budget-stale.md](./budget-stale.md)             | `BudgetReconcileLag`     | warning  | finance           |
 | [platform-suspended.md](./platform-suspended.md) | `PlatformSuspended`      | critical | depends on tenant |
+| [vcluster-down.md](./vcluster-down.md)           | `VClusterNotReady`       | warning  | ops               |
 
 ## Scenario-triggered (no automated page)
 

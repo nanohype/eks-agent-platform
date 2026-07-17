@@ -153,6 +153,43 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
+# ── vcluster hard-isolation tier ─────────────────────────────────────────────
+# Config for Platform.spec.isolation: vcluster. The operator declares a
+# per-Platform virtual cluster as an ArgoCD Application pinned to chart.version,
+# and bootstraps the fleet's control plane (kagent) + autoscaler (KEDA) INSIDE
+# each vcluster via the chart's init-charts, so the tenant's control+data plane
+# live entirely within the isolation boundary. ArgoCD is a hard prerequisite for
+# this tier (see docs/adr/0009-vcluster-isolation-tier.md); the namespace tier
+# ignores this block entirely.
+vcluster:
+  chart:
+    # The upstream vcluster chart. OCI mirror: oci://ghcr.io/loft-sh/charts/vcluster.
+    repoURL: https://charts.loft.sh
+    # Pinned chart version (targetRevision). Renovate proposes bumps; a human
+    # reviews majors — the operator never auto-upgrades a running vcluster.
+    version: "0.35.2"
+  # initCharts are deployed inside every per-Platform vcluster on startup
+  # (experimental.deploy.vcluster.helm). The recommended placement for kagent +
+  # KEDA. Set to [] to ship a containment-only vcluster (no in-vcluster fleet
+  # control plane). Field names are the operator flag's JSON contract
+  # (chartName/repoURL/version/releaseName/namespace/values).
+  initCharts:
+    - chartName: kagent-crds
+      repoURL: oci://ghcr.io/kagent-dev/kagent/helm/kagent-crds
+      version: "0.9.11"
+      releaseName: kagent-crds
+      namespace: kagent
+    - chartName: kagent
+      repoURL: oci://ghcr.io/kagent-dev/kagent/helm/kagent
+      version: "0.9.11"
+      releaseName: kagent
+      namespace: kagent
+    - chartName: keda
+      repoURL: https://kedacore.github.io/charts
+      version: "2.20.1"
+      releaseName: keda
+      namespace: keda
+
 # ── eval-runtime ─────────────────────────────────────────────────────────────
 # The Argo Workflows runtime the operator submits EvalSuite runs to: a
 # WorkflowTemplate (eval-runner), the gating AnalysisTemplate, and the SA + RBAC

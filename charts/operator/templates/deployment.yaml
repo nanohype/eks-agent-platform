@@ -50,6 +50,11 @@ spec:
             - --environment={{ .Values.config.environment }}
             - --region={{ .Values.config.region }}
             - --network-engine={{ .Values.networkPolicy.engine }}
+            - --vcluster-chart-repo={{ .Values.vcluster.chart.repoURL }}
+            - --vcluster-chart-version={{ .Values.vcluster.chart.version }}
+            {{- if .Values.vcluster.initCharts }}
+            - --vcluster-init-charts={{ .Values.vcluster.initCharts | toJson }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -147,6 +147,27 @@ spec:
             description: "Tenant IRSA role has been detached. Check BudgetPolicy + invoke spend. Operator will keep the platform suspended until the platform.nanohype.dev/suspended IAM tag is removed."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/platform-suspended.md
 
+        # A vcluster-tier Platform's virtual cluster has been unavailable for
+        # 15m. VClusterReady flips False during normal bring-up (the vcluster
+        # chart installs, the tenant SA syncs) and clears within a few minutes;
+        # a sustained 15m False means the vcluster control-plane pod is down (or
+        # ArgoCD is absent and the tier failed closed). While it's down, workload
+        # reconciles INTO the vcluster error and requeue, but host-side
+        # provisioning and already-running synced pods are unaffected — so this
+        # is a warning, not a page.
+        - alert: VClusterNotReady
+          expr: |
+            kube_customresource_condition{customresource_kind="Platform",condition_type="VClusterReady",condition_status="False"} == 1
+          for: 15m
+          labels:
+            severity: warning
+            component: platform
+            persona: ops
+          annotations:
+            summary: "Platform {{ $labels.name }} vcluster not ready for 15m"
+            description: "A vcluster-tier Platform's virtual cluster has been unavailable for 15m. Workload reconciles into the vcluster error and requeue; host containment and running synced pods are intact. Check the vcluster control-plane pod (StatefulSet in tenants-<name>) and the operator's Platform reconciler. If VClusterReady reason is ArgoCDRequired, ArgoCD is missing and the tier is failing closed by design."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/vcluster-down.md
+
         # Tenant aggregate spend over its soft cap.
         - alert: TenantBudgetExceeded
           expr: |
