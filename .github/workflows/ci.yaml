@@ -133,6 +133,7 @@ jobs:
       - run: pnpm test
 
   operator:
+    # Keep this job name stable — it is a required status check on main.
     name: go test (envtest)
     runs-on: ubuntu-latest
     steps:
@@ -141,12 +142,51 @@ jobs:
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
-      - name: go test with envtest
-        run: cd operators && make test
+      # make coverage-check runs the envtest + unit suite over a merged
+      # -coverpkg=./internal/... profile, then enforces the org coverage floor
+      # per package (75%), a per-file 100% on the security-critical IAM/KMS
+      # paths, and documented lower floors for agentctl/awsclients. A drop below
+      # any floor fails here rather than shipping an unproven control.
+      - name: go test with envtest + coverage floors
+        run: cd operators && make coverage-check
       - uses: golangci/golangci-lint-action@v7
         with:
           working-directory: operators
           version: v2.11.4
+
+  # ── Generated CRD reference drift gate ───────────────────────────────────
+  # docs/crd-reference/v1alpha1.md, the CRD manifests under config/crd, the
+  # manager RBAC under config/rbac, and the deepcopy code are all generated from
+  # the Go API types (make crd-docs → controller-gen + crd-ref-docs). A type
+  # change that isn't regenerated drifts the published reference and the shipped
+  # CRDs from the code. Regenerate and diff so it can't.
+  crd-docs:
+    name: crd reference in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - run: cd operators && make crd-docs
+      - name: fail on drift
+        run: git diff --exit-code -- docs/crd-reference operators/config/crd operators/config/rbac operators/api
+
+  docs:
+    name: typedoc builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Builds the API reference for every workspace package; fails on a broken
+      # doc reference or a type error typedoc surfaces.
+      - run: pnpm run docs
 
   # ── Generated-artifact drift gate ────────────────────────────────────────
   # The Lambda cost-publisher price table (pricing_data.py) and the TypeScript

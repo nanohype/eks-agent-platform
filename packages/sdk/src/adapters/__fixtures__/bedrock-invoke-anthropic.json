@@ -1,0 +1,15 @@
+{
+  "id": "msg_bdrk_01ABCdefGHIjklMNOpqrStuv",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-6-20260501-v1:0",
+  "content": [{ "type": "text", "text": "The mitochondrion is the powerhouse of the cell." }],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 27,
+    "output_tokens": 12,
+    "cache_read_input_tokens": 1024,
+    "cache_creation_input_tokens": 512
+  }
+}

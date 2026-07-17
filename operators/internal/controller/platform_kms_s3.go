@@ -234,7 +234,9 @@ func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platform
 
 	newBytes, err := json.Marshal(currentDoc)
 	if err != nil {
-		return fmt.Errorf("marshal bucket policy: %w", err)
+		// currentDoc is JSON-native throughout (parsed policy + string/[]string
+		// statements); marshal cannot fail. Defensive, unreachable, excluded.
+		return fmt.Errorf("marshal bucket policy: %w", err) //coverage:ignore unreachable — JSON-native document
 	}
 	if _, err := r.S3.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
 		Bucket: aws.String(bucket),
@@ -304,7 +306,9 @@ func (r *PlatformReconciler) removeBucketPolicyStatements(ctx context.Context, p
 	currentDoc["Statement"] = filtered
 	newBytes, err := json.Marshal(currentDoc)
 	if err != nil {
-		return fmt.Errorf("marshal bucket policy: %w", err)
+		// currentDoc is JSON-native throughout (parsed policy + string/[]string
+		// statements); marshal cannot fail. Defensive, unreachable, excluded.
+		return fmt.Errorf("marshal bucket policy: %w", err) //coverage:ignore unreachable — JSON-native document
 	}
 	if _, err := r.S3.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
 		Bucket: aws.String(bucket),

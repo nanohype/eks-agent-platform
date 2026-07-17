@@ -7,6 +7,9 @@ build/
 *.tsbuildinfo
 .eslintcache
 
+# Generated TypeScript API reference (typedoc; rebuilt by the docs CI job)
+docs/api/
+
 # Environment
 .env
 .env.local

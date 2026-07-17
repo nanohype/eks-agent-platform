@@ -55,6 +55,15 @@ type fakeIAM struct {
 	listReturnsErr    error
 	attachReturnsErr  map[string]error // policyARN -> err
 	pageBoundary      int              // if > 0, paginate ListAttached at this size
+
+	// Error-injection hooks for the finalizer / error-branch coverage tests.
+	// All default nil (no error); set per-test to drive a specific failure.
+	getReturnsErr        error // GetRole returns this instead of NoSuchEntity/role
+	createReturnsErr     error // CreateRole
+	detachReturnsErr     error // DetachRolePolicy
+	deleteReturnsErr     error // DeleteRole
+	updateAssumeErr      error // UpdateAssumeRolePolicy
+	listInlineReturnsErr error // ListRolePolicies
 }
 
 func newFakeIAM() *fakeIAM {
@@ -94,6 +103,9 @@ func (f *fakeIAM) attachmentsFor(roleName string) []string {
 }
 
 func (f *fakeIAM) CreateRole(_ context.Context, params *iam.CreateRoleInput, _ ...func(*iam.Options)) (*iam.CreateRoleOutput, error) {
+	if f.createReturnsErr != nil {
+		return nil, f.createReturnsErr
+	}
 	f.createCalls = append(f.createCalls, *params)
 	name := aws.ToString(params.RoleName)
 	arn := "arn:aws:iam::123456789012:role/" + name
@@ -102,6 +114,9 @@ func (f *fakeIAM) CreateRole(_ context.Context, params *iam.CreateRoleInput, _ .
 }
 
 func (f *fakeIAM) GetRole(_ context.Context, params *iam.GetRoleInput, _ ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
+	if f.getReturnsErr != nil {
+		return nil, f.getReturnsErr
+	}
 	name := aws.ToString(params.RoleName)
 	role, ok := f.roles[name]
 	if !ok {
@@ -111,6 +126,9 @@ func (f *fakeIAM) GetRole(_ context.Context, params *iam.GetRoleInput, _ ...func
 }
 
 func (f *fakeIAM) DeleteRole(_ context.Context, params *iam.DeleteRoleInput, _ ...func(*iam.Options)) (*iam.DeleteRoleOutput, error) {
+	if f.deleteReturnsErr != nil {
+		return nil, f.deleteReturnsErr
+	}
 	name := aws.ToString(params.RoleName)
 	delete(f.roles, name)
 	delete(f.attached, name)
@@ -122,6 +140,9 @@ func (f *fakeIAM) TagRole(_ context.Context, _ *iam.TagRoleInput, _ ...func(*iam
 }
 
 func (f *fakeIAM) UpdateAssumeRolePolicy(_ context.Context, params *iam.UpdateAssumeRolePolicyInput, _ ...func(*iam.Options)) (*iam.UpdateAssumeRolePolicyOutput, error) {
+	if f.updateAssumeErr != nil {
+		return nil, f.updateAssumeErr
+	}
 	f.updateAssumeCalls = append(f.updateAssumeCalls, *params)
 	return &iam.UpdateAssumeRolePolicyOutput{}, nil
 }
@@ -141,6 +162,9 @@ func (f *fakeIAM) AttachRolePolicy(_ context.Context, params *iam.AttachRolePoli
 }
 
 func (f *fakeIAM) DetachRolePolicy(_ context.Context, params *iam.DetachRolePolicyInput, _ ...func(*iam.Options)) (*iam.DetachRolePolicyOutput, error) {
+	if f.detachReturnsErr != nil {
+		return nil, f.detachReturnsErr
+	}
 	f.detachCalls = append(f.detachCalls, *params)
 	roleName := aws.ToString(params.RoleName)
 	delete(f.attached[roleName], aws.ToString(params.PolicyArn))
@@ -183,6 +207,9 @@ func (f *fakeIAM) DeleteRolePolicy(_ context.Context, params *iam.DeleteRolePoli
 }
 
 func (f *fakeIAM) ListRolePolicies(_ context.Context, params *iam.ListRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
+	if f.listInlineReturnsErr != nil {
+		return nil, f.listInlineReturnsErr
+	}
 	roleName := aws.ToString(params.RoleName)
 	if _, ok := f.roles[roleName]; !ok {
 		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role: " + roleName)}
@@ -462,6 +489,11 @@ type fakeEKS struct {
 	createCalls  []eks.CreatePodIdentityAssociationInput
 	deleteCalls  []eks.DeletePodIdentityAssociationInput
 	nextID       int
+
+	// Error-injection hooks (default nil = no error).
+	listReturnsErr   error
+	createReturnsErr error
+	deleteReturnsErr error
 }
 
 func newFakeEKS() *fakeEKS {
@@ -469,6 +501,9 @@ func newFakeEKS() *fakeEKS {
 }
 
 func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
+	if f.listReturnsErr != nil {
+		return nil, f.listReturnsErr
+	}
 	key := aws.ToString(params.Namespace) + "/" + aws.ToString(params.ServiceAccount)
 	out := &eks.ListPodIdentityAssociationsOutput{}
 	if id, ok := f.associations[key]; ok {
@@ -482,6 +517,9 @@ func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.Lis
 }
 
 func (f *fakeEKS) CreatePodIdentityAssociation(_ context.Context, params *eks.CreatePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error) {
+	if f.createReturnsErr != nil {
+		return nil, f.createReturnsErr
+	}
 	f.createCalls = append(f.createCalls, *params)
 	f.nextID++
 	id := fmt.Sprintf("a-%d", f.nextID)
@@ -490,6 +528,9 @@ func (f *fakeEKS) CreatePodIdentityAssociation(_ context.Context, params *eks.Cr
 }
 
 func (f *fakeEKS) DeletePodIdentityAssociation(_ context.Context, params *eks.DeletePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DeletePodIdentityAssociationOutput, error) {
+	if f.deleteReturnsErr != nil {
+		return nil, f.deleteReturnsErr
+	}
 	f.deleteCalls = append(f.deleteCalls, *params)
 	for k, id := range f.associations {
 		if id == aws.ToString(params.AssociationId) {

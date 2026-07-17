@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { EksAgentClient, type CustomObjectsClient, type Platform } from './index.js';
+import {
+  EksAgentClient,
+  resolveApi,
+  type CustomObjectsClient,
+  type KubeConfigLoader,
+  type Platform,
+} from './index.js';
 
 function fakeApi(overrides: Partial<CustomObjectsClient> = {}): {
   api: CustomObjectsClient;
@@ -83,5 +89,74 @@ describe('EksAgentClient', () => {
       body: { metadata: { name: 'acme' } },
     });
     expect(calls.deleteClusterCustomObject?.[0]).toMatchObject({ name: 'acme' });
+  });
+});
+
+// A fake KubeConfig that records which load path the resolver chose, so the
+// precedence branches are covered without a real kubeconfig file or cluster env.
+function fakeKubeConfig(): { kc: KubeConfigLoader; loads: string[]; context?: string } {
+  const state: { kc: KubeConfigLoader; loads: string[]; context?: string } = {
+    loads: [],
+    kc: {} as KubeConfigLoader,
+  };
+  state.kc = {
+    loadFromFile: (p: string) => state.loads.push(`file:${p}`),
+    loadFromCluster: () => state.loads.push('cluster'),
+    loadFromDefault: () => state.loads.push('default'),
+    setCurrentContext: (c: string) => {
+      state.context = c;
+    },
+    makeApiClient: () => ({}) as CustomObjectsClient,
+  } as KubeConfigLoader;
+  return state;
+}
+
+describe('resolveApi kubeconfig resolution', () => {
+  const savedEnv = { ...process.env };
+  afterEach(() => {
+    process.env = { ...savedEnv };
+    vi.restoreAllMocks();
+  });
+
+  it('prefers an explicit kubeconfigPath and applies a context override', () => {
+    delete process.env.KUBECONFIG;
+    delete process.env.KUBERNETES_SERVICE_HOST;
+    const f = fakeKubeConfig();
+    resolveApi({ kubeconfigPath: '/tmp/kc', context: 'staging' }, f.kc);
+    expect(f.loads).toEqual(['file:/tmp/kc']);
+    expect(f.context).toBe('staging');
+  });
+
+  it('falls back to the KUBECONFIG env path', () => {
+    process.env.KUBECONFIG = '/env/kubeconfig';
+    delete process.env.KUBERNETES_SERVICE_HOST;
+    const f = fakeKubeConfig();
+    resolveApi({}, f.kc);
+    expect(f.loads).toEqual(['file:/env/kubeconfig']);
+  });
+
+  it('loads the in-cluster config when running inside a pod', () => {
+    delete process.env.KUBECONFIG;
+    process.env.KUBERNETES_SERVICE_HOST = '10.0.0.1';
+    const f = fakeKubeConfig();
+    resolveApi({}, f.kc);
+    expect(f.loads).toEqual(['cluster']);
+  });
+
+  it('falls back to the default kubeconfig discovery', () => {
+    delete process.env.KUBECONFIG;
+    delete process.env.KUBERNETES_SERVICE_HOST;
+    const f = fakeKubeConfig();
+    resolveApi({}, f.kc);
+    expect(f.loads).toEqual(['default']);
+  });
+
+  it('the constructor skips resolution entirely when an api is injected', () => {
+    const f = fakeKubeConfig();
+    const { api } = fakeApi();
+    // Passing api short-circuits resolveApi; the fake loader stays untouched.
+    const client = new EksAgentClient({ api });
+    expect(client.api).toBe(api);
+    expect(f.loads).toEqual([]);
   });
 });
