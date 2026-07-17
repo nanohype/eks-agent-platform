@@ -20,9 +20,8 @@ export default tseslint.config(
       'scripts/**',
     ],
   },
-  // Org base — vendored byte-identical from nanohype library/config
-  // (drift-gated by scripts/sync-vendored.mjs): @eslint/js recommended +
-  // typescript-eslint strict + the shared rule options.
+  // Shared base (eslint.base.mjs): @eslint/js recommended + typescript-eslint
+  // strict + the shared rule options.
   ...base,
   // Type-checked layers on top of the strict base.
   ...tseslint.configs.recommendedTypeCheckedOnly,

@@ -1,14 +1,9 @@
 /**
- * Org-canonical ESLint base — flat config on the typescript-eslint `strict`
- * ruleset. Canonical source: nanohype `library/config/eslint.base.mjs`.
+ * ESLint base for this repo's TypeScript packages — flat config on the
+ * typescript-eslint `strict` ruleset.
  *
- * Consumers carry a byte-identical copy (drift-gated by their
- * `scripts/sync-vendored.mjs` where the repo vendors from a nanohype
- * checkout) or extend this file by relative path inside the nanohype repo
- * itself. Fixes land here, then re-sync — never patch a copy.
- *
- * Repo-specific plugins, ignores, and rules layer on top in each repo's thin
- * `eslint.config.*`.
+ * Repo-specific plugins, ignores, and type-checked rules layer on top in the
+ * thin `eslint.config.mjs`.
  */
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
