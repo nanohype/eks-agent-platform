@@ -75,24 +75,6 @@ config:
     athenaWorkgroup: ""
     athenaDatabase: ""
 
-webhooks:
-  enabled: true
-  port: 9443
-  failurePolicy: Fail
-  # CA bundle is injected automatically by cert-manager via the
-  # cert-manager.io/inject-ca-from annotation on the kubebuilder-generated
-  # ValidatingWebhookConfiguration / MutatingWebhookConfiguration.
-  caBundle: ""
-  certManager:
-    enabled: true
-    # When true, this chart provisions a self-signed ClusterIssuer named
-    # below. Leave false in production and reference your real issuer
-    # (Vault, ACM Private CA, etc.).
-    installSelfSignedIssuer: false
-    issuerRef:
-      kind: ClusterIssuer
-      name: selfsigned-cluster-issuer
-
 metrics:
   enabled: true
   port: 8080

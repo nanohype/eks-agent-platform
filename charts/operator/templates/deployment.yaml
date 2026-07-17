@@ -94,11 +94,6 @@ spec:
             - name: probe
               containerPort: 8081
               protocol: TCP
-            {{- if .Values.webhooks.enabled }}
-            - name: webhook
-              containerPort: {{ .Values.webhooks.port }}
-              protocol: TCP
-            {{- end }}
           startupProbe:
             httpGet:
               path: /healthz
@@ -122,19 +117,6 @@ spec:
             periodSeconds: 10
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- if .Values.webhooks.enabled }}
-          volumeMounts:
-            - name: webhook-certs
-              mountPath: /tmp/k8s-webhook-server/serving-certs
-              readOnly: true
-          {{- end }}
-      {{- if .Values.webhooks.enabled }}
-      volumes:
-        - name: webhook-certs
-          secret:
-            secretName: {{ include "operator.fullname" . }}-webhook-cert
-            defaultMode: 420
-      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

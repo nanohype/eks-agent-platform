@@ -29,15 +29,13 @@ done
 
 1. **OOMKilled** — the operator hit its memory limit. Check `kubectl get pods` for `OOMKilled` state. Bump `resources.limits.memory` in the operator chart values.
 2. **CrashLoopBackOff** — startup failure. Read `kubectl logs <pod>` for the panic message. Most likely a malformed SSM config or missing IRSA wiring.
-3. **Webhook cert expired** — the cert-manager-managed webhook cert lapsed. `kubectl -n eks-agent-platform get certificate` — look for `Ready: False`.
-4. **Leader election lease wedged** — rare; manually delete the lease to force re-election: `kubectl -n eks-agent-platform delete lease eks-agent-platform.nanohype.dev`.
+3. **Leader election lease wedged** — rare; manually delete the lease to force re-election: `kubectl -n eks-agent-platform delete lease eks-agent-platform.nanohype.dev`.
 
 ## Mitigate
 
 1. If OOMKilled, bump limit and `kubectl rollout restart deploy/operator -n eks-agent-platform`.
 2. If CrashLoop, fix the config / wiring and let the deployment converge.
-3. If webhook cert expired, force a cert-manager renewal: `kubectl -n eks-agent-platform annotate certificate operator-webhook-cert cert-manager.io/issue-temporary-certificate=true --overwrite`.
-4. If lease wedged, delete it as above. Replicas re-elect within 15s.
+3. If lease wedged, delete it as above. Replicas re-elect within 15s.
 
 ## Recover
 

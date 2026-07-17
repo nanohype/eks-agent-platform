@@ -111,11 +111,11 @@ Six threat categories, evaluated per architecture component.
 
 ### Tenant attacks operator
 
-| Threat                                                                                         | STRIDE      | Mitigation                                                                                                                                                                     |
-| ---------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Tenant crafts a malicious `Platform` spec that triggers operator panic / unbounded reconcile   | **D**oS     | Validating webhook rejects malformed specs. Reconciler has explicit error budgets via controller-runtime's backoff. CRD schema enforces enum + min/max constraints.            |
-| Tenant adds a label that matches the operator's NetworkPolicy selector → pivot inbound traffic | **E**oP     | Operator NetworkPolicy only accepts ingress from `monitoring` namespace (Prometheus scrape) and the API server (webhook port). No tenant-namespace ingress allowed.            |
-| Tenant CR triggers an SSRF in a reconciler (e.g. fetching an unvalidated URL)                  | **E**oP / I | Reconcilers do not fetch external URLs at reconcile time. Eval reports and pricing data are fetched only by explicitly-named bucket/path; new reconcilers must hold this line. |
+| Threat                                                                                         | STRIDE      | Mitigation                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tenant crafts a malicious `Platform` spec that triggers operator panic / unbounded reconcile   | **D**oS     | CEL rules (`x-kubernetes-validations`) reject malformed specs at admission. Reconciler has explicit error budgets via controller-runtime's backoff. CRD schema enforces enum + min/max constraints. |
+| Tenant adds a label that matches the operator's NetworkPolicy selector → pivot inbound traffic | **E**oP     | Operator NetworkPolicy only accepts ingress from the `monitoring` namespace (Prometheus scrape). No tenant-namespace ingress allowed.                                                               |
+| Tenant CR triggers an SSRF in a reconciler (e.g. fetching an unvalidated URL)                  | **E**oP / I | Reconcilers do not fetch external URLs at reconcile time. Eval reports and pricing data are fetched only by explicitly-named bucket/path; new reconcilers must hold this line.                      |
 
 ### External attacks platform
 
@@ -159,7 +159,7 @@ The mitigations above are not aspirational. Today, the platform ships:
 
 Planned hardening:
 
-- [ ] Validating webhook on `Platform`, `BudgetPolicy`, `ModelGateway` (CRD schema is the floor; webhook adds cross-field invariants)
+- [ ] CEL `x-kubernetes-validations` cross-field rules on `BudgetPolicy` + `ModelGateway` (CRD schema is the floor; `Platform` + `EvalSuite` already enforce theirs)
 - [ ] cosign keyless signing on operator images via Sigstore/Fulcio (workflow exists; needs first tagged release)
 - [ ] Kyverno `verify-images` policy in `eks-gitops` referencing our cosign signer
 - [ ] GuardDuty Anomaly Detection rules tuned for "unfamiliar IAM principal as grantee" events

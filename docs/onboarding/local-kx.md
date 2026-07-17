@@ -36,7 +36,7 @@ What it does:
 
 1. Confirms `kubectl current-context == kind-kx` (refuses otherwise).
 2. Probes for the four required CRDs; prints which kx slice to enable if any are missing.
-3. `helm upgrade --install operator ./charts/operator -n eks-agent-platform -f scripts/local-kx/values-local.yaml` — single replica, no leader election, no webhook, `--disable-aws`.
+3. `helm upgrade --install operator ./charts/operator -n eks-agent-platform -f scripts/local-kx/values-local.yaml` — single replica, no leader election, `--disable-aws`.
 4. Waits for the operator deployment to come up.
 5. Applies `examples/blank-tenant/platform.yaml` — Platform + BudgetPolicy + ModelGateway + AgentFleet + EvalSuite for a single-agent smoke-test tenant.
 6. Waits for `Platform/blank` to hit `NamespaceReady`.
@@ -107,13 +107,13 @@ Removes the operator, the blank tenant, the tenant workload namespace, the opera
 
 ## Troubleshooting
 
-| Symptom                                          | Cause / fix                                                                                                                                                                                                                                                           |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Platform/blank` stays `Pending`                 | `kubectl describe platform blank -n eks-agent-platform` shows the failing step. Most common: a CRD wasn't installed (re-run `task stack:*:enable` in kx).                                                                                                             |
-| `agents.kagent.dev` shape rejected               | kagent version drift between kx and our reconciler's emitted spec. Check `kubectl explain agent.spec` against `operators/internal/controller/agentfleet_reconcile.go:ensureKagentAgents`; bump kx's kagent chart version if needed.                                   |
-| Bedrock `AccessDeniedException`                  | The static cred mounted on agentgateway doesn't have `bedrock:InvokeModel`. Confirm what the pod sees with `kubectl exec -n agentgateway deploy/agentgateway -- printenv AWS_ACCESS_KEY_ID` and cross-check with `aws sts get-caller-identity` for the same identity. |
-| Bedrock `ResourceNotFoundException` on the model | Your account doesn't have access to `claude-3-5-sonnet-20241022-v2:0` (the route's model). Either request access in the AWS console → Bedrock → Model access, or edit `examples/blank-tenant/platform.yaml`'s `ModelRouteSpec.modelId` to a model you do have.        |
-| Operator pod crash-loops                         | `kubectl logs -n eks-agent-platform -l app.kubernetes.io/name=operator --tail=200`. Likely cause: a chart values knob that requires an integration we disabled (webhook=false but the chart still mounts the cert).                                                   |
+| Symptom                                          | Cause / fix                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Platform/blank` stays `Pending`                 | `kubectl describe platform blank -n eks-agent-platform` shows the failing step. Most common: a CRD wasn't installed (re-run `task stack:*:enable` in kx).                                                                                                                                                     |
+| `agents.kagent.dev` shape rejected               | kagent version drift between kx and our reconciler's emitted spec. Check `kubectl explain agent.spec` against `operators/internal/controller/agentfleet_reconcile.go:ensureKagentAgents`; bump kx's kagent chart version if needed.                                                                           |
+| Bedrock `AccessDeniedException`                  | The static cred mounted on agentgateway doesn't have `bedrock:InvokeModel`. Confirm what the pod sees with `kubectl exec -n agentgateway deploy/agentgateway -- printenv AWS_ACCESS_KEY_ID` and cross-check with `aws sts get-caller-identity` for the same identity.                                         |
+| Bedrock `ResourceNotFoundException` on the model | Your account doesn't have access to `claude-3-5-sonnet-20241022-v2:0` (the route's model). Either request access in the AWS console → Bedrock → Model access, or edit `examples/blank-tenant/platform.yaml`'s `ModelRouteSpec.modelId` to a model you do have.                                                |
+| Operator pod crash-loops                         | `kubectl logs -n eks-agent-platform -l app.kubernetes.io/name=operator --tail=200`. Likely cause: a chart values knob that requires an integration we disabled (e.g. `metrics.serviceMonitor.enabled` without the Prometheus-operator CRDs, or `evalRuntime.rollouts.enabled` without the Argo Rollouts CRD). |
 
 ## Related
 
