@@ -5,6 +5,7 @@ on:
     tags:
       - "operator-v*"
       - "sandbox-worker-v*"
+      - "eval-runner-v*"
       - "charts-v*"
       - "sdk-v*"
 
@@ -93,6 +94,47 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sbom-sandbox-worker-${{ steps.ver.outputs.version }}
+          path: sbom.spdx.json
+
+  eval-runner-image:
+    name: build + sign eval runner image
+    if: startsWith(github.ref, 'refs/tags/eval-runner-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sigstore/cosign-installer@v3
+      - uses: anchore/sbom-action/download-syft@v0
+      - name: derive version
+        id: ver
+        run: echo "version=${GITHUB_REF#refs/tags/eval-runner-v}" >> "$GITHUB_OUTPUT"
+      - name: docker login (ghcr.io)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: build + push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          # Repo root context: the image bundles the pnpm workspace (the runner
+          # builds on @eks-agent/core + @eks-agent/pricing).
+          context: .
+          file: packages/eval-runner/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
+            ghcr.io/${{ github.repository }}/eval-runner:latest
+      - name: sign (keyless, OIDC)
+        run: |
+          cosign sign --yes ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
+      - name: sbom
+        run: |
+          syft "ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-eval-runner-${{ steps.ver.outputs.version }}
           path: sbom.spdx.json
 
   charts-oci:

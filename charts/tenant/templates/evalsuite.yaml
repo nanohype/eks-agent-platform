@@ -26,6 +26,12 @@ spec:
       {{- with .expectContains }}
       expectContains: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .expectNotContains }}
+      expectNotContains: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .expectRefusal }}
+      expectRefusal: true
+      {{- end }}
       {{- with .maxLatencyMs }}
       maxLatencyMs: {{ . }}
       {{- end }}

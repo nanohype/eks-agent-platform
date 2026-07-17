@@ -156,11 +156,14 @@ spec:
         source: |
           set -eu
           echo '{{inputs.parameters.cases-json}}' > /tmp/cases.json
-          # eval-runner is a small Python image that ships with httpx +
-          # jq + bash. The 'evaluate' script reads /tmp/cases.json,
-          # POSTs each one to {gateway}/v1/agents/{platform}-{fleet}/messages,
-          # and writes /tmp/results.json with shape:
-          #   [{name, input, output, latency_ms, cost_usd, error?}]
+          # eval-runner is the @eks-agent/eval-runner Node CLI (packages/
+          # eval-runner). The 'evaluate' command reads /tmp/cases.json, POSTs
+          # each case to {gateway}/v1/agents/{platform}-{fleet}/messages, prices
+          # the call, and writes /tmp/results.json — one record per case:
+          #   {name, input, output, latency_ms, cost_usd, error?}
+          # plus the case's echoed assertion criteria (expectContains,
+          # expectNotContains, expectRefusal, maxLatencyMs, maxCostUsd) so the
+          # score step can grade without re-reading the source suite.
           evaluate \
             --cases /tmp/cases.json \
             --platform '{{inputs.parameters.platform}}' \
@@ -176,9 +179,10 @@ spec:
             valueFrom: { path: /tmp/results.json }
 
     # ─────────────── 3. score ───────────────
-    # Compute the mean score + per-case pass/fail against
-    # expectContains, maxLatencyMs, maxCostUsd. Render HTML report and
-    # junit.xml, upload to S3.
+    # Compute the mean score + per-case pass/fail against every assertion the
+    # case declares (expectContains, expectNotContains, expectRefusal,
+    # maxLatencyMs, maxCostUsd — an unpriced model fails a cost ceiling closed).
+    # Render the HTML report + junit.xml and upload to S3.
     - name: score
       inputs:
         parameters:

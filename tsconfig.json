@@ -6,6 +6,7 @@
     { "path": "./packages/sdk" },
     { "path": "./packages/pricing" },
     { "path": "./packages/client" },
-    { "path": "./packages/cli" }
+    { "path": "./packages/cli" },
+    { "path": "./packages/eval-runner" }
   ]
 }

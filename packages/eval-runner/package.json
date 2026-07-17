@@ -1,0 +1,43 @@
+{
+  "name": "@eks-agent/eval-runner",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Evaluation runner for EvalSuite CRs — executes golden + adversarial cases against a tenant's agents through the model gateway and scores them. Shipped as the ghcr.io/nanohype/eks-agent-platform/eval-runner image the Argo eval-runner WorkflowTemplate invokes.",
+  "license": "Apache-2.0",
+  "author": "stxkxs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nanohype/eks-agent-platform.git",
+    "directory": "packages/eval-runner"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "bundle": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/cli.bundle.js",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "test:coverage": "vitest run src --coverage"
+  },
+  "dependencies": {
+    "@eks-agent/core": "workspace:*",
+    "@eks-agent/pricing": "workspace:*",
+    "@eks-agent/sdk": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

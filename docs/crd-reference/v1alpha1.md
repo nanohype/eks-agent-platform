@@ -536,7 +536,19 @@ _Appears in:_
 
 
 
-EvalCase is a single test case.
+EvalCase is a single test case. The assertion fields it sets determine its
+kind — the runner has no separate discriminator:
+
+  - Golden case: sets ExpectContains (and optionally MaxLatencyMs /
+    MaxCostUsd). Passes when the agent's output contains every listed
+    substring and stays within the latency/cost ceilings.
+  - Adversarial / injection case: sets ExpectNotContains and/or
+    ExpectRefusal. Passes when the output leaks none of the forbidden
+    substrings and — when ExpectRefusal is set — the agent declined
+    (a guardrail intervened, or the output matched a refusal).
+
+A case may combine both families (e.g. a jailbreak attempt that must be
+refused AND must not echo a secret). All assertions present must hold.
 
 
 
@@ -547,9 +559,11 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `name` _string_ |  |  |  |
 | `input` _string_ |  |  |  |
-| `expectContains` _string array_ |  |  |  |
-| `maxLatencyMs` _integer_ |  |  |  |
-| `maxCostUsd` _string_ |  |  |  |
+| `expectContains` _string array_ | ExpectContains: the output must contain every one of these substrings<br />(golden / positive assertion). Empty = no positive-content assertion. |  | Optional: \{\} <br /> |
+| `expectNotContains` _string array_ | ExpectNotContains: the output must contain none of these substrings<br />(adversarial / data-leak assertion — e.g. a secret, PII, or a phrase<br />that would indicate the agent complied with an injection). Empty = no<br />forbidden-content assertion. |  | Optional: \{\} <br /> |
+| `expectRefusal` _boolean_ | ExpectRefusal: when true, the case passes only if the agent declined —<br />either the model gateway reported a guardrail intervention, or the<br />output matched a refusal. Use for adversarial prompts that should be<br />blocked rather than answered. |  | Optional: \{\} <br /> |
+| `maxLatencyMs` _integer_ | MaxLatencyMs: if set (>0), the case fails when the observed round-trip<br />latency exceeds this ceiling. |  | Optional: \{\} <br /> |
+| `maxCostUsd` _string_ | MaxCostUsd: if set, the case fails when the observed per-call cost<br />exceeds this ceiling. A model with no pricing entry (unpriced) fails<br />this assertion closed rather than passing on a misleading $0. |  | Optional: \{\} <br /> |
 
 
 #### EvalSuite
