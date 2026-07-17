@@ -34,7 +34,7 @@ func TestEnsureSessionRole_CreatesRoleWithTrustAndBaseline(t *testing.T) {
 	const tenantARN = "arn:aws:iam::123456789012:role/production-acme-tenant"
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, Environment: "production"}
+	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com", "bob@acme.com"}, nil)
 
 	arn, err := r.ensureSessionRole(context.Background(), p, tenantARN, false, cfg)
@@ -44,7 +44,7 @@ func TestEnsureSessionRole_CreatesRoleWithTrustAndBaseline(t *testing.T) {
 	if arn == "" {
 		t.Fatal("expected a session role ARN")
 	}
-	name := sessionRoleName(cfg.Environment, p)
+	name := sessionRoleName(cfg.ClusterName, p)
 	if name != "production-acme-session" {
 		t.Fatalf("session role name: got %s want production-acme-session", name)
 	}
@@ -74,7 +74,7 @@ func TestEnsureSessionRole_CreatesRoleWithTrustAndBaseline(t *testing.T) {
 func TestEnsureSessionRole_CustomMaxDuration(t *testing.T) {
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	cfg := IAMConfig{Environment: "production"}
+	cfg := IAMConfig{ClusterName: "production", Environment: "production"}
 	dur := int32(7200)
 	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com"}, &dur)
 
@@ -90,9 +90,9 @@ func TestEnsureSessionRole_IdempotentRefreshesTrust(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, Environment: "production"}
+	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com"}, nil)
-	name := sessionRoleName(cfg.Environment, p)
+	name := sessionRoleName(cfg.ClusterName, p)
 	f.seedRole(name, "arn:aws:iam::123:role/"+name)
 
 	if _, err := r.ensureSessionRole(context.Background(), p, "arn:aws:iam::1:role/tenant", false, cfg); err != nil {
@@ -116,9 +116,9 @@ func TestEnsureSessionRole_SuspendedDetachesBaseline(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, Environment: "production"}
+	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com"}, nil)
-	name := sessionRoleName(cfg.Environment, p)
+	name := sessionRoleName(cfg.ClusterName, p)
 	f.seedRole(name, "arn:aws:iam::123:role/"+name)
 	f.seedAttachment(name, baseline)
 
@@ -135,7 +135,7 @@ func TestEnsureSessionRole_NilAttributionNoop(t *testing.T) {
 	r := &PlatformReconciler{IAM: f}
 	p := newPlatform("acme", "protohype") // no attribution
 
-	arn, err := r.ensureSessionRole(context.Background(), p, "arn:aws:iam::1:role/tenant", false, IAMConfig{Environment: "production"})
+	arn, err := r.ensureSessionRole(context.Background(), p, "arn:aws:iam::1:role/tenant", false, IAMConfig{ClusterName: "production", Environment: "production"})
 	if err != nil || arn != "" {
 		t.Fatalf("expected no-op; got arn=%q err=%v", arn, err)
 	}
@@ -147,9 +147,9 @@ func TestEnsureSessionRole_NilAttributionNoop(t *testing.T) {
 func TestDeleteSessionRole(t *testing.T) {
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	cfg := IAMConfig{Environment: "production"}
+	cfg := IAMConfig{ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com"}, nil)
-	name := sessionRoleName(cfg.Environment, p)
+	name := sessionRoleName(cfg.ClusterName, p)
 	f.seedRole(name, "arn:aws:iam::123:role/"+name)
 	f.seedAttachment(name, "arn:aws:iam::aws:policy/EksAgentBaseline")
 

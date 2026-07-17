@@ -50,8 +50,12 @@ reconcilers:
     pollInterval: 2m
 
 config:
-  ssmPathPrefix: /eks-agent-platform
   environment: ""
+  # Full EKS cluster name this operator serves (e.g. development-analytics). Keys the
+  # per-cluster SSM subtree /eks-agent-platform/<clusterName>/ and prefixes the
+  # tenant/session roles the operator mints, isolating co-located sibling
+  # clusters. Required — set per cluster at install time.
+  clusterName: ""
   region: us-west-2
   # Org-dimension tag values stamped on the tenant IRSA roles the operator
   # creates (resource-tagging standard, required tier). Empty falls back to the
@@ -63,9 +67,6 @@ config:
     businessUnit: ""
     dataClassification: ""
     compliance: ""
-  # The EKS cluster name (used to create tenant Pod Identity associations) is
-  # read from SSM (/eks-agent-platform/<env>/cluster/name) by operatorconfig,
-  # alongside the operator's other AWS config — not injected as a Helm value.
   killSwitch:
     eventBusName: ""
   bedrock:

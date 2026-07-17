@@ -405,7 +405,7 @@ func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 		t.Errorf("expected RoleARN to be set")
 	}
 
-	roleName := tenantRoleName(cfg.Environment, platform)
+	roleName := tenantRoleName(cfg.ClusterName, platform)
 	attachments := f.attachmentsFor(roleName)
 	wantSet := map[string]bool{baseline: true, extras[0]: true, extras[1]: true}
 	if len(attachments) != len(wantSet) {
@@ -434,7 +434,7 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 
 	// Seed the role with the suspension marker so ensureIamRole's GetRole
 	// branch returns suspended=true and skips reconcileManagedPolicies.
-	roleName := tenantRoleName(cfg.Environment, platform)
+	roleName := tenantRoleName(cfg.ClusterName, platform)
 	f.seedRole(roleName, "arn:aws:iam::123:role/"+roleName,
 		iamtypes.Tag{Key: aws.String(suspendedTag), Value: aws.String("true")},
 		iamtypes.Tag{Key: aws.String(suspendedReasonTag), Value: aws.String("budget-exceeded")},

@@ -262,7 +262,7 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 	r := &PlatformReconciler{IAM: f}
 	platform := newPlatform("slack-knowledge-bot", "protohype")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
-	roleName := tenantRoleName(cfg.Environment, platform)
+	roleName := tenantRoleName(cfg.ClusterName, platform)
 
 	// Fresh role: the scoping policy lands alongside the baseline attach.
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
@@ -329,7 +329,7 @@ func TestEnsureIamRole_SuspendedDoesNotTouchModelScopingPolicy(t *testing.T) {
 	platform := newPlatform("slack-knowledge-bot", "protohype")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
 
-	roleName := tenantRoleName(cfg.Environment, platform)
+	roleName := tenantRoleName(cfg.ClusterName, platform)
 	f.seedRole(roleName, "arn:aws:iam::123:role/"+roleName,
 		iamtypes.Tag{Key: aws.String(suspendedTag), Value: aws.String("true")},
 	)
@@ -363,7 +363,7 @@ func TestDeleteIamRole_RemovesInlinePoliciesBeforeRoleDelete(t *testing.T) {
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("ensureIamRole: %v", err)
 	}
-	roleName := tenantRoleName(cfg.Environment, platform)
+	roleName := tenantRoleName(cfg.ClusterName, platform)
 	if _, ok := f.inline[roleName][modelScopingPolicyName]; !ok {
 		t.Fatalf("precondition: scoping policy should exist")
 	}
@@ -387,6 +387,7 @@ func TestDeleteIamRole_RemovesInlinePoliciesBeforeRoleDelete(t *testing.T) {
 func TestEnsureSessionRole_CarriesModelScopingPolicy(t *testing.T) {
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
+		ClusterName:             "production-cluster",
 		Environment:             "production",
 		Region:                  "us-west-2",
 	}
@@ -400,7 +401,7 @@ func TestEnsureSessionRole_CarriesModelScopingPolicy(t *testing.T) {
 	if _, err := r.ensureSessionRole(context.Background(), platform, tenantARN, false, cfg); err != nil {
 		t.Fatalf("ensureSessionRole: %v", err)
 	}
-	sessionName := sessionRoleName(cfg.Environment, platform)
+	sessionName := sessionRoleName(cfg.ClusterName, platform)
 	doc, ok := f.inline[sessionName][modelScopingPolicyName]
 	if !ok {
 		t.Fatalf("session role must carry the model scoping clamp; inline=%v", f.inline)

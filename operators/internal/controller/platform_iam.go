@@ -67,18 +67,19 @@ type platformSuspension struct {
 // the contract documented in ADR 0003 and consumed by the kill-switch
 // Step Functions state machine:
 //
-//	<env>-<platform.name>-tenant
+//	<cluster-name>-<platform.name>-tenant
 //
-// Capped at 64 chars (IAM role-name limit); long platform names get
-// hash-truncated using the same scheme as PlatformNamespace.
-func tenantRoleName(env string, p *platformv1alpha1.Platform) string {
+// Cluster-scoped (not env-scoped) so two co-located clusters can host a Platform
+// of the same name without their tenant roles colliding. Capped at 64 chars (IAM
+// role-name limit); long platform names get hash-truncated like PlatformNamespace.
+func tenantRoleName(clusterName string, p *platformv1alpha1.Platform) string {
 	const suffix = "-tenant"
 	const maxLen = 64
-	full := env + "-" + p.Name + suffix
+	full := clusterName + "-" + p.Name + suffix
 	if len(full) <= maxLen {
 		return full
 	}
-	prefix := env + "-"
+	prefix := clusterName + "-"
 	// budget = maxLen - len(prefix) - len(suffix) - 1(hyphen) - 8(hash)
 	budget := maxLen - len(prefix) - len(suffix) - 1 - 8
 	h := fnv1a64(p.Name)
@@ -199,7 +200,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		// Skip silently — AWS-side callers explicitly check IAM != nil.
 		return platformSuspension{}, nil
 	}
-	name := tenantRoleName(cfg.Environment, p)
+	name := tenantRoleName(cfg.ClusterName, p)
 	path := cfg.TenantIAMPath
 	if path == "" {
 		path = "/eks-agent-platform/tenants/"
@@ -398,7 +399,7 @@ func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alp
 	if err := r.deletePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName); err != nil {
 		return err
 	}
-	return r.detachAndDeleteRole(ctx, tenantRoleName(cfg.Environment, p))
+	return r.detachAndDeleteRole(ctx, tenantRoleName(cfg.ClusterName, p))
 }
 
 // detachAndDeleteRole detaches every managed policy from a role, deletes its

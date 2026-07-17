@@ -1,7 +1,7 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-artifacts"
+  prefix = "${var.cluster_name}-artifacts"
   tags = merge(var.tags, {
     Component = "model-artifacts"
     Tier      = "platform"
@@ -214,14 +214,14 @@ resource "aws_s3_bucket_public_access_block" "eval_reports" {
 ################################################################################
 
 resource "aws_ssm_parameter" "artifacts_bucket" {
-  name  = "/eks-agent-platform/${var.environment}/model-artifacts/bucket_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/model-artifacts/bucket_arn"
   type  = "String"
   value = aws_s3_bucket.artifacts.arn
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "eval_reports_bucket" {
-  name  = "/eks-agent-platform/${var.environment}/model-artifacts/eval_reports_bucket_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/model-artifacts/eval_reports_bucket_arn"
   type  = "String"
   value = aws_s3_bucket.eval_reports.arn
   tags  = local.tags

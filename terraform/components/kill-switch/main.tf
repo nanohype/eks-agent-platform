@@ -5,19 +5,19 @@ data "aws_partition" "current" {}
 # landing-zone's canonical agent-iam component. Read them from the SSM contract
 # it publishes rather than carrying a duplicate agent-iam in this tree.
 data "aws_ssm_parameter" "operator_role_arn" {
-  name = "/eks-agent-platform/${var.environment}/agent-iam/operator_role_arn"
+  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/operator_role_arn"
 }
 
 data "aws_ssm_parameter" "tenant_iam_path" {
-  name = "/eks-agent-platform/${var.environment}/agent-iam/tenant_iam_path"
+  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/tenant_iam_path"
 }
 
 data "aws_ssm_parameter" "tenant_baseline_policy_arn" {
-  name = "/eks-agent-platform/${var.environment}/agent-iam/tenant_baseline_policy_arn"
+  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/tenant_baseline_policy_arn"
 }
 
 locals {
-  prefix = "${var.environment}-${var.cluster_name}-killswitch"
+  prefix = "${var.cluster_name}-killswitch"
   tags = merge(var.tags, {
     Component = "kill-switch"
     Tier      = "platform"
@@ -168,11 +168,11 @@ resource "aws_sfn_state_machine" "killswitch" {
         Resource = "arn:${data.aws_partition.current.partition}:states:::aws-sdk:iam:detachRolePolicy"
         Parameters = {
           # The role name is built from var.tenant_role_name_pattern with
-          # the literal '<env>' substituted with var.environment at plan
+          # the literal '<cluster>' substituted with var.cluster_name at plan
           # time, and '{}' substituted with $.detail.platformId at runtime
           # via Step Functions States.Format. This pattern is a CONTRACT
           # with the operator's PlatformReconciler — see the variable doc.
-          "RoleName.$" = "States.Format('${replace(var.tenant_role_name_pattern, "<env>", var.environment)}', $.detail.platformId)"
+          "RoleName.$" = "States.Format('${replace(var.tenant_role_name_pattern, "<cluster>", var.cluster_name)}', $.detail.platformId)"
           PolicyArn    = data.aws_ssm_parameter.tenant_baseline_policy_arn.value
         }
         Retry = [{
@@ -197,7 +197,7 @@ resource "aws_sfn_state_machine" "killswitch" {
         Type     = "Task"
         Resource = "arn:${data.aws_partition.current.partition}:states:::aws-sdk:iam:tagRole"
         Parameters = {
-          "RoleName.$" = "States.Format('${replace(var.tenant_role_name_pattern, "<env>", var.environment)}', $.detail.platformId)"
+          "RoleName.$" = "States.Format('${replace(var.tenant_role_name_pattern, "<cluster>", var.cluster_name)}', $.detail.platformId)"
           Tags = [
             { Key = "platform.nanohype.dev/suspended", Value = "true" },
             { Key = "platform.nanohype.dev/suspended-reason", "Value.$" = "$.detail.reason" }
@@ -299,21 +299,21 @@ resource "aws_cloudwatch_event_bus_policy" "operator_put" {
 ################################################################################
 
 resource "aws_ssm_parameter" "event_bus_name" {
-  name  = "/eks-agent-platform/${var.environment}/kill-switch/event_bus_name"
+  name  = "/eks-agent-platform/${var.cluster_name}/kill-switch/event_bus_name"
   type  = "String"
   value = aws_cloudwatch_event_bus.killswitch.name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "event_bus_arn" {
-  name  = "/eks-agent-platform/${var.environment}/kill-switch/event_bus_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/kill-switch/event_bus_arn"
   type  = "String"
   value = aws_cloudwatch_event_bus.killswitch.arn
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "state_machine_arn" {
-  name  = "/eks-agent-platform/${var.environment}/kill-switch/state_machine_arn"
+  name  = "/eks-agent-platform/${var.cluster_name}/kill-switch/state_machine_arn"
   type  = "String"
   value = aws_sfn_state_machine.killswitch.arn
   tags  = local.tags

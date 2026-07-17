@@ -39,7 +39,7 @@ remote_state {
 
   config = {
     bucket         = "eks-agent-platform-tfstate-${local.account_id}-${local.region}"
-    key            = "eks-agent-platform/${local.environment}/${path_relative_to_include()}/terraform.tfstate"
+    key            = "eks-agent-platform/${path_relative_to_include()}/terraform.tfstate"
     region         = local.region
     encrypt        = true
     use_lockfile   = true

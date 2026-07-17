@@ -6,6 +6,11 @@ variable "environment" {
 variable "cluster_name" {
   description = "EKS cluster name — used to namespace SSM parameters and tags"
   type        = string
+
+  validation {
+    condition     = length(var.cluster_name) <= 27
+    error_message = "cluster_name (<environment>-<base>) must be <= 27 chars: it prefixes cluster-scoped S3 bucket names (e.g. <cluster_name>-bedrock-invocations-<account>) that must stay within S3's 63-char limit."
+  }
 }
 
 variable "logs_kms_key_arn" {

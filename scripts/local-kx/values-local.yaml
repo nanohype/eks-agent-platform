@@ -21,7 +21,6 @@ leaderElection:
 config:
   environment: local
   region: us-west-2
-  ssmPathPrefix: /eks-agent-platform # preserved for shape parity; unused with --disable-aws
   oidc:
     providerArn: "" # no OIDC on kind
     issuerHost: ""

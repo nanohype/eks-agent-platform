@@ -116,7 +116,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				return ctrl.Result{}, err
 			}
 			// Attribution resources (no-ops when attribution was never enabled).
-			if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.Environment); err != nil {
+			if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.ClusterName); err != nil {
 				logger.Error(err, "session role cleanup failed; will retry")
 				return ctrl.Result{}, err
 			}
@@ -243,7 +243,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	} else if platform.Status.SessionRoleArn != "" {
 		// Attribution was enabled and is now removed — tear the pair down.
-		if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.Environment); err != nil {
+		if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.ClusterName); err != nil {
 			logger.Error(err, "deleteSessionRole (attribution removed) failed")
 			return ctrl.Result{}, err
 		}
