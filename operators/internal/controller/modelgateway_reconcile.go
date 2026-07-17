@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
@@ -54,16 +55,27 @@ const gatewayListenerPort = 8080
 // surface that as a status condition rather than retrying forever.
 var errPlatformNotFound = errors.New("platformRef not found")
 
-func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (*platformv1alpha1.Platform, error) {
+// getReferencedPlatform fetches the Platform named by a same-namespace
+// Spec.PlatformRef. It is the one implementation shared by every workload
+// reconciler's resolve*Platform helper. A missing Platform maps to notFound so
+// each caller keeps its own sentinel — the budget reconciler treats a dangling
+// ref as Pending (re-driven by Platform create events), the agent workloads
+// surface it as a status condition — while any other Get error is wrapped
+// uniformly.
+func getReferencedPlatform(ctx context.Context, c client.Client, namespace, refName string, notFound error) (*platformv1alpha1.Platform, error) {
 	var p platformv1alpha1.Platform
-	key := types.NamespacedName{Namespace: mg.Namespace, Name: mg.Spec.PlatformRef.Name}
-	if err := r.Get(ctx, key, &p); err != nil {
+	key := types.NamespacedName{Namespace: namespace, Name: refName}
+	if err := c.Get(ctx, key, &p); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, errPlatformNotFound
+			return nil, notFound
 		}
 		return nil, fmt.Errorf("get platform %s: %w", key, err)
 	}
 	return &p, nil
+}
+
+func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (*platformv1alpha1.Platform, error) {
+	return getReferencedPlatform(ctx, r.Client, mg.Namespace, mg.Spec.PlatformRef.Name, errPlatformNotFound)
 }
 
 // ensureGatewayResources renders a ModelGateway into the agentgateway data

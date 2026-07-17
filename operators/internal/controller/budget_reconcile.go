@@ -23,9 +23,8 @@ import (
 	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	eventbridgetypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
@@ -78,18 +77,11 @@ var athenaIdentifierRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 // driven by Platform create events.
 var errPlatformBudgetNotFound = errors.New("budget platformRef not found")
 
-// resolveBudgetPlatform fetches the referenced Platform. Same shape as
-// the ModelGateway/AgentFleet resolvers.
+// resolveBudgetPlatform fetches the referenced Platform, mapping a dangling ref
+// to errPlatformBudgetNotFound (Pending, not a hard error). Shares the fetch
+// with the other workload reconcilers via getReferencedPlatform.
 func (r *BudgetReconciler) resolveBudgetPlatform(ctx context.Context, bp *governancev1alpha1.BudgetPolicy) (*platformv1alpha1.Platform, error) {
-	var p platformv1alpha1.Platform
-	key := types.NamespacedName{Namespace: bp.Namespace, Name: bp.Spec.PlatformRef.Name}
-	if err := r.Get(ctx, key, &p); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, errPlatformBudgetNotFound
-		}
-		return nil, fmt.Errorf("get platform %s: %w", key, err)
-	}
-	return &p, nil
+	return getReferencedPlatform(ctx, r.Client, bp.Namespace, bp.Spec.PlatformRef.Name, errPlatformBudgetNotFound)
 }
 
 // querySpendFromAthena runs the CUR rollup query for the current
@@ -509,9 +501,13 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 	since := time.Now().Add(-24 * time.Hour).UTC()
 	spendInflight, err := r.queryInflightCost(ctx, platform.Name, since)
 	if err != nil {
-		// CloudWatch outage shouldn't block the entire reconciler; we
-		// log and zero out the in-flight portion. The Athena CUR value
-		// is still a valid (though stale) reading.
+		// CloudWatch outage shouldn't block the entire reconciler; we log
+		// and zero out the in-flight portion. The Athena CUR value is still
+		// a valid (though stale) reading. The log call makes a persistently
+		// failing in-flight query visible — without it the reconciler would
+		// silently undercount spend against the budget on every tick.
+		log.FromContext(ctx).Error(err, "in-flight CloudWatch cost query failed; zeroing the in-flight spend portion for this tick (CUR-derived spend still applies)",
+			"platform", platform.Name, "budgetPolicy", bp.Name)
 		spendInflight = "0"
 	}
 

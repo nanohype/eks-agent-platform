@@ -14,7 +14,7 @@ paths = [
   # Generated outputs that never contain real secrets
   '''pnpm-lock\.yaml$''',
   '''operators/go\.sum$''',
-  '''operators/api/v1alpha1/zz_generated\.deepcopy\.go$''',
+  '''operators/api/[a-z]+/v1alpha1/zz_generated\.deepcopy\.go$''',
   # ADRs / docs that reference example ARNs in prose
   '''docs/adr/.*\.md$''',
 ]

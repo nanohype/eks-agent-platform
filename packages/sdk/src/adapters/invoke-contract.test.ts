@@ -18,6 +18,7 @@ import { NovaBedrockAdapter } from './nova.js';
 
 function fixture(name: string): Uint8Array {
   const path = fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url));
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-local path resolved from a fixture name relative to this module, not user input
   return readFileSync(path);
 }
 

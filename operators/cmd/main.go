@@ -230,10 +230,11 @@ func main() {
 			Compliance:                   compliance,
 		}
 		platformReconciler.AWSCfg = controller.PlatformAWSConfig{
-			// cmk-data ARN isn't in operatorconfig today; the operator reads
-			// it from an env var. Future work: publish it to SSM alongside
-			// the other agent-iam outputs so the env-var override becomes
-			// the dev escape hatch rather than the default.
+			// The data CMK ARN is the one substrate value still read from an
+			// env var rather than the operatorconfig SSM subtree. Moving it to
+			// SSM needs the landing-zone agent-iam component to publish the key
+			// first, so the env var stays the wiring until then — tracked in
+			// nanohype/eks-agent-platform#97.
 			DataKMSKeyARN:       os.Getenv("AGENTS_DATA_KMS_KEY_ARN"),
 			ArtifactsBucketName: opConfig.ArtifactsBucketName,
 			Environment:         environment,

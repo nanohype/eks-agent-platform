@@ -14,7 +14,12 @@
     },
     "lint": {
       "outputs": [],
-      "inputs": ["src/**", "eslint.config.mjs", "package.json"]
+      "inputs": [
+        "src/**",
+        "package.json",
+        "$TURBO_ROOT$/eslint.config.mjs",
+        "$TURBO_ROOT$/eslint.base.mjs"
+      ]
     },
     "test": {
       "dependsOn": ["^build"],

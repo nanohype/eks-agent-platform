@@ -51,6 +51,59 @@ func TestScaffoldTenant_PersonaDefaults(t *testing.T) {
 	}
 }
 
+// TestScaffoldTenant_SecondaryRouteFamily pins the fix for the secondary-route
+// family bug: a persona pairing an anthropic primary with an amazon-nova
+// secondary (sales-ops, marketing) must render the secondary route's modelFamily
+// as amazon-nova — not inherit the primary's anthropic — and the scaffolded
+// Platform must grant invoke on every family its routes reference.
+func TestScaffoldTenant_SecondaryRouteFamily(t *testing.T) {
+	// The CRD enum vocabulary for ModelRouteSpec.modelFamily; every rendered
+	// route family must be a member or the scaffold produces an invalid CR.
+	validFamilies := map[string]bool{
+		"anthropic": true, "meta": true, "mistral": true, "cohere": true,
+		"amazon-titan": true, "amazon-nova": true, "stability": true,
+	}
+	cases := []struct {
+		persona          string
+		wantSecondaryFam string
+		wantAllowed      []string
+	}{
+		{"sales-ops", "amazon-nova", []string{"anthropic", "amazon-nova"}},
+		{"marketing", "amazon-nova", []string{"anthropic", "amazon-nova"}},
+		{"support", "anthropic", []string{"anthropic"}},
+		{"founder", "anthropic", []string{"anthropic"}},
+	}
+	for _, c := range cases {
+		t.Run(c.persona, func(t *testing.T) {
+			res, err := ScaffoldTenant(ScaffoldOptions{TenantName: "t-" + c.persona, Persona: c.persona})
+			if err != nil {
+				t.Fatalf("ScaffoldTenant: %v", err)
+			}
+			routes := res.ModelGateway.Spec.Routes
+			if len(routes) != 2 {
+				t.Fatalf("%s: expected primary+secondary routes, got %d", c.persona, len(routes))
+			}
+			if got := routes[1].ModelFamily; got != c.wantSecondaryFam {
+				t.Errorf("secondary route modelFamily = %q, want %q", got, c.wantSecondaryFam)
+			}
+			for _, r := range routes {
+				if !validFamilies[r.ModelFamily] {
+					t.Errorf("route %q renders modelFamily %q outside the CRD enum", r.Name, r.ModelFamily)
+				}
+			}
+			got := res.Platform.Spec.Identity.AllowedModelFamilies
+			if len(got) != len(c.wantAllowed) {
+				t.Fatalf("allowedModelFamilies = %v, want %v", got, c.wantAllowed)
+			}
+			for i, f := range c.wantAllowed {
+				if got[i] != f {
+					t.Errorf("allowedModelFamilies[%d] = %q, want %q (full: %v)", i, got[i], f, got)
+				}
+			}
+		})
+	}
+}
+
 func TestScaffoldTenant_RequiresName(t *testing.T) {
 	_, err := ScaffoldTenant(ScaffoldOptions{Persona: "generic"})
 	if err == nil {

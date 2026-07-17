@@ -18,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -48,15 +47,7 @@ const tenantSAName = "tenant-runtime"
 
 // resolvePlatform fetches the AgentFleet's referenced Platform.
 func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agentsv1alpha1.AgentFleet) (*platformv1alpha1.Platform, error) {
-	var p platformv1alpha1.Platform
-	key := types.NamespacedName{Namespace: fleet.Namespace, Name: fleet.Spec.PlatformRef.Name}
-	if err := r.Get(ctx, key, &p); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, errPlatformNotFound
-		}
-		return nil, fmt.Errorf("get platform %s: %w", key, err)
-	}
-	return &p, nil
+	return getReferencedPlatform(ctx, r.Client, fleet.Namespace, fleet.Spec.PlatformRef.Name, errPlatformNotFound)
 }
 
 // ensureTenantServiceAccount creates the ServiceAccount tenant pods assume —

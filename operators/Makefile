@@ -15,7 +15,7 @@ help:
 .PHONY: generate
 generate: ## Run controller-gen for deepcopy + RBAC + CRDs
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." \
+	$(CONTROLLER_GEN) rbac:roleName=manager-role crd paths="./..." \
 	  output:crd:artifacts:config=config/crd/bases \
 	  output:rbac:artifacts:config=config/rbac
 
