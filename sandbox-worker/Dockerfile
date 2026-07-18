@@ -7,7 +7,11 @@
 # container — agent code and its filesystem stay inside the cluster. The
 # workload that schedules it supplies `ANTHROPIC_ENVIRONMENT_ID` and
 # `ANTHROPIC_ENVIRONMENT_KEY`; they are not baked into the image.
-FROM debian:bookworm-slim
+#
+# Pinned to the multi-arch manifest-list digest, not just the tag — buildx still
+# picks the right per-platform manifest, but the bytes are fixed. Refresh with
+# `docker buildx imagetools inspect debian:bookworm-slim`.
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
 # The agent's tool calls run in this container, so it carries a real
 # userland — bash at /bin/bash (required by `ant`), git, and TLS roots

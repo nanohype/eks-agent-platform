@@ -10,7 +10,7 @@ Whether to ship a multi-provider adapter family (Azure OpenAI, direct-Anthropic,
 
 ## Decision
 
-v1 ships only `BedrockAdapter` with per-family submodules (Anthropic, Meta, Mistral, Cohere, Titan, Nova, Stability). No direct-API adapters, no Azure OpenAI, no Vertex.
+v1 ships only `BedrockAdapter`, with a family registry in `packages/sdk/src/factory.ts`. Two family adapters are registered — Anthropic and Amazon Nova — each subclassing `BedrockAdapter` with its own request/response wire shape. Any family without a registered adapter loud-fails at construction (`createBedrockAdapter` throws, naming the shipped families) rather than silently mis-routing to a default. No direct-API adapters, no Azure OpenAI, no Vertex.
 
 ## Why
 
@@ -20,6 +20,6 @@ v1 ships only `BedrockAdapter` with per-family submodules (Anthropic, Meta, Mist
 
 ## Consequences
 
-- The SDK has a thin family of adapters that share `BedrockAdapter` as a base. Adding a model family means adding `buildRequestBody` + `parseResponseBody` for that family's wire shape, nothing more.
-- Pricing tables live in `@eks-agent/pricing`, are Bedrock-only, and are hand-curated — Renovate bumps the package's deps, not the `PRICES` content. An automated refresh from the AWS Pricing API (`scripts/refresh-pricing.mjs`) is Phase-2 and currently a fail-loud scaffold; until it lands, prices are updated by hand, and a model id missing from the table meters as an unmetered `0` (`priced:false` via `priceModel`) rather than a silent real `$0`.
+- The SDK has a thin family of adapters that share `BedrockAdapter` as a base. Adding a model family means adding `buildRequestBody` + `parseResponseBody` for that family's wire shape plus a registry insert, nothing more.
+- Pricing is Bedrock-only and lives in a single JSON source of truth (`packages/pricing/src/data/bedrock-pricing.json`) that `@eks-agent/pricing` imports and the Lambda cost-publisher table is generated from (with a CI drift gate). `scripts/refresh-pricing.mjs` refreshes that JSON from the AWS Price List Query API (SigV4-signed `pricing:GetProducts`, weekly cadence, `--dry-run` to preview the diff). A model id missing from the table meters as an unmetered `0` (`priced:false` via `priceModel`), surfaced as `unpriced` traffic rather than a silent real `$0`.
 - The error taxonomy in `@eks-agent/core` is provider-agnostic, so the day we add a non-Bedrock adapter, downstream code doesn't change.

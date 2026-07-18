@@ -1,5 +1,11 @@
-# Build the operator binary
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+# Build the operator binary.
+#
+# Base images are pinned to their multi-arch manifest-list digests, not just a
+# floating tag — buildx still selects the right per-platform manifest from the
+# index, but the exact bytes are fixed. Refresh a digest with
+# `docker buildx imagetools inspect <image>:<tag>` and bump the tag comment
+# alongside it.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 WORKDIR /workspace
 
@@ -31,8 +37,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" \
     -o /workspace/metrics-shim ./cmd/metrics-shim
 
-# Distroless runtime — non-root, minimal surface
-FROM gcr.io/distroless/static-debian12:nonroot
+# Distroless runtime — non-root, minimal surface (digest-pinned; see note above)
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
 WORKDIR /
 COPY --from=builder /workspace/manager /manager
 COPY --from=builder /workspace/metrics-shim /metrics-shim

@@ -26,10 +26,20 @@ jobs:
         with:
           fetch-depth: 0
       # The official gitleaks-action gates organization repos behind a paid
-      # license; the gitleaks CLI itself is free. Pin and run it directly.
+      # license; the gitleaks CLI itself is free. Pin the version, verify the
+      # download against its published sha256, then run it directly — a tampered
+      # or swapped tarball fails the checksum instead of executing.
       - name: gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          # sha256 of gitleaks_${VERSION}_linux_x64.tar.gz from the release
+          # checksums.txt — bump both together when moving versions.
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
           ./gitleaks git --config .gitleaks.toml --redact --no-banner .
 
   trivy-config:
@@ -48,7 +58,9 @@ jobs:
           # to fail the build.
           trivyignores: ".trivyignore.yaml"
           exit-code: "1"
-          ignore-unfixed: true
+          # No ignore-unfixed here: it only applies to CVE scanning. A
+          # misconfiguration finding is always fixable in-repo (it is our own
+          # terraform/Dockerfile), so nothing is ever "unfixed" to ignore.
           format: sarif
           output: trivy-config.sarif
           # Helm scanning is covered by the ci workflow's helm lint +
@@ -74,6 +86,13 @@ jobs:
           scan-ref: .
           severity: HIGH,CRITICAL
           exit-code: "1"
+          # ignore-unfixed stays true here (dependency CVE scan), deliberately.
+          # A HIGH/CRITICAL with no upstream fix can't be remediated by a version
+          # bump, so failing on it would be a permanent, unactionable red that
+          # blocks unrelated PRs. The weekly schedule (cron above) re-runs the
+          # scan, so the moment a patched release ships the finding surfaces and
+          # the fix is a normal go.mod/package.json bump. Fixable HIGH/CRITICAL
+          # still fail the build immediately.
           ignore-unfixed: true
           format: sarif
           output: trivy-fs.sarif
@@ -127,3 +146,23 @@ jobs:
         with:
           working-directory: operators
           version: v2.11.4
+
+  # govulncheck complements the trivy dependency scan: it is Go-vulnerability-DB
+  # aware and call-graph-driven, so it only reports advisories whose vulnerable
+  # symbol the operator actually reaches — far less noise than a manifest-level
+  # scan, and it covers stdlib CVEs (a Go-toolchain fix) that trivy's fs scan
+  # misses. Runs on every PR and on the weekly schedule.
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - name: govulncheck
+        working-directory: operators
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

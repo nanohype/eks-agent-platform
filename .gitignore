@@ -51,7 +51,11 @@ operators/config/crd/bases/*.yaml.bak
 
 # OpenTofu / Terraform
 .terraform/
+# .terraform.lock.hcl: track the canonical per-component locks (reproducible,
+# hash-pinned provider selections across the CI + dev platforms); ignore any
+# others (module/.terraform caches).
 .terraform.lock.hcl
+!/terraform/components/*/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan

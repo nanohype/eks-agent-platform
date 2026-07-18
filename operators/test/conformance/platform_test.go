@@ -116,3 +116,66 @@ func TestPlatform_InvalidPersona(t *testing.T) {
 	}
 	// Any non-nil error counts — the CRD validation rejected the value.
 }
+
+// TestPlatform_RejectsIsolationChange proves the isolation tier is immutable at
+// admission. Switching a live Platform's tier would strand its virtual cluster
+// and synced host objects, so the CEL transition rule (self == oldSelf) rejects
+// the update rather than silently half-reconciling — the negative path for the
+// invariant the vcluster reconciler relies on.
+func TestPlatform_RejectsIsolationChange(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+
+	p := &platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
+		Spec: platformv1alpha1.PlatformSpec{
+			Persona:   "ops",
+			Tenant:    "conformance",
+			Budget:    platformv1alpha1.BudgetRef{Name: "x"},
+			Identity:  platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Isolation: "namespace",
+		},
+	}
+	mustCreate(ctx, t, p)
+
+	// Re-read so the update carries the server's resourceVersion, then flip the
+	// immutable tier — the only thing the API server can reject on here is the
+	// isolation transition rule.
+	var got platformv1alpha1.Platform
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: testNs}, &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	got.Spec.Isolation = "vcluster" //nolint:goconst // the isolation-tier enum value, distinct from the vcluster chart/release-name literals elsewhere in this package
+	if err := k8sClient.Update(ctx, &got); err == nil {
+		t.Fatalf("expected validation error changing spec.isolation namespace→vcluster, got nil (CEL immutability rule should fire)")
+	}
+}
+
+// TestPlatform_RejectsAllowedModelsPlusFamilies proves allowedModels and
+// allowedModelFamilies are mutually exclusive at admission. Setting both is
+// ambiguous for the bedrock-model-scoping policy expansion, so the CEL rule on
+// IdentitySpec rejects it — the negative path mirroring EvalSuite's
+// cases/casesFromManifest exclusivity test.
+func TestPlatform_RejectsAllowedModelsPlusFamilies(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+
+	p := &platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "p"), Namespace: testNs},
+		Spec: platformv1alpha1.PlatformSpec{
+			Persona: "ops",
+			Tenant:  "conformance",
+			Budget:  platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{
+				AllowedModels:        []string{"anthropic.claude-sonnet-4-6"},
+				AllowedModelFamilies: []string{"anthropic"},
+			},
+		},
+	}
+
+	err := k8sClient.Create(ctx, p)
+	if err == nil {
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, p) })
+		t.Fatalf("expected validation error for allowedModels AND allowedModelFamilies both set, got nil (CEL XValidation should fire)")
+	}
+}
