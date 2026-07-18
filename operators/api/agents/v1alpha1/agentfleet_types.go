@@ -7,7 +7,6 @@ Licensed under the Apache License, Version 2.0 (the "License");
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
@@ -25,10 +24,6 @@ type AgentFleetSpec struct {
 	// Scaling controls KEDA's ScaledObject for the runtime Deployments.
 	// +optional
 	Scaling ScalingSpec `json:"scaling,omitempty"`
-
-	// Compute optionally requests an AcceleratorClaim.
-	// +optional
-	Compute *ComputeSpec `json:"compute,omitempty"`
 }
 
 // AgentSpec is one agent in the fleet.
@@ -91,17 +86,6 @@ type ScalingSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^https://sqs\.[a-z0-9-]+\.amazonaws\.com/[0-9]{12}/[A-Za-z0-9_-]+(\.fifo)?$`
 	QueueURL string `json:"queueUrl,omitempty"`
-}
-
-// ComputeSpec requests accelerator resources via DRA.
-type ComputeSpec struct {
-	// AcceleratorClaim references an AcceleratorClaim CR. The operator
-	// translates that into a ResourceClaimTemplate referenced in the pod spec.
-	AcceleratorClaim commonv1alpha1.LocalRef `json:"acceleratorClaim"`
-
-	// Resources are pod resource requests/limits.
-	// +optional
-	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // AgentFleetStatus reports rollout state.

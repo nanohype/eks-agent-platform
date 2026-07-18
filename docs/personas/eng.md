@@ -39,7 +39,6 @@ spec:
 
 - Bedrock invocation via IRSA, no keys
 - Per-pod cost attribution (visible on Ops dashboard, joinable on `agents.platform`)
-- DRA-aware compute when you eventually need GPU for self-hosted models — set `AcceleratorClaim` on the AgentFleet and the operator picks a NodePool
 - Cross-region inference profile failover when set on the `ModelRoute`
 
 ## Notes
