@@ -27,6 +27,7 @@ See [`values.yaml`](./values.yaml). Highlights:
 
 - `serviceAccount.annotations."eks.amazonaws.com/role-arn"` — required; the operator IRSA role from `terraform/components/agent-iam`
 - `reconcilers.budget.requeueInterval` — production: 1h, dev: 5m
+- `metrics.secure` — **default true**: serve metrics over HTTPS and require each scrape to authenticate + authorize (controller-runtime's authn/authz filter — TokenReview + a SubjectAccessReview on `/metrics`), so the endpoint rejects unauthenticated scrapes at the HTTP layer, not just via NetworkPolicy. The chart wires the operator SA for token review and a metrics-reader SA + token the ServiceMonitor presents. A plaintext annotation-based scraper cannot read the endpoint while secure, so the `prometheus.io/scrape` pod annotations are suppressed; scrape via the authenticated ServiceMonitor or an agent that presents the metrics-reader token over https. Set false only where no kube-apiserver is reachable to review tokens.
 - `metrics.serviceMonitor.enabled` — requires Prometheus operator CRDs (from `eks-gitops`)
 
 ### eval-runtime (`evalRuntime.*`)

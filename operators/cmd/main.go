@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
@@ -42,8 +43,27 @@ func init() {
 	utilruntime.Must(governancev1alpha1.AddToScheme(scheme))
 }
 
+// metricsServerOptions builds the manager's metrics-server config. When secure,
+// the endpoint serves over HTTPS (controller-runtime generates a self-signed
+// cert in-memory when no cert dir is mounted) and every request runs through
+// the built-in authentication+authorization filter — the scrape must present a
+// bearer token that passes TokenReview and a SubjectAccessReview on the
+// /metrics nonResourceURL. An unauthenticated scrape is rejected at the HTTP
+// layer (401/403), not only by the NetworkPolicy. Insecure mode (plaintext, no
+// filter) exists for local/dev runs where no kube-apiserver is reachable to
+// review tokens.
+func metricsServerOptions(secure bool, addr string) server.Options {
+	opts := server.Options{BindAddress: addr}
+	if secure {
+		opts.SecureServing = true
+		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
+	return opts
+}
+
 func main() {
 	var metricsAddr string
+	var secureMetrics bool
 	var probeAddr string
 	var enableLeaderElection bool
 	var leaderElectionID string
@@ -98,6 +118,7 @@ func main() {
 	var compliance string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "Address the metric endpoint binds to.")
+	flag.BoolVar(&secureMetrics, "metrics-secure", true, "Serve metrics over HTTPS and require each scrape to pass authentication + authorization (TokenReview + a SubjectAccessReview on the /metrics nonResourceURL). Set false only for local/dev runs.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "Address the health probe binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", true, "Enable leader election.")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "eks-agent-platform.nanohype.dev", "Leader election lock name.")
@@ -172,7 +193,7 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
-		Metrics:                server.Options{BindAddress: metricsAddr},
+		Metrics:                metricsServerOptions(secureMetrics, metricsAddr),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       leaderElectionID,

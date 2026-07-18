@@ -128,3 +128,72 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.metrics.secure }}
+---
+# Secure metrics (metrics.secure). The metrics server authenticates + authorizes
+# every scrape via TokenReview + SubjectAccessReview, which the operator's own
+# ServiceAccount must be permitted to run — that is exactly what the built-in
+# system:auth-delegator ClusterRole grants.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "operator.fullname" . }}-metrics-auth
+  labels: {{- include "operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# The authorization half: a scraper is allowed to read /metrics only if it can
+# `get` this nonResourceURL. This ClusterRole is the grant; the binding below
+# gives it to the metrics-reader identity the ServiceMonitor authenticates as.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "operator.fullname" . }}-metrics-reader
+  labels: {{- include "operator.labels" . | nindent 4 }}
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+{{- if .Values.metrics.serviceMonitor.enabled }}
+---
+# A dedicated read-only identity the ServiceMonitor presents when scraping the
+# secure endpoint: a ServiceAccount, a long-lived token Secret bound to it, and
+# the binding onto the metrics-reader ClusterRole above. The ServiceMonitor
+# references the token Secret's `token` key as its bearer credential.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "operator.fullname" . }}-metrics-reader
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "operator.labels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "operator.fullname" . }}-metrics-reader-token
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "operator.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/service-account.name: {{ include "operator.fullname" . }}-metrics-reader
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "operator.fullname" . }}-metrics-reader
+  labels: {{- include "operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "operator.fullname" . }}-metrics-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "operator.fullname" . }}-metrics-reader
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

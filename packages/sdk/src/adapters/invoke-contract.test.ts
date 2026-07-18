@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { AgentError } from '@eks-agent/core';
 import { describe, expect, it } from 'vitest';
 
 import type { MessagesParams } from '../types.js';
@@ -67,5 +68,44 @@ describe('Bedrock InvokeModel response contract', () => {
     expect(res.stopReason).toBe('end_turn');
     expect(res.usage.inputTokens).toBe(20);
     expect(res.usage.outputTokens).toBe(9);
+  });
+});
+
+// A body that is well-formed JSON but the wrong SHAPE (content as a string,
+// token counts as strings, a non-object body) must fail the adapter's schema
+// validation and surface as a typed AgentError — not sail past an unchecked
+// cast into a bogus completion with silently-zero token counts. The thrown
+// error carries the retryable 'Server' class and the call's correlation id.
+describe('Bedrock InvokeModel malformed-response validation', () => {
+  const encode = (v: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(v));
+
+  it('surfaces a malformed Anthropic response as a Server-class AgentError', async () => {
+    const a = new ExposedAnthropic({ region: 'us-west-2' });
+    a.setBody(
+      encode({ content: 'not-an-array', usage: { input_tokens: 'lots', output_tokens: 5 } }),
+    );
+
+    const err: unknown = await a
+      .messages(params('anthropic.claude-sonnet-4-6-20260501-v1:0', 'anthropic'))
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).class).toBe('Server');
+    expect((err as AgentError).correlationId).toBe('cid-contract');
+  });
+
+  it('surfaces a malformed Nova response as a Server-class AgentError', async () => {
+    const n = new ExposedNova({ region: 'us-west-2' });
+    n.setBody(encode({ usage: { inputTokens: 'twenty', outputTokens: 9 } }));
+
+    const err: unknown = await n
+      .messages(params('amazon.nova-pro-v1:0', 'amazon-nova'))
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).class).toBe('Server');
+    expect((err as AgentError).correlationId).toBe('cid-contract');
   });
 });
