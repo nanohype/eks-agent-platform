@@ -3,6 +3,14 @@ import { z } from 'zod';
 /**
  * Schemas mirroring the operator's CRD types. These are the *runtime*
  * validation contract for any code that reads CRs back out of the cluster.
+ *
+ * Field names and shapes track the Go API types under
+ * `operators/api/**` one-for-one. The drift gate
+ * (`scripts/check-schema-drift.mts`, wired into CI) diffs these zod shapes
+ * against the generated CRD OpenAPI schemas and fails the build if a spec or
+ * status field is present on one side but not the other — so the typed client
+ * can never silently go blind to a field the operator writes (the way it once
+ * was for `spec.attribution` and the whole suspension-state status block).
  */
 
 export const ComplianceSpec = z.object({
@@ -17,6 +25,32 @@ export const IdentitySpec = z.object({
   extraPolicyArns: z.array(z.string()).default([]),
 });
 export type IdentitySpec = z.infer<typeof IdentitySpec>;
+
+/**
+ * AttributionSpec opts a Platform into per-session human attribution. Mirrors
+ * the Go `AttributionSpec` — `operators` is the set of human identities a
+ * session may act as (min 1); `sessionRoleMaxDurationSeconds` caps the assumed
+ * session lifetime (defaulted server-side to 3600).
+ */
+export const AttributionSpec = z.object({
+  operators: z.array(z.string()).min(1),
+  sessionRoleMaxDurationSeconds: z.number().int().min(900).max(43200).default(3600),
+});
+export type AttributionSpec = z.infer<typeof AttributionSpec>;
+
+/**
+ * Condition mirrors k8s `metav1.Condition` — the standard status-condition
+ * shape the operator writes onto Platform/ModelGateway status.
+ */
+export const Condition = z.object({
+  type: z.string(),
+  status: z.enum(['True', 'False', 'Unknown']),
+  observedGeneration: z.number().int().optional(),
+  lastTransitionTime: z.string().datetime(),
+  reason: z.string(),
+  message: z.string(),
+});
+export type Condition = z.infer<typeof Condition>;
 
 export const PlatformPersona = z.enum([
   'sales-ops',
@@ -39,8 +73,27 @@ export const PlatformSpec = z.object({
   identity: IdentitySpec,
   compliance: ComplianceSpec.optional(),
   isolation: z.enum(['namespace', 'vcluster']).default('namespace'),
+  attribution: AttributionSpec.optional(),
 });
 export type PlatformSpec = z.infer<typeof PlatformSpec>;
+
+/**
+ * PlatformStatus mirrors the Go `PlatformStatus`. Every field the operator
+ * writes is modelled so a client reading a Platform back sees the full picture
+ * — including the suspension-state block (`suspendedAt`/`suspendedReason`) the
+ * kill-switch sets, which callers must be able to observe.
+ */
+export const PlatformStatus = z.object({
+  phase: z.string().optional(),
+  iamRoleArn: z.string().optional(),
+  sessionRoleArn: z.string().optional(),
+  namespace: z.string().optional(),
+  observedGeneration: z.number().int().optional(),
+  suspendedAt: z.string().datetime().optional(),
+  suspendedReason: z.string().optional(),
+  conditions: z.array(Condition).optional(),
+});
+export type PlatformStatus = z.infer<typeof PlatformStatus>;
 
 export const ModelFamily = z.enum([
   'anthropic',
@@ -89,26 +142,33 @@ export const PlatformResource = z.object({
   kind: z.literal('Platform'),
   metadata: ResourceMeta,
   spec: PlatformSpec,
-  status: z
-    .object({
-      phase: z.string().optional(),
-      iamRoleArn: z.string().optional(),
-      namespace: z.string().optional(),
-    })
-    .optional(),
+  status: PlatformStatus.optional(),
 });
 export type PlatformResource = z.infer<typeof PlatformResource>;
+
+/** ModelGatewaySpec mirrors the Go `ModelGatewaySpec`. */
+export const ModelGatewaySpec = z.object({
+  platformRef: z.object({ name: z.string() }),
+  routes: z.array(ModelRouteSpec),
+  defaultGuardrailRef: z.object({ name: z.string() }).optional(),
+});
+export type ModelGatewaySpec = z.infer<typeof ModelGatewaySpec>;
+
+/** ModelGatewayStatus mirrors the Go `ModelGatewayStatus`. */
+export const ModelGatewayStatus = z.object({
+  phase: z.string().optional(),
+  endpoint: z.string().optional(),
+  observedGeneration: z.number().int().optional(),
+  conditions: z.array(Condition).optional(),
+});
+export type ModelGatewayStatus = z.infer<typeof ModelGatewayStatus>;
 
 export const ModelGatewayResource = z.object({
   apiVersion: z.literal('agents.nanohype.dev/v1alpha1'),
   kind: z.literal('ModelGateway'),
   metadata: ResourceMeta,
-  spec: z.object({
-    platformRef: z.object({ name: z.string() }),
-    routes: z.array(ModelRouteSpec),
-    defaultGuardrailRef: z.object({ name: z.string() }).optional(),
-  }),
-  status: z.object({ phase: z.string().optional(), endpoint: z.string().optional() }).optional(),
+  spec: ModelGatewaySpec,
+  status: ModelGatewayStatus.optional(),
 });
 export type ModelGatewayResource = z.infer<typeof ModelGatewayResource>;
 

@@ -203,6 +203,28 @@ jobs:
           node-version-file: package.json
       - run: node scripts/gen-lambda-pricing.mjs --check
 
+  # ── TS↔CRD schema mirror drift gate ──────────────────────────────────────
+  # packages/core/src/schemas.ts declares zod schemas mirroring the operator's
+  # CRD types — the runtime contract the typed client (packages/client) reads
+  # CRs through. zod strips unknown keys, so a field the operator writes but the
+  # zod schema doesn't model is silently invisible to consumers. This gate diffs
+  # each mirrored zod schema's spec/status property tree against the generated
+  # CRD OpenAPI schema and fails on divergence — the same regenerate-and-diff
+  # discipline as the crd-docs and generated (pricing) gates, closing the one
+  # mirror the lattice was missing.
+  schema-drift:
+    name: ts↔crd schema mirror in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:schema-drift
+
   lambda:
     name: cost-pipeline lambda tests
     runs-on: ubuntu-latest

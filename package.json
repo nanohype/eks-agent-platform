@@ -27,6 +27,7 @@
     "docs": "pnpm build && typedoc",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
+    "check:schema-drift": "tsx scripts/check-schema-drift.mts",
     "tofu:fmt": "tofu fmt -recursive terraform/",
     "tofu:fmt:check": "tofu fmt -check -recursive terraform/",
     "tofu:validate": "for d in terraform/components/*/; do (cd \"$d\" && tofu init -backend=false -input=false >/dev/null && tofu validate) || exit 1; done",
@@ -58,6 +59,8 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.3",
     "vite": "^8.0.16",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.6",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   }
 }

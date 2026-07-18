@@ -43,8 +43,13 @@ linters:
         linters: [revive, unused, dupl]
       - path: _test\.go
         linters: [dupl, gosec, errcheck]
-      # Reconciler stubs are intentionally similar in Phase 1; they diverge
-      # in Phase 2 when reconciliation bodies land.
+      # The per-CRD *_controller.go files share the same structural scaffold by
+      # design — SetupWithManager wiring, finalizer add/remove, the phase-handling
+      # switch, and the requeue/status-write boilerplate are deliberately uniform
+      # across reconcilers so the set reads consistently. dupl flags that shared
+      # skeleton as duplication; it is intentional, so exclude these files (the
+      # substantive reconcile bodies live in the *_reconcile.go files, which dupl
+      # still checks).
       - path: internal/controller/.*_controller\.go
         linters: [dupl]
 
