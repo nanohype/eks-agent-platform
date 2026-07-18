@@ -42,7 +42,7 @@ Every component publishes its outputs to SSM under:
 
 Consumers:
 
-- **Operator pod** reads SSM at startup for `agent-iam.operator_role_arn` (its own role), `agent-iam.tenant_iam_path`, `agent-iam.tenant_baseline_policy_arn` (the `agent-iam.*` params are landing-zone's contract, not this tree's), `kill-switch.event_bus_name`, `cost-pipeline.athena_workgroup`, `cost-pipeline.athena_database`, `bedrock.baseline_guardrail_id`, `accelerator-pools.pool_catalog`, `model-artifacts.bucket_name`.
+- **Operator pod** reads SSM at startup for `agent-iam.operator_role_arn` (its own role), `agent-iam.tenant_iam_path`, `agent-iam.tenant_baseline_policy_arn` (the `agent-iam.*` params are landing-zone's contract, not this tree's), `kill-switch.event_bus_name`, `cost-pipeline.athena_workgroup`, `cost-pipeline.athena_database`, `bedrock.baseline_guardrail_id`, `model-artifacts.bucket_name`.
 - **accelerator roles** (`accelerator-pools.neuron_role_arn`, `accelerator-pools.gpu_operator_role_arn`) are bound to the device-plugin / operator ServiceAccounts by EKS Pod Identity associations created in this component — not by an annotation on the eks-gitops side.
 
 ## Backends

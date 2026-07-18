@@ -59,7 +59,6 @@ _Appears in:_
 | `platformRef` _[LocalRef](#localref)_ |  |  |  |
 | `agents` _[AgentSpec](#agentspec) array_ | Agents is the list of agents to provision in this fleet. |  | MinItems: 1 <br /> |
 | `scaling` _[ScalingSpec](#scalingspec)_ | Scaling controls KEDA's ScaledObject for the runtime Deployments. |  | Optional: \{\} <br /> |
-| `compute` _[ComputeSpec](#computespec)_ | Compute optionally requests an AcceleratorClaim. |  | Optional: \{\} <br /> |
 
 
 #### AgentFleetStatus
@@ -241,23 +240,6 @@ _Appears in:_
 | `failedCount` _integer_ |  |  | Optional: \{\} <br /> |
 | `message` _string_ | Message carries the last Bedrock status / failure reason. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
-
-
-#### ComputeSpec
-
-
-
-ComputeSpec requests accelerator resources via DRA.
-
-
-
-_Appears in:_
-- [AgentFleetSpec](#agentfleetspec)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `acceleratorClaim` _[LocalRef](#localref)_ | AcceleratorClaim references an AcceleratorClaim CR. The operator<br />translates that into a ResourceClaimTemplate referenced in the pod spec. |  |  |
-| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#resourcerequirements-v1-core)_ | Resources are pod resource requests/limits. |  | Optional: \{\} <br /> |
 
 
 #### ModelGateway
