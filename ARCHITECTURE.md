@@ -14,7 +14,7 @@ The system organizes around nine bounded contexts. Each gets a CRD, a reconciler
 | **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`            | —                | kagent `Agent` + `ModelConfig` per agent, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, tenant `ServiceAccount` bound to the tenant IAM role via EKS Pod Identity                                                  |
 | **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                       |
 | **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`              | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore` |
-| **Observability** | —              | —          | —                              | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family`, `agents.model_id` resource attrs; Bedrock invocation spans + per-invocation cost                                                   |
+| **Observability** | —              | —          | —                              | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family` resource attrs (model id rides on the per-invocation span, not the pod resource); Bedrock invocation spans + per-invocation cost    |
 
 The CRDs are split across three capability groups under the `nanohype.dev` domain, all at version `v1alpha1`:
 
@@ -84,7 +84,7 @@ Every signal flows through the OTel Collector already installed by `eks-gitops`.
 ```
 agent pod → OTLP (localhost:4317) → OTel Collector
    → memory_limiter
-   → resource processor (adds tenant, platform, workspace, model_family, model_id)
+   → resource processor (adds tenant, platform, workspace, model_family)
    → transform processor (PII redaction on log bodies)
    → batch
    → exporters: awscloudwatch (always) + datadog (optional, gated on values)

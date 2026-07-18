@@ -13,7 +13,7 @@ spec:
       labels: {{- include "operator.selectorLabels" . | nindent 8 }}
       annotations:
         kubectl.kubernetes.io/default-container: manager
-        {{- if and .Values.metrics.enabled .Values.metrics.podScrapeAnnotations }}
+        {{- if and .Values.metrics.enabled .Values.metrics.podScrapeAnnotations (not .Values.metrics.secure) }}
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ .Values.metrics.port | quote }}
         prometheus.io/path: "/metrics"
@@ -33,6 +33,7 @@ spec:
             - --leader-elect={{ .Values.leaderElection.enabled }}
             - --leader-election-id={{ .Values.leaderElection.id }}
             - --metrics-bind-address=:{{ .Values.metrics.port }}
+            - --metrics-secure={{ .Values.metrics.secure }}
             - --health-probe-bind-address=:8081
             - --tenant-requeue-interval={{ .Values.reconcilers.tenant.requeueInterval }}
             - --budget-requeue-interval={{ .Values.reconcilers.budget.requeueInterval }}

@@ -1,20 +1,32 @@
-import type { ModelFamily, TokenUsage } from '@eks-agent/core';
+import { AgentError, type ModelFamily, type TokenUsage } from '@eks-agent/core';
+import { z } from 'zod';
 
 import type { Message, MessagesParams, MessagesResponse } from '../types.js';
 
 import { BedrockAdapter, type StreamAccumulator } from './bedrock-base.js';
 
-interface AnthropicResponse {
-  content?: { type: 'text'; text: string }[];
-  stop_reason?: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use';
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_read_input_tokens?: number;
-    cache_creation_input_tokens?: number;
-  };
-  amazon_bedrock_invocation_metrics?: { inputTokenCount: number; outputTokenCount: number };
-}
+// Schema for a Bedrock InvokeModel Anthropic Messages response body. Fields stay
+// optional — the parser tolerates a response that reports usage under
+// `usage` OR the `amazon_bedrock_invocation_metrics` fallback — but every field
+// that IS present must carry the right type. A shape drift (content arriving as
+// a string, a string-typed token count, a non-object body) fails validation at
+// the adapter boundary and surfaces as a typed AgentError instead of a silent
+// zero token count or an undefined-property read downstream.
+const anthropicResponseSchema = z.object({
+  content: z.array(z.object({ type: z.string().optional(), text: z.string() })).optional(),
+  stop_reason: z.string().optional(),
+  usage: z
+    .object({
+      input_tokens: z.number(),
+      output_tokens: z.number(),
+      cache_read_input_tokens: z.number().optional(),
+      cache_creation_input_tokens: z.number().optional(),
+    })
+    .optional(),
+  amazon_bedrock_invocation_metrics: z
+    .object({ inputTokenCount: z.number(), outputTokenCount: z.number() })
+    .optional(),
+});
 
 // A cache_control breakpoint on a system/content block. On Bedrock's native
 // Anthropic InvokeModel format this is the prompt-cache marker (the InvokeModel
@@ -66,7 +78,15 @@ export class AnthropicBedrockAdapter extends BedrockAdapter {
     usage: TokenUsage;
     stopReason: MessagesResponse['stopReason'];
   } {
-    const r = body as AnthropicResponse;
+    const parsed = anthropicResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new AgentError({
+        class: 'Server',
+        message: `malformed Anthropic Bedrock InvokeModel response: ${parsed.error.message}`,
+        cause: parsed.error,
+      });
+    }
+    const r = parsed.data;
     const text = r.content?.map((c) => c.text).join('') ?? '';
     const usage: TokenUsage = {
       inputTokens:
@@ -76,7 +96,11 @@ export class AnthropicBedrockAdapter extends BedrockAdapter {
       cacheReadTokens: r.usage?.cache_read_input_tokens ?? 0,
       cacheWriteTokens: r.usage?.cache_creation_input_tokens ?? 0,
     };
-    return { text, usage, stopReason: r.stop_reason ?? 'end_turn' };
+    const stopReason =
+      r.stop_reason && STOP_REASONS.has(r.stop_reason)
+        ? (r.stop_reason as MessagesResponse['stopReason'])
+        : 'end_turn';
+    return { text, usage, stopReason };
   }
 
   protected streamAccumulator(): StreamAccumulator {

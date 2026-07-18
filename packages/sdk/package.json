@@ -41,7 +41,8 @@
     "@aws-sdk/client-bedrock-runtime": "^3.1048.0",
     "@aws-sdk/credential-providers": "^3.1048.0",
     "@eks-agent/core": "workspace:*",
-    "@eks-agent/pricing": "workspace:*"
+    "@eks-agent/pricing": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "typescript": "^6.0.3",

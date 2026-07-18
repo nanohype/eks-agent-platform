@@ -1,14 +1,26 @@
-import type { ModelFamily, TokenUsage } from '@eks-agent/core';
+import { AgentError, type ModelFamily, type TokenUsage } from '@eks-agent/core';
+import { z } from 'zod';
 
 import type { MessagesParams, MessagesResponse } from '../types.js';
 
 import { BedrockAdapter, type StreamAccumulator } from './bedrock-base.js';
 
-interface NovaResponse {
-  output?: { message?: { content?: { text?: string }[] } };
-  stopReason?: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use';
-  usage?: { inputTokens: number; outputTokens: number };
-}
+// Schema for a Bedrock InvokeModel Amazon Nova response body. Fields stay
+// optional (the parser tolerates a truncated response), but a present field
+// with the wrong type — content that is not an array, a string-typed token
+// count, a non-object body — fails validation at the adapter boundary and
+// surfaces as a typed AgentError instead of a silently-zero token count.
+const novaResponseSchema = z.object({
+  output: z
+    .object({
+      message: z
+        .object({ content: z.array(z.object({ text: z.string().optional() })).optional() })
+        .optional(),
+    })
+    .optional(),
+  stopReason: z.string().optional(),
+  usage: z.object({ inputTokens: z.number(), outputTokens: z.number() }).optional(),
+});
 
 export class NovaBedrockAdapter extends BedrockAdapter {
   readonly modelFamily: ModelFamily = 'amazon-nova';
@@ -37,7 +49,15 @@ export class NovaBedrockAdapter extends BedrockAdapter {
     usage: TokenUsage;
     stopReason: MessagesResponse['stopReason'];
   } {
-    const r = body as NovaResponse;
+    const parsed = novaResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new AgentError({
+        class: 'Server',
+        message: `malformed Amazon Nova Bedrock InvokeModel response: ${parsed.error.message}`,
+        cause: parsed.error,
+      });
+    }
+    const r = parsed.data;
     const text = r.output?.message?.content?.map((c) => c.text ?? '').join('') ?? '';
     const usage: TokenUsage = {
       inputTokens: r.usage?.inputTokens ?? 0,
@@ -45,7 +65,11 @@ export class NovaBedrockAdapter extends BedrockAdapter {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     };
-    return { text, usage, stopReason: r.stopReason ?? 'end_turn' };
+    const stopReason =
+      r.stopReason && NOVA_STOP_REASONS.has(r.stopReason)
+        ? (r.stopReason as MessagesResponse['stopReason'])
+        : 'end_turn';
+    return { text, usage, stopReason };
   }
 
   protected streamAccumulator(): StreamAccumulator {

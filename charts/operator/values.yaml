@@ -78,17 +78,31 @@ config:
 metrics:
   enabled: true
   port: 8080
+  # Serve metrics over HTTPS and require every scrape to authenticate +
+  # authorize (controller-runtime's WithAuthenticationAndAuthorization filter:
+  # TokenReview + a SubjectAccessReview on the /metrics nonResourceURL). This
+  # closes the info-disclosure gap where the NetworkPolicy was the only gate.
+  # The chart then wires the operator SA for token review (system:auth-delegator)
+  # and, for the ServiceMonitor path, a metrics-reader SA + token the scraper
+  # presents (see rbac.yaml, servicemonitor.yaml).
+  #
+  # A scraper MUST present a bearer token over https to read the endpoint. An
+  # unauthenticated annotation-based scrape can no longer read it, so the
+  # plaintext prometheus.io scrape annotations below are suppressed while secure.
+  # Set false only where no kube-apiserver is reachable to review tokens.
+  secure: true
   service:
     type: ClusterIP
   serviceMonitor:
     enabled: true
-  # Pod-level prometheus.io scrape annotations. The EKS clusters scrape with the
-  # Grafana Agent (→ Amazon Managed Prometheus) by pod annotation, with no
-  # prometheus-operator — so the ServiceMonitor above is consumed only on
-  # kube-prometheus-stack clusters (kx). These annotations make the operator's
-  # controller-runtime reconcile metrics reach AMP in prod. The operator
-  # NetworkPolicy already allows scrape from the monitoring namespace (where the
-  # Grafana Agent runs).
+  # Pod-level prometheus.io scrape annotations for annotation-based scrapers
+  # (e.g. the Grafana Agent → Amazon Managed Prometheus, which runs without a
+  # prometheus-operator so it does not consume the ServiceMonitor). These are
+  # only emitted when metrics.secure is false — an annotation scrape is
+  # plaintext and unauthenticated, which the secure endpoint rejects; a secure
+  # deployment is scraped via the authenticated ServiceMonitor (kube-prometheus-
+  # stack) or by an agent taught to present the metrics-reader token over https.
+  # The operator NetworkPolicy allows scrape from the monitoring namespace.
   podScrapeAnnotations: true
 
 resources:

@@ -15,11 +15,12 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// TestPlatformNew_ByteForByteFixture is the fidelity gate for the CLI
-// consolidation: `platform new` must reproduce, byte-for-byte, the scaffold the
-// prior TypeScript CLI emitted for every persona. The golden fixtures under
-// testdata/platform-new were captured from that scaffolder; a drift in the Go
-// port (indentation, quoting, folding, key order) fails here.
+// TestPlatformNew_ByteForByteFixture is the output-fidelity gate for the CLI:
+// `platform new` must reproduce, byte-for-byte, the golden fixture committed
+// under testdata/platform-new for every persona. Any drift in the scaffolder
+// (indentation, quoting, folding, key order, or the default case set) fails
+// here, so the emitted bytes only ever change on purpose alongside a fixture
+// update.
 func TestPlatformNew_ByteForByteFixture(t *testing.T) {
 	for _, persona := range []string{
 		"sales-ops", "support", "finance", "ops", "founder", "eng", "marketing", "legal", "generic",

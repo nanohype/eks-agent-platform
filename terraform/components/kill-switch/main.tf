@@ -228,8 +228,12 @@ resource "aws_sfn_state_machine" "killswitch" {
       # AgentFleets. The IAM detach + suspension tag already landed in the
       # prior states, so this is the last action — but a transient
       # PutEvents failure must not go unrecorded: retry on backoff, then
-      # route to RecordFailure (which surfaces in the execution history the
-      # KillSwitchStepFailures alarm watches) rather than dropping silently.
+      # route to the terminal RecordFailure state (recorded in this machine's
+      # CloudWatch execution history, logged at ALL with execution data)
+      # rather than dropping silently. A breach that ultimately fails to leave
+      # the tenant suspended is re-driven by the operator's effect-verifying
+      # KillSwitchUnrouted net (condition + alert), which is the load-bearing
+      # safety net here — not a CloudWatch alarm on this state machine.
       NotifyOperator = {
         Type     = "Task"
         Resource = "arn:${data.aws_partition.current.partition}:states:::events:putEvents"

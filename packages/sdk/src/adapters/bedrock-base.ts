@@ -240,10 +240,23 @@ export abstract class BedrockAdapter implements ProviderAdapter {
   /**
    * Normalize a thrown error into an AgentError. Don't double-wrap: if a
    * subclass's parseResponseBody already threw an AgentError with a precise
-   * classification, preserve it.
+   * classification (e.g. a response schema-validation failure), preserve its
+   * class, message, and cause — only backfilling the correlation id from the
+   * call params when the subclass threw before it was attached, so every
+   * surfaced error stays correlation-tagged.
    */
   private asAgentError(params: MessagesParams, err: unknown): AgentError {
-    if (err instanceof AgentError) return err;
+    if (err instanceof AgentError) {
+      if (err.correlationId === undefined) {
+        return new AgentError({
+          class: err.class,
+          message: err.message,
+          cause: err.cause,
+          correlationId: params.correlationId,
+        });
+      }
+      return err;
+    }
     return new AgentError({
       class: this.classifyError(err),
       message: err instanceof Error ? err.message : String(err),

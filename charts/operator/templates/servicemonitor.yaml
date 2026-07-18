@@ -12,5 +12,21 @@ spec:
     - port: metrics
       interval: 30s
       path: /metrics
+{{- if .Values.metrics.secure }}
+      scheme: https
+      tlsConfig:
+        # The metrics server presents a self-signed cert controller-runtime
+        # generates in-memory. Skip CA verification (there is no CA to pin) and
+        # rely on the bearer-token authorization below for access control: the
+        # endpoint is cluster-internal, NetworkPolicy-gated, and the token
+        # proves the scraper is the metrics-reader identity.
+        insecureSkipVerify: true
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "operator.fullname" . }}-metrics-reader-token
+          key: token
+{{- else }}
       scheme: http
+{{- end }}
 {{- end }}
