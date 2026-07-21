@@ -15,7 +15,7 @@ overrides:
   esbuild: "^0.28.1" # GHSA-g7r4-m6w7-qqqr
   ws: "^8.21.0" # CVE-2026-48779 (memory-exhaustion DoS)
   form-data: "^4.0.6" # CVE-2026-12143 (CRLF header injection)
-  js-yaml: "^4.2.0" # CVE-2026-53550 (merge-key quadratic DoS)
+  js-yaml: "^4.3.0" # CVE-2026-53550 (merge-key quadratic DoS), CVE-2026-59869 (crafted-document DoS)
   read-yaml-file: "^2.1.0"
 
 peerDependencyRules:
