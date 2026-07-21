@@ -110,7 +110,7 @@ Recovery is **human-only** — an operator clears the suspension tag manually af
 - Go: `go fmt`, `go vet`, `golangci-lint` on PR
 - Tests: `go test ./internal/...`; in-memory fakes for AWS clients (see `operators/internal/controller/platform_iam_reconcile_test.go` for the pattern)
 - Generated artifacts (CRD manifests, deepcopy code) committed; `make manifests` regenerates them
-- CRD API groups are org-aligned under the `nanohype.dev` domain: `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Finalizers, label/tag keys, and the leader-election lease ID follow the same domain. The tenant team identifier stays `protohype`
+- CRD API groups are org-aligned under the `nanohype.dev` domain: `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Finalizers, label/tag keys, and the leader-election lease ID follow the same domain. A Platform's tenant field carries the owning team's real name — `strategy`, `growth`, `reliability`, `workplace`
 
 ## Pointers
 

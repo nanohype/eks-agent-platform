@@ -260,7 +260,7 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	platform := newPlatform("slack-knowledge-bot", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
 	roleName := tenantRoleName(cfg.ClusterName, platform)
 
@@ -326,7 +326,7 @@ func TestEnsureIamRole_SuspendedDoesNotTouchModelScopingPolicy(t *testing.T) {
 	}
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	platform := newPlatform("slack-knowledge-bot", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
 
 	roleName := tenantRoleName(cfg.ClusterName, platform)
@@ -357,7 +357,7 @@ func TestDeleteIamRole_RemovesInlinePoliciesBeforeRoleDelete(t *testing.T) {
 	}
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	platform := newPlatform("slack-knowledge-bot", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
 
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
@@ -393,7 +393,7 @@ func TestEnsureSessionRole_CarriesModelScopingPolicy(t *testing.T) {
 	}
 	f := newFakeIAM()
 	r := &PlatformReconciler{IAM: f}
-	platform := newPlatform("slack-knowledge-bot", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
 	platform.Spec.Attribution = &platformv1alpha1.AttributionSpec{Operators: []string{"ops@nanohype.dev"}}
 

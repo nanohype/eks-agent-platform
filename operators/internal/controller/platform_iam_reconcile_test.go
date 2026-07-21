@@ -421,7 +421,7 @@ func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 		ClusterName:             "production-cluster",
 		Environment:             "production",
 	}
-	platform := newPlatform("slack-knowledge-bot", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.ExtraPolicyArns = extras
 
 	got, err := r.ensureIamRole(context.Background(), platform, cfg)
@@ -456,7 +456,7 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 		ClusterName:             "production-cluster",
 		Environment:             "production",
 	}
-	platform := newPlatform("slack-knowledge-bot", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.ExtraPolicyArns = extras
 
 	// Seed the role with the suspension marker so ensureIamRole's GetRole
@@ -549,7 +549,7 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 		ClusterName:             "production-cluster",
 		Environment:             "production",
 	}
-	platform := newPlatform("slack-knowledge-bot", "protohype")
+	platform := newPlatform("slack-knowledge-bot", "workplace")
 
 	got, err := r.ensureIamRole(context.Background(), platform, cfg)
 	if err != nil {

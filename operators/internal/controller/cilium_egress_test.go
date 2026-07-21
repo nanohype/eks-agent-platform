@@ -69,7 +69,7 @@ func TestTenantEgressCiliumRules_AllowsPodIdentityCreds(t *testing.T) {
 }
 
 func TestEnsureTenantCiliumEgress_GatedByEngine(t *testing.T) {
-	p := attributedPlatform("acme", "protohype", nil, nil)
+	p := attributedPlatform("acme", "reliability", nil, nil)
 
 	// kubernetes engine: no-op, no CiliumNetworkPolicy created.
 	cl := ciliumTestClient(t)
@@ -105,7 +105,7 @@ func TestEnsureTenantCiliumEgress_GatedByEngine(t *testing.T) {
 }
 
 func TestEnsureFleetCiliumEgress_DeniesIngressAndSelectsFleet(t *testing.T) {
-	p := attributedPlatform("acme", "protohype", nil, nil)
+	p := attributedPlatform("acme", "reliability", nil, nil)
 	cl := ciliumTestClient(t)
 	r := &AgentFleetReconciler{Client: cl, NetworkEngine: NetworkEngineCilium}
 
