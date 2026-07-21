@@ -47,7 +47,7 @@ func syncedSAObject(p *platformv1alpha1.Platform) *corev1.ServiceAccount {
 }
 
 func vclusterPlatform() *platformv1alpha1.Platform {
-	p := newPlatform("demo", "protohype")
+	p := newPlatform("demo", "reliability")
 	p.Spec.Isolation = isolationVCluster
 	return p
 }

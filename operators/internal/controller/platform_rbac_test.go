@@ -30,7 +30,7 @@ func rbacTestClient(t *testing.T) client.Client {
 func TestEnsureOperatorImpersonateRBAC(t *testing.T) {
 	cl := rbacTestClient(t)
 	r := &PlatformReconciler{Client: cl}
-	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com", "bob@acme.com"}, nil)
+	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com", "bob@acme.com"}, nil)
 
 	if err := r.ensureOperatorImpersonateRBAC(context.Background(), p); err != nil {
 		t.Fatalf("ensureOperatorImpersonateRBAC: %v", err)
@@ -80,7 +80,7 @@ func TestEnsureOperatorImpersonateRBAC(t *testing.T) {
 func TestEnsureOperatorImpersonateRBAC_UpdatesOperators(t *testing.T) {
 	cl := rbacTestClient(t)
 	r := &PlatformReconciler{Client: cl}
-	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com"}, nil)
+	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
 	if err := r.ensureOperatorImpersonateRBAC(context.Background(), p); err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestEnsureOperatorImpersonateRBAC_UpdatesOperators(t *testing.T) {
 func TestDeleteOperatorImpersonateRBAC(t *testing.T) {
 	cl := rbacTestClient(t)
 	r := &PlatformReconciler{Client: cl}
-	p := attributedPlatform("acme", "protohype", []string{"alice@acme.com"}, nil)
+	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
 	if err := r.ensureOperatorImpersonateRBAC(context.Background(), p); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
