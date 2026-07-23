@@ -21,7 +21,7 @@ func testScope() arnScope {
 	return arnScope{Partition: "aws", Region: "us-west-2", AccountID: "123456789012"}
 }
 
-func platformWithDatastores(name string, ds ...platformv1alpha1.DatastoreSpec) *platformv1alpha1.Platform {
+func platformWithDatastores(name string, ds ...platformv1alpha1.DatastoreSpec) *platformv1alpha1.Platform { //nolint:unparam // policy-generation unit tests use a fixed platform token
 	return &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec:       platformv1alpha1.PlatformSpec{Datastores: ds},
