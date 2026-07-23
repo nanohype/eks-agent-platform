@@ -619,6 +619,25 @@ Package v1alpha1 contains API Schema definitions for the platform v1alpha1 API g
 
 
 
+#### AttributeSchema
+
+
+
+AttributeSchema names a DynamoDB key attribute and its scalar type
+(S string, N number, B binary).
+
+
+
+_Appears in:_
+- [GlobalSecondaryIndex](#globalsecondaryindex)
+- [KeyValueConfig](#keyvalueconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name of the attribute. |  | Pattern: `^[a-zA-Z0-9_.-]\{1,255\}$` <br /> |
+| `type` _string_ | Type is the DynamoDB scalar attribute type. |  | Enum: [S N B] <br /> |
+
+
 #### AttributionSpec
 
 
@@ -651,6 +670,25 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `name` _string_ |  |  |  |
+
+
+#### CacheConfig
+
+
+
+CacheConfig tunes the ElastiCache cluster. Engine and node type are reported
+on drift (a resize is disruptive); replica count converges.
+
+
+
+_Appears in:_
+- [DatastoreSpec](#datastorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `engine` _string_ | Engine of the cache. Valkey is the default going-forward OSS engine.<br />Drift: reported. | valkey | Enum: [valkey redis] <br />Optional: \{\} <br /> |
+| `nodeType` _string_ | NodeType sizes each node. Drift: reported — a node-type change is a<br />disruptive resize, surfaced as a condition rather than force-applied. | cache.t4g.micro | Optional: \{\} <br /> |
+| `replicas` _integer_ | Replicas is the number of read replicas per shard; 0 (default) is a<br />single-node cache for a young tenant. Drift: converged. | 0 | Maximum: 5 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### ComplianceSpec
@@ -689,6 +727,115 @@ _Appears in:_
 | `billingEmail` _string_ | BillingEmail — invoice + budget-breach notification recipient. |  | Optional: \{\} <br /> |
 
 
+#### DatastoreKind
+
+_Underlying type:_ _string_
+
+DatastoreKind is the abstract kind of a tenant datastore. The Platform CR
+names what the tenant needs; the operator and the tenant-substrate tofu
+module map each kind to an AWS implementation and scope access to it. Keeping
+the vocabulary abstract preserves the pluggable seam the org commits to
+elsewhere and keeps the spec a statement of need rather than a config file
+for a specific service.
+
+	relational  -> Aurora PostgreSQL Serverless v2
+	keyValue    -> DynamoDB
+	objectStore -> S3
+	queue       -> SQS (with a dead-letter queue when redrive is set)
+	cache       -> ElastiCache (Valkey / Redis)
+	stream      -> MSK Serverless (IAM auth)
+
+_Validation:_
+- Enum: [relational keyValue objectStore queue cache stream]
+
+_Appears in:_
+- [DatastoreSpec](#datastorespec)
+- [DatastoreStatus](#datastorestatus)
+
+| Field | Description |
+| --- | --- |
+| `relational` |  |
+| `keyValue` |  |
+| `objectStore` |  |
+| `queue` |  |
+| `cache` |  |
+| `stream` |  |
+
+
+#### DatastoreSpec
+
+
+
+DatastoreSpec declares one stateful store the tenant needs. The kind selects
+an AWS implementation and, at most, the one typed config block matching that
+kind (stream needs none; a kind whose block is omitted takes the young/light
+defaults). The heavy resource is provisioned by the tenant-substrate tofu
+module; the operator generates the scoped IAM policy that reaches it. Nothing
+here grants the operator delete on the store — deletion is governed by
+deletionPolicy and the per-kind deletion_protection backstop, not by the
+reconciling principal's IAM (T1/T2).
+
+
+
+_Appears in:_
+- [PlatformSpec](#platformspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name identifies the datastore within its Platform and composes into the<br />AWS resource names (bucket, table, queue, cluster) alongside the env,<br />account, and platform tokens. A short RFC-1123 label; the tenant-substrate<br />module re-proves the exact composed length at its variable boundary, where<br />the env and account values are known. |  | Pattern: `^[a-z0-9]([a-z0-9-]\{0,16\}[a-z0-9])?$` <br /> |
+| `kind` _[DatastoreKind](#datastorekind)_ | Kind selects the AWS implementation. Immutable — changing a live<br />datastore's kind would strand the provisioned resource. |  | Enum: [relational keyValue objectStore queue cache stream] <br /> |
+| `deletionPolicy` _string_ | DeletionPolicy governs the underlying AWS resource when this datastore is<br />removed from spec or the Platform is deleted (T2).<br />  Retain (default): the resource is orphaned, tagged<br />    platform.nanohype.dev/owned-by and platform.nanohype.dev/released-at,<br />    so a `kubectl delete platform` never takes the data with it.<br />  Delete: the resource is torn down with the declaration.<br />Independent of the per-kind deletion_protection backstop, which defaults on<br />for relational and cache — two gates, both defaulting closed. | Retain | Enum: [Retain Delete] <br />Optional: \{\} <br /> |
+| `relational` _[RelationalConfig](#relationalconfig)_ | Relational config; honored only when kind=relational. |  | Optional: \{\} <br /> |
+| `keyValue` _[KeyValueConfig](#keyvalueconfig)_ | KeyValue config; honored only when kind=keyValue. |  | Optional: \{\} <br /> |
+| `objectStore` _[ObjectStoreConfig](#objectstoreconfig)_ | ObjectStore config; honored only when kind=objectStore. |  | Optional: \{\} <br /> |
+| `queue` _[QueueConfig](#queueconfig)_ | Queue config; honored only when kind=queue. |  | Optional: \{\} <br /> |
+| `cache` _[CacheConfig](#cacheconfig)_ | Cache config; honored only when kind=cache. |  | Optional: \{\} <br /> |
+
+
+#### DatastoreStatus
+
+
+
+DatastoreStatus reports one datastore's observed state (T3/(a)). It lives
+under PlatformStatus.Datastores, separate from the top-level Phase so a
+still-creating datastore does not hold back the tenant's Ready (T6).
+
+
+
+_Appears in:_
+- [PlatformStatus](#platformstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name matches spec.datastores[].name. |  |  |
+| `kind` _[DatastoreKind](#datastorekind)_ | Kind echoes the declared kind. |  | Enum: [relational keyValue objectStore queue cache stream] <br />Optional: \{\} <br /> |
+| `phase` _string_ | Phase: Pending, Provisioning, Ready, Drifted, Failed. |  | Optional: \{\} <br /> |
+| `endpoint` _string_ | Endpoint is the connection address once available — Aurora/cache endpoint,<br />SQS queue URL, S3 bucket name, or MSK bootstrap brokers. |  | Optional: \{\} <br /> |
+| `arn` _string_ | ARN of the provisioned resource. |  | Optional: \{\} <br /> |
+| `secretName` _string_ | SecretName is the resolved name of the credentials secret the datastore<br />publishes — the RDS-managed master secret for relational — so the tenant<br />chart reads one predictable place instead of hand-wiring it per app (T7). |  | Optional: \{\} <br /> |
+| `drift` _string array_ | Drift lists spec fields observed to differ from AWS that the operator<br />reports but does not converge (the destructive-to-correct fields per T3).<br />Empty when in sync. |  | Optional: \{\} <br /> |
+
+
+#### GlobalSecondaryIndex
+
+
+
+GlobalSecondaryIndex declares a DynamoDB GSI. The key schema is immutable
+(AWS recreates the index to change it); drift on projection is reported.
+
+
+
+_Appears in:_
+- [KeyValueConfig](#keyvalueconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name of the index. |  | Pattern: `^[a-zA-Z0-9_.-]\{3,255\}$` <br /> |
+| `partitionKey` _[AttributeSchema](#attributeschema)_ | PartitionKey (hash key) of the index. |  |  |
+| `sortKey` _[AttributeSchema](#attributeschema)_ | SortKey (range key) of the index. |  | Optional: \{\} <br /> |
+| `projection` _string_ | Projection controls which attributes are copied into the index. | ALL | Enum: [ALL KEYS_ONLY INCLUDE] <br />Optional: \{\} <br /> |
+
+
 #### IdentitySpec
 
 
@@ -713,6 +860,46 @@ _Appears in:_
 | `allowedModels` _string array_ | AllowedModels is the list of Bedrock model IDs or cross-region<br />inference-profile IDs (e.g. "anthropic.claude-sonnet-4-6",<br />"us.anthropic.claude-sonnet-4-6-v1:0") the role may invoke. The<br />controller expands each entry into its foundation-model ARN pattern plus<br />the matching inference-profile ARN pattern (a `us.` profile fans out to<br />foundation models across regions, so both are granted together) and<br />reconciles them into the role's bedrock-model-scoping policy. Scopes<br />tighter than a family; mutually exclusive with AllowedModelFamilies. |  | Optional: \{\} <br /> |
 | `allowedModelFamilies` _string array_ | AllowedModelFamilies (e.g. ["anthropic", "amazon-nova"]) is expanded by<br />the controller at reconcile time into the family's foundation-model ARN<br />pattern (arn:<partition>:bedrock:*::foundation-model/<prefix>*) and, for<br />families with cross-region inference profiles (anthropic, amazon-nova,<br />meta, mistral), the `us.` inference-profile ARN pattern<br />(arn:<partition>:bedrock:<region>:<account>:inference-profile/us.<prefix>*),<br />then reconciled into the role's bedrock-model-scoping policy. Leaving<br />both this and AllowedModels empty denies all Bedrock model invocation<br />for the Platform's roles. |  | items:Enum: [anthropic amazon-nova amazon-titan meta mistral cohere stability] <br />Optional: \{\} <br /> |
 | `extraPolicyArns` _string array_ | ExtraPolicyArns are managed IAM policies attached on top of the baseline. |  | Optional: \{\} <br /> |
+
+
+#### KeyValueConfig
+
+
+
+KeyValueConfig tunes the DynamoDB table. The key schema is immutable; billing
+mode, TTL, and point-in-time recovery converge on drift.
+
+
+
+_Appears in:_
+- [DatastoreSpec](#datastorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `partitionKey` _[AttributeSchema](#attributeschema)_ | PartitionKey (hash key). Immutable after create. |  |  |
+| `sortKey` _[AttributeSchema](#attributeschema)_ | SortKey (range key). Immutable after create. |  | Optional: \{\} <br /> |
+| `billingMode` _string_ | BillingMode. PAY_PER_REQUEST (default) suits a young tenant with unknown<br />traffic; PROVISIONED is for steady, predictable load. Drift: converged. | PAY_PER_REQUEST | Enum: [PAY_PER_REQUEST PROVISIONED] <br />Optional: \{\} <br /> |
+| `ttlAttribute` _string_ | TTLAttribute names the item attribute holding an epoch expiry; empty<br />disables TTL. Drift: converged. |  | Optional: \{\} <br /> |
+| `pointInTimeRecovery` _boolean_ | PointInTimeRecovery enables continuous backups. Defaults on. Drift:<br />converged. | true | Optional: \{\} <br /> |
+| `globalSecondaryIndexes` _[GlobalSecondaryIndex](#globalsecondaryindex) array_ | GlobalSecondaryIndexes declared on the table. |  | Optional: \{\} <br /> |
+
+
+#### ObjectStoreConfig
+
+
+
+ObjectStoreConfig tunes the S3 bucket. Encryption and public-access blocking
+are always on and not configurable. Both fields converge on drift.
+
+
+
+_Appears in:_
+- [DatastoreSpec](#datastorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `versioning` _boolean_ | Versioning keeps prior object versions. Defaults on; set false only for a<br />bucket of regenerable data where prior versions add cost with no recovery<br />value. Drift: converged. | true | Optional: \{\} <br /> |
+| `lifecycleExpireDays` _integer_ | LifecycleExpireDays expires objects after N days; 0 (default) keeps them<br />indefinitely. Drift: converged. | 0 | Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### Platform
@@ -762,6 +949,7 @@ _Appears in:_
 | `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance flags drive stricter defaults across the Platform. |  | Optional: \{\} <br /> |
 | `isolation` _string_ | Isolation is the workload-isolation tier:<br />  - namespace (default): namespace RBAC + default-deny NetworkPolicy +<br />    ResourceQuota + PSS-restricted, tenant workloads on the host API server.<br />  - vcluster: the same host-side containment PLUS a per-Platform virtual<br />    cluster, so tenant code that talks to the Kubernetes API talks to its own<br />    API server, not the host's (API-server-level isolation — NOT kernel/node<br />    isolation; see docs/adr/0009-vcluster-isolation-tier.md and SECURITY.md).<br />Immutable: switching tiers on a live Platform is a migration (it would strand<br />the virtual cluster and its synced host objects), so the tier is fixed at<br />create time. Re-declare the Platform to change it. Enforced at admission by<br />the CEL transition rule below — an invalid tier flip fails the apply rather<br />than silently half-reconciling. | namespace | Enum: [namespace vcluster] <br />Optional: \{\} <br /> |
 | `attribution` _[AttributionSpec](#attributionspec)_ | Attribution opts the Platform into per-session human attribution. When<br />set, the operator provisions a session role — assumable by the tenant<br />IRSA role with the operator carried as STS SourceIdentity, scoped to the<br />tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a<br />ClusterRole letting the tenant ServiceAccount impersonate the named<br />operators at the apiserver. fab's role-session entrypoint consumes both,<br />so an agent's AWS + Kubernetes actions attribute to a named human.<br />nil = unattributed (the default). |  | Optional: \{\} <br /> |
+| `datastores` _[DatastoreSpec](#datastorespec) array_ | Datastores declares the tenant's stateful substrate — the databases,<br />buckets, queues, caches, and streams it needs. Each entry is a declaration,<br />not a hand-written component: the tenant-substrate tofu module provisions<br />the heavy resource from this same list and the operator generates the<br />scoped IAM policy that reaches it, so adding a tenant never means authoring<br />a landing-zone component. Empty for a Platform with no stateful needs. |  | Optional: \{\} <br /> |
 
 
 #### PlatformStatus
@@ -785,6 +973,49 @@ _Appears in:_
 | `suspendedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | SuspendedAt is the timestamp at which the kill-switch fired. When<br />non-nil the operator stops reattaching the baseline IAM policy and<br />the AgentFleetReconciler scales fleets to zero. Resets to nil only<br />when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'<br />marker on the tenant IRSA role. |  | Optional: \{\} <br /> |
 | `suspendedReason` _string_ | SuspendedReason carries the kill-switch's reason (e.g.<br />'budget-exceeded'). Same lifecycle as SuspendedAt. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions follows the standard kubernetes pattern. |  | Optional: \{\} <br /> |
+| `datastores` _[DatastoreStatus](#datastorestatus) array_ | Datastores reports per-datastore observed state, separate from the<br />top-level Phase: a Platform is Ready once its namespace, quota, and<br />identity are live, while each datastore reports its own readiness here so a<br />still-creating Aurora cluster does not gate the tenant's Ready (T6). |  | Optional: \{\} <br /> |
+
+
+#### QueueConfig
+
+
+
+QueueConfig tunes the SQS queue. FIFO-ness is immutable (a FIFO and a standard
+queue are different resources); the remaining fields converge on drift.
+
+
+
+_Appears in:_
+- [DatastoreSpec](#datastorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `fifo` _boolean_ | FIFO makes an exactly-once, ordered queue. Immutable after create. | false | Optional: \{\} <br /> |
+| `visibilityTimeoutSeconds` _integer_ | VisibilityTimeoutSeconds before a received-but-unacked message is<br />redelivered. Drift: converged. | 30 | Maximum: 43200 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `messageRetentionSeconds` _integer_ | MessageRetentionSeconds a message is kept before it expires (default 4<br />days). Drift: converged. | 345600 | Maximum: 1.2096e+06 <br />Minimum: 60 <br />Optional: \{\} <br /> |
+| `maxReceiveCount` _integer_ | MaxReceiveCount, when > 0, provisions a dead-letter queue and redrives a<br />message to it after this many failed receives; 0 (default) means no DLQ.<br />Drift: converged. | 0 | Maximum: 1000 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+
+
+#### RelationalConfig
+
+
+
+RelationalConfig tunes the Aurora PostgreSQL Serverless v2 cluster. Omitting
+the block provisions the young/light default: 0.5–8 ACU, 7-day backups,
+deletion protection on.
+
+
+
+_Appears in:_
+- [DatastoreSpec](#datastorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `engineVersion` _string_ | EngineVersion of Aurora PostgreSQL. Drift: reported, never converged — an<br />out-of-band engine change is not force-corrected because a downgrade is<br />destructive; the operator raises a Drifted condition instead. | 16.6 | Optional: \{\} <br /> |
+| `minACU` _string_ | MinACU is the Serverless v2 floor in Aurora Capacity Units, in 0.5-ACU<br />steps (e.g. "0.5", "1", "8"). Serialized as a string, per the Kubernetes<br />convention for fractional values. The exact 0.5–256 range and the<br />maxACU >= minACU relation are enforced at the tenant-substrate module's<br />variable boundary. Drift: converged — the operator resets scaling bounds<br />to spec. | 0.5 | Pattern: `^([1-9][0-9]\{0,2\}(\.5)?\|0\.5)$` <br />Optional: \{\} <br /> |
+| `maxACU` _string_ | MaxACU is the Serverless v2 ceiling, in 0.5-ACU steps. Drift: converged. | 8 | Pattern: `^([1-9][0-9]\{0,2\}(\.5)?\|0\.5)$` <br />Optional: \{\} <br /> |
+| `backupRetentionDays` _integer_ | BackupRetentionDays for automated backups. Drift: converged. | 7 | Maximum: 35 <br />Minimum: 1 <br />Optional: \{\} <br /> |
+| `deletionProtection` _boolean_ | DeletionProtection is the AWS-level backstop (T2/(c)): with it on, the<br />cluster cannot be deleted even by an authorized principal until it is<br />cleared. Defaults on. Drift: converged. | true | Optional: \{\} <br /> |
 
 
 #### Tenant

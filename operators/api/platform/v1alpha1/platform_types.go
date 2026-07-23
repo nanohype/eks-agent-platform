@@ -68,6 +68,17 @@ type PlatformSpec struct {
 	// nil = unattributed (the default).
 	// +optional
 	Attribution *AttributionSpec `json:"attribution,omitempty"`
+
+	// Datastores declares the tenant's stateful substrate — the databases,
+	// buckets, queues, caches, and streams it needs. Each entry is a declaration,
+	// not a hand-written component: the tenant-substrate tofu module provisions
+	// the heavy resource from this same list and the operator generates the
+	// scoped IAM policy that reaches it, so adding a tenant never means authoring
+	// a landing-zone component. Empty for a Platform with no stateful needs.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Datastores []DatastoreSpec `json:"datastores,omitempty"`
 }
 
 // AttributionSpec configures per-session human attribution for a Platform. See
@@ -191,6 +202,15 @@ type PlatformStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Datastores reports per-datastore observed state, separate from the
+	// top-level Phase: a Platform is Ready once its namespace, quota, and
+	// identity are live, while each datastore reports its own readiness here so a
+	// still-creating Aurora cluster does not gate the tenant's Ready (T6).
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Datastores []DatastoreStatus `json:"datastores,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -200,6 +220,7 @@ type PlatformStatus struct {
 // +kubebuilder:printcolumn:name="Tenant",type=string,JSONPath=`.spec.tenant`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.datastores) || self.spec.datastores.all(d, size(self.metadata.name) + size(d.name) <= 28)",message="platform name + datastore name must be <= 28 combined: they compose into S3 bucket and table/queue names as <env>-<name>-<datastore>-<account>-<suffix> against S3's 63-char ceiling (63 - env<=11 - account 12 - 4 separators - suffix<=8); the tenant-substrate module re-proves the exact env/account-aware length"
 
 // Platform is the top-level tenancy CR. Namespaced so that BudgetPolicy,
 // ModelGateway, AgentFleet, and EvalSuite references resolve in the same

@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	phasePending = "Pending"
-	phaseReady   = "Ready"
+	phasePending      = "Pending"
+	phaseProvisioning = "Provisioning"
+	phaseReady        = "Ready"
 )
 
 func newModelGatewayReconciler() *controller.ModelGatewayReconciler {
