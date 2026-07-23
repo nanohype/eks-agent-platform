@@ -30,11 +30,12 @@ import (
 //     declarations + a constructor); there is no branching logic to exercise
 //     without a live AWS endpoint, so it carries a floor matching that reality.
 //
-// On top of the package floors, three security-critical files carry a per-file
+// On top of the package floors, four security-critical files carry a per-file
 // 100% override (the rubric's security-critical-100 rule): the tenant/session
-// IAM role reconcilers and the KMS-grant + bucket-policy reconciler. These mint
-// the IAM roles, KMS grants, and S3 policies that are the tenant isolation
-// boundary; a single uncovered branch there is an unproven security control.
+// IAM role reconcilers, the KMS-grant + bucket-policy reconciler, and the
+// datastore-access policy generator. These mint the IAM roles, KMS grants, S3
+// policies, and per-datastore grants that are the tenant isolation boundary; a
+// single uncovered branch there is an unproven security control.
 var floors = config{
 	packageFloors: map[string]float64{
 		"internal/controller":     75,
@@ -43,9 +44,10 @@ var floors = config{
 		"internal/awsclients":     30,
 	},
 	fileFloors: map[string]float64{
-		"internal/controller/platform_iam.go":         100,
-		"internal/controller/platform_session_iam.go": 100,
-		"internal/controller/platform_kms_s3.go":      100,
+		"internal/controller/platform_iam.go":              100,
+		"internal/controller/platform_session_iam.go":      100,
+		"internal/controller/platform_kms_s3.go":           100,
+		"internal/controller/platform_datastore_policy.go": 100,
 	},
 }
 
