@@ -182,6 +182,21 @@ type IdentitySpec struct {
 	// +kubebuilder:validation:MaxItems=8
 	// +optional
 	Capabilities []Capability `json:"capabilities,omitempty"`
+
+	// DirectSecretReads names the application secrets this Platform's pods read
+	// directly through the pod role via the AWS SDK, each a name under the
+	// tenant's own <platform>/<env>/ prefix in Secrets Manager (e.g.
+	// "grafana/oncall-webhook-hmac"). The controller grants
+	// secretsmanager:GetSecretValue/DescribeSecret on exactly those secrets in
+	// the tenant-secrets inline policy — no prefix wildcard. Secret material
+	// projected into the pod by the chart's ExternalSecret is resolved by the
+	// External Secrets controller's own identity and needs no entry here;
+	// leaving this empty means the tenant role holds no Secrets Manager grant.
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=256
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9][A-Za-z0-9/_+=.@-]*$`
+	// +optional
+	DirectSecretReads []string `json:"directSecretReads,omitempty"`
 }
 
 // ComplianceSpec enables stricter defaults.

@@ -24,6 +24,7 @@ export const IdentitySpec = z.object({
   allowedModelFamilies: z.array(z.string()).default([]),
   extraPolicyArns: z.array(z.string()).default([]),
   capabilities: z.array(z.enum(['ses', 'eventBridgeScheduler'])).default([]),
+  directSecretReads: z.array(z.string()).default([]),
 });
 export type IdentitySpec = z.infer<typeof IdentitySpec>;
 

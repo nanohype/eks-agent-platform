@@ -49,6 +49,7 @@ const platform = (name: string): Platform => ({
       allowedModelFamilies: ['anthropic'],
       extraPolicyArns: [],
       capabilities: [],
+      directSecretReads: [],
     },
     isolation: 'namespace',
   },
