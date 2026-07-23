@@ -44,11 +44,12 @@ var floors = config{
 		"internal/awsclients":     30,
 	},
 	fileFloors: map[string]float64{
-		"internal/controller/platform_iam.go":               100,
-		"internal/controller/platform_session_iam.go":       100,
-		"internal/controller/platform_kms_s3.go":            100,
-		"internal/controller/platform_datastore_policy.go":  100,
-		"internal/controller/platform_capability_policy.go": 100,
+		"internal/controller/platform_iam.go":                   100,
+		"internal/controller/platform_session_iam.go":           100,
+		"internal/controller/platform_kms_s3.go":                100,
+		"internal/controller/platform_datastore_policy.go":      100,
+		"internal/controller/platform_capability_policy.go":     100,
+		"internal/controller/platform_tenant_secrets_policy.go": 100,
 	},
 }
 

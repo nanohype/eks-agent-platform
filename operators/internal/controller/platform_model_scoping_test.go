@@ -278,16 +278,16 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 	if !strings.Contains(doc, "DenyUnscopedBedrockInvoke") {
 		t.Errorf("scoping doc missing the NotResource deny: %s", doc)
 	}
-	if len(f.putInlineCalls) != 1 {
-		t.Fatalf("PutRolePolicy calls: got %d want 1", len(f.putInlineCalls))
+	if len(putsFor(f, modelScopingPolicyName)) != 1 {
+		t.Fatalf("PutRolePolicy calls: got %d want 1", len(putsFor(f, modelScopingPolicyName)))
 	}
 
 	// Idempotent: converged spec re-reconciles without a write.
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("second ensureIamRole: %v", err)
 	}
-	if len(f.putInlineCalls) != 1 {
-		t.Errorf("PutRolePolicy calls after converged re-run: got %d want 1", len(f.putInlineCalls))
+	if len(putsFor(f, modelScopingPolicyName)) != 1 {
+		t.Errorf("PutRolePolicy calls after converged re-run: got %d want 1", len(putsFor(f, modelScopingPolicyName)))
 	}
 
 	// Spec change: the document follows.
@@ -300,8 +300,8 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 	if !strings.Contains(doc, "foundation-model/amazon.titan-embed-text-v2*") || strings.Contains(doc, "anthropic") {
 		t.Errorf("scoping doc did not follow the spec change: %s", doc)
 	}
-	if len(f.putInlineCalls) != 2 {
-		t.Errorf("PutRolePolicy calls after spec change: got %d want 2", len(f.putInlineCalls))
+	if len(putsFor(f, modelScopingPolicyName)) != 2 {
+		t.Errorf("PutRolePolicy calls after spec change: got %d want 2", len(putsFor(f, modelScopingPolicyName)))
 	}
 
 	// Fields cleared: the grant is removed — the policy degrades to the
