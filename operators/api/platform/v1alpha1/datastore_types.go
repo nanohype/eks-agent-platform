@@ -23,6 +23,8 @@ package v1alpha1
 // +kubebuilder:validation:Enum=relational;keyValue;objectStore;queue;cache;stream
 type DatastoreKind string
 
+// The datastore kinds. Each maps to the AWS implementation documented on
+// DatastoreKind.
 const (
 	DatastoreRelational  DatastoreKind = "relational"
 	DatastoreKeyValue    DatastoreKind = "keyValue"

@@ -128,9 +128,9 @@ func TestPlatform_DatastoreStatusSubresource(t *testing.T) {
 	}
 	mustCreate(ctx, t, p)
 
-	p.Status.Phase = "Ready"
+	p.Status.Phase = phaseReady
 	p.Status.Datastores = []platformv1alpha1.DatastoreStatus{
-		{Name: "db", Kind: platformv1alpha1.DatastoreRelational, Phase: "Provisioning", SecretName: "db-master", Drift: []string{"engineVersion"}},
+		{Name: "db", Kind: platformv1alpha1.DatastoreRelational, Phase: phaseProvisioning, SecretName: "db-master", Drift: []string{"engineVersion"}},
 	}
 	if err := k8sClient.Status().Update(ctx, p); err != nil {
 		t.Fatalf("status update: %v", err)
@@ -140,10 +140,10 @@ func TestPlatform_DatastoreStatusSubresource(t *testing.T) {
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: testNs}, &got); err != nil {
 		t.Fatalf("get after status update: %v", err)
 	}
-	if got.Status.Phase != "Ready" {
+	if got.Status.Phase != phaseReady {
 		t.Errorf("top-level phase: got %q want Ready", got.Status.Phase)
 	}
-	if len(got.Status.Datastores) != 1 || got.Status.Datastores[0].Phase != "Provisioning" {
+	if len(got.Status.Datastores) != 1 || got.Status.Datastores[0].Phase != phaseProvisioning {
 		t.Fatalf("datastore status round-trip: got %+v", got.Status.Datastores)
 	}
 	if got.Status.Datastores[0].SecretName != "db-master" {

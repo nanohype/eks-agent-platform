@@ -52,6 +52,118 @@ export const Condition = z.object({
 });
 export type Condition = z.infer<typeof Condition>;
 
+/**
+ * Datastore schemas mirror the Go datastore vocabulary
+ * (`operators/api/platform/v1alpha1/datastore_types.go`). A Platform declares
+ * the stateful stores it needs; the kind selects an AWS implementation and, at
+ * most, the one config block matching it (stream carries none). Field names and
+ * shapes track the Go types one-for-one so the drift gate stays satisfied and
+ * the typed client never goes blind to a declared datastore.
+ */
+export const DatastoreKind = z.enum([
+  'relational',
+  'keyValue',
+  'objectStore',
+  'queue',
+  'cache',
+  'stream',
+]);
+export type DatastoreKind = z.infer<typeof DatastoreKind>;
+
+/** AttributeSchema mirrors the Go `AttributeSchema` — a DynamoDB key attribute. */
+export const AttributeSchema = z.object({
+  name: z.string(),
+  type: z.enum(['S', 'N', 'B']),
+});
+export type AttributeSchema = z.infer<typeof AttributeSchema>;
+
+/** GlobalSecondaryIndex mirrors the Go `GlobalSecondaryIndex` — a DynamoDB GSI. */
+export const GlobalSecondaryIndex = z.object({
+  name: z.string(),
+  partitionKey: AttributeSchema,
+  sortKey: AttributeSchema.optional(),
+  projection: z.enum(['ALL', 'KEYS_ONLY', 'INCLUDE']).default('ALL'),
+});
+export type GlobalSecondaryIndex = z.infer<typeof GlobalSecondaryIndex>;
+
+/** RelationalConfig mirrors the Go `RelationalConfig` — Aurora Serverless v2. */
+export const RelationalConfig = z.object({
+  engineVersion: z.string().default('16.6'),
+  // ACU is fractional; serialized as a string, matching the Go/CRD side.
+  minACU: z.string().default('0.5'),
+  maxACU: z.string().default('8'),
+  backupRetentionDays: z.number().int().min(1).max(35).default(7),
+  deletionProtection: z.boolean().default(true),
+});
+export type RelationalConfig = z.infer<typeof RelationalConfig>;
+
+/** KeyValueConfig mirrors the Go `KeyValueConfig` — a DynamoDB table. */
+export const KeyValueConfig = z.object({
+  partitionKey: AttributeSchema,
+  sortKey: AttributeSchema.optional(),
+  billingMode: z.enum(['PAY_PER_REQUEST', 'PROVISIONED']).default('PAY_PER_REQUEST'),
+  ttlAttribute: z.string().optional(),
+  pointInTimeRecovery: z.boolean().default(true),
+  globalSecondaryIndexes: z.array(GlobalSecondaryIndex).optional(),
+});
+export type KeyValueConfig = z.infer<typeof KeyValueConfig>;
+
+/** ObjectStoreConfig mirrors the Go `ObjectStoreConfig` — an S3 bucket. */
+export const ObjectStoreConfig = z.object({
+  versioning: z.boolean().default(true),
+  lifecycleExpireDays: z.number().int().min(0).default(0),
+});
+export type ObjectStoreConfig = z.infer<typeof ObjectStoreConfig>;
+
+/** QueueConfig mirrors the Go `QueueConfig` — an SQS queue. */
+export const QueueConfig = z.object({
+  fifo: z.boolean().default(false),
+  visibilityTimeoutSeconds: z.number().int().min(0).max(43200).default(30),
+  messageRetentionSeconds: z.number().int().min(60).max(1209600).default(345600),
+  maxReceiveCount: z.number().int().min(0).max(1000).default(0),
+});
+export type QueueConfig = z.infer<typeof QueueConfig>;
+
+/** CacheConfig mirrors the Go `CacheConfig` — an ElastiCache cluster. */
+export const CacheConfig = z.object({
+  engine: z.enum(['valkey', 'redis']).default('valkey'),
+  nodeType: z.string().default('cache.t4g.micro'),
+  replicas: z.number().int().min(0).max(5).default(0),
+});
+export type CacheConfig = z.infer<typeof CacheConfig>;
+
+/**
+ * DatastoreSpec mirrors the Go `DatastoreSpec` — one declared stateful store.
+ * The kind selects the AWS implementation and, at most, the one config block
+ * matching it; the CRD enforces the kind↔block relation at admission.
+ */
+export const DatastoreSpec = z.object({
+  name: z.string(),
+  kind: DatastoreKind,
+  deletionPolicy: z.enum(['Retain', 'Delete']).default('Retain'),
+  relational: RelationalConfig.optional(),
+  keyValue: KeyValueConfig.optional(),
+  objectStore: ObjectStoreConfig.optional(),
+  queue: QueueConfig.optional(),
+  cache: CacheConfig.optional(),
+});
+export type DatastoreSpec = z.infer<typeof DatastoreSpec>;
+
+/**
+ * DatastoreStatus mirrors the Go `DatastoreStatus` — one datastore's observed
+ * state, reported separately from the top-level phase.
+ */
+export const DatastoreStatus = z.object({
+  name: z.string(),
+  kind: DatastoreKind.optional(),
+  phase: z.string().optional(),
+  endpoint: z.string().optional(),
+  arn: z.string().optional(),
+  secretName: z.string().optional(),
+  drift: z.array(z.string()).optional(),
+});
+export type DatastoreStatus = z.infer<typeof DatastoreStatus>;
+
 export const PlatformPersona = z.enum([
   'sales-ops',
   'support',
@@ -74,6 +186,7 @@ export const PlatformSpec = z.object({
   compliance: ComplianceSpec.optional(),
   isolation: z.enum(['namespace', 'vcluster']).default('namespace'),
   attribution: AttributionSpec.optional(),
+  datastores: z.array(DatastoreSpec).optional(),
 });
 export type PlatformSpec = z.infer<typeof PlatformSpec>;
 
@@ -92,6 +205,7 @@ export const PlatformStatus = z.object({
   suspendedAt: z.string().datetime().optional(),
   suspendedReason: z.string().optional(),
   conditions: z.array(Condition).optional(),
+  datastores: z.array(DatastoreStatus).optional(),
 });
 export type PlatformStatus = z.infer<typeof PlatformStatus>;
 
