@@ -109,6 +109,32 @@ type BudgetRef struct {
 	Name string `json:"name"`
 }
 
+// Capability is a managed AWS capability the datastore vocabulary does not
+// cover. Declaring one drives an operator-generated `capability-access` inline
+// policy on the tenant role, scoped by the same <env>-<platform> naming
+// convention the datastore policy uses — so a capability is a statement of
+// need, not a hand-written managed policy the tenant references by ARN.
+//
+//	ses                  -> ses:SendEmail scoped by a ses:FromAddress condition
+//	                        to the tenant's sending domain. The verified sending
+//	                        identity itself is account-level mail infra
+//	                        (landing-zone), not provisioned here.
+//	eventBridgeScheduler -> scheduler:*Schedule on the tenant's own schedules
+//	                        plus an operator-minted <env>-<platform>-scheduler-invoke
+//	                        role (trusted by scheduler.amazonaws.com, allowed to
+//	                        SendMessage to the tenant's own queue datastores) that
+//	                        the tenant passes when creating a schedule.
+//
+// +kubebuilder:validation:Enum=ses;eventBridgeScheduler
+type Capability string
+
+// The capability vocabulary. Each maps to the operator-generated grants
+// documented on Capability.
+const (
+	CapabilitySES                  Capability = "ses"
+	CapabilityEventBridgeScheduler Capability = "eventBridgeScheduler"
+)
+
 // IdentitySpec wires the per-Platform IRSA role. The controller reconciles a
 // `bedrock-model-scoping` inline policy onto the tenant role (and the
 // attribution session role, when spec.attribution is set) that denies the
@@ -147,6 +173,15 @@ type IdentitySpec struct {
 	// ExtraPolicyArns are managed IAM policies attached on top of the baseline.
 	// +optional
 	ExtraPolicyArns []string `json:"extraPolicyArns,omitempty"`
+
+	// Capabilities are managed AWS capabilities outside the datastore vocabulary
+	// (SES send, EventBridge Scheduler). Each drives an operator-generated
+	// `capability-access` inline policy — and, for eventBridgeScheduler, a minted
+	// scheduler-invoke role — so a tenant declares what it needs rather than
+	// referencing a hand-written managed policy through extraPolicyArns.
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	Capabilities []Capability `json:"capabilities,omitempty"`
 }
 
 // ComplianceSpec enables stricter defaults.

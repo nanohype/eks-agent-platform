@@ -498,6 +498,36 @@ spec:
                     items:
                       type: string
                     type: array
+                  capabilities:
+                    description: |-
+                      Capabilities are managed AWS capabilities outside the datastore vocabulary
+                      (SES send, EventBridge Scheduler). Each drives an operator-generated
+                      `capability-access` inline policy — and, for eventBridgeScheduler, a minted
+                      scheduler-invoke role — so a tenant declares what it needs rather than
+                      referencing a hand-written managed policy through extraPolicyArns.
+                    items:
+                      description: "Capability is a managed AWS capability the datastore
+                        vocabulary does not\ncover. Declaring one drives an operator-generated
+                        `capability-access` inline\npolicy on the tenant role, scoped
+                        by the same <env>-<platform> naming\nconvention the datastore
+                        policy uses — so a capability is a statement of\nneed, not
+                        a hand-written managed policy the tenant references by ARN.\n\n\tses
+                        \                 -> ses:SendEmail scoped by a ses:FromAddress
+                        condition\n\t                        to the tenant's sending
+                        domain. The verified sending\n\t                        identity
+                        itself is account-level mail infra\n\t                        (landing-zone),
+                        not provisioned here.\n\teventBridgeScheduler -> scheduler:*Schedule
+                        on the tenant's own schedules\n\t                        plus
+                        an operator-minted <env>-<platform>-scheduler-invoke\n\t                        role
+                        (trusted by scheduler.amazonaws.com, allowed to\n\t                        SendMessage
+                        to the tenant's own queue datastores) that\n\t                        the
+                        tenant passes when creating a schedule."
+                      enum:
+                      - ses
+                      - eventBridgeScheduler
+                      type: string
+                    maxItems: 8
+                    type: array
                   extraPolicyArns:
                     description: ExtraPolicyArns are managed IAM policies attached
                       on top of the baseline.

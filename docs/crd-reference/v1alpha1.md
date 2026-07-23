@@ -691,6 +691,38 @@ _Appears in:_
 | `replicas` _integer_ | Replicas is the number of read replicas per shard; 0 (default) is a<br />single-node cache for a young tenant. Drift: converged. | 0 | Maximum: 5 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
+#### Capability
+
+_Underlying type:_ _string_
+
+Capability is a managed AWS capability the datastore vocabulary does not
+cover. Declaring one drives an operator-generated `capability-access` inline
+policy on the tenant role, scoped by the same <env>-<platform> naming
+convention the datastore policy uses — so a capability is a statement of
+need, not a hand-written managed policy the tenant references by ARN.
+
+	ses                  -> ses:SendEmail scoped by a ses:FromAddress condition
+	                        to the tenant's sending domain. The verified sending
+	                        identity itself is account-level mail infra
+	                        (landing-zone), not provisioned here.
+	eventBridgeScheduler -> scheduler:*Schedule on the tenant's own schedules
+	                        plus an operator-minted <env>-<platform>-scheduler-invoke
+	                        role (trusted by scheduler.amazonaws.com, allowed to
+	                        SendMessage to the tenant's own queue datastores) that
+	                        the tenant passes when creating a schedule.
+
+_Validation:_
+- Enum: [ses eventBridgeScheduler]
+
+_Appears in:_
+- [IdentitySpec](#identityspec)
+
+| Field | Description |
+| --- | --- |
+| `ses` |  |
+| `eventBridgeScheduler` |  |
+
+
 #### ComplianceSpec
 
 
@@ -860,6 +892,7 @@ _Appears in:_
 | `allowedModels` _string array_ | AllowedModels is the list of Bedrock model IDs or cross-region<br />inference-profile IDs (e.g. "anthropic.claude-sonnet-4-6",<br />"us.anthropic.claude-sonnet-4-6-v1:0") the role may invoke. The<br />controller expands each entry into its foundation-model ARN pattern plus<br />the matching inference-profile ARN pattern (a `us.` profile fans out to<br />foundation models across regions, so both are granted together) and<br />reconciles them into the role's bedrock-model-scoping policy. Scopes<br />tighter than a family; mutually exclusive with AllowedModelFamilies. |  | Optional: \{\} <br /> |
 | `allowedModelFamilies` _string array_ | AllowedModelFamilies (e.g. ["anthropic", "amazon-nova"]) is expanded by<br />the controller at reconcile time into the family's foundation-model ARN<br />pattern (arn:<partition>:bedrock:*::foundation-model/<prefix>*) and, for<br />families with cross-region inference profiles (anthropic, amazon-nova,<br />meta, mistral), the `us.` inference-profile ARN pattern<br />(arn:<partition>:bedrock:<region>:<account>:inference-profile/us.<prefix>*),<br />then reconciled into the role's bedrock-model-scoping policy. Leaving<br />both this and AllowedModels empty denies all Bedrock model invocation<br />for the Platform's roles. |  | items:Enum: [anthropic amazon-nova amazon-titan meta mistral cohere stability] <br />Optional: \{\} <br /> |
 | `extraPolicyArns` _string array_ | ExtraPolicyArns are managed IAM policies attached on top of the baseline. |  | Optional: \{\} <br /> |
+| `capabilities` _[Capability](#capability) array_ | Capabilities are managed AWS capabilities outside the datastore vocabulary<br />(SES send, EventBridge Scheduler). Each drives an operator-generated<br />`capability-access` inline policy — and, for eventBridgeScheduler, a minted<br />scheduler-invoke role — so a tenant declares what it needs rather than<br />referencing a hand-written managed policy through extraPolicyArns. |  | Enum: [ses eventBridgeScheduler] <br />MaxItems: 8 <br />Optional: \{\} <br /> |
 
 
 #### KeyValueConfig

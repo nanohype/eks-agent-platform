@@ -243,6 +243,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err := r.ensureDatastorePolicy(ctx, name, arn, p, cfg); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
+		if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
+			return platformSuspension{RoleARN: arn}, err
+		}
 		if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
@@ -276,6 +279,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		return platformSuspension{RoleARN: arn}, err
 	}
 	if err := r.ensureDatastorePolicy(ctx, name, arn, p, cfg); err != nil {
+		return platformSuspension{RoleARN: arn}, err
+	}
+	if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
 		return platformSuspension{RoleARN: arn}, err
 	}
 	if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {
@@ -433,6 +439,11 @@ func (r *PlatformReconciler) reconcileManagedPolicies(ctx context.Context, roleN
 // missing association and NotFound so re-runs are safe.
 func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) error {
 	if err := r.deletePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName); err != nil {
+		return err
+	}
+	// The scheduler-invoke role is operator-owned (unlike a datastore), so the
+	// finalizer removes it. No-op when the Platform never declared the capability.
+	if err := r.deleteSchedulerInvokeRole(ctx, p, cfg); err != nil {
 		return err
 	}
 	return r.detachAndDeleteRole(ctx, tenantRoleName(cfg.ClusterName, p))
