@@ -64,6 +64,15 @@ type fakeIAM struct {
 	deleteReturnsErr     error // DeleteRole
 	updateAssumeErr      error // UpdateAssumeRolePolicy
 	listInlineReturnsErr error // ListRolePolicies
+	// getInlineReturnsErr injects a GetRolePolicy error keyed by policy name, so
+	// a test can fail one inline-policy reconcile (e.g. datastore-access) while
+	// the others (e.g. bedrock-model-scoping) still succeed.
+	getInlineReturnsErr map[string]error
+	// deleteInlineReturnsErr injects a DeleteRolePolicy error keyed by policy
+	// name (the datastore-access removal path when a declaration is cleared).
+	deleteInlineReturnsErr map[string]error
+	// putInlineReturnsErr injects a PutRolePolicy error keyed by policy name.
+	putInlineReturnsErr map[string]error
 }
 
 func newFakeIAM() *fakeIAM {
@@ -174,6 +183,9 @@ func (f *fakeIAM) DetachRolePolicy(_ context.Context, params *iam.DetachRolePoli
 func (f *fakeIAM) GetRolePolicy(_ context.Context, params *iam.GetRolePolicyInput, _ ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
 	roleName := aws.ToString(params.RoleName)
 	policyName := aws.ToString(params.PolicyName)
+	if err := f.getInlineReturnsErr[policyName]; err != nil {
+		return nil, err
+	}
 	doc, ok := f.inline[roleName][policyName]
 	if !ok {
 		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role policy: " + roleName + "/" + policyName)}
@@ -187,6 +199,9 @@ func (f *fakeIAM) GetRolePolicy(_ context.Context, params *iam.GetRolePolicyInpu
 
 func (f *fakeIAM) PutRolePolicy(_ context.Context, params *iam.PutRolePolicyInput, _ ...func(*iam.Options)) (*iam.PutRolePolicyOutput, error) {
 	f.putInlineCalls = append(f.putInlineCalls, *params)
+	if err := f.putInlineReturnsErr[aws.ToString(params.PolicyName)]; err != nil {
+		return nil, err
+	}
 	roleName := aws.ToString(params.RoleName)
 	if _, ok := f.inline[roleName]; !ok {
 		f.inline[roleName] = map[string]string{}
@@ -199,6 +214,9 @@ func (f *fakeIAM) DeleteRolePolicy(_ context.Context, params *iam.DeleteRolePoli
 	f.deleteInlineCalls = append(f.deleteInlineCalls, *params)
 	roleName := aws.ToString(params.RoleName)
 	policyName := aws.ToString(params.PolicyName)
+	if err := f.deleteInlineReturnsErr[policyName]; err != nil {
+		return nil, err
+	}
 	if _, ok := f.inline[roleName][policyName]; !ok {
 		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role policy: " + roleName + "/" + policyName)}
 	}
