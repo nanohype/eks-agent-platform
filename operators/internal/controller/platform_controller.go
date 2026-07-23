@@ -113,6 +113,14 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// the tenant namespace + AppProject + IAM role (resources the kube GC
 	// can't reap via OwnerReferences from a namespaced parent), then drop
 	// the finalizer.
+	//
+	// Datastores are deliberately NOT touched here: the tenant-substrate module
+	// owns them, and the operator holds no delete permission on any datastore
+	// service (the T1 guarantee is enforced by permission, not finalizer logic).
+	// So `kubectl delete platform` orphans the datastores intact — each still
+	// carrying the module-set Tenant tag recording what owned it — and this
+	// finalizer only releases the operator's own resources. Nothing here can
+	// wedge on a datastore, which is the point.
 	if !platform.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(platform, finalizerName) {
 			// vcluster tier: tear the virtual cluster down first (reverse of
@@ -382,6 +390,15 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			ObservedGeneration: platform.Generation,
 		})
 	}
+	// Report the declared datastores' resolved identity (ARN + deterministic
+	// endpoint) so consumers read one predictable place instead of hand-wiring it
+	// per app. Deterministic from the naming convention — no AWS call — and
+	// re-derived every reconcile (idempotent). Per-datastore Phase mirrors the
+	// Platform phase; a still-provisioning datastore never gated the top-level
+	// Ready set above (namespace + identity).
+	platform.Status.Datastores = datastoreStatuses(platform, r.IAMCfg.Environment,
+		arnScopeFromRole(susp.RoleARN, r.IAMCfg.Region), platform.Status.Phase)
+
 	if err := r.Status().Update(ctx, platform); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)
 	}

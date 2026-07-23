@@ -215,6 +215,53 @@ func TestPlatformReconciler_StatusGoesToReady(t *testing.T) {
 	}
 }
 
+// TestPlatformReconciler_ReportsDatastores proves the reconcile populates
+// status.datastores with each declared datastore's identity (kind + ARN) and a
+// per-datastore phase, while the top-level Phase reaches Ready on namespace +
+// identity independent of the datastores (T6). Uses a short platform name so the
+// platform+datastore name-length CEL admits the create.
+func TestPlatformReconciler_ReportsDatastores(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+
+	p := &platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: "pds-rec", Namespace: testNs},
+		Spec: platformv1alpha1.PlatformSpec{
+			Persona:  "eng",
+			Tenant:   "acme",
+			Budget:   platformv1alpha1.BudgetRef{Name: "x"},
+			Identity: platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
+			Datastores: []platformv1alpha1.DatastoreSpec{
+				{Name: "main", Kind: platformv1alpha1.DatastoreRelational},
+				{Name: "events", Kind: platformv1alpha1.DatastoreQueue},
+			},
+		},
+	}
+	mustCreate(ctx, t, p)
+	tenantNS := controller.PlatformNamespace(p)
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: tenantNS}}) })
+
+	reconcileOnce(ctx, t, p)
+
+	got := getPlatform(ctx, t, testNs, p.Name)
+	if got.Status.Phase != phaseReady {
+		t.Errorf("top-level phase: got %q want Ready (datastores must not gate it)", got.Status.Phase)
+	}
+	if len(got.Status.Datastores) != 2 {
+		t.Fatalf("status.datastores: got %d entries want 2 (%+v)", len(got.Status.Datastores), got.Status.Datastores)
+	}
+	by := map[string]platformv1alpha1.DatastoreStatus{}
+	for _, d := range got.Status.Datastores {
+		by[d.Name] = d
+	}
+	if d := by["main"]; d.Kind != platformv1alpha1.DatastoreRelational || d.ARN == "" || d.Phase != phaseReady {
+		t.Errorf("relational datastore status wrong: %+v", d)
+	}
+	if d := by["events"]; d.Kind != platformv1alpha1.DatastoreQueue || d.ARN == "" || d.Phase != phaseReady {
+		t.Errorf("queue datastore status wrong: %+v", d)
+	}
+}
+
 func TestPlatformReconciler_FinalizerCleansUpOnDelete(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
