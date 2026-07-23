@@ -528,6 +528,23 @@ spec:
                       type: string
                     maxItems: 8
                     type: array
+                  directSecretReads:
+                    description: |-
+                      DirectSecretReads names the application secrets this Platform's pods read
+                      directly through the pod role via the AWS SDK, each a name under the
+                      tenant's own <platform>/<env>/ prefix in Secrets Manager (e.g.
+                      "grafana/oncall-webhook-hmac"). The controller grants
+                      secretsmanager:GetSecretValue/DescribeSecret on exactly those secrets in
+                      the tenant-secrets inline policy — no prefix wildcard. Secret material
+                      projected into the pod by the chart's ExternalSecret is resolved by the
+                      External Secrets controller's own identity and needs no entry here;
+                      leaving this empty means the tenant role holds no Secrets Manager grant.
+                    items:
+                      maxLength: 256
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9/_+=.@-]*$
+                      type: string
+                    maxItems: 16
+                    type: array
                   extraPolicyArns:
                     description: ExtraPolicyArns are managed IAM policies attached
                       on top of the baseline.

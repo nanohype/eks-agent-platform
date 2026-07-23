@@ -15,29 +15,39 @@ import (
 )
 
 // tenantSecretsPolicyName is the inline policy granting a tenant role read
-// access to its OWN application secrets under <platform>/<env>/* in Secrets
-// Manager. Every tenant reads its own seeded config secrets (Slack tokens,
-// provider keys, webhook HMAC secrets, ...) — either directly via the pod role or
-// through the chart's ExternalSecret. Unlike datastore-access (which only grants
-// the RDS-managed master secret, whose name is AWS-generated), this grant is
-// universal and scoped to the tenant's own prefix, so a tenant can never read
-// another tenant's secrets.
+// access to the specific application secrets its pods resolve directly through
+// the pod role, declared in spec.identity.directSecretReads. Most secret
+// material reaches a tenant through the chart's ExternalSecret — projected by the
+// External Secrets controller's own identity — and needs no grant here; this
+// policy covers only the secrets a pod reads itself via the AWS SDK
+// (rotation-sensitive values cached by VersionId, or config bulk-loaded at
+// startup). Each declared name scopes to the tenant's own <platform>/<env>/<name>
+// secret, so a tenant can never read another tenant's secrets, and a tenant that
+// declares none holds no Secrets Manager grant at all.
 const tenantSecretsPolicyName = "tenant-secrets"
 
 var tenantSecretsActions = []string{"secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"}
 
-// tenantSecretsPolicyDoc builds the inline policy document granting the tenant
-// its own <platform>/<env>/* secret prefix. Always non-empty — every tenant owns
-// a secret namespace. The trailing * covers the 6-char random suffix Secrets
-// Manager appends to each secret name.
+// tenantSecretsPolicyDoc builds the inline policy from the declared direct-read
+// secret names — one Resource ARN per entry, each under the tenant's own
+// <platform>/<env>/ prefix. Returns the empty string when none are declared, so
+// the caller (reconcileInlinePolicy) removes the inline policy. The trailing -*
+// on each ARN covers the 6-char random suffix Secrets Manager appends to every
+// secret name.
 func tenantSecretsPolicyDoc(p *platformv1alpha1.Platform, env string, scope arnScope) (string, error) {
+	names := p.Spec.Identity.DirectSecretReads
+	if len(names) == 0 {
+		return "", nil
+	}
+	resources := make([]string, 0, len(names))
+	for _, name := range names {
+		resources = append(resources, fmt.Sprintf("arn:%s:secretsmanager:%s:%s:secret:%s/%s/%s-*", scope.partition(), scope.region(), scope.account(), p.Name, env, name))
+	}
 	stmt := policyStatement{
-		Sid:    "tenantSecrets",
-		Effect: "Allow",
-		Action: tenantSecretsActions,
-		Resource: []string{
-			fmt.Sprintf("arn:%s:secretsmanager:%s:%s:secret:%s/%s/*", scope.partition(), scope.region(), scope.account(), p.Name, env),
-		},
+		Sid:      "tenantSecrets",
+		Effect:   "Allow",
+		Action:   tenantSecretsActions,
+		Resource: resources,
 	}
 	b, err := json.Marshal(policyDocument{Version: "2012-10-17", Statement: []policyStatement{stmt}})
 	if err != nil {
@@ -47,10 +57,11 @@ func tenantSecretsPolicyDoc(p *platformv1alpha1.Platform, env string, scope arnS
 }
 
 // ensureTenantSecretsPolicy reconciles the tenant-secrets inline policy on a
-// tenant role. Always present — every tenant reads its own <platform>/<env>/*
-// secrets. Idempotent (read/diff/write via reconcileInlinePolicy). Callers MUST
-// NOT invoke this on a suspended role — ensureIamRole's suspension short-circuit
-// returns first, keeping the operator observe-only under the kill-switch.
+// tenant role from spec.identity.directSecretReads. Removed when none are
+// declared, so an ExternalSecret-only tenant holds no secretsmanager grant.
+// Idempotent (read/diff/write via reconcileInlinePolicy). Callers MUST NOT invoke
+// this on a suspended role — ensureIamRole's suspension short-circuit returns
+// first, keeping the operator observe-only under the kill-switch.
 func (r *PlatformReconciler) ensureTenantSecretsPolicy(ctx context.Context, roleName, roleARN string, p *platformv1alpha1.Platform, cfg IAMConfig) error {
 	if r.IAM == nil {
 		return nil
