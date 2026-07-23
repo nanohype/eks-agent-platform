@@ -23,6 +23,7 @@ export const IdentitySpec = z.object({
   allowedModels: z.array(z.string()).default([]),
   allowedModelFamilies: z.array(z.string()).default([]),
   extraPolicyArns: z.array(z.string()).default([]),
+  capabilities: z.array(z.enum(['ses', 'eventBridgeScheduler'])).default([]),
 });
 export type IdentitySpec = z.infer<typeof IdentitySpec>;
 

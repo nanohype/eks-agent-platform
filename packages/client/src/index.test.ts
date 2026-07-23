@@ -44,7 +44,12 @@ const platform = (name: string): Platform => ({
     persona: 'ops',
     tenant: 'acme',
     budget: { name: `${name}-budget` },
-    identity: { allowedModels: [], allowedModelFamilies: ['anthropic'], extraPolicyArns: [] },
+    identity: {
+      allowedModels: [],
+      allowedModelFamilies: ['anthropic'],
+      extraPolicyArns: [],
+      capabilities: [],
+    },
     isolation: 'namespace',
   },
 });
