@@ -52,6 +52,14 @@ type SLI struct {
 
 // SLOPolicySpec declares one service-level objective for a Platform and what
 // the control loop does when its error budget burns too fast.
+//
+// The threshold rules are validated here rather than left to the reconciler
+// because both failure modes are permanent and quiet: a latency SLI with no
+// threshold builds an invalid query on every tick forever, and a threshold on an
+// availability SLI is silently ignored, so the author believes they narrowed an
+// objective that is in fact measuring everything.
+// +kubebuilder:validation:XValidation:rule="self.sli.type != 'latency' || has(self.sli.thresholdSeconds)",message="a latency SLI requires sli.thresholdSeconds — without it the objective can never be evaluated and every tick fails"
+// +kubebuilder:validation:XValidation:rule="self.sli.type != 'availability' || !has(self.sli.thresholdSeconds)",message="sli.thresholdSeconds applies only to a latency SLI; setting it on an availability SLI silently does nothing"
 type SLOPolicySpec struct {
 	PlatformRef commonv1alpha1.LocalRef `json:"platformRef"`
 
@@ -130,9 +138,19 @@ type SLOPolicyStatus struct {
 	// +optional
 	Severity string `json:"severity,omitempty"`
 
-	// LastReconciled timestamp.
+	// LastReconciled is when the reconciler last ticked, whether or not it got a
+	// usable reading.
 	// +optional
 	LastReconciled *metav1.Time `json:"lastReconciled,omitempty"`
+
+	// LastEvaluated is when the objective was last actually measured — set only
+	// on a tick that obtained a reading. It is deliberately distinct from
+	// LastReconciled: a reconciler that ticks every five minutes and fails every
+	// AMP query keeps LastReconciled fresh forever, so a staleness alert built on
+	// that field can never fire. This is the field that answers "is this
+	// objective being measured", which is the question worth alerting on.
+	// +optional
+	LastEvaluated *metav1.Time `json:"lastEvaluated,omitempty"`
 
 	// BreachFiredAt is when the current unbroken breach episode was first
 	// published to the kill-switch bus. Cleared when the burn clears, so a

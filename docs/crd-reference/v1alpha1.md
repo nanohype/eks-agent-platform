@@ -687,6 +687,12 @@ a hold on the tenant's rollout.
 SLOPolicySpec declares one service-level objective for a Platform and what
 the control loop does when its error budget burns too fast.
 
+The threshold rules are validated here rather than left to the reconciler
+because both failure modes are permanent and quiet: a latency SLI with no
+threshold builds an invalid query on every tick forever, and a threshold on an
+availability SLI is silently ignored, so the author believes they narrowed an
+objective that is in fact measuring everything.
+
 
 
 _Appears in:_
@@ -723,7 +729,8 @@ _Appears in:_
 | `errorBudgetRemaining` _string_ | ErrorBudgetRemaining is the fraction of the SLO window's error budget<br />still unspent, as a decimal string clamped to [0,1]: 1 - (error ratio over<br />the 30d SLO window / error budget). Measured over the full window the<br />standard defines rather than extrapolated from a burn window, so the<br />gauge means what it says. |  | Optional: \{\} <br /> |
 | `breachedWindow` _string_ | BreachedWindow names the long window whose pair tripped at the highest<br />severity ("1h", "6h", "1d", "3d"). Empty when nothing is breaching. |  | Optional: \{\} <br /> |
 | `severity` _string_ | Severity is the tier of the current breach: critical for a page-tier<br />window pair, warning for a ticket-tier pair, empty when healthy. |  | Enum: [critical warning ] <br />Optional: \{\} <br /> |
-| `lastReconciled` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastReconciled timestamp. |  | Optional: \{\} <br /> |
+| `lastReconciled` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastReconciled is when the reconciler last ticked, whether or not it got a<br />usable reading. |  | Optional: \{\} <br /> |
+| `lastEvaluated` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastEvaluated is when the objective was last actually measured — set only<br />on a tick that obtained a reading. It is deliberately distinct from<br />LastReconciled: a reconciler that ticks every five minutes and fails every<br />AMP query keeps LastReconciled fresh forever, so a staleness alert built on<br />that field can never fire. This is the field that answers "is this<br />objective being measured", which is the question worth alerting on. |  | Optional: \{\} <br /> |
 | `breachFiredAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | BreachFiredAt is when the current unbroken breach episode was first<br />published to the kill-switch bus. Cleared when the burn clears, so a<br />later breach publishes again rather than being swallowed as a duplicate. |  | Optional: \{\} <br /> |
 | `holdEngagedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | HoldEngagedAt is when this reconciler decided to hold the tenant's<br />rollout. It is the decision, not the effect: the Platform reconciler is<br />the only writer of the AppProject, and it renders the deny syncWindow from<br />this field. Non-null means a hold is called for. |  | Optional: \{\} <br /> |
 | `holdObservedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | HoldObservedAt is when the deny syncWindow was last actually seen on the<br />tenant's AppProject. Engaging a hold is not the same as holding: if this<br />stays null past the grace window while HoldEngagedAt is set, the hold is<br />not landing and the HoldUnobserved condition says so. |  | Optional: \{\} <br /> |
