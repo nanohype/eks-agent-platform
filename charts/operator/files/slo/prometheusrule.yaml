@@ -254,6 +254,29 @@ spec:
             description: "A budget breach published a kill-switch event, but the platform is still not Suspended after the grace window. The EventBridge → Step Functions suspension path is likely broken and the tenant is still spending. Check the state machine execution history and the operator's budget reconciler logs."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md
 
+        # A burn-rate hold was engaged but never took effect. The SLO reconciler
+        # decides the hold and records it on SLOPolicy.status; the Platform
+        # reconciler renders the deny sync window onto the tenant's AppProject.
+        # Splitting decision from write is what keeps the AppProject
+        # single-writer, but it means the decision can land while the write does
+        # not — and a rollout that is supposed to be held and isn't will keep
+        # shipping into a burning error budget. The reconciler reads the window
+        # back every tick and emits this counter while it is missing. The [1h]
+        # window comfortably spans the 5m SLO tick, so the alert stays lit
+        # through the fault and clears about an hour after the hold lands.
+        - alert: SLOHoldUnobserved
+          expr: |
+            increase(agents_slo_hold_unobserved_total[1h]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            component: slo
+            persona: ops
+          annotations:
+            summary: "Rollout hold for SLOPolicy {{ $labels.slopolicy }} never reached {{ $labels.platform }}'s AppProject"
+            description: "A page-tier error-budget burn engaged a rollout hold, but the deny sync window has not appeared on the tenant's AppProject after the grace window. The tenant is still auto-syncing into a burning SLO. Check the Platform reconciler's logs and whether the AppProject exists."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/slo-burn-rate-hold.md
+
         # Any Platform suspended — kill-switch fired. Page persona owner.
         - alert: PlatformSuspended
           expr: |

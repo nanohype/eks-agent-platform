@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
@@ -338,9 +339,53 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *platformv1
 			"clusterResourceWhitelist":   clusterResourceWhitelist,
 			"namespaceResourceWhitelist": []interface{}{map[string]interface{}{"group": "*", "kind": "*"}},
 		}
+		// Rollout holds. This write replaces the whole spec — SetNestedField
+		// assigns wholesale at the leaf — so any syncWindow written here by a
+		// second controller would be erased on the next tick. Rather than have
+		// two writers contend for one field, the AppProject stays single-writer
+		// and the hold is rendered from desired state: every SLOPolicy in this
+		// Platform's namespace whose burn-rate hold is engaged contributes a deny
+		// window. Idempotent by construction, and reversible — clearing
+		// status.holdEngagedAt drops the key on the next reconcile, which the
+		// SLOPolicy watch triggers immediately.
+		windows, err := r.sloHoldWindows(ctx, p)
+		if err != nil {
+			return err
+		}
+		if len(windows) > 0 {
+			spec["syncWindows"] = windows
+		}
 		return unstructured.SetNestedField(ap.Object, spec, "spec")
 	})
 	return err
+}
+
+// sloHoldWindows renders the deny syncWindows this Platform's AppProject should
+// carry: one per SLOPolicy in the Platform's namespace that points at this
+// Platform and has an engaged burn-rate hold.
+//
+// The SLO reconciler decides the hold and records it on its own status; this
+// renders it. Keeping the decision and the write in different controllers is
+// what lets the AppProject stay single-writer while the control loop still acts
+// — see the file comment in slo_hold.go for why a second writer cannot work
+// here. The SLO reconciler reads the window back to confirm the effect landed.
+func (r *PlatformReconciler) sloHoldWindows(ctx context.Context, p *platformv1alpha1.Platform) ([]interface{}, error) {
+	var policies governancev1alpha1.SLOPolicyList
+	if err := r.List(ctx, &policies, client.InNamespace(p.Namespace)); err != nil {
+		return nil, fmt.Errorf("list slopolicies in %s: %w", p.Namespace, err)
+	}
+	windows := make([]interface{}, 0, len(policies.Items))
+	for i := range policies.Items {
+		s := &policies.Items[i]
+		if s.Spec.PlatformRef.Name != p.Name || s.Status.HoldEngagedAt == nil {
+			continue
+		}
+		windows = append(windows, sloDenyWindow())
+		// One window denies everything in the project, so a second engaged
+		// policy would add nothing but noise to the spec.
+		break
+	}
+	return windows, nil
 }
 
 // cleanupTenantResources removes resources outside the Platform's own

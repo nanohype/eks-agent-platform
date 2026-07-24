@@ -52,6 +52,61 @@ var evalSuiteScore = prometheus.NewGaugeVec(
 	[]string{"namespace", "platform", "suite"},
 )
 
+// sloBurnRate is the operator's evaluation of an SLOPolicy's error-budget burn,
+// normalized per severity tier so one threshold covers windows with different
+// factors: 1 means a window pair sits exactly at its factor, above 1 is a
+// breach. This is the operator-emitted twin of the KSM projection of
+// SLOPolicy.status — the reconciler is the single evaluator, so a dashboard or a
+// pager reads the number it computed rather than re-deriving the same PromQL
+// against the same data and drifting from the control loop's decision.
+var sloBurnRate = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "agents_slo_burn_rate",
+		Help: "Normalized error-budget burn per severity tier (>= 1 is a breach of that tier's multi-window burn-rate check).",
+	},
+	[]string{"namespace", "slopolicy", "platform", "tier"},
+)
+
+// sloHoldActive is 1 while a tenant's rollout is held by a deny sync window.
+// A gauge, not a counter: the question an operator asks is "is this tenant held
+// right now", and a held tenant that nobody notices is the failure mode.
+var sloHoldActive = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "agents_slo_hold_active",
+		Help: "1 while an SLOPolicy's page-tier breach holds its tenant's ArgoCD auto-sync, 0 otherwise.",
+	},
+	[]string{"namespace", "slopolicy", "platform"},
+)
+
+// sloHoldUnobservedTotal counts reconcile ticks that observed an engaged hold
+// whose deny window never appeared on the tenant's AppProject within the grace
+// window. It rises every tick the fault persists (not once per breach) so an
+// alert built on increase() stays lit for the whole outage. Zero is the only
+// healthy value: a rising counter means the hold was decided but never took
+// effect, and a burning rollout is still advancing. The exact twin of
+// killSwitchUnroutedTotal, for the same reason — publishing a decision is not
+// the same as the decision taking effect.
+var sloHoldUnobservedTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "agents_slo_hold_unobserved_total",
+		Help: "Reconcile observations of an engaged rollout hold whose deny sync window never reached the tenant's AppProject within the grace window.",
+	},
+	[]string{"namespace", "slopolicy", "platform"},
+)
+
+// forgetSLOPolicySeries drops every series an SLOPolicy owns. Called when the CR
+// is gone so a deleted objective does not leave a stale burn rate on a dashboard
+// forever — the same cleanup fleetReadyAgents and evalSuiteScore do on delete.
+func forgetSLOPolicySeries(namespace, name string) {
+	labels := prometheus.Labels{"namespace": namespace, "slopolicy": name}
+	sloBurnRate.DeletePartialMatch(labels)
+	sloHoldActive.DeletePartialMatch(labels)
+	sloHoldUnobservedTotal.DeletePartialMatch(labels)
+}
+
 func init() {
-	ctrlmetrics.Registry.MustRegister(killSwitchUnroutedTotal, fleetReadyAgents, evalSuiteScore)
+	ctrlmetrics.Registry.MustRegister(
+		killSwitchUnroutedTotal, fleetReadyAgents, evalSuiteScore,
+		sloBurnRate, sloHoldActive, sloHoldUnobservedTotal,
+	)
 }

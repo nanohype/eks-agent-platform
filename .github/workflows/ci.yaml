@@ -169,9 +169,14 @@ jobs:
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
-      - run: cd operators && make crd-docs
+      # `make manifests` rather than `make crd-docs`: it runs the same generation
+      # AND copies the generated CRDs into the chart. The chart copy is diffed
+      # below because it is the only thing that actually reaches a cluster — a
+      # new CRD that lands in config/crd but not in charts/operator/crds is
+      # invisible to every gate here and never gets installed.
+      - run: cd operators && make manifests
       - name: fail on drift
-        run: git diff --exit-code -- docs/crd-reference operators/config/crd operators/config/rbac operators/api
+        run: git diff --exit-code -- docs/crd-reference operators/config/crd operators/config/rbac operators/api charts/operator/crds
 
   docs:
     name: typedoc builds

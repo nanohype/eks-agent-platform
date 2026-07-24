@@ -11,6 +11,7 @@
 | [0007](./0007-eval-runtime-kustomize.md)      | eval-runtime WorkflowTemplate ships via kustomize, not the operator chart                                        | Superseded by ADR-0008 |
 | [0008](./0008-eval-runtime-operator-chart.md) | eval-runtime + operator SLO ship in the operator chart, not a gitops overlay                                     | Accepted               |
 | [0009](./0009-vcluster-isolation-tier.md)     | vcluster hard-isolation tier: reconcile model, synced-SA Pod Identity, ArgoCD destination, containment, teardown | Accepted               |
+| [0010](./0010-slo-hold-single-writer.md)      | Burn-rate rollout hold: one evaluator for the objective, one writer for the AppProject                           | Accepted               |
 
 ## Template
 

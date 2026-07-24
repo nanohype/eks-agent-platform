@@ -80,7 +80,7 @@ func TestTenantRoleTags(t *testing.T) {
 			t.Errorf("tenantRoleTags missing/empty key %q (have %v)", k, got)
 		}
 	}
-	if got["PlatformId"] != "acme" {
+	if got["PlatformId"] != ctrlTestPlatform {
 		t.Errorf("PlatformId: got %q want acme", got["PlatformId"])
 	}
 	if got["ManagedBy"] != "eks-agent-platform" {

@@ -476,6 +476,7 @@ Package v1alpha1 contains API Schema definitions for the governance v1alpha1 API
 ### Resource Types
 - [BudgetPolicy](#budgetpolicy)
 - [EvalSuite](#evalsuite)
+- [SLOPolicy](#slopolicy)
 
 
 
@@ -632,6 +633,100 @@ _Appears in:_
 | `lastScore` _string_ | LastScore (mean across cases, 0..1). |  | Optional: \{\} <br /> |
 | `lastReportUrl` _string_ | LastReportURL (s3:// URL to the rendered HTML report). |  | Optional: \{\} <br /> |
 | `phase` _string_ | Phase: Pending, Running, Passed, Failed. |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
+
+
+#### SLI
+
+
+
+SLI declares the good-events/valid-events ratio an objective is measured on.
+The reconciler builds the PromQL from these fields rather than accepting a
+query — a raw expression would be an injection seam into a request the
+operator signs with the platform's own credentials, and the shapes are fully
+determined by the observability-slo standard's sli_types anyway.
+
+
+
+_Appears in:_
+- [SLOPolicySpec](#slopolicyspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _string_ | Type selects the ratio shape. availability divides an errors counter by a<br />requests counter; latency divides a duration histogram's under-threshold<br />bucket by its count. |  | Enum: [availability latency] <br /> |
+| `metric` _string_ | Metric is the base series name in Prometheus form — the OTLP service name<br />with dashes normalized to underscores, without the _errors_total /<br />_requests_total / _request_duration_seconds_* suffix the Type implies<br />(e.g. "incident_response_webhook"). |  | MaxLength: 200 <br />Pattern: `^[a-zA-Z_][a-zA-Z0-9_]*$` <br /> |
+| `selector` _object (keys:string, values:string)_ | Selector narrows the SLI to a subset of series as an exact-match label<br />set. Rendered into the query as label="value" with values escaped. Keys<br />are Prometheus label names; a raw matcher string is deliberately not<br />accepted. |  | Optional: \{\} <br /> |
+| `thresholdSeconds` _string_ | ThresholdSeconds is the histogram bucket boundary a latency SLI counts as<br />good, as a decimal-string of seconds ("0.5"). Required for<br />type=latency, ignored for type=availability. It must name a bucket the<br />histogram actually publishes — an le value with no matching bucket yields<br />an empty result, which the reconciler reports as NoData rather than as a<br />healthy zero. |  | Pattern: `^[0-9]+(\.[0-9]\{1,6\})?$` <br />Optional: \{\} <br /> |
+
+
+#### SLOPolicy
+
+
+
+SLOPolicy declares a Platform's service-level objective and turns a page-tier
+error-budget burn into a platform action: an event on the kill-switch bus and
+a hold on the tenant's rollout.
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `governance.nanohype.dev/v1alpha1` | | |
+| `kind` _string_ | `SLOPolicy` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[SLOPolicySpec](#slopolicyspec)_ |  |  |  |
+| `status` _[SLOPolicyStatus](#slopolicystatus)_ |  |  |  |
+
+
+#### SLOPolicySpec
+
+
+
+SLOPolicySpec declares one service-level objective for a Platform and what
+the control loop does when its error budget burns too fast.
+
+
+
+_Appears in:_
+- [SLOPolicy](#slopolicy)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `platformRef` _[LocalRef](#localref)_ |  |  |  |
+| `sli` _[SLI](#sli)_ | SLI is the ratio this objective is measured on. |  |  |
+| `objective` _string_ | Objective is the target good-event ratio as a decimal string ("0.999").<br />The error budget is 1 - Objective, and the burn rate is the observed error<br />ratio over a window divided by that budget. Modeled as a string for the<br />same reason BudgetPolicy.monthlyUsd is: a float64 round-trip through JSON<br />would perturb the denominator every burn-rate alert divides by. Bounded<br />below 1 because an objective of 1 leaves a zero budget and an infinite<br />burn rate. |  | Pattern: `^0\.[0-9]\{1,6\}$` <br /> |
+| `onPageTierBreach` _string_ | OnPageTierBreach is the automated action taken when a page-tier burn-rate<br />window pair trips.<br />	HoldRollout — patch a deny syncWindow onto the tenant's ArgoCD<br />	              AppProject so a bad rollout stops advancing. The window<br />	              leaves manualSync open, so an operator can still push a<br />	              fix by hand. Reversed automatically once the burn clears.<br />	None        — evaluate, publish, and page, but take no cluster action. | HoldRollout | Enum: [HoldRollout None] <br />Optional: \{\} <br /> |
+
+
+#### SLOPolicyStatus
+
+
+
+SLOPolicyStatus surfaces the most recent burn-rate evaluation. The SLO
+reconciler rewrites it on every tick. It is the operator's single evaluation
+of this objective: kube-state-metrics projects these fields, so the paging
+alert reads the number computed here instead of re-deriving the same PromQL
+against the same data.
+
+
+
+_Appears in:_
+- [SLOPolicy](#slopolicy)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `errorRatios` _object (keys:string, values:string)_ | ErrorRatios is the observed error ratio for each queried window, keyed by<br />the window ("5m", "1h", "3d", "30d", …) with a decimal-string value.<br />Present so an operator can see which window tripped, and by how much,<br />without re-running the queries by hand. |  | Optional: \{\} <br /> |
+| `pageTierBreachRatio` _string_ | PageTierBreachRatio is how close the page tier is to breaching, as a<br />decimal string, normalized so one threshold covers every window: across<br />each page-tier window pair it takes min(long burn rate, short burn rate)<br />divided by that pair's factor, and reports the largest. 1.0 means a pair<br />is exactly at its factor; above 1.0 is a breach. Normalized rather than<br />raw because the page tier has two pairs with different factors (14.4 and<br />6), so no single raw burn rate can be compared against one number. |  | Optional: \{\} <br /> |
+| `ticketTierBreachRatio` _string_ | TicketTierBreachRatio is the same normalized measure over the ticket-tier<br />window pairs (factors 3 and 1). |  | Optional: \{\} <br /> |
+| `errorBudgetRemaining` _string_ | ErrorBudgetRemaining is the fraction of the SLO window's error budget<br />still unspent, as a decimal string clamped to [0,1]: 1 - (error ratio over<br />the 30d SLO window / error budget). Measured over the full window the<br />standard defines rather than extrapolated from a burn window, so the<br />gauge means what it says. |  | Optional: \{\} <br /> |
+| `breachedWindow` _string_ | BreachedWindow names the long window whose pair tripped at the highest<br />severity ("1h", "6h", "1d", "3d"). Empty when nothing is breaching. |  | Optional: \{\} <br /> |
+| `severity` _string_ | Severity is the tier of the current breach: critical for a page-tier<br />window pair, warning for a ticket-tier pair, empty when healthy. |  | Enum: [critical warning ] <br />Optional: \{\} <br /> |
+| `lastReconciled` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastReconciled timestamp. |  | Optional: \{\} <br /> |
+| `breachFiredAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | BreachFiredAt is when the current unbroken breach episode was first<br />published to the kill-switch bus. Cleared when the burn clears, so a<br />later breach publishes again rather than being swallowed as a duplicate. |  | Optional: \{\} <br /> |
+| `holdEngagedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | HoldEngagedAt is when this reconciler decided to hold the tenant's<br />rollout. It is the decision, not the effect: the Platform reconciler is<br />the only writer of the AppProject, and it renders the deny syncWindow from<br />this field. Non-null means a hold is called for. |  | Optional: \{\} <br /> |
+| `holdObservedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | HoldObservedAt is when the deny syncWindow was last actually seen on the<br />tenant's AppProject. Engaging a hold is not the same as holding: if this<br />stays null past the grace window while HoldEngagedAt is set, the hold is<br />not landing and the HoldUnobserved condition says so. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
 
 

@@ -59,6 +59,14 @@ type Config struct {
 	KillSwitchEventBusARN  string
 	StateMachineARN        string
 
+	// managed-monitoring outputs. AMPEndpoint is the Amazon Managed Prometheus
+	// workspace base URL the SLO reconciler queries. Deliberately absent from
+	// Validate's required set: cluster-bootstrap's enable_managed_monitoring
+	// defaults false, so most clusters publish no such parameter, and requiring
+	// it would refuse to start the operator on every one of them. The SLO
+	// reconciler degrades to a MetricStoreUnavailable condition instead.
+	AMPEndpoint string
+
 	// cost-pipeline outputs
 	CURBucketName       string
 	AthenaWorkgroup     string
@@ -147,6 +155,8 @@ func (c *Config) assign(suffix, value string) {
 		c.KillSwitchEventBusARN = value
 	case "kill-switch/state_machine_arn":
 		c.StateMachineARN = value
+	case "managed-monitoring/amp_endpoint":
+		c.AMPEndpoint = value
 	case "cost-pipeline/cur_bucket":
 		c.CURBucketName = value
 	case "cost-pipeline/athena_workgroup":

@@ -7,9 +7,6 @@ Licensed under the Apache License, Version 2.0 (the "License");
 package controller
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
 	"testing"
 )
 
@@ -21,38 +18,28 @@ import (
 // reconciler records a false success. This test parses the terraform
 // event_pattern and asserts it equals the Go constants, so drift on either
 // side of the seam fails the build instead of the production kill-switch.
-
-var (
-	tfSourceRE     = regexp.MustCompile(`(?m)^\s*source\s*=\s*\[\s*"([^"]+)"\s*\]`)
-	tfDetailTypeRE = regexp.MustCompile(`(?m)^\s*"detail-type"\s*=\s*\[\s*"([^"]+)"\s*\]`)
-	tfSeverityRE   = regexp.MustCompile(`(?m)^\s*severity\s*=\s*\[\s*"([^"]+)"\s*\]`)
-)
+//
+// The parse is scoped to the named rule (readEventRule, in
+// slo_killswitch_contract_test.go) because the bus now carries more than one
+// rule. A whole-file regex would take the first match it found, so a rule added
+// above this one would silently retarget the assertion and keep the test green
+// while it checked the wrong thing.
 
 func TestKillSwitchEventContract(t *testing.T) {
-	// Package dir → repo root is three levels up.
-	path := filepath.Join("..", "..", "..", "terraform", "components", "kill-switch", "main.tf")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read terraform kill-switch config at %s: %v", path, err)
-	}
-	tf := string(raw)
+	got := readEventRule(t, "main.tf", "breach")
 
 	cases := []struct {
 		field string
-		re    *regexp.Regexp
+		got   string
 		want  string
 	}{
-		{"source", tfSourceRE, budgetEventSource},
-		{"detail-type", tfDetailTypeRE, budgetEventDetailType},
-		{"detail.severity", tfSeverityRE, budgetEventSeverity},
+		{"source", got.source, budgetEventSource},
+		{"detail-type", got.detailType, budgetEventDetailType},
+		{"detail.severity", got.severity, budgetEventSeverity},
 	}
 	for _, c := range cases {
-		m := c.re.FindStringSubmatch(tf)
-		if m == nil {
-			t.Fatalf("could not find %q in the terraform event_pattern; the contract regex or the terraform layout drifted (%s)", c.field, path)
-		}
-		if got := m[1]; got != c.want {
-			t.Errorf("kill-switch %s: terraform event_pattern has %q, Go constant has %q — the EventBridge match is now dead on one side; align both", c.field, got, c.want)
+		if c.got != c.want {
+			t.Errorf("kill-switch %s: terraform event_pattern has %q, Go constant has %q — the EventBridge match is now dead on one side; align both", c.field, c.got, c.want)
 		}
 	}
 }

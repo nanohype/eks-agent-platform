@@ -1,0 +1,291 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: slopolicies.governance.nanohype.dev
+spec:
+  group: governance.nanohype.dev
+  names:
+    kind: SLOPolicy
+    listKind: SLOPolicyList
+    plural: slopolicies
+    shortNames:
+    - slo
+    singular: slopolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.platformRef.name
+      name: Platform
+      type: string
+    - jsonPath: .spec.objective
+      name: Objective
+      type: string
+    - jsonPath: .status.pageTierBreachRatio
+      name: PageBurn
+      type: string
+    - jsonPath: .status.severity
+      name: Severity
+      type: string
+    - jsonPath: .status.holdEngagedAt
+      name: Held
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SLOPolicy declares a Platform's service-level objective and turns a page-tier
+          error-budget burn into a platform action: an event on the kill-switch bus and
+          a hold on the tenant's rollout.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SLOPolicySpec declares one service-level objective for a Platform and what
+              the control loop does when its error budget burns too fast.
+            properties:
+              objective:
+                description: |-
+                  Objective is the target good-event ratio as a decimal string ("0.999").
+                  The error budget is 1 - Objective, and the burn rate is the observed error
+                  ratio over a window divided by that budget. Modeled as a string for the
+                  same reason BudgetPolicy.monthlyUsd is: a float64 round-trip through JSON
+                  would perturb the denominator every burn-rate alert divides by. Bounded
+                  below 1 because an objective of 1 leaves a zero budget and an infinite
+                  burn rate.
+                pattern: ^0\.[0-9]{1,6}$
+                type: string
+              onPageTierBreach:
+                default: HoldRollout
+                description: "OnPageTierBreach is the automated action taken when
+                  a page-tier burn-rate\nwindow pair trips.\n\n\tHoldRollout — patch
+                  a deny syncWindow onto the tenant's ArgoCD\n\t              AppProject
+                  so a bad rollout stops advancing. The window\n\t              leaves
+                  manualSync open, so an operator can still push a\n\t              fix
+                  by hand. Reversed automatically once the burn clears.\n\tNone        —
+                  evaluate, publish, and page, but take no cluster action."
+                enum:
+                - HoldRollout
+                - None
+                type: string
+              platformRef:
+                description: LocalRef references a CR by name in the same namespace.
+                properties:
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
+              sli:
+                description: SLI is the ratio this objective is measured on.
+                properties:
+                  metric:
+                    description: |-
+                      Metric is the base series name in Prometheus form — the OTLP service name
+                      with dashes normalized to underscores, without the _errors_total /
+                      _requests_total / _request_duration_seconds_* suffix the Type implies
+                      (e.g. "incident_response_webhook").
+                    maxLength: 200
+                    pattern: ^[a-zA-Z_][a-zA-Z0-9_]*$
+                    type: string
+                  selector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Selector narrows the SLI to a subset of series as an exact-match label
+                      set. Rendered into the query as label="value" with values escaped. Keys
+                      are Prometheus label names; a raw matcher string is deliberately not
+                      accepted.
+                    type: object
+                  thresholdSeconds:
+                    description: |-
+                      ThresholdSeconds is the histogram bucket boundary a latency SLI counts as
+                      good, as a decimal-string of seconds ("0.5"). Required for
+                      type=latency, ignored for type=availability. It must name a bucket the
+                      histogram actually publishes — an le value with no matching bucket yields
+                      an empty result, which the reconciler reports as NoData rather than as a
+                      healthy zero.
+                    pattern: ^[0-9]+(\.[0-9]{1,6})?$
+                    type: string
+                  type:
+                    description: |-
+                      Type selects the ratio shape. availability divides an errors counter by a
+                      requests counter; latency divides a duration histogram's under-threshold
+                      bucket by its count.
+                    enum:
+                    - availability
+                    - latency
+                    type: string
+                required:
+                - metric
+                - type
+                type: object
+            required:
+            - objective
+            - platformRef
+            - sli
+            type: object
+          status:
+            description: |-
+              SLOPolicyStatus surfaces the most recent burn-rate evaluation. The SLO
+              reconciler rewrites it on every tick. It is the operator's single evaluation
+              of this objective: kube-state-metrics projects these fields, so the paging
+              alert reads the number computed here instead of re-deriving the same PromQL
+              against the same data.
+            properties:
+              breachFiredAt:
+                description: |-
+                  BreachFiredAt is when the current unbroken breach episode was first
+                  published to the kill-switch bus. Cleared when the burn clears, so a
+                  later breach publishes again rather than being swallowed as a duplicate.
+                format: date-time
+                type: string
+              breachedWindow:
+                description: |-
+                  BreachedWindow names the long window whose pair tripped at the highest
+                  severity ("1h", "6h", "1d", "3d"). Empty when nothing is breaching.
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              errorBudgetRemaining:
+                description: |-
+                  ErrorBudgetRemaining is the fraction of the SLO window's error budget
+                  still unspent, as a decimal string clamped to [0,1]: 1 - (error ratio over
+                  the 30d SLO window / error budget). Measured over the full window the
+                  standard defines rather than extrapolated from a burn window, so the
+                  gauge means what it says.
+                type: string
+              errorRatios:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ErrorRatios is the observed error ratio for each queried window, keyed by
+                  the window ("5m", "1h", "3d", "30d", …) with a decimal-string value.
+                  Present so an operator can see which window tripped, and by how much,
+                  without re-running the queries by hand.
+                type: object
+              holdEngagedAt:
+                description: |-
+                  HoldEngagedAt is when this reconciler decided to hold the tenant's
+                  rollout. It is the decision, not the effect: the Platform reconciler is
+                  the only writer of the AppProject, and it renders the deny syncWindow from
+                  this field. Non-null means a hold is called for.
+                format: date-time
+                type: string
+              holdObservedAt:
+                description: |-
+                  HoldObservedAt is when the deny syncWindow was last actually seen on the
+                  tenant's AppProject. Engaging a hold is not the same as holding: if this
+                  stays null past the grace window while HoldEngagedAt is set, the hold is
+                  not landing and the HoldUnobserved condition says so.
+                format: date-time
+                type: string
+              lastReconciled:
+                description: LastReconciled timestamp.
+                format: date-time
+                type: string
+              pageTierBreachRatio:
+                description: |-
+                  PageTierBreachRatio is how close the page tier is to breaching, as a
+                  decimal string, normalized so one threshold covers every window: across
+                  each page-tier window pair it takes min(long burn rate, short burn rate)
+                  divided by that pair's factor, and reports the largest. 1.0 means a pair
+                  is exactly at its factor; above 1.0 is a breach. Normalized rather than
+                  raw because the page tier has two pairs with different factors (14.4 and
+                  6), so no single raw burn rate can be compared against one number.
+                type: string
+              severity:
+                description: |-
+                  Severity is the tier of the current breach: critical for a page-tier
+                  window pair, warning for a ticket-tier pair, empty when healthy.
+                enum:
+                - critical
+                - warning
+                - ""
+                type: string
+              ticketTierBreachRatio:
+                description: |-
+                  TicketTierBreachRatio is the same normalized measure over the ticket-tier
+                  window pairs (factors 3 and 1).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
