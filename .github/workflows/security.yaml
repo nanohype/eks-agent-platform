@@ -80,20 +80,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      # Two invocations on purpose, because one cannot do both jobs.
+      #
+      # The trivy-action rebuilds a SARIF report with ALL severities regardless of
+      # the severity input ("Building SARIF report with all severities" in its
+      # own log), and then applies exit-code to whatever it found. So a single
+      # sarif-format step with severity: HIGH,CRITICAL and ignore-unfixed: true
+      # fails the build on a MEDIUM, and on an UNKNOWN with no fix available —
+      # precisely the two categories the policy below says it deliberately does
+      # not fail on. That is how this gate came to be red on main over an
+      # advisory about an unmaintained transitive package nobody can patch.
+      #
+      # Report first, gate second: the upload keeps every severity visible in
+      # code scanning, and the gate enforces the documented policy.
+      - name: Report every finding to code scanning
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          # ignore-unfixed stays true here (dependency CVE scan), deliberately.
-          # A HIGH/CRITICAL with no upstream fix can't be remediated by a version
-          # bump, so failing on it would be a permanent, unactionable red that
-          # blocks unrelated PRs. The weekly schedule (cron above) re-runs the
-          # scan, so the moment a patched release ships the finding surfaces and
-          # the fix is a normal go.mod/package.json bump. Fixable HIGH/CRITICAL
-          # still fail the build immediately.
-          ignore-unfixed: true
+          exit-code: "0"
           format: sarif
           output: trivy-fs.sarif
           skip-dirs: "node_modules,**/.terraform"
@@ -102,6 +107,26 @@ jobs:
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
+      # The build gate. Table format, so severity and ignore-unfixed actually
+      # apply to the exit code.
+      #
+      # ignore-unfixed stays true here (dependency CVE scan), deliberately.
+      # A HIGH/CRITICAL with no upstream fix can't be remediated by a version
+      # bump, so failing on it would be a permanent, unactionable red that
+      # blocks unrelated PRs. The weekly schedule (cron above) re-runs the
+      # scan, so the moment a patched release ships the finding surfaces and
+      # the fix is a normal go.mod/package.json bump. Fixable HIGH/CRITICAL
+      # still fail the build immediately.
+      - name: Fail on a fixable HIGH or CRITICAL
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          skip-dirs: "node_modules,**/.terraform"
 
   tflint:
     name: tflint
