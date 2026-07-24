@@ -77,11 +77,18 @@ spec:
                   description: ModelRouteSpec is a single named route.
                   properties:
                     crossRegionProfile:
-                      description: CrossRegionProfile enables a Bedrock cross-region
-                        inference profile.
+                      description: |-
+                        CrossRegionProfile enables a Bedrock cross-region inference profile.
+                        Foundation routes only; rejected on an imported route.
                       type: string
                     guardrailRef:
-                      description: GuardrailRef overrides the gateway's default guardrail.
+                      description: |-
+                        GuardrailRef overrides the gateway's default guardrail. On a foundation
+                        route the guardrail attaches inline to the Bedrock backend. On an imported
+                        route an inline guardrail is not applicable (Bedrock inline guardrails are
+                        foundation-model-only), so the route is served without one and the gateway
+                        surfaces an ImportedRouteGuardrailUnenforced condition — enforcement via
+                        ApplyGuardrail is a tracked follow-up.
                       properties:
                         name:
                           type: string
@@ -90,8 +97,10 @@ spec:
                       type: object
                     modelFamily:
                       description: |-
-                        ModelFamily: anthropic | meta | mistral | cohere | amazon-titan |
-                        amazon-nova | stability.
+                        ModelFamily is the Bedrock model family for a foundation route:
+                        anthropic | meta | mistral | cohere | amazon-titan | amazon-nova |
+                        stability. Required for a foundation route, rejected for an imported one
+                        (enforced by the route-level CEL rules above).
                       enum:
                       - anthropic
                       - meta
@@ -102,8 +111,21 @@ spec:
                       - stability
                       type: string
                     modelId:
-                      description: ModelId is the canonical Bedrock model ID or inference
-                        profile ID.
+                      description: |-
+                        ModelID is the route's model. For a foundation route it is the canonical
+                        Bedrock model ID or inference-profile ID; for an imported route it is the
+                        imported-model ARN
+                        (arn:<partition>:bedrock:<region>:<account>:imported-model/<id>).
+                      type: string
+                    modelSource:
+                      default: foundation
+                      description: |-
+                        ModelSource discriminates a foundation-model route from an imported
+                        (Custom Model Import) route. Defaults to foundation, so an existing
+                        route that omits it stays a foundation route.
+                      enum:
+                      - foundation
+                      - imported
                       type: string
                     name:
                       type: string
@@ -115,10 +137,21 @@ spec:
                       format: int32
                       type: integer
                   required:
-                  - modelFamily
                   - modelId
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: modelFamily is required for a foundation route
+                    rule: self.modelSource != 'foundation' || has(self.modelFamily)
+                  - message: modelFamily does not apply to an imported route and must
+                      be omitted
+                    rule: self.modelSource != 'imported' || !has(self.modelFamily)
+                  - message: crossRegionProfile does not apply to an imported route
+                      and must be omitted
+                    rule: self.modelSource != 'imported' || !has(self.crossRegionProfile)
+                  - message: an imported route's modelId must be the imported-model
+                      ARN
+                    rule: self.modelSource != 'imported' || self.modelId.startsWith('arn:')
                 minItems: 1
                 type: array
             required:

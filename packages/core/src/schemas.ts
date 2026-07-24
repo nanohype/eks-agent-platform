@@ -222,9 +222,19 @@ export const ModelFamily = z.enum([
 ]);
 export type ModelFamily = z.infer<typeof ModelFamily>;
 
+/** ModelSource mirrors the Go `ModelSource` discriminator. */
+export const ModelSource = z.enum(['foundation', 'imported']);
+export type ModelSource = z.infer<typeof ModelSource>;
+
 export const ModelRouteSpec = z.object({
   name: z.string(),
-  modelFamily: ModelFamily,
+  // Defaults to foundation, so a route that omits it stays a foundation route.
+  modelSource: ModelSource.default('foundation'),
+  // Optional: required for a foundation route, rejected for an imported one
+  // (enforced CRD-side by the route CEL rules).
+  modelFamily: ModelFamily.optional(),
+  // For a foundation route the Bedrock model/inference-profile id; for an
+  // imported route the imported-model ARN.
   modelId: z.string(),
   crossRegionProfile: z.string().optional(),
   rateLimit: z.number().int().positive().optional(),

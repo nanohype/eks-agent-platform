@@ -313,11 +313,38 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `name` _string_ |  |  |  |
-| `modelFamily` _string_ | ModelFamily: anthropic \| meta \| mistral \| cohere \| amazon-titan \|<br />amazon-nova \| stability. |  | Enum: [anthropic meta mistral cohere amazon-titan amazon-nova stability] <br /> |
-| `modelId` _string_ | ModelId is the canonical Bedrock model ID or inference profile ID. |  |  |
-| `crossRegionProfile` _string_ | CrossRegionProfile enables a Bedrock cross-region inference profile. |  | Optional: \{\} <br /> |
+| `modelSource` _[ModelSource](#modelsource)_ | ModelSource discriminates a foundation-model route from an imported<br />(Custom Model Import) route. Defaults to foundation, so an existing<br />route that omits it stays a foundation route. | foundation | Enum: [foundation imported] <br />Optional: \{\} <br /> |
+| `modelFamily` _string_ | ModelFamily is the Bedrock model family for a foundation route:<br />anthropic \| meta \| mistral \| cohere \| amazon-titan \| amazon-nova \|<br />stability. Required for a foundation route, rejected for an imported one<br />(enforced by the route-level CEL rules above). |  | Enum: [anthropic meta mistral cohere amazon-titan amazon-nova stability] <br />Optional: \{\} <br /> |
+| `modelId` _string_ | ModelID is the route's model. For a foundation route it is the canonical<br />Bedrock model ID or inference-profile ID; for an imported route it is the<br />imported-model ARN<br />(arn:<partition>:bedrock:<region>:<account>:imported-model/<id>). |  |  |
+| `crossRegionProfile` _string_ | CrossRegionProfile enables a Bedrock cross-region inference profile.<br />Foundation routes only; rejected on an imported route. |  | Optional: \{\} <br /> |
 | `rateLimit` _integer_ | RateLimit caps requests per minute (not tokens) on this route. The<br />operator renders it into an agentgateway local rate-limit policy with<br />unit=Minutes; 0 or unset disables rate limiting for the route. |  | Optional: \{\} <br /> |
-| `guardrailRef` _[LocalRef](#localref)_ | GuardrailRef overrides the gateway's default guardrail. |  | Optional: \{\} <br /> |
+| `guardrailRef` _[LocalRef](#localref)_ | GuardrailRef overrides the gateway's default guardrail. On a foundation<br />route the guardrail attaches inline to the Bedrock backend. On an imported<br />route an inline guardrail is not applicable (Bedrock inline guardrails are<br />foundation-model-only), so the route is served without one and the gateway<br />surfaces an ImportedRouteGuardrailUnenforced condition — enforcement via<br />ApplyGuardrail is a tracked follow-up. |  | Optional: \{\} <br /> |
+
+
+#### ModelSource
+
+_Underlying type:_ _string_
+
+ModelSource discriminates how a route sources its model — the same
+create|adopt idiom the rest of the platform uses: a stable route interface
+either way, with the source-specific fields validated at the CRD boundary
+rather than silently ignored.
+  - foundation: a Bedrock foundation model or inference profile. modelFamily
+    is required; crossRegionProfile is available.
+  - imported: an open-weight model brought in through Bedrock Custom Model
+    Import. modelId is the imported-model ARN; modelFamily and
+    crossRegionProfile do not apply and are rejected.
+
+_Validation:_
+- Enum: [foundation imported]
+
+_Appears in:_
+- [ModelRouteSpec](#modelroutespec)
+
+| Field | Description |
+| --- | --- |
+| `foundation` | ModelSourceFoundation routes to a Bedrock foundation model / inference profile.<br /> |
+| `imported` | ModelSourceImported routes to a Custom Model Import open-weight model by ARN.<br /> |
 
 
 #### SandboxPool

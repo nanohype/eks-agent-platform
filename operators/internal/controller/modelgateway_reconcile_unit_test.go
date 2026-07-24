@@ -12,7 +12,10 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
@@ -88,7 +91,7 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 	t.Run("platform not found is pending", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).Build()
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s}
-		phase, _, err := r.reconcileSelf(context.Background(), mg(ctrlTestNS))
+		phase, _, _, err := r.reconcileSelf(context.Background(), mg(ctrlTestNS))
 		if err != nil || phase != phasePending {
 			t.Fatalf("missing platform: got (%q, %v)", phase, err)
 		}
@@ -99,7 +102,7 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 		p.Namespace = ctrlTestNS
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s}
-		phase, _, err := r.reconcileSelf(context.Background(), mg(ctrlTestNS))
+		phase, _, _, err := r.reconcileSelf(context.Background(), mg(ctrlTestNS))
 		if err != nil || phase != phasePending {
 			t.Fatalf("not-ready platform: got (%q, %v)", phase, err)
 		}
@@ -111,7 +114,7 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 		p.Status.Phase = phaseReady
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
-		phase, endpoint, err := r.reconcileSelf(context.Background(), mg(ctrlTestNS))
+		phase, endpoint, unenforced, err := r.reconcileSelf(context.Background(), mg(ctrlTestNS))
 		if err != nil {
 			t.Fatalf("reconcileSelf (ready): %v", err)
 		}
@@ -121,7 +124,105 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 		if endpoint == "" {
 			t.Error("a ready gateway must return its data-plane endpoint")
 		}
+		if len(unenforced) != 0 {
+			t.Errorf("foundation-only routes must not report unenforced guardrails, got %v", unenforced)
+		}
 	})
+}
+
+// TestModelGatewayImportedRoute covers the imported-source path: the ARN routes
+// as the backend model, no inline guardrail is attached (Bedrock inline
+// guardrails are foundation-only), the route carries the source as its family
+// label, and a configured guardrail on an imported route is reported as
+// unenforced rather than dropped silently.
+func TestModelGatewayImportedRoute(t *testing.T) {
+	s := mgwScheme(t)
+	p := newPlatform(ctrlTestPlatform, "team")
+	p.Namespace = ctrlTestNS
+	p.Status.Phase = phaseReady
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	// A baseline guardrail is configured cluster-wide; an imported route cannot
+	// carry it inline, so it must surface as unenforced.
+	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2", GuardrailID: "baseline-gr", GuardrailVersion: "1"}
+
+	const arn = "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123"
+	mg := &agentsv1alpha1.ModelGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: ctrlTestNS},
+		Spec: agentsv1alpha1.ModelGatewaySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: ctrlTestPlatform},
+			Routes: []agentsv1alpha1.ModelRouteSpec{
+				{Name: "oss", ModelSource: agentsv1alpha1.ModelSourceImported, ModelID: arn},
+			},
+		},
+	}
+
+	phase, _, unenforced, err := r.reconcileSelf(context.Background(), mg)
+	if err != nil {
+		t.Fatalf("reconcileSelf (imported): %v", err)
+	}
+	if phase != phaseReady {
+		t.Errorf("phase: got %q want Ready", phase)
+	}
+	if len(unenforced) != 1 || unenforced[0] != "oss" {
+		t.Fatalf("imported route with a baseline guardrail must report unenforced [oss], got %v", unenforced)
+	}
+
+	// Inspect the rendered backend: model is the ARN, no inline guardrail, and
+	// the family label carries the source.
+	backend := &unstructured.Unstructured{}
+	backend.SetGroupVersionKind(schema.GroupVersionKind{Group: agentgatewayGV.Group, Version: agentgatewayGV.Version, Kind: "AgentgatewayBackend"})
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: agentgatewayNamespace, Name: ctrlTestPlatform + "-oss"}, backend); err != nil {
+		t.Fatalf("get imported backend: %v", err)
+	}
+	model, _, _ := unstructured.NestedString(backend.Object, "spec", "ai", "provider", "bedrock", "model")
+	if model != arn {
+		t.Errorf("imported backend model: got %q want the ARN", model)
+	}
+	if _, found, _ := unstructured.NestedMap(backend.Object, "spec", "ai", "provider", "bedrock", "guardrail"); found {
+		t.Error("an imported backend must not carry an inline guardrail")
+	}
+	if backend.GetLabels()[LabelModelFamily] != string(agentsv1alpha1.ModelSourceImported) {
+		t.Errorf("imported route family label: got %q want imported", backend.GetLabels()[LabelModelFamily])
+	}
+}
+
+// TestModelGatewayApplyStatus_UnenforcedGuardrailCondition covers the status
+// surfacing: a non-empty unenforced list flips the ImportedRouteGuardrailUnenforced
+// condition True, an empty one keeps it False.
+func TestModelGatewayApplyStatus_UnenforcedGuardrailCondition(t *testing.T) {
+	s := mgwScheme(t)
+	mg := &agentsv1alpha1.ModelGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: ctrlTestNS},
+		Spec: agentsv1alpha1.ModelGatewaySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: ctrlTestPlatform},
+			Routes:      []agentsv1alpha1.ModelRouteSpec{{Name: "oss", ModelSource: agentsv1alpha1.ModelSourceImported, ModelID: "arn:x"}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(mg).WithStatusSubresource(mg).Build()
+	r := &ModelGatewayReconciler{Client: cl, Scheme: s}
+
+	find := func() *metav1.Condition {
+		for i := range mg.Status.Conditions {
+			if mg.Status.Conditions[i].Type == "ImportedRouteGuardrailUnenforced" {
+				return &mg.Status.Conditions[i]
+			}
+		}
+		return nil
+	}
+
+	if err := r.modelGatewayApplyStatus(context.Background(), mg, phaseReady, "http://gw", []string{"oss"}); err != nil {
+		t.Fatalf("applyStatus (unenforced): %v", err)
+	}
+	if c := find(); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("unenforced guardrail must set the condition True, got %v", c)
+	}
+
+	if err := r.modelGatewayApplyStatus(context.Background(), mg, phaseReady, "http://gw", nil); err != nil {
+		t.Fatalf("applyStatus (clear): %v", err)
+	}
+	if c := find(); c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("no unenforced guardrail must set the condition False, got %v", c)
+	}
 }
 
 func TestEnsureRouteRateLimit_RemovesWhenDisabled(t *testing.T) {
