@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,7 +86,7 @@ func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agents
 // AgentgatewayPolicy. Idempotent (CreateOrUpdate keyed by stable
 // Platform+route names). Returns the in-cluster endpoint of the Gateway's
 // data-plane Service (the base URL tenant ModelConfigs target).
-func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg *agentsv1alpha1.ModelGateway, guardrailID, guardrailVersion string) (string, error) {
+func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg *agentsv1alpha1.ModelGateway, guardrailID, guardrailVersion string) (string, []string, error) {
 	platformName := mg.Spec.PlatformRef.Name
 	gwName := platformName + "-gateway"
 
@@ -114,19 +115,26 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 	})
 	if err != nil {
 		if isNoKindMatch(err) {
-			return "", errAgentgatewayNotInstalled
+			return "", nil, errAgentgatewayNotInstalled
 		}
-		return "", fmt.Errorf("ensure Gateway %s: %w", gwName, err)
+		return "", nil, fmt.Errorf("ensure Gateway %s: %w", gwName, err)
 	}
+
+	// Imported routes whose configured guardrail could not attach inline
+	// (Bedrock inline guardrails are foundation-model-only); surfaced as a
+	// status condition so an unguarded imported route is never silent.
+	var unenforcedGuardrail []string
 
 	// 2. Per route: backend + HTTPRoute + (optional) rate-limit policy.
 	for _, route := range mg.Spec.Routes {
 		routeName := platformName + "-" + route.Name
+		imported := route.ModelSource == agentsv1alpha1.ModelSourceImported
 
-		// Effective model: cross-region inference profile when set, else
-		// the bare model id.
+		// Effective model: an imported route carries the imported-model ARN
+		// directly; a foundation route uses its cross-region inference profile
+		// when set, else the bare model id.
 		effectiveModel := route.ModelID
-		if route.CrossRegionProfile != "" {
+		if !imported && route.CrossRegionProfile != "" {
 			effectiveModel = route.CrossRegionProfile
 		}
 		// Guardrail: per-route ref wins; else gateway default; else the SSM
@@ -139,6 +147,20 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 		case mg.Spec.DefaultGuardrailRef != nil && mg.Spec.DefaultGuardrailRef.Name != "":
 			gID, gVer = mg.Spec.DefaultGuardrailRef.Name, "DRAFT"
 		}
+		// Inline Bedrock guardrails are foundation-model-only, so an imported
+		// route cannot carry one: drop it and record the route so the gateway
+		// surfaces the gap rather than serving it silently unguarded.
+		// Enforcement via ApplyGuardrail is a tracked follow-up.
+		if imported && gID != "" {
+			unenforcedGuardrail = append(unenforcedGuardrail, route.Name)
+			gID, gVer = "", ""
+		}
+		// Family label: an imported route has no model family, so it carries the
+		// source as the label value.
+		famLabel := route.ModelFamily
+		if imported {
+			famLabel = string(agentsv1alpha1.ModelSourceImported)
+		}
 
 		// 2a. AgentgatewayBackend — the Bedrock LLM backend.
 		backend := &unstructured.Unstructured{}
@@ -146,7 +168,7 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 		backend.SetName(routeName)
 		backend.SetNamespace(agentgatewayNamespace)
 		if _, berr := controllerutil.CreateOrUpdate(ctx, r.Client, backend, func() error {
-			backend.SetLabels(routeLabels(platformName, route.ModelFamily))
+			backend.SetLabels(routeLabels(platformName, famLabel))
 			bedrock := map[string]any{"model": effectiveModel}
 			if r.Region != "" {
 				bedrock["region"] = r.Region
@@ -162,9 +184,9 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 			return unstructured.SetNestedField(backend.Object, spec, "spec")
 		}); berr != nil {
 			if isNoKindMatch(berr) {
-				return "", errAgentgatewayNotInstalled
+				return "", nil, errAgentgatewayNotInstalled
 			}
-			return "", fmt.Errorf("ensure AgentgatewayBackend %s: %w", routeName, berr)
+			return "", nil, fmt.Errorf("ensure AgentgatewayBackend %s: %w", routeName, berr)
 		}
 
 		// 2b. HTTPRoute — exposes the backend at /<platform>-<route>.
@@ -173,7 +195,7 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 		hr.SetName(routeName)
 		hr.SetNamespace(agentgatewayNamespace)
 		if _, herr := controllerutil.CreateOrUpdate(ctx, r.Client, hr, func() error {
-			hr.SetLabels(routeLabels(platformName, route.ModelFamily))
+			hr.SetLabels(routeLabels(platformName, famLabel))
 			spec := map[string]any{
 				"parentRefs": []any{
 					map[string]any{"name": gwName},
@@ -198,17 +220,17 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 			return unstructured.SetNestedField(hr.Object, spec, "spec")
 		}); herr != nil {
 			if isNoKindMatch(herr) {
-				return "", errAgentgatewayNotInstalled
+				return "", nil, errAgentgatewayNotInstalled
 			}
-			return "", fmt.Errorf("ensure HTTPRoute %s: %w", routeName, herr)
+			return "", nil, fmt.Errorf("ensure HTTPRoute %s: %w", routeName, herr)
 		}
 
 		// 2c. AgentgatewayPolicy — per-route local rate limit (req/min).
 		if rerr := r.ensureRouteRateLimit(ctx, platformName, routeName, route.RateLimit); rerr != nil {
-			return "", rerr
+			return "", nil, rerr
 		}
 	}
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", gwName, agentgatewayNamespace, gatewayListenerPort), nil
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", gwName, agentgatewayNamespace, gatewayListenerPort), unenforcedGuardrail, nil
 }
 
 // ensureRouteRateLimit attaches an AgentgatewayPolicy carrying the route's
@@ -306,33 +328,33 @@ var errAgentgatewayNotInstalled = errors.New("agentgateway.dev / Gateway-API CRD
 // Returns (phase, endpoint, error). 'Ready' = gateway resources emitted;
 // 'Pending' = waiting on agentgateway/Gateway-API CRDs or Platform
 // readiness; error = real failure to retry.
-func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (string, string, error) {
+func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (string, string, []string, error) {
 	platform, err := r.resolvePlatform(ctx, mg)
 	if err != nil {
 		if errors.Is(err, errPlatformNotFound) {
-			return phasePending, "", nil
+			return phasePending, "", nil, nil
 		}
-		return "", "", err
+		return "", "", nil, err
 	}
 	// Don't emit routes until the Platform itself is Ready (status.namespace
 	// populated + IRSA role minted). Otherwise agentgateway would route
 	// requests to a tenant role that doesn't exist yet → AccessDenied.
 	if platform.Status.Phase != phaseReady {
-		return phasePending, "", nil
+		return phasePending, "", nil, nil
 	}
 
-	endpoint, err := r.ensureGatewayResources(ctx, mg, r.GuardrailID, r.GuardrailVersion)
+	endpoint, unenforcedGuardrail, err := r.ensureGatewayResources(ctx, mg, r.GuardrailID, r.GuardrailVersion)
 	if err != nil {
 		if errors.Is(err, errAgentgatewayNotInstalled) {
-			return phasePending, "", nil
+			return phasePending, "", nil, nil
 		}
-		return "", "", err
+		return "", "", nil, err
 	}
-	return phaseReady, endpoint, nil
+	return phaseReady, endpoint, unenforcedGuardrail, nil
 }
 
 // modelGatewayApplyStatus writes the computed phase + endpoint + conditions.
-func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg *agentsv1alpha1.ModelGateway, phase, endpoint string) error {
+func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg *agentsv1alpha1.ModelGateway, phase, endpoint string, unenforcedGuardrail []string) error {
 	mg.Status.Phase = phase
 	mg.Status.Endpoint = endpoint
 	mg.Status.ObservedGeneration = mg.Generation
@@ -350,5 +372,25 @@ func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg
 		cond.Message = "waiting on Platform or agentgateway / Gateway-API CRDs"
 	}
 	upsertCondition(&mg.Status.Conditions, cond)
+
+	// Surface imported routes whose configured guardrail can't attach inline, so
+	// an unguarded imported route is visible rather than silent. True = at least
+	// one imported route is served without its guardrail; enforcement via
+	// ApplyGuardrail is a tracked follow-up.
+	gcond := metav1.Condition{
+		Type:               "ImportedRouteGuardrailUnenforced",
+		Status:             metav1.ConditionFalse,
+		Reason:             "NotApplicable",
+		Message:            "no imported route is missing guardrail enforcement",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: mg.Generation,
+	}
+	if len(unenforcedGuardrail) > 0 {
+		gcond.Status = metav1.ConditionTrue
+		gcond.Reason = "InlineGuardrailNotApplicable"
+		gcond.Message = fmt.Sprintf("imported route(s) %s served without an inline guardrail (Bedrock inline guardrails are foundation-model-only); enforcement for imported models requires ApplyGuardrail", strings.Join(unenforcedGuardrail, ", "))
+	}
+	upsertCondition(&mg.Status.Conditions, gcond)
+
 	return r.Status().Update(ctx, mg)
 }
