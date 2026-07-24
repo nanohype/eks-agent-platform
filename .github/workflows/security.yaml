@@ -135,8 +135,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: terraform-linters/setup-tflint@v4
         with:
-          tflint_version: latest
+          # Pinned, not `latest`. Resolving "latest" is itself an unauthenticated
+          # GitHub API call, and an unpinned linter means a new rule release can
+          # turn an unrelated PR red with no change on our side.
+          tflint_version: v0.64.0
+      # tflint --init downloads the AWS ruleset from GitHub releases. Without a
+      # token that request is anonymous, which is the 60-per-hour IP-scoped
+      # limit shared with every other job leaving the same runner egress
+      # address — so this step fails with "API rate limit exceeded for <ip>" at
+      # random, on a diff that touched no terraform. GITHUB_TOKEN moves it to
+      # the authenticated limit, which this job cannot realistically reach.
       - run: tflint --init --config .tflint.hcl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # --chdir changes CWD so .tflint.hcl resolution must be absolute.
       - run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --chdir=terraform/components --minimum-failure-severity=warning
 
