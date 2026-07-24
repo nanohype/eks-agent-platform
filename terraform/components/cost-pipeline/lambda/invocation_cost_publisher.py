@@ -20,6 +20,13 @@ mistyped model id. Instead it is published as an explicit ``UnpricedInvocations`
 count dimensioned by PlatformId + ModelId, so unpriced traffic is observable
 and the pricing table can be extended before the next billing cycle.
 
+Imported (Custom Model Import, open-weight) models are capacity-billed rather
+than per-token, so they carry no pricing-table row. They surface as
+``UnpricedInvocations`` by default, and are priced at the optional
+``IMPORTED_MODEL_ESTIMATE_USD_PER_MTOKENS`` per-token governance estimate when
+one is configured, so imported spend can reach the kill-switch signal (see
+``IMPORTED_ESTIMATE_USD_PER_M``).
+
 The pricing table is generated from the same JSON source of truth the
 TypeScript ``@eks-agent/pricing`` package imports
 (``packages/pricing/src/data/bedrock-pricing.json``); a CI drift gate keeps the
@@ -67,6 +74,20 @@ ESTIMATE_BUCKET = os.environ.get("ESTIMATE_BUCKET", "")
 ESTIMATE_PREFIX = os.environ.get("ESTIMATE_PREFIX", "estimates")
 ESTIMATE_KMS_KEY_ID = os.environ.get("ESTIMATE_KMS_KEY_ID", "")
 
+# Custom Model Import (open-weight) models are capacity-billed (per active model
+# copy per minute, i.e. CMUs), not per-token, so no per-token rate is derivable
+# and they carry no pricing-table row. Imported invocations are always surfaced —
+# as UnpricedInvocations when no estimate is configured, so they are never a
+# silent zero — and when IMPORTED_MODEL_ESTIMATE_USD_PER_MTOKENS is set they are
+# priced at that per-token GOVERNANCE estimate (applied to input+output tokens),
+# which brings imported spend into the EstimatedInvocationCostUsd signal the
+# kill-switch reads and splits it across the tenants sharing the model by token
+# share. It is a threshold knob, not finance-grade; CUR stays authoritative for
+# the actual CMU bill.
+IMPORTED_ESTIMATE_USD_PER_M = float(
+    os.environ.get("IMPORTED_MODEL_ESTIMATE_USD_PER_MTOKENS", "0") or 0
+)
+
 
 def _bare_model(model_id: str) -> str:
     """
@@ -89,6 +110,16 @@ def _bare_model(model_id: str) -> str:
 def _price_for(model_id: str) -> dict[str, float] | None:
     """Return the price row for a model id, or None when it isn't priced."""
     return PRICING.get(_bare_model(model_id))
+
+
+def _is_imported(model_id: str) -> bool:
+    """True for a Bedrock Custom Model Import model, keyed off its ARN resource type."""
+    return ":imported-model/" in model_id
+
+
+def _imported_key(model_id: str) -> str:
+    """Compact metric/estimate id for an imported model: imported/<model-id>."""
+    return "imported/" + model_id.rsplit("imported-model/", 1)[-1]
 
 
 def _extract_platform(identity_arn: str) -> str:
@@ -130,10 +161,25 @@ def _estimate_cost(record: dict[str, Any]) -> tuple[float, str, str, int, int, b
     it as an UnpricedInvocations count.
     """
     model = record.get("modelId") or record.get("model") or "unknown"
-    bare = _bare_model(model)
     in_tokens = (record.get("input") or {}).get("inputTokenCount", 0) or 0
     out_tokens = (record.get("output") or {}).get("outputTokenCount", 0) or 0
+    platform_id = _extract_platform((record.get("identity") or {}).get("arn", ""))
 
+    # Imported (Custom Model Import) models carry no pricing-table row (capacity-
+    # billed, not per-token). Price them at the configured per-token governance
+    # estimate when one is set, so imported spend is visible to the kill-switch;
+    # otherwise leave them unpriced, which the caller surfaces as an
+    # UnpricedInvocations count rather than a silent zero. See IMPORTED_ESTIMATE_USD_PER_M.
+    if _is_imported(model):
+        priced = IMPORTED_ESTIMATE_USD_PER_M > 0
+        cost = (
+            ((in_tokens + out_tokens) / 1_000_000.0) * IMPORTED_ESTIMATE_USD_PER_M
+            if priced
+            else 0.0
+        )
+        return cost, platform_id, _imported_key(model), int(in_tokens), int(out_tokens), priced
+
+    bare = _bare_model(model)
     price = PRICING.get(bare)
     priced = price is not None
     cost = 0.0
@@ -141,8 +187,6 @@ def _estimate_cost(record: dict[str, Any]) -> tuple[float, str, str, int, int, b
         cost = (in_tokens / 1_000_000.0) * price["input"] + (
             out_tokens / 1_000_000.0
         ) * price["output"]
-
-    platform_id = _extract_platform((record.get("identity") or {}).get("arn", ""))
     return cost, platform_id, bare, int(in_tokens), int(out_tokens), priced
 
 

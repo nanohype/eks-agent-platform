@@ -685,6 +685,11 @@ resource "aws_lambda_function" "invocation_cost_publisher" {
       ESTIMATE_BUCKET     = aws_s3_bucket.cur.id
       ESTIMATE_PREFIX     = local.estimate_prefix
       ESTIMATE_KMS_KEY_ID = var.data_kms_key_arn
+      # Per-token governance estimate for imported (Custom Model Import) models,
+      # which are capacity-billed and carry no pricing-table row. 0 leaves them
+      # unpriced-but-observable (UnpricedInvocations); a positive value brings
+      # imported spend into the kill-switch cost signal. See the Lambda header.
+      IMPORTED_MODEL_ESTIMATE_USD_PER_MTOKENS = tostring(var.imported_model_estimate_usd_per_mtokens)
     }
   }
 

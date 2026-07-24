@@ -77,6 +77,25 @@ variable "estimate_retention_days" {
   }
 }
 
+variable "imported_model_estimate_usd_per_mtokens" {
+  description = <<-EOT
+    Per-token governance estimate (USD per 1,000,000 input+output tokens) applied
+    to Bedrock Custom Model Import (open-weight) model invocations, which are
+    capacity-billed (CMUs) and so have no derivable per-token rate. 0 (default)
+    leaves imported invocations unpriced — still observable via the
+    UnpricedInvocations metric, but not in the EstimatedInvocationCostUsd signal
+    the kill-switch reads. Set a conservative (rather high) value on an account
+    that serves imported models so their spend trips the kill-switch; CUR remains
+    authoritative for the actual bill. Threshold knob, not finance-grade.
+  EOT
+  type        = number
+  default     = 0
+  validation {
+    condition     = var.imported_model_estimate_usd_per_mtokens >= 0
+    error_message = "imported_model_estimate_usd_per_mtokens must be non-negative."
+  }
+}
+
 variable "tags" {
   description = "Common tags"
   type        = map(string)

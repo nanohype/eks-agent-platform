@@ -127,5 +127,61 @@ class HandlerTest(unittest.TestCase):
         self.assertAlmostEqual(cost_metric["Value"], 3.0, places=4)
 
 
+class ImportedModelTest(unittest.TestCase):
+    """Custom Model Import (open-weight) models: unpriced-but-observable by
+    default, priced at the configured per-token governance estimate when set."""
+
+    ARN = "arn:aws:bedrock:us-west-2:123456789012:imported-model/abc123"
+
+    def _record(self, in_tok: int = 1_000_000, out_tok: int = 1_000_000) -> dict:
+        return {
+            "modelId": self.ARN,
+            "input": {"inputTokenCount": in_tok},
+            "output": {"outputTokenCount": out_tok},
+            "identity": {"arn": "arn:aws:sts::1:assumed-role/dev-acme-tenant/sess"},
+        }
+
+    def test_detection_and_key(self):
+        self.assertTrue(iv._is_imported(self.ARN))
+        self.assertFalse(iv._is_imported("us.anthropic.claude-sonnet-4-6"))
+        self.assertEqual(iv._imported_key(self.ARN), "imported/abc123")
+
+    def test_unpriced_without_estimate(self):
+        # Default estimate 0 → imported invocation is unpriced (surfaced as an
+        # UnpricedInvocations count), never a borrowed rate. Model key is the
+        # compact imported id, not the raw ARN.
+        with mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 0.0):
+            cost, platform, model, _in, _out, priced = iv._estimate_cost(self._record())
+        self.assertFalse(priced)
+        self.assertEqual(cost, 0.0)
+        self.assertEqual(model, "imported/abc123")
+        self.assertEqual(platform, "acme")
+
+    def test_priced_with_estimate(self):
+        # A configured per-token estimate prices input+output tokens so imported
+        # spend reaches the kill-switch cost signal.
+        with mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 4.0):
+            cost, _platform, model, _in, _out, priced = iv._estimate_cost(self._record(1_000_000, 1_000_000))
+        self.assertTrue(priced)
+        self.assertAlmostEqual(cost, 8.0, places=4)  # (1M + 1M)/1M * 4.0
+        self.assertEqual(model, "imported/abc123")
+
+    def test_handler_prices_imported_when_estimate_set(self):
+        with (
+            mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 4.0),
+            mock.patch.object(iv, "cloudwatch") as cw,
+            mock.patch.object(iv, "s3"),
+        ):
+            result = iv.handler(_envelope([self._record(1_000_000, 0)]), None)
+        metrics = [m for call in cw.put_metric_data.call_args_list for m in call.kwargs["MetricData"]]
+        self.assertEqual(result["platforms"], 1)
+        self.assertEqual(result["unpriced"], 0)
+        cost_metric = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
+        self.assertAlmostEqual(cost_metric["Value"], 4.0, places=4)  # 1M/1M * 4.0
+        tok = next(m for m in metrics if m["MetricName"] == iv.TOKENS_IN_METRIC)
+        dims = {d["Name"]: d["Value"] for d in tok["Dimensions"]}
+        self.assertEqual(dims["ModelId"], "imported/abc123")
+
+
 if __name__ == "__main__":
     unittest.main()
