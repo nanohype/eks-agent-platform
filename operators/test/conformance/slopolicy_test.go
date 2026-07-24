@@ -110,6 +110,22 @@ func TestSLOPolicy_RejectsInvalidSpecs(t *testing.T) {
 				s.Spec.SLI = governancev1alpha1.SLI{Type: "latency", Metric: "x", ThresholdSeconds: "half a second"}
 			},
 		},
+		{
+			// Admitted, it would build an invalid query on every tick forever —
+			// a permanently failing objective that looks declared.
+			name: "latency SLI with no threshold",
+			mutate: func(s *governancev1alpha1.SLOPolicy) {
+				s.Spec.SLI = governancev1alpha1.SLI{Type: "latency", Metric: "x"}
+			},
+		},
+		{
+			// Silently ignored, so the author believes they narrowed an
+			// objective that is in fact measuring everything.
+			name: "availability SLI carrying a latency threshold",
+			mutate: func(s *governancev1alpha1.SLOPolicy) {
+				s.Spec.SLI = governancev1alpha1.SLI{Type: "availability", Metric: "x", ThresholdSeconds: "0.5"}
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

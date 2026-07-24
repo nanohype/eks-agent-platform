@@ -478,3 +478,64 @@ func TestForgetSLOPolicySeriesClearsGauges(t *testing.T) {
 		}
 	}
 }
+
+// Partial signal loss is the subtler version of the same hazard: the ticket tier
+// resolves, the page tier does not, so the tick is NOT signalMissing and the
+// page tier reads as "not breaching". Releasing the hold on that is releasing it
+// on a signal nobody read.
+func TestReconcileSLO_PageTierBlackoutNeverReleasesTheHold(t *testing.T) {
+	h := newSLOHarness(t, burningRatios(), appProjectWithHold(true))
+	h.run(t)
+	if h.sp.Status.HoldEngagedAt == nil {
+		t.Fatal("setup: the hold should be engaged")
+	}
+
+	// Long windows healthy and resolving; both page short-windows absent, as a
+	// missed scrape would leave them.
+	h.r.Prometheus = &fakePrometheus{byWindow: map[string]float64{
+		"1h": 0, "6h": 0, "1d": 0, "2h": 0, "3d": 0, sloWindow: 0,
+	}}
+	reading := h.run(t)
+
+	if reading.eval.pageHaveData {
+		t.Fatal("setup: the page tier should have no data in this fixture")
+	}
+	if h.sp.Status.HoldEngagedAt == nil {
+		t.Error("a page tier that did not resolve must not release the hold — that is auto-resuming a rollout on an unread signal")
+	}
+	if h.sp.Status.PageTierBreachRatio != "" {
+		t.Errorf("page-tier ratio = %q; an unevaluated tier must be absent, not a fabricated 0", h.sp.Status.PageTierBreachRatio)
+	}
+	if h.sp.Status.TicketTierBreachRatio == "" {
+		t.Error("the ticket tier resolved and should still be reported")
+	}
+}
+
+// LastEvaluated answers "is this objective being measured", which LastReconciled
+// cannot: a reconciler that ticks and fails every query keeps LastReconciled
+// fresh forever.
+func TestReconcileSLO_LastEvaluatedTracksRealReadingsOnly(t *testing.T) {
+	h := newSLOHarness(t, healthyRatios())
+	h.run(t)
+	if h.sp.Status.LastEvaluated == nil {
+		t.Fatal("a successful evaluation must set LastEvaluated")
+	}
+	// Backdate both, so the next tick's effect is visible regardless of how
+	// coarse metav1.Now() is — two ticks in one second are otherwise equal.
+	// Truncated to the second: a status round-trip drops sub-second precision,
+	// so a nanosecond-bearing fixture would fail an equality check for reasons
+	// that have nothing to do with the behaviour under test.
+	old := metav1.NewTime(time.Now().Add(-2 * time.Hour).Truncate(time.Second))
+	h.sp.Status.LastEvaluated = &old
+	h.sp.Status.LastReconciled = &old
+
+	h.r.Prometheus = nil
+	h.run(t)
+
+	if h.sp.Status.LastReconciled == nil || !h.sp.Status.LastReconciled.After(old.Time) {
+		t.Error("LastReconciled must advance on every tick, including one that got no reading")
+	}
+	if h.sp.Status.LastEvaluated == nil || !h.sp.Status.LastEvaluated.Equal(&old) {
+		t.Error("LastEvaluated must NOT advance on a tick that obtained no reading — that is the whole reason it is a separate field")
+	}
+}

@@ -227,9 +227,26 @@ func buildErrorRatioQuery(sli governancev1alpha1.SLI, window string) (string, er
 	var ratio string
 	switch sli.Type {
 	case sliTypeAvailability:
+		// The zero-default is scoped to the case it exists for, with absent().
+		//
+		// A bare `or vector(0)` cannot tell "this service has never errored"
+		// from "the errors series does not carry the labels this selector
+		// matches" — a differently-instrumented counter, or a metric named
+		// _error_total. Both make the numerator empty, and an unscoped default
+		// turns the second into a permanent, perfectly healthy zero across every
+		// window: budget 100%, severity empty, no condition, no metric, nothing
+		// to alert on. An objective that measures nothing and reports success is
+		// worse than one that reports nothing.
+		//
+		// `vector(0) and absent(<m>_errors_total)` yields a sample only when the
+		// family does not exist at all — a service that has genuinely never
+		// errored — so that case still reads 0, while a selector matching no
+		// errors series falls through to an empty result and is reported as
+		// NoData. That is the direction the pipeline's own rule demands: absent
+		// is not healthy.
 		ratio = fmt.Sprintf(
-			"(sum(rate(%s_errors_total%s[%s])) or vector(0)) / clamp_min(sum(rate(%s_requests_total%s[%s])), %s)",
-			sli.Metric, sel, window, sli.Metric, sel, window, sliDenominatorFloor,
+			"(sum(rate(%s_errors_total%s[%s])) or (vector(0) and absent(%s_errors_total))) / clamp_min(sum(rate(%s_requests_total%s[%s])), %s)",
+			sli.Metric, sel, window, sli.Metric, sli.Metric, sel, window, sliDenominatorFloor,
 		)
 	case sliTypeLatency:
 		if !promDecimalRE.MatchString(sli.ThresholdSeconds) {
@@ -528,8 +545,21 @@ func (r *SLOReconciler) reconcileSLO(ctx context.Context, sp *governancev1alpha1
 		reading.ratios = ratios
 		reading.eval = evaluateBurn(ratios, budget)
 		reading.budgetRemaining, reading.haveBudget = errorBudgetRemaining(ratios, budget)
-		reading.pageRatio = formatRatio(reading.eval.pageRatio)
-		reading.ticketRatio = formatRatio(reading.eval.ticketRatio)
+		// Only format a tier that actually resolved. pageHaveData/ticketHaveData
+		// gated the breach comparison but not the reporting, so a tier whose
+		// windows all came back empty was published as "0.000000" — a fabricated
+		// healthy reading for a tier that was never evaluated. A single missed
+		// scrape empties the 5m window (rate() needs two samples in range) while
+		// the 1h/6h/1d/3d windows still resolve, so the 14.4x fast-burn pair
+		// drops out of evaluation during exactly the incident that disturbs
+		// scraping. Both status fields are omitempty, so an unevaluated tier is
+		// absent rather than zero.
+		if reading.eval.pageHaveData {
+			reading.pageRatio = formatRatio(reading.eval.pageRatio)
+		}
+		if reading.eval.ticketHaveData {
+			reading.ticketRatio = formatRatio(reading.eval.ticketRatio)
+		}
 		// Every window came back empty: the service is not reporting the series
 		// this SLI names. Losing the signal must not look like good news.
 		reading.signalMissing = !reading.eval.anyData
@@ -556,7 +586,13 @@ func (r *SLOReconciler) reconcileSLO(ctx context.Context, sp *governancev1alpha1
 		case want && sp.Status.HoldEngagedAt == nil:
 			reading.holdEngaging = true
 			reading.holdEngaged = true
-		case !want && sp.Status.HoldEngagedAt != nil:
+		case !want && sp.Status.HoldEngagedAt != nil && reading.eval.pageHaveData:
+			// Only a page tier that actually evaluated clean may release the
+			// hold. Without the pageHaveData guard, a page tier that went blind
+			// while the ticket tier still resolved would read as "not
+			// breaching" and auto-resume the rollout — the same failure the
+			// signalMissing path exists to prevent, reached through a partial
+			// signal instead of a total one.
 			reading.holdReleasing = true
 			reading.holdEngaged = false
 		}
@@ -575,8 +611,20 @@ func (r *SLOReconciler) reconcileSLO(ctx context.Context, sp *governancev1alpha1
 		reading.holdUnobs = r.holdUnobserved(sp, obs, time.Now())
 	}
 
-	if !reading.signalMissing {
+	// Drop any series this policy owns under a stale platform label first. The
+	// platform is a metric label, so a policy repointed at a different Platform
+	// would otherwise leave the old platform's gauges pinned at their last value
+	// forever — including hold_active at 1 for a tenant nobody is holding.
+	forgetSLOPolicySeries(sp.Namespace, sp.Name)
+
+	// Per tier, not per tick: a tier that did not resolve must not export a 0,
+	// or a dashboard and an alert both read healthy for a tier nobody measured.
+	// Leaving the gauge unset lets it go stale instead, which the staleness
+	// alert can see.
+	if reading.eval.pageHaveData {
 		sloBurnRate.WithLabelValues(sp.Namespace, sp.Name, platform.Name, tierPage).Set(reading.eval.pageRatio)
+	}
+	if reading.eval.ticketHaveData {
 		sloBurnRate.WithLabelValues(sp.Namespace, sp.Name, platform.Name, tierTicket).Set(reading.eval.ticketRatio)
 	}
 	held := 0.0
@@ -597,6 +645,12 @@ func (r *SLOReconciler) applySLOStatus(ctx context.Context, sp *governancev1alph
 	now := metav1.Now()
 	previousSeverity := sp.Status.Severity
 	sp.Status.LastReconciled = &now
+	if !reading.signalMissing {
+		// Distinct from LastReconciled on purpose — see the field's doc. This is
+		// the one a staleness alert can read, because it stops advancing the
+		// moment the objective stops being measured.
+		sp.Status.LastEvaluated = &now
+	}
 
 	if reading.ratios != nil {
 		formatted := make(map[string]string, len(reading.ratios))

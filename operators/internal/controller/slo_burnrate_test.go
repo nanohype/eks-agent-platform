@@ -212,9 +212,10 @@ func TestBuildErrorRatioQuery(t *testing.T) {
 		}
 		// Without the OR, a service that has never errored has no _errors_total
 		// series, the whole ratio evaluates empty, and a healthy service reports
-		// NoData forever.
-		if !strings.Contains(q, "or vector(0)") {
-			t.Errorf("availability query must default a missing errors counter to zero: %s", q)
+		// NoData forever. The OR is gated on absent() so it covers only that
+		// case — see TestAvailabilityZeroDefaultIsScopedToAnAbsentFamily.
+		if !strings.Contains(q, "or (vector(0) and absent(") {
+			t.Errorf("availability query must default an ABSENT errors family to zero: %s", q)
 		}
 		if !strings.Contains(q, "checkout_api_errors_total") || !strings.Contains(q, "checkout_api_requests_total") {
 			t.Errorf("availability query must divide errors by requests: %s", q)
@@ -233,7 +234,7 @@ func TestBuildErrorRatioQuery(t *testing.T) {
 		// under-threshold bucket would read as "no request was fast" and
 		// fabricate a 100% error ratio — an instant page from a threshold that
 		// merely names a bucket the histogram does not publish.
-		if strings.Contains(q, "or vector(0)") {
+		if strings.Contains(q, "vector(0)") {
 			t.Errorf("latency query must NOT default a missing bucket to zero, or an unpublished le fabricates a total breach: %s", q)
 		}
 		if !strings.Contains(q, `le="0.5"`) {
@@ -417,5 +418,50 @@ func TestTierRatioPicksTheBreachingTier(t *testing.T) {
 	eval.severity = severityWarning
 	if got := tierRatio(eval); got != 9 {
 		t.Errorf("warning breach must report the ticket ratio, got %v", got)
+	}
+}
+
+// The zero-default exists for a service that has never errored. It must NOT
+// cover a selector that matches no errors series — that is a misconfiguration,
+// and defaulting it to zero reports a perfectly healthy objective that is
+// measuring nothing at all.
+func TestAvailabilityZeroDefaultIsScopedToAnAbsentFamily(t *testing.T) {
+	q, err := buildErrorRatioQuery(governancev1alpha1.SLI{
+		Type: sliTypeAvailability, Metric: "acme_api",
+		Selector: map[string]string{"route": "/checkout"},
+	}, "1h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(q, "absent(acme_api_errors_total)") {
+		t.Errorf("the zero-default must be gated on the errors family being absent entirely, or a selector that matches nothing reads as healthy: %s", q)
+	}
+	// The guard has to be on the unselected family name: absent() of the
+	// selected series would be true whenever the selector misses, which is the
+	// very case that must NOT default to zero.
+	if strings.Contains(q, `absent(acme_api_errors_total{route="/checkout"})`) {
+		t.Errorf("absent() must test the metric family, not the selected series — otherwise it re-creates the bug it fixes: %s", q)
+	}
+}
+
+// A tier whose windows did not resolve must not be reported at all. Publishing
+// 0 for it is a fabricated healthy reading for a tier nobody measured, and a
+// single missed scrape empties the 5m window while the long ones still resolve.
+func TestEvaluateBurnMarksAnUnresolvedTier(t *testing.T) {
+	// Every ticket window present, both page short-windows missing.
+	ratios := map[string]float64{"1h": 0.02, "6h": 0.02, "1d": 0, "2h": 0, "3d": 0}
+	got := evaluateBurn(ratios, budget99)
+
+	if got.pageHaveData {
+		t.Error("a page tier whose short windows are absent must not report data — the dual-window check cannot be evaluated")
+	}
+	if !got.ticketHaveData {
+		t.Error("the ticket tier resolved and should still be evaluated")
+	}
+	if !got.anyData {
+		t.Error("anyData must stay true — one tier resolved, so this is not a total signal loss")
+	}
+	if got.severity != "" {
+		t.Errorf("severity = %q; an unevaluable page tier must not produce a verdict", got.severity)
 	}
 }

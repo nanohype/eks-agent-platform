@@ -385,6 +385,10 @@ func (in *SLOPolicyStatus) DeepCopyInto(out *SLOPolicyStatus) {
 		in, out := &in.LastReconciled, &out.LastReconciled
 		*out = (*in).DeepCopy()
 	}
+	if in.LastEvaluated != nil {
+		in, out := &in.LastEvaluated, &out.LastEvaluated
+		*out = (*in).DeepCopy()
+	}
 	if in.BreachFiredAt != nil {
 		in, out := &in.BreachFiredAt, &out.BreachFiredAt
 		*out = (*in).DeepCopy()
