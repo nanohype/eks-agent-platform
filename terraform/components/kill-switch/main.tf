@@ -45,7 +45,11 @@ resource "aws_cloudwatch_event_archive" "killswitch" {
   name             = local.prefix
   event_source_arn = aws_cloudwatch_event_bus.killswitch.arn
   retention_days   = 365
-  description      = "Retain every budget-breach event for compliance"
+  # Bus-scoped, not rule-scoped: it retains every governance event published
+  # here — budget breaches, the state machine's ScaleToZero, and the SLO
+  # reconciler's burn-rate breaches (burn-rate.tf) — so the compliance record
+  # covers a decision the platform took automatically, whatever drove it.
+  description = "Retain every governance event on this bus for compliance"
 }
 
 resource "aws_cloudwatch_event_rule" "breach" {

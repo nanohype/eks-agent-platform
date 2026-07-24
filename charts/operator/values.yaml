@@ -43,6 +43,14 @@ reconcilers:
   budget:
     concurrent: 1
     requeueInterval: 1h
+  slo:
+    concurrent: 2
+    # Must not exceed the shortest burn-rate window (5m) or a fast burn is
+    # stepped over between ticks.
+    requeueInterval: 5m
+    # How many requeueIntervals an engaged rollout hold may go unobserved on the
+    # tenant's AppProject before the reconciler reports it as not landing.
+    holdGraceIntervals: 2
   eval:
     concurrent: 2
   batch:

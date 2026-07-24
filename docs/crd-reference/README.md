@@ -2,7 +2,7 @@
 
 Browsable Markdown reference, regenerated from the Go types on every `make -C operators manifests`:
 
-- [`v1alpha1.md`](./v1alpha1.md) — all eight kinds, every field, every validation marker.
+- [`v1alpha1.md`](./v1alpha1.md) — all ten kinds, every field, every validation marker.
 
 The **source of truth** is the Go types in `operators/api/{platform,agents,governance}/v1alpha1/` plus the generated manifests in `operators/config/crd/bases/`; this Markdown is a rendered view of them.
 
@@ -27,6 +27,7 @@ The generated YAML manifests are the operational truth — they're what gets app
 | `BatchJob`                              | `agents.nanohype.dev`     | Namespaced | [`batchjob_types.go`](../../operators/api/agents/v1alpha1/batchjob_types.go)             | [`agents.nanohype.dev_batchjobs.yaml`](../../operators/config/crd/bases/agents.nanohype.dev_batchjobs.yaml)                   |
 | `BudgetPolicy`                          | `governance.nanohype.dev` | Namespaced | [`budgetpolicy_types.go`](../../operators/api/governance/v1alpha1/budgetpolicy_types.go) | [`governance.nanohype.dev_budgetpolicies.yaml`](../../operators/config/crd/bases/governance.nanohype.dev_budgetpolicies.yaml) |
 | `EvalSuite`                             | `governance.nanohype.dev` | Namespaced | [`evalsuite_types.go`](../../operators/api/governance/v1alpha1/evalsuite_types.go)       | [`governance.nanohype.dev_evalsuites.yaml`](../../operators/config/crd/bases/governance.nanohype.dev_evalsuites.yaml)         |
+| `SLOPolicy` (+ `SLI`)                   | `governance.nanohype.dev` | Namespaced | [`slopolicy_types.go`](../../operators/api/governance/v1alpha1/slopolicy_types.go)       | [`governance.nanohype.dev_slopolicies.yaml`](../../operators/config/crd/bases/governance.nanohype.dev_slopolicies.yaml)       |
 
 Regenerate manifests + DeepCopy: `make -C operators manifests` (also copies to `charts/operator/crds/`).
 

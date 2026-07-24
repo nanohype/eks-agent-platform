@@ -70,6 +70,8 @@ func main() {
 	var budgetRequeueInterval time.Duration
 	var killSwitchGraceIntervals int
 	var killSwitchMaxRefires int
+	var sloRequeueInterval time.Duration
+	var sloHoldGraceIntervals int
 	// Per-reconciler worker concurrency. Each value is wired into the
 	// corresponding reconciler's SetupWithManager via MaxConcurrentReconciles
 	// so the operator chart's values.yaml — reconcilers.<x>.concurrent —
@@ -80,6 +82,7 @@ func main() {
 	var sandboxWorkers int
 	var agentSandboxWorkers int
 	var budgetWorkers int
+	var sloWorkers int
 	var evalWorkers int
 	var batchWorkers int
 	var batchPollInterval time.Duration
@@ -124,6 +127,8 @@ func main() {
 	flag.StringVar(&leaderElectionID, "leader-election-id", "eks-agent-platform.nanohype.dev", "Leader election lock name.")
 	flag.DurationVar(&budgetRequeueInterval, "budget-requeue-interval", time.Hour, "How often the budget reconciler ticks.")
 	flag.IntVar(&killSwitchGraceIntervals, "killswitch-grace-intervals", 3, "How many budget-requeue-intervals to wait after firing before treating an un-suspended platform as an unrouted breach.")
+	flag.DurationVar(&sloRequeueInterval, "slo-requeue-interval", 5*time.Minute, "How often the SLOPolicy reconciler evaluates burn rate. Must not exceed the shortest burn window (5m) or a fast burn is stepped over entirely.")
+	flag.IntVar(&sloHoldGraceIntervals, "slo-hold-grace-intervals", 2, "How many slo-requeue-intervals an engaged rollout hold may go unobserved on the tenant's AppProject before the reconciler reports it as not landing.")
 	flag.IntVar(&killSwitchMaxRefires, "killswitch-max-refires", 5, "Maximum times a single unrouted breach is re-published before the reconciler stops re-firing (the KillSwitchUnrouted condition + alert stay set).")
 	flag.IntVar(&platformWorkers, "platform-workers", 3, "MaxConcurrentReconciles for the Platform reconciler.")
 	flag.IntVar(&gatewayWorkers, "gateway-workers", 3, "MaxConcurrentReconciles for the ModelGateway reconciler.")
@@ -131,6 +136,7 @@ func main() {
 	flag.IntVar(&sandboxWorkers, "sandbox-workers", 3, "MaxConcurrentReconciles for the SandboxPool reconciler.")
 	flag.IntVar(&agentSandboxWorkers, "agentsandbox-workers", 5, "MaxConcurrentReconciles for the AgentSandbox reconciler.")
 	flag.IntVar(&budgetWorkers, "budget-workers", 1, "MaxConcurrentReconciles for the Budget reconciler.")
+	flag.IntVar(&sloWorkers, "slo-workers", 2, "MaxConcurrentReconciles for the SLOPolicy reconciler.")
 	flag.IntVar(&evalWorkers, "eval-workers", 2, "MaxConcurrentReconciles for the EvalSuite reconciler.")
 	flag.IntVar(&batchWorkers, "batch-workers", 2, "MaxConcurrentReconciles for the BatchJob reconciler.")
 	flag.DurationVar(&batchPollInterval, "batch-poll-interval", 2*time.Minute, "How often the BatchJob reconciler polls a submitted Bedrock job.")
@@ -329,6 +335,36 @@ func main() {
 	}
 	if err := budgetReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "Budget")
+		os.Exit(1)
+	}
+	sloReconciler := &controller.SLOReconciler{
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		Concurrency:        sloWorkers,
+		RequeueInterval:    sloRequeueInterval,
+		HoldGraceIntervals: sloHoldGraceIntervals,
+	}
+	if awsClients != nil {
+		sloReconciler.EventBridge = awsClients.EventBridge
+		sloReconciler.KillSwitchEventBusName = opConfig.KillSwitchEventBusName
+		// The AMP query client can only be built here, not in awsclients.New:
+		// its endpoint comes from SSM, and reading SSM needs the clients New
+		// returns. A cluster without managed-monitoring publishes no endpoint,
+		// and the reconciler degrades to a MetricStoreUnavailable condition
+		// rather than failing startup — enable_managed_monitoring is opt-in.
+		if opConfig.AMPEndpoint != "" {
+			ampQuery, err := awsclients.NewPrometheusQuery(awsClients.AWSConfig, opConfig.AMPEndpoint)
+			if err != nil {
+				setupLog.Error(err, "unable to build the AMP query client; SLO burn-rate evaluation is disabled", "endpoint", opConfig.AMPEndpoint)
+			} else {
+				sloReconciler.Prometheus = ampQuery
+			}
+		} else {
+			setupLog.Info("no managed-monitoring AMP endpoint published for this cluster; SLO burn-rate evaluation is disabled")
+		}
+	}
+	if err := sloReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to register reconciler", "controller", "SLO")
 		os.Exit(1)
 	}
 	evalReconciler := &controller.EvalReconciler{

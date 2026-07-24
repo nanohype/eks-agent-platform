@@ -43,6 +43,7 @@ func TestSetupWithManager_RegistersEveryReconciler(t *testing.T) {
 		"eval":         (&controller.EvalReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"modelgateway": (&controller.ModelGatewayReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"sandboxpool":  (&controller.SandboxPoolReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
+		"slo":          (&controller.SLOReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 	}
 	for name, setup := range setups {
 		if err := setup(mgr); err != nil {

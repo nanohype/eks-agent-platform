@@ -86,4 +86,13 @@ resources:
     kind: EvalSuite
     path: github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1
     version: v1alpha1
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: nanohype.dev
+    group: governance
+    kind: SLOPolicy
+    path: github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1
+    version: v1alpha1
 version: "3"

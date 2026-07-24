@@ -17,3 +17,11 @@ output "archive_name" {
   description = "EventBridge archive for compliance retention"
   value       = aws_cloudwatch_event_archive.killswitch.name
 }
+
+output "burn_rate_rule_names" {
+  description = "EventBridge rules routing SLOPolicy burn-rate breaches to the severity alert topics, by tier"
+  value = {
+    critical = aws_cloudwatch_event_rule.burn_rate_critical.name
+    warning  = aws_cloudwatch_event_rule.burn_rate_warning.name
+  }
+}

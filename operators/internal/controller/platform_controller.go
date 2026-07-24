@@ -17,13 +17,17 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
@@ -87,6 +91,10 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cilium.io,resources=ciliumnetworkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=appprojects;applications,verbs=get;list;watch;create;update;patch;delete
+// The AppProject's deny sync windows are rendered from SLOPolicy hold state, so
+// this reconciler reads that kind. Read-only — the SLO reconciler owns its own
+// status and this one never writes it.
+// +kubebuilder:rbac:groups=governance.nanohype.dev,resources=slopolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=users,verbs=impersonate
 // vcluster tier: read the vcluster kubeconfig Secret + write the ArgoCD cluster-
@@ -466,7 +474,25 @@ func (r *PlatformReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&corev1.LimitRange{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		// The AppProject's deny sync windows are rendered from SLOPolicy hold
+		// state, so a hold engaging or clearing has to re-run this reconciler.
+		// Load-bearing rather than an optimization: the periodic resync below is
+		// gated on AWS clients being wired, so without this watch the hold would
+		// never land at all on a cluster running without them.
+		Watches(&governancev1alpha1.SLOPolicy{}, handler.EnqueueRequestsFromMapFunc(sloPolicyToPlatform)).
 		Named("platform").
 		WithOptions(ctrlruntime.Options{MaxConcurrentReconciles: c}).
 		Complete(r)
+}
+
+// sloPolicyToPlatform maps an SLOPolicy event to the Platform it references, so
+// a hold decision reaches the AppProject writer without waiting for a resync.
+func sloPolicyToPlatform(_ context.Context, obj client.Object) []reconcile.Request {
+	s, ok := obj.(*governancev1alpha1.SLOPolicy)
+	if !ok || s.Spec.PlatformRef.Name == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Namespace: s.Namespace, Name: s.Spec.PlatformRef.Name},
+	}}
 }

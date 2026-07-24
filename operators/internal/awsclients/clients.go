@@ -41,6 +41,13 @@ type Clients struct {
 	CloudWatch  CloudWatch
 	EventBridge EventBridge
 	Bedrock     Bedrock
+
+	// AWSConfig is the resolved SDK config the clients above were built from.
+	// Retained because not every dependency can be constructed at startup: the
+	// AMP query client needs a workspace endpoint that arrives from SSM, and
+	// reading SSM needs the client this struct carries. Callers build those
+	// late-bound clients from this config (see NewPrometheusQuery).
+	AWSConfig aws.Config
 }
 
 // awsHTTPTimeout bounds every AWS SDK request. controller-runtime does not
@@ -102,6 +109,7 @@ func New(ctx context.Context, region string) (*Clients, error) {
 		CloudWatch:  cloudwatch.NewFromConfig(cfg),
 		EventBridge: eventbridge.NewFromConfig(cfg),
 		Bedrock:     bedrock.NewFromConfig(cfg),
+		AWSConfig:   cfg,
 	}, nil
 }
 
