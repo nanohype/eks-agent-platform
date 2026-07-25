@@ -249,6 +249,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err := r.ensureTenantSecretsPolicy(ctx, name, arn, p, cfg); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
+		if err := r.ensureTenantKeyPolicy(ctx, name, p, cfg); err != nil {
+			return platformSuspension{RoleARN: arn}, err
+		}
 		if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {
 			return platformSuspension{RoleARN: arn}, err
 		}
@@ -288,6 +291,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		return platformSuspension{RoleARN: arn}, err
 	}
 	if err := r.ensureTenantSecretsPolicy(ctx, name, arn, p, cfg); err != nil {
+		return platformSuspension{RoleARN: arn}, err
+	}
+	if err := r.ensureTenantKeyPolicy(ctx, name, p, cfg); err != nil {
 		return platformSuspension{RoleARN: arn}, err
 	}
 	if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {

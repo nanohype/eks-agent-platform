@@ -381,6 +381,10 @@ type stubSSM struct {
 	params map[string]string
 	err    error
 	calls  []string
+	// nilParameter reproduces the shape the SDK permits but the service does not
+	// normally return: a 200 with no Parameter body. Treated as unpublished
+	// rather than dereferenced.
+	nilParameter bool
 }
 
 func (s *stubSSM) GetParameter(_ context.Context, in *ssm.GetParameterInput, _ ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
@@ -388,6 +392,9 @@ func (s *stubSSM) GetParameter(_ context.Context, in *ssm.GetParameterInput, _ .
 	s.calls = append(s.calls, name)
 	if s.err != nil {
 		return nil, s.err
+	}
+	if s.nilParameter {
+		return &ssm.GetParameterOutput{}, nil
 	}
 	v, ok := s.params[name]
 	if !ok {
@@ -470,6 +477,18 @@ func TestResolveRelationalSecretARNs(t *testing.T) {
 
 		if _, _, err := r.resolveRelationalSecretARNs(context.Background(), p, cluster); err == nil {
 			t.Error("an SSM error is not a missing parameter and must not be swallowed")
+		}
+	})
+
+	t.Run("a response with no parameter body is unresolved, not a panic", func(t *testing.T) {
+		r := &PlatformReconciler{SSM: &stubSSM{nilParameter: true}}
+
+		_, unresolved, err := r.resolveRelationalSecretARNs(context.Background(), p, cluster)
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if len(unresolved) != 1 {
+			t.Errorf("an empty response must read as unpublished, got %v", unresolved)
 		}
 	})
 

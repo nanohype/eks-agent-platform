@@ -50,6 +50,7 @@ var floors = config{
 		"internal/controller/platform_datastore_policy.go":      100,
 		"internal/controller/platform_capability_policy.go":     100,
 		"internal/controller/platform_tenant_secrets_policy.go": 100,
+		"internal/controller/platform_tenant_key_policy.go":     100,
 	},
 }
 
