@@ -58,7 +58,7 @@ per-Platform virtual cluster on top of the unchanged host-side provisioning:
 - **Grant AWS access.** The vcluster syncs the tenant `tenant-runtime` ServiceAccount
   down to the host under a translated name; the operator discovers that name by label
   (cross-checking a byte-identical replica of vcluster's own algorithm) and binds the
-  per-Platform IRSA role to it with an EKS Pod Identity association. The syncer's own
+  per-Platform tenant role to it with an EKS Pod Identity association. The syncer's own
   ServiceAccount gets no association, so it has no AWS reach.
 - **Deliver tenant apps.** The operator registers the vcluster as an ArgoCD cluster
   Secret scoped to the Platform's `AppProject`, so the tenant's ApplicationSet entry

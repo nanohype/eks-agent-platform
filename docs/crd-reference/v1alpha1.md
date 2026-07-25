@@ -1129,7 +1129,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase: Pending, Provisioning, Ready, Suspended, Failed. |  | Optional: \{\} <br /> |
-| `iamRoleArn` _string_ | IamRoleArn is the per-Platform IRSA role created by the controller. |  | Optional: \{\} <br /> |
+| `iamRoleArn` _string_ | IamRoleArn is the per-Platform tenant role created by the controller.<br />Tenant pods receive its credentials through the Pod Identity association<br />reported in status.podIdentity. |  | Optional: \{\} <br /> |
 | `sessionRoleArn` _string_ | SessionRoleArn is the per-Platform attribution session role, created when<br />spec.attribution is set. Empty when attribution is off. |  | Optional: \{\} <br /> |
 | `namespace` _string_ | Namespace is the tenant namespace the controller provisioned. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the last spec.generation the controller reconciled. |  | Optional: \{\} <br /> |
@@ -1137,6 +1137,34 @@ _Appears in:_
 | `suspendedReason` _string_ | SuspendedReason carries the kill-switch's reason (e.g.<br />'budget-exceeded'). Same lifecycle as SuspendedAt. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions follows the standard kubernetes pattern. |  | Optional: \{\} <br /> |
 | `datastores` _[DatastoreStatus](#datastorestatus) array_ | Datastores reports per-datastore observed state, separate from the<br />top-level Phase: a Platform is Ready once its namespace, quota, and<br />identity are live, while each datastore reports its own readiness here so a<br />still-creating Aurora cluster does not gate the tenant's Ready (T6). |  | Optional: \{\} <br /> |
+| `podIdentity` _[PodIdentityStatus](#podidentitystatus)_ | PodIdentity reports the EKS Pod Identity association that binds this<br />tenant's ServiceAccount to status.iamRoleArn. Empty until the association<br />is reconciled (and on the suspended path, which skips AWS writes — the<br />last observed binding is preserved rather than cleared). |  | Optional: \{\} <br /> |
+
+
+#### PodIdentityStatus
+
+
+
+PodIdentityStatus is the observed (namespace, serviceAccount) → role binding.
+
+It exists because the binding is not derivable from anything else on the CR.
+The trust policy carries no subject — under Pod Identity the constraint lives
+in the association, not the role — and the ServiceAccount the association
+targets is not always tenant-runtime: under spec.isolation: vcluster the
+syncer rewrites it to a translated host name whose algorithm (and hash
+truncation) is vcluster's, not ours. Publishing what the operator actually
+bound means an auditor reads one field instead of reimplementing that.
+
+
+
+_Appears in:_
+- [PlatformStatus](#platformstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `clusterName` _string_ | ClusterName is the EKS cluster the association lives on. Associations are<br />cluster-scoped resources, so this is required to look one up. |  | Optional: \{\} <br /> |
+| `namespace` _string_ | Namespace is the host namespace the association targets — the tenant<br />namespace on both isolation tiers. |  | Optional: \{\} <br /> |
+| `serviceAccount` _string_ | ServiceAccount is the host ServiceAccount name the association targets:<br />tenant-runtime under namespace isolation, the vcluster-translated host<br />name under vcluster isolation. |  | Optional: \{\} <br /> |
+| `roleArn` _string_ | RoleArn is the role the association vends. Always equal to<br />status.iamRoleArn at the moment it was written; reported separately so a<br />reader can tell a stale binding from a current one. |  | Optional: \{\} <br /> |
 
 
 #### QueueConfig

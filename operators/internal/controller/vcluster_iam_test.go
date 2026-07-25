@@ -74,7 +74,8 @@ func TestEnsureIamRole_VClusterTier_BindsSyncedSA(t *testing.T) {
 		Environment:             "production",
 	}
 
-	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
+	res, err := r.ensureIamRole(context.Background(), platform, cfg)
+	if err != nil {
 		t.Fatalf("ensureIamRole (vcluster tier): %v", err)
 	}
 
@@ -88,6 +89,20 @@ func TestEnsureIamRole_VClusterTier_BindsSyncedSA(t *testing.T) {
 	}
 	if got == tenantSAName {
 		t.Errorf("association bound the virtual tenant-runtime SA %q — Pod Identity would resolve nothing", got)
+	}
+
+	// status.podIdentity carries the translated name, not the virtual one. This
+	// is the whole reason the binding is published: the translation is
+	// vcluster's algorithm, and a reader that assumed tenant-runtime here would
+	// conclude a conformant vcluster tenant is unbound.
+	if res.PodIdentity == nil {
+		t.Fatal("vcluster tier reconciled an association but reported no binding")
+	}
+	if res.PodIdentity.ServiceAccount != wantSynced {
+		t.Errorf("published SA: got %q want synced host name %q", res.PodIdentity.ServiceAccount, wantSynced)
+	}
+	if res.PodIdentity.ServiceAccount == tenantSAName {
+		t.Error("published binding names the virtual tenant-runtime SA; a reader would look up an association that does not exist")
 	}
 }
 

@@ -221,7 +221,9 @@ type PlatformStatus struct {
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
-	// IamRoleArn is the per-Platform IRSA role created by the controller.
+	// IamRoleArn is the per-Platform tenant role created by the controller.
+	// Tenant pods receive its credentials through the Pod Identity association
+	// reported in status.podIdentity.
 	// +optional
 	IamRoleArn string `json:"iamRoleArn,omitempty"`
 
@@ -265,6 +267,46 @@ type PlatformStatus struct {
 	// +listType=map
 	// +listMapKey=name
 	Datastores []DatastoreStatus `json:"datastores,omitempty"`
+
+	// PodIdentity reports the EKS Pod Identity association that binds this
+	// tenant's ServiceAccount to status.iamRoleArn. Empty until the association
+	// is reconciled (and on the suspended path, which skips AWS writes — the
+	// last observed binding is preserved rather than cleared).
+	// +optional
+	PodIdentity *PodIdentityStatus `json:"podIdentity,omitempty"`
+}
+
+// PodIdentityStatus is the observed (namespace, serviceAccount) → role binding.
+//
+// It exists because the binding is not derivable from anything else on the CR.
+// The trust policy carries no subject — under Pod Identity the constraint lives
+// in the association, not the role — and the ServiceAccount the association
+// targets is not always tenant-runtime: under spec.isolation: vcluster the
+// syncer rewrites it to a translated host name whose algorithm (and hash
+// truncation) is vcluster's, not ours. Publishing what the operator actually
+// bound means an auditor reads one field instead of reimplementing that.
+type PodIdentityStatus struct {
+	// ClusterName is the EKS cluster the association lives on. Associations are
+	// cluster-scoped resources, so this is required to look one up.
+	// +optional
+	ClusterName string `json:"clusterName,omitempty"`
+
+	// Namespace is the host namespace the association targets — the tenant
+	// namespace on both isolation tiers.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// ServiceAccount is the host ServiceAccount name the association targets:
+	// tenant-runtime under namespace isolation, the vcluster-translated host
+	// name under vcluster isolation.
+	// +optional
+	ServiceAccount string `json:"serviceAccount,omitempty"`
+
+	// RoleArn is the role the association vends. Always equal to
+	// status.iamRoleArn at the moment it was written; reported separately so a
+	// reader can tell a stale binding from a current one.
+	// +optional
+	RoleArn string `json:"roleArn,omitempty"`
 }
 
 // +kubebuilder:object:root=true

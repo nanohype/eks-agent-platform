@@ -291,6 +291,12 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if susp.RoleARN != "" {
 		platform.Status.IamRoleArn = susp.RoleARN
 	}
+	// Same rule for the Pod Identity binding: nil means this pass reconciled no
+	// association (no EKS client, or the suspended short-circuit returned before
+	// any AWS write), not that the binding is gone.
+	if susp.PodIdentity != nil {
+		platform.Status.PodIdentity = susp.PodIdentity
+	}
 	platform.Status.ObservedGeneration = platform.Generation
 
 	// Create the tenant-runtime ServiceAccount (no role-arn annotation — its IAM
