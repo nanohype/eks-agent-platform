@@ -244,6 +244,7 @@ func main() {
 		platformReconciler.EKS = awsClients.EKS
 		platformReconciler.KMS = awsClients.KMS
 		platformReconciler.S3 = awsClients.S3
+		platformReconciler.SSM = awsClients.SSM
 		platformReconciler.IAMCfg = controller.IAMConfig{
 			TenantIAMPath:                opConfig.TenantIAMPath,
 			TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,

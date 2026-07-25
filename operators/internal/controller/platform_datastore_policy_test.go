@@ -37,6 +37,11 @@ func findStmt(stmts []policyStatement, sid string) *policyStatement {
 	return nil
 }
 
+// The shape RDS actually produces: rds!cluster-<cluster-resource-id>-<suffix>,
+// every segment AWS-generated. Nothing from the tenant naming convention appears
+// in it, which is why the ARN has to be published rather than composed.
+const testDBSecretARN = "arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!cluster-4f9c2b1a-7de3-4c11-9a02-1f7b6c5d8e90-Ab3xYz"
+
 func hasResource(s *policyStatement, want string) bool {
 	for _, r := range s.Resource {
 		if r == want {
@@ -59,7 +64,8 @@ func TestDatastorePolicy_ScopesEachKind(t *testing.T) {
 		platformv1alpha1.DatastoreSpec{Name: "ca", Kind: platformv1alpha1.DatastoreCache},
 		platformv1alpha1.DatastoreSpec{Name: "st", Kind: platformv1alpha1.DatastoreStream},
 	)
-	stmts := datastorePolicyStatements(p, "development", testScope())
+	stmts := datastorePolicyStatements(p, "development", testScope(),
+		map[string]string{"db": testDBSecretARN})
 
 	// S3: bucket + object statements, account-qualified name.
 	if s := findStmt(stmts, "s3bucketobj"); s == nil || !hasResource(s, "arn:aws:s3:::development-myplat-obj-123456789012") {
@@ -89,10 +95,12 @@ func TestDatastorePolicy_ScopesEachKind(t *testing.T) {
 		t.Errorf("msk statement missing or misscoped: %+v", s)
 	}
 
-	// relational: one shared secret grant scoped to the RDS-managed prefix.
-	if s := findStmt(stmts, "relationalSecrets"); s == nil ||
-		!hasResource(s, "arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!cluster-*") {
-		t.Errorf("relational secret statement missing or misscoped: %+v", s)
+	// relational: the grant names the one secret this tenant's own Aurora cluster
+	// owns, resolved from SSM. It must be the literal published ARN — a pattern
+	// here is a cross-tenant read, because every Aurora master secret in the
+	// account shares the rds!cluster- prefix.
+	if s := findStmt(stmts, "relationalSecrets"); s == nil || !hasResource(s, testDBSecretARN) {
+		t.Errorf("relational secret statement missing or not scoped to the published ARN: %+v", s)
 	}
 
 	// cache contributes no statement — nothing named for "ca".
@@ -119,7 +127,7 @@ func TestDatastorePolicy_ScopesEachKind(t *testing.T) {
 // datastores — or only a cache, which needs no IAM — produces no policy, so the
 // reconciler removes the inline policy rather than writing an empty one.
 func TestDatastorePolicy_EmptyWhenNoIAMDatastores(t *testing.T) {
-	none := datastorePolicyStatements(platformWithDatastores("myplat"), "development", testScope())
+	none := datastorePolicyStatements(platformWithDatastores("myplat"), "development", testScope(), nil)
 	if len(none) != 0 {
 		t.Errorf("no datastores must yield no statements, got %d", len(none))
 	}
@@ -133,7 +141,7 @@ func TestDatastorePolicy_EmptyWhenNoIAMDatastores(t *testing.T) {
 
 	cacheOnly := datastorePolicyStatements(
 		platformWithDatastores("myplat", platformv1alpha1.DatastoreSpec{Name: "ca", Kind: platformv1alpha1.DatastoreCache}),
-		"development", testScope(),
+		"development", testScope(), nil,
 	)
 	if len(cacheOnly) != 0 {
 		t.Errorf("a cache-only Platform needs no IAM statement, got %d", len(cacheOnly))
@@ -148,7 +156,8 @@ func TestDatastorePolicy_RelationalSecretDeduped(t *testing.T) {
 		platformv1alpha1.DatastoreSpec{Name: "a", Kind: platformv1alpha1.DatastoreRelational},
 		platformv1alpha1.DatastoreSpec{Name: "b", Kind: platformv1alpha1.DatastoreRelational},
 	)
-	stmts := datastorePolicyStatements(p, "development", testScope())
+	stmts := datastorePolicyStatements(p, "development", testScope(),
+		map[string]string{"a": testDBSecretARN, "b": testDBSecretARN + "-b"})
 	secretCount := 0
 	for _, s := range stmts {
 		if s.Sid == "relationalSecrets" {
@@ -291,5 +300,72 @@ func TestEnsureIamRole_DatastorePolicyError_ExistingRolePath(t *testing.T) {
 
 	if _, err := r.ensureIamRole(context.Background(), p, cfg); err == nil {
 		t.Fatalf("expected ensureIamRole to propagate the datastore-policy error on the existing-role path")
+	}
+}
+
+// TestDatastorePolicy_UnresolvedRelationalSecretGrantsNothing proves the
+// fail-closed half of the scoping contract. A Platform can reconcile before its
+// Aurora cluster exists, so the published ARN is legitimately absent for a while.
+// The tempting fallback — grant on the rds!cluster-* prefix until the real ARN
+// arrives — hands the tenant every other tenant's master credentials, so the
+// correct behaviour is no grant at all.
+func TestDatastorePolicy_UnresolvedRelationalSecretGrantsNothing(t *testing.T) {
+	p := platformWithDatastores("myplat",
+		platformv1alpha1.DatastoreSpec{Name: "db", Kind: platformv1alpha1.DatastoreRelational},
+		platformv1alpha1.DatastoreSpec{Name: "kv", Kind: platformv1alpha1.DatastoreKeyValue},
+	)
+
+	stmts := datastorePolicyStatements(p, "development", testScope(), nil)
+
+	if s := findStmt(stmts, "relationalSecrets"); s != nil {
+		t.Errorf("an unresolved master-secret ARN must produce no secret grant, got %+v", s)
+	}
+	// The rest of the declaration is unaffected — one missing parameter does not
+	// strip a tenant of the grants that do resolve.
+	if s := findStmt(stmts, "dynamodbkv"); s == nil {
+		t.Error("the other datastores' grants must still be emitted")
+	}
+}
+
+// TestDatastorePolicy_NoResourceCrossesTenants is the regression guard for the
+// defect this scoping replaced: a Secrets Manager grant on
+// arn:aws:secretsmanager:<region>:<account>:secret:rds!cluster-*, which every
+// Aurora cluster in the account matches. The previous test asserted that exact
+// wildcard was PRESENT, so the gate ratified the bug rather than catching it.
+//
+// Checking for a bare "*" is not enough — the defect was a qualified pattern, not
+// a bare one. Every Secrets Manager resource must be a literal ARN.
+func TestDatastorePolicy_NoResourceCrossesTenants(t *testing.T) {
+	p := platformWithDatastores("myplat",
+		platformv1alpha1.DatastoreSpec{Name: "db", Kind: platformv1alpha1.DatastoreRelational},
+		platformv1alpha1.DatastoreSpec{Name: "obj", Kind: platformv1alpha1.DatastoreObjectStore},
+	)
+
+	stmts := datastorePolicyStatements(p, "development", testScope(),
+		map[string]string{"db": testDBSecretARN})
+
+	for _, s := range stmts {
+		for _, r := range s.Resource {
+			if !strings.Contains(r, ":secretsmanager:") {
+				continue
+			}
+			if strings.Contains(r, "*") {
+				t.Errorf("statement %s grants Secrets Manager on a pattern, which spans tenants: %s", s.Sid, r)
+			}
+			if !strings.Contains(r, testDBSecretARN) {
+				t.Errorf("statement %s names a secret this tenant does not own: %s", s.Sid, r)
+			}
+		}
+	}
+}
+
+// TestMasterSecretParamPath pins the contract with the tenant-substrate component,
+// which publishes at this exact path. The two sides are in different repos, so a
+// drift here is only visible as a tenant that silently loses its database grant.
+func TestMasterSecretParamPath(t *testing.T) {
+	got := masterSecretParamPath("development-platform", "myplat", "db")
+	want := "/eks-agent-platform/development-platform/tenant-substrate/myplat/db/master_secret_arn"
+	if got != want {
+		t.Errorf("SSM path drifted from what tenant-substrate publishes:\n got %s\nwant %s", got, want)
 	}
 }

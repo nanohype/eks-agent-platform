@@ -190,8 +190,12 @@ type IdentitySpec struct {
 	// secretsmanager:GetSecretValue/DescribeSecret on exactly those secrets in
 	// the tenant-secrets inline policy — no prefix wildcard. Secret material
 	// projected into the pod by the chart's ExternalSecret is resolved by the
-	// External Secrets controller's own identity and needs no entry here;
-	// leaving this empty means the tenant role holds no Secrets Manager grant.
+	// External Secrets controller's own identity and needs no entry here.
+	// Leaving this empty means the tenant role holds no grant on any *application*
+	// secret. It is not the whole Secrets Manager story: a relational datastore
+	// separately grants read on the one RDS-managed master secret its own Aurora
+	// cluster owns, resolved from the ARN the tenant-substrate component publishes
+	// — never a prefix, since every Aurora master secret in the account shares one.
 	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:items:MaxLength=256
 	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9][A-Za-z0-9/_+=.@-]*$`

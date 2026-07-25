@@ -59,6 +59,11 @@ type PlatformReconciler struct {
 	EKS awsclients.EKS
 	KMS awsclients.KMS
 	S3  awsclients.S3
+	// SSM resolves the per-tenant master-secret ARNs the tenant-substrate
+	// component publishes. Read per reconcile rather than at startup: a tenant's
+	// Aurora cluster can be created after the operator boots, and a stale
+	// snapshot would leave that tenant with no database grant until a restart.
+	SSM awsclients.SSM
 
 	// IAMCfg carries the SSM-resolved values the IAM step needs:
 	// TenantIAMPath, TenantBaselinePolicyARN, ClusterName, Environment.
@@ -404,8 +409,15 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// re-derived every reconcile (idempotent). Per-datastore Phase mirrors the
 	// Platform phase; a still-provisioning datastore never gated the top-level
 	// Ready set above (namespace + identity).
+	// Resolved here as well as in the IAM path: the two run in different call
+	// chains and the grant must not depend on status having been written first.
+	// One GetParameter per relational datastore, and most tenants declare one.
+	statusSecretARNs, _, err := r.resolveRelationalSecretARNs(ctx, platform, r.IAMCfg.ClusterName)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolve relational secret ARNs: %w", err)
+	}
 	platform.Status.Datastores = datastoreStatuses(platform, r.IAMCfg.Environment,
-		arnScopeFromRole(susp.RoleARN, r.IAMCfg.Region), platform.Status.Phase)
+		arnScopeFromRole(susp.RoleARN, r.IAMCfg.Region), platform.Status.Phase, statusSecretARNs)
 
 	if err := r.Status().Update(ctx, platform); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)

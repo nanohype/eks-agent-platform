@@ -29,7 +29,8 @@ func TestDatastoreStatuses_DeterministicIdentity(t *testing.T) {
 		platformv1alpha1.DatastoreSpec{Name: "st", Kind: platformv1alpha1.DatastoreStream},
 	)
 
-	sts := datastoreStatuses(p, "development", testScope(), "Ready")
+	sts := datastoreStatuses(p, "development", testScope(), "Ready",
+		map[string]string{"db": testDBSecretARN})
 	if len(sts) != 7 {
 		t.Fatalf("got %d statuses want 7", len(sts))
 	}
@@ -60,15 +61,22 @@ func TestDatastoreStatuses_DeterministicIdentity(t *testing.T) {
 	if by["st"].ARN != "arn:aws:kafka:us-west-2:123456789012:cluster/development-myplat-st" || by["st"].Endpoint != "" {
 		t.Errorf("stream identity wrong (endpoint must be empty — generated id): %+v", by["st"])
 	}
-	if by["db"].ARN != "arn:aws:rds:us-west-2:123456789012:cluster:development-myplat-db" || by["db"].Endpoint != "" || by["db"].SecretName != "" {
-		t.Errorf("relational identity wrong (endpoint/secret resolved out-of-band): %+v", by["db"])
+	// Endpoint stays empty — the Aurora writer address carries an AWS-generated id
+	// nothing here can compose. SecretName does not: it is the ARN tenant-substrate
+	// publishes, the same one the datastore-access grant is scoped to, so the CR
+	// reports exactly the secret the tenant is allowed to read.
+	if by["db"].ARN != "arn:aws:rds:us-west-2:123456789012:cluster:development-myplat-db" || by["db"].Endpoint != "" {
+		t.Errorf("relational identity wrong (endpoint resolved out-of-band): %+v", by["db"])
+	}
+	if by["db"].SecretName != testDBSecretARN {
+		t.Errorf("relational status must report the published master-secret ARN, got %q", by["db"].SecretName)
 	}
 }
 
 // TestDatastoreStatuses_EmptyWhenNone proves a Platform with no datastores
 // reports a nil list (clears any prior status).
 func TestDatastoreStatuses_EmptyWhenNone(t *testing.T) {
-	if got := datastoreStatuses(platformWithDatastores("myplat"), "development", testScope(), "Ready"); got != nil {
+	if got := datastoreStatuses(platformWithDatastores("myplat"), "development", testScope(), "Ready", nil); got != nil {
 		t.Errorf("no datastores must report nil, got %+v", got)
 	}
 }
