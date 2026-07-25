@@ -205,22 +205,39 @@ func (r *PlatformReconciler) resolveRelationalSecretARNs(
 			continue
 		}
 
-		path := masterSecretParamPath(clusterName, p.Name, d.Name)
-		out, err := r.SSM.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(path)})
-		var notFound *ssmtypes.ParameterNotFound
-		switch {
-		case errors.As(err, &notFound):
-			unresolved = append(unresolved, d.Name)
-		case err != nil:
-			return nil, nil, fmt.Errorf("ssm GetParameter %s: %w", path, err)
-		case out == nil || out.Parameter == nil || aws.ToString(out.Parameter.Value) == "":
-			unresolved = append(unresolved, d.Name)
-		default:
-			resolved[d.Name] = aws.ToString(out.Parameter.Value)
+		value, err := r.readSSMParameter(ctx, masterSecretParamPath(clusterName, p.Name, d.Name))
+		if err != nil {
+			return nil, nil, err
 		}
+		if value == "" {
+			unresolved = append(unresolved, d.Name)
+			continue
+		}
+		resolved[d.Name] = value
 	}
 
 	return resolved, unresolved, nil
+}
+
+// readSSMParameter returns a parameter's value, or the empty string when it does
+// not exist or carries no value. Every consumer of the tenant-substrate SSM
+// contract treats "absent" the same way — no grant rather than a broader one —
+// so the not-found case is normalized here instead of at each call site. A real
+// failure (throttled, denied) still propagates: mistaking it for "not published"
+// would quietly strip a working tenant's grant on the next converge.
+func (r *PlatformReconciler) readSSMParameter(ctx context.Context, path string) (string, error) {
+	out, err := r.SSM.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(path)})
+	var notFound *ssmtypes.ParameterNotFound
+	switch {
+	case errors.As(err, &notFound):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("ssm GetParameter %s: %w", path, err)
+	case out == nil || out.Parameter == nil:
+		return "", nil
+	default:
+		return aws.ToString(out.Parameter.Value), nil
+	}
 }
 
 // ensureDatastorePolicy reconciles the datastore-access inline policy on a tenant
