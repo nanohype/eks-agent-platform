@@ -54,13 +54,20 @@ func suspensionFromTags(tags []iamtypes.Tag) (bool, string) {
 	return suspended, reason
 }
 
-// platformSuspension is the return shape of ensureIamRole, carrying both
-// the ARN and the kill-switch state. The PlatformReconciler propagates
-// Suspended/Reason into status.suspendedAt + status.suspendedReason.
-type platformSuspension struct {
+// iamReconcileResult is the return shape of ensureIamRole: the tenant role ARN,
+// the kill-switch state, and the Pod Identity binding that was reconciled. The
+// PlatformReconciler propagates Suspended/Reason into status.suspendedAt +
+// status.suspendedReason and PodIdentity into status.podIdentity.
+type iamReconcileResult struct {
 	RoleARN   string
 	Suspended bool
 	Reason    string
+
+	// PodIdentity is nil whenever no association was reconciled this pass —
+	// the nil-EKS path, and the suspended short-circuit, which returns before
+	// any AWS write. Callers preserve the last published binding on nil rather
+	// than clearing it.
+	PodIdentity *platformv1alpha1.PodIdentityStatus
 }
 
 // tenantRoleName returns the IAM role name minted for a Platform. Matches
@@ -193,14 +200,14 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 // Idempotent: re-runs on the same Platform observe the role's existence
 // via GetRole and skip CreateRole. Reads the kill-switch suspension tag
 // (platform.nanohype.dev/suspended); when present, returns
-// platformSuspension{Suspended: true} and SKIPS both the managed-policy
+// iamReconcileResult{Suspended: true} and SKIPS both the managed-policy
 // reconcile and the model-scoping policy write so the operator doesn't
 // fight the kill-switch by reattaching grants on every reconcile.
-func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) (platformSuspension, error) {
+func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) (iamReconcileResult, error) {
 	if r.IAM == nil {
 		// IAM client not wired (e.g., envtest path with no AWS creds).
 		// Skip silently — AWS-side callers explicitly check IAM != nil.
-		return platformSuspension{}, nil
+		return iamReconcileResult{}, nil
 	}
 	name := tenantRoleName(cfg.ClusterName, p)
 	path := cfg.TenantIAMPath
@@ -218,7 +225,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	if err != nil {
 		// assumeRolePolicyForPodIdentity only errors on a marshal that cannot
 		// fail (fixed document); unreachable, excluded from the floor.
-		return platformSuspension{}, err //coverage:ignore unreachable — see assumeRolePolicyForPodIdentity
+		return iamReconcileResult{}, err //coverage:ignore unreachable — see assumeRolePolicyForPodIdentity
 	}
 
 	// Idempotency: GetRole first; if NotFound, CreateRole.
@@ -232,33 +239,34 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 			// bedrock-model-scoping policy — the operator is observe-only
 			// on a suspended role; any policy write here would fight the
 			// kill-switch until the next SFN execution.
-			return platformSuspension{RoleARN: arn, Suspended: true, Reason: reason}, nil
+			return iamReconcileResult{RoleARN: arn, Suspended: true, Reason: reason}, nil
 		}
 		if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
-			return platformSuspension{RoleARN: arn}, err
+			return iamReconcileResult{RoleARN: arn}, err
 		}
 		if err := r.ensureModelScopingPolicy(ctx, name, arn, p.Spec.Identity, cfg); err != nil {
-			return platformSuspension{RoleARN: arn}, err
+			return iamReconcileResult{RoleARN: arn}, err
 		}
 		if err := r.ensureDatastorePolicy(ctx, name, arn, p, cfg); err != nil {
-			return platformSuspension{RoleARN: arn}, err
+			return iamReconcileResult{RoleARN: arn}, err
 		}
 		if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
-			return platformSuspension{RoleARN: arn}, err
+			return iamReconcileResult{RoleARN: arn}, err
 		}
 		if err := r.ensureTenantSecretsPolicy(ctx, name, arn, p, cfg); err != nil {
-			return platformSuspension{RoleARN: arn}, err
+			return iamReconcileResult{RoleARN: arn}, err
 		}
 		if err := r.ensureTenantKeyPolicy(ctx, name, p, cfg); err != nil {
-			return platformSuspension{RoleARN: arn}, err
+			return iamReconcileResult{RoleARN: arn}, err
 		}
-		if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {
-			return platformSuspension{RoleARN: arn}, err
+		binding, err := r.ensureTenantPodIdentity(ctx, p, cfg, arn)
+		if err != nil {
+			return iamReconcileResult{RoleARN: arn}, err
 		}
-		return platformSuspension{RoleARN: arn}, nil
+		return iamReconcileResult{RoleARN: arn, PodIdentity: binding}, nil
 	}
 	if !isIAMNotFound(getErr) {
-		return platformSuspension{}, fmt.Errorf("iam GetRole: %w", getErr)
+		return iamReconcileResult{}, fmt.Errorf("iam GetRole: %w", getErr)
 	}
 
 	createInput := &iam.CreateRoleInput{
@@ -273,33 +281,34 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	}
 	createOut, err := r.IAM.CreateRole(ctx, createInput)
 	if err != nil {
-		return platformSuspension{}, fmt.Errorf("iam CreateRole %s: %w", name, err)
+		return iamReconcileResult{}, fmt.Errorf("iam CreateRole %s: %w", name, err)
 	}
 	arn := aws.ToString(createOut.Role.Arn)
 
 	// Fresh role can't be suspended yet — go straight to attach.
 	if err := r.reconcileManagedPolicies(ctx, name, cfg.TenantBaselinePolicyARN, p.Spec.Identity.ExtraPolicyArns); err != nil {
-		return platformSuspension{RoleARN: arn}, err
+		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureModelScopingPolicy(ctx, name, arn, p.Spec.Identity, cfg); err != nil {
-		return platformSuspension{RoleARN: arn}, err
+		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureDatastorePolicy(ctx, name, arn, p, cfg); err != nil {
-		return platformSuspension{RoleARN: arn}, err
+		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
-		return platformSuspension{RoleARN: arn}, err
+		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureTenantSecretsPolicy(ctx, name, arn, p, cfg); err != nil {
-		return platformSuspension{RoleARN: arn}, err
+		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureTenantKeyPolicy(ctx, name, p, cfg); err != nil {
-		return platformSuspension{RoleARN: arn}, err
+		return iamReconcileResult{RoleARN: arn}, err
 	}
-	if err := r.ensureTenantPodIdentity(ctx, p, cfg, arn); err != nil {
-		return platformSuspension{RoleARN: arn}, err
+	binding, err := r.ensureTenantPodIdentity(ctx, p, cfg, arn)
+	if err != nil {
+		return iamReconcileResult{RoleARN: arn}, err
 	}
-	return platformSuspension{RoleARN: arn}, nil
+	return iamReconcileResult{RoleARN: arn, PodIdentity: binding}, nil
 }
 
 // ensureTenantPodIdentity binds the Platform's IAM role to the ServiceAccount
@@ -316,16 +325,34 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 //
 // The IAM role name and the association's other arguments are identical across
 // tiers; only the serviceAccount argument moves. No new AWS primitive is needed.
-func (r *PlatformReconciler) ensureTenantPodIdentity(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig, roleARN string) error {
+//
+// Returns the binding it reconciled so the reconciler can publish it on
+// status.podIdentity. Nil when there is no EKS client — nothing was bound, so
+// there is nothing to report.
+func (r *PlatformReconciler) ensureTenantPodIdentity(
+	ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig, roleARN string,
+) (*platformv1alpha1.PodIdentityStatus, error) {
 	saName := tenantSAName
 	if p.Spec.Isolation == isolationVCluster {
 		synced, err := r.discoverSyncedHostSA(ctx, p)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		saName = synced
 	}
-	return r.ensurePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), saName, roleARN)
+	ns := PlatformNamespace(p)
+	if err := r.ensurePodIdentityAssociation(ctx, cfg, ns, saName, roleARN); err != nil {
+		return nil, err
+	}
+	if r.EKS == nil {
+		return nil, nil
+	}
+	return &platformv1alpha1.PodIdentityStatus{
+		ClusterName:    cfg.ClusterName,
+		Namespace:      ns,
+		ServiceAccount: saName,
+		RoleArn:        roleARN,
+	}, nil
 }
 
 // ensurePodIdentityAssociation binds the tenant ServiceAccount to its IAM role

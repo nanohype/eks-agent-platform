@@ -734,8 +734,10 @@ spec:
                 - name
                 x-kubernetes-list-type: map
               iamRoleArn:
-                description: IamRoleArn is the per-Platform IRSA role created by the
-                  controller.
+                description: |-
+                  IamRoleArn is the per-Platform tenant role created by the controller.
+                  Tenant pods receive its credentials through the Pod Identity association
+                  reported in status.podIdentity.
                 type: string
               namespace:
                 description: Namespace is the tenant namespace the controller provisioned.
@@ -748,6 +750,36 @@ spec:
               phase:
                 description: 'Phase: Pending, Provisioning, Ready, Suspended, Failed.'
                 type: string
+              podIdentity:
+                description: |-
+                  PodIdentity reports the EKS Pod Identity association that binds this
+                  tenant's ServiceAccount to status.iamRoleArn. Empty until the association
+                  is reconciled (and on the suspended path, which skips AWS writes — the
+                  last observed binding is preserved rather than cleared).
+                properties:
+                  clusterName:
+                    description: |-
+                      ClusterName is the EKS cluster the association lives on. Associations are
+                      cluster-scoped resources, so this is required to look one up.
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the host namespace the association targets — the tenant
+                      namespace on both isolation tiers.
+                    type: string
+                  roleArn:
+                    description: |-
+                      RoleArn is the role the association vends. Always equal to
+                      status.iamRoleArn at the moment it was written; reported separately so a
+                      reader can tell a stale binding from a current one.
+                    type: string
+                  serviceAccount:
+                    description: |-
+                      ServiceAccount is the host ServiceAccount name the association targets:
+                      tenant-runtime under namespace isolation, the vcluster-translated host
+                      name under vcluster isolation.
+                    type: string
+                type: object
               sessionRoleArn:
                 description: |-
                   SessionRoleArn is the per-Platform attribution session role, created when

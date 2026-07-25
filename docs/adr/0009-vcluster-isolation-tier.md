@@ -228,7 +228,7 @@ the host _enforces_ on the pods that result.
 ### The problem the syncer creates
 
 In the namespace tier the operator binds the tenant `tenant-runtime` ServiceAccount
-to the per-Platform IRSA role with a Pod Identity association keyed on
+to the per-Platform tenant role with a Pod Identity association keyed on
 `(cluster, namespace=tenants-<platform>, serviceAccount=tenant-runtime)`
 (`ensurePodIdentityAssociation`, `platform_iam.go:283`). EKS Pod Identity resolves
 credentials by the pod's **host** `(namespace, serviceAccountName)`.

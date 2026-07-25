@@ -604,6 +604,21 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 		t.Errorf("association role: got %q want %q", aws.ToString(assoc.RoleArn), got.RoleARN)
 	}
 
+	// The binding is published back, field for field, so a reader never has to
+	// re-derive it from the role name or reimplement the SA naming.
+	if got.PodIdentity == nil {
+		t.Fatal("ensureIamRole reconciled an association but reported no binding")
+	}
+	want := platformv1alpha1.PodIdentityStatus{
+		ClusterName:    aws.ToString(assoc.ClusterName),
+		Namespace:      aws.ToString(assoc.Namespace),
+		ServiceAccount: aws.ToString(assoc.ServiceAccount),
+		RoleArn:        aws.ToString(assoc.RoleArn),
+	}
+	if *got.PodIdentity != want {
+		t.Errorf("published binding does not match the association created:\n got %+v\nwant %+v", *got.PodIdentity, want)
+	}
+
 	// Idempotent: a second reconcile finds the existing association, no duplicate.
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("second ensureIamRole: %v", err)
@@ -618,6 +633,52 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 	}
 	if len(fe.deleteCalls) != 1 {
 		t.Errorf("expected one DeletePodIdentityAssociation, got %d", len(fe.deleteCalls))
+	}
+}
+
+// TestEnsureIamRole_NoEKSClient_PublishesNoBinding pins the fail-closed shape of
+// status.podIdentity. Without an EKS client the operator creates no association,
+// so it must report no binding — publishing a hollow one (right namespace and SA,
+// no association behind it) would tell a reader the tenant is bound when nothing
+// vends it credentials.
+func TestEnsureIamRole_NoEKSClient_PublishesNoBinding(t *testing.T) {
+	r := &PlatformReconciler{IAM: newFakeIAM()}
+	cfg := IAMConfig{
+		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
+		ClusterName:             "production-cluster",
+		Environment:             "production",
+	}
+
+	got, err := r.ensureIamRole(context.Background(), newPlatform("slack-knowledge-bot", "workplace"), cfg)
+	if err != nil {
+		t.Fatalf("ensureIamRole: %v", err)
+	}
+	if got.RoleARN == "" {
+		t.Fatal("expected the role to be created on the nil-EKS path")
+	}
+	if got.PodIdentity != nil {
+		t.Errorf("no association was created, so no binding should be published: %+v", *got.PodIdentity)
+	}
+}
+
+// TestEnsureIamRole_AssociationFailure_PublishesNoBinding is the other half of
+// fail-closed: when the association cannot be created the reconcile must error
+// out with no binding published, rather than reporting a binding for an
+// association that does not exist. An EKS client with no ClusterName is the
+// cheapest way to make the association fail.
+func TestEnsureIamRole_AssociationFailure_PublishesNoBinding(t *testing.T) {
+	r := &PlatformReconciler{IAM: newFakeIAM(), EKS: newFakeEKS()}
+	cfg := IAMConfig{
+		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
+		Environment:             "production",
+	}
+
+	got, err := r.ensureIamRole(context.Background(), newPlatform("slack-knowledge-bot", "workplace"), cfg)
+	if err == nil {
+		t.Fatal("expected ensureIamRole to fail when the association cannot be created")
+	}
+	if got.PodIdentity != nil {
+		t.Errorf("failed association must publish no binding: %+v", *got.PodIdentity)
 	}
 }
 

@@ -75,6 +75,8 @@ A Platform tenant ends up with **two** IAM roles serving different workload clas
 
 The landing-zone `<app>-platform` component creates the Pod Identity association binding the app's ServiceAccount to its role; the chart just pins `serviceAccount.name` to the app name so the association matches. The operator creates the association for `tenant-runtime` → `<cluster>-<app>-tenant`, which carries the baseline Bedrock policy + `extraPolicyArns`. The tenant role name is cluster-keyed (not env-keyed) so two clusters can host a Platform of the same name without their roles colliding.
 
+The association the operator created is reported on `Platform.status.podIdentity` — `clusterName`, `namespace`, `serviceAccount`, `roleArn`. Read it rather than deriving the binding: the trust policy carries no subject (under Pod Identity the `(namespace, service-account)` constraint lives in the association, so every tenant role's trust document is byte-identical), and the bound ServiceAccount is not always `tenant-runtime` — under `spec.isolation: vcluster` it is the vcluster-translated host name. Anything auditing the binding, in this repo or another, reads that field.
+
 ## Declare a tenant
 
 1. Apply a `BudgetPolicy` CR in the tenant namespace (or alongside Platform — operator handles ordering).
