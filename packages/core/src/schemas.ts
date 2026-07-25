@@ -198,6 +198,14 @@ export type PlatformSpec = z.infer<typeof PlatformSpec>;
  * — including the suspension-state block (`suspendedAt`/`suspendedReason`) the
  * kill-switch sets, which callers must be able to observe.
  */
+export const PodIdentityStatus = z.object({
+  clusterName: z.string().optional(),
+  namespace: z.string().optional(),
+  serviceAccount: z.string().optional(),
+  roleArn: z.string().optional(),
+});
+export type PodIdentityStatus = z.infer<typeof PodIdentityStatus>;
+
 export const PlatformStatus = z.object({
   phase: z.string().optional(),
   iamRoleArn: z.string().optional(),
@@ -208,6 +216,7 @@ export const PlatformStatus = z.object({
   suspendedReason: z.string().optional(),
   conditions: z.array(Condition).optional(),
   datastores: z.array(DatastoreStatus).optional(),
+  podIdentity: PodIdentityStatus.optional(),
 });
 export type PlatformStatus = z.infer<typeof PlatformStatus>;
 

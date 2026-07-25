@@ -30,9 +30,10 @@ kubectl get platform blank -n eks-agent-platform -o jsonpath='{.status.phase}'  
 /path/to/cloudgov platform audit --kubeconfig ~/.kube/config                     # k8s-side PASS
 ```
 
-The one expected finding locally is `IRSA_ANNOTATION_MISSING` (no real role under
-`--disable-aws`). The agent plane (ModelGateway/AgentFleet) reaches Ready against
-the local kagent/agentgateway.
+There is no AWS side under `--disable-aws`, so the tenant-role and Pod Identity
+checks are skipped with a note and the k8s-side audit reports clean. The agent
+plane (ModelGateway/AgentFleet) reaches Ready against the local
+kagent/agentgateway.
 
 ---
 
@@ -201,7 +202,7 @@ ApplicationSet, with per-env values from `tofu output`.
 ### B4. Validate
 
 ```bash
-<cloudgov> platform audit --kubeconfig ~/.kube/config   # 0 findings (k8s + AWS IRSA)
+<cloudgov> platform audit --kubeconfig ~/.kube/config   # 0 findings (k8s + AWS identity)
 ```
 
 Spot-check: tenant IAM role exists at `…:role/eks-agent-platform/tenants/<env>-<platform>-tenant`
