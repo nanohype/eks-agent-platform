@@ -1,0 +1,14 @@
+# expect: the capability silently does nothing
+# Not a CRD rule — a cross-field semantic no schema can express. The operator
+# scopes the minted scheduler-invoke role's SendMessage to the tenant's own queue
+# datastores, so declaring the capability with no queue creates a role carrying no
+# grant at all.
+platform:
+  name: cover
+  tenant: coverco
+identity:
+  capabilities:
+    - eventBridgeScheduler
+datastores:
+  - name: docs
+    kind: objectStore

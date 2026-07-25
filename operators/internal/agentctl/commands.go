@@ -40,6 +40,7 @@ func newTenantInitCmd() *cobra.Command {
 		namespace   string
 		schedule    string
 		slack       string
+		vocab       VocabularyFlags
 	)
 	cmd := &cobra.Command{
 		Use:   "init NAME",
@@ -51,9 +52,28 @@ func newTenantInitCmd() *cobra.Command {
 Persona-flexed defaults choose model routes, system prompts, budget,
 and scaling bounds. List supported personas:
 
-    agentctl persona list`,
+    agentctl persona list
+
+Declare the tenant's stateful substrate and the rest of the Platform vocabulary
+as you scaffold it:
+
+    agentctl tenant init acme --persona support \
+      --datastore name=tickets,kind=keyValue,partitionKey=ticketId:S \
+      --datastore name=work,kind=queue \
+      --datastore name=docs,kind=objectStore \
+      --capability eventBridgeScheduler \
+      --secret-read zendesk/api-token \
+      --attribution-operator operator@example.com
+
+A datastore declaration grants the tenant role access to the resource and
+reports it under status.datastores; the resource itself is provisioned when the
+declaration reaches landing-zone's tenant-substrate input.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			parsed, err := ParseVocabulary(args[0], vocab)
+			if err != nil {
+				return err
+			}
 			res, err := ScaffoldTenant(ScaffoldOptions{
 				TenantName:   args[0],
 				DisplayName:  displayName,
@@ -61,6 +81,7 @@ and scaling bounds. List supported personas:
 				Namespace:    namespace,
 				Schedule:     schedule,
 				SlackChannel: slack,
+				Vocabulary:   parsed,
 			})
 			if err != nil {
 				return err
@@ -78,6 +99,7 @@ and scaling bounds. List supported personas:
 	cmd.Flags().StringVar(&namespace, "namespace", "eks-agent-platform", "namespace for the Platform/Budget/Gateway/Fleet/Eval CRs")
 	cmd.Flags().StringVar(&schedule, "schedule", "", "EvalSuite cron schedule (empty = manual only)")
 	cmd.Flags().StringVar(&slack, "slack", "", "Slack channel for tenant notifications (e.g. #acme-ops)")
+	RegisterVocabularyFlags(cmd, &vocab)
 	return cmd
 }
 

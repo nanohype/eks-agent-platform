@@ -56,6 +56,105 @@ identity:
     - amazon-nova
   allowedModels: []
   extraPolicyArns: []
+  # Managed AWS capabilities outside the datastore vocabulary. Each one drives an
+  # operator-generated `capability-access` inline policy on the tenant role, so a
+  # tenant declares what it needs instead of referencing a hand-written managed
+  # policy by ARN through extraPolicyArns. At most 8.
+  #   ses                   sends mail. Scoped by a ses:FromAddress condition
+  #                         derived from the PLATFORM NAME (*@<platform.name>.*),
+  #                         so the grant is only usable when the platform name is
+  #                         the sending-domain label. The verified sending
+  #                         identity itself is account-level mail infra.
+  #   eventBridgeScheduler  manages the tenant's own schedules, and passes an
+  #                         operator-minted scheduler-invoke role that may
+  #                         SendMessage to the tenant's OWN queue datastores.
+  #                         Requires at least one kind=queue datastore below —
+  #                         without one the minted role carries no send grant and
+  #                         the capability does nothing. The chart rejects that
+  #                         combination rather than shipping a silent no-op.
+  capabilities: []
+  # Application secrets this Platform's pods read directly through the pod role
+  # via the AWS SDK. Each entry is PREFIX-RELATIVE: the operator composes the ARN
+  # as <platform.name>/<environment>/<entry>, so write `oncall/webhook-hmac`, not
+  # `my-platform/production/oncall/webhook-hmac` (that would grant on the prefix
+  # twice). The grant is GetSecretValue/DescribeSecret on exactly these names —
+  # no wildcard. Secret material projected into the pod by an ExternalSecret is
+  # resolved by the External Secrets controller's own identity and needs no entry
+  # here; leaving this empty means the tenant role holds no Secrets Manager
+  # grant at all. At most 16.
+  directSecretReads: []
+
+# Per-session human attribution. A non-empty operators list opts the Platform in:
+# the operator provisions a session role assumable by the tenant role with the
+# named human carried as STS SourceIdentity, plus a ClusterRole letting the tenant
+# ServiceAccount impersonate them at the apiserver — so an agent's AWS and
+# Kubernetes actions both attribute to a named person. An empty list is the
+# default and means unattributed; there is no boolean to flip, because the CRD
+# requires at least one operator whenever the block is present.
+#
+# Each value must BYTE-MATCH the operator's own Kubernetes RBAC subject name (use
+# a lowercased email) — the same string binds the AWS and Kubernetes audit
+# records, so a mismatch attributes to nobody.
+attribution:
+  operators: []
+  # STS role chaining hard-caps a chained session at 3600s regardless of this
+  # value, because the caller is the tenant role. Larger values only matter if
+  # the caller ever changes. 900–43200.
+  sessionRoleMaxDurationSeconds: 3600
+
+# The tenant's stateful substrate: the databases, buckets, queues, caches, and
+# streams it needs. Each entry is a declaration, not a hand-written component —
+# the generic tenant-substrate tofu module provisions the heavy resource from
+# this same list, and the operator generates the scoped IAM policy that reaches
+# it. Adding a tenant is therefore a declaration, never a new landing-zone
+# component.
+#
+# TWO STEPS, TWO OWNERS. Declaring a datastore here grants the tenant role
+# access to the resource's ARN and reports it under status.datastores. The
+# resource itself is provisioned when the declaration reaches landing-zone's
+# tenant-substrate `tenants` input. Until it does, the tenant holds a grant on a
+# name that does not exist yet.
+#
+#   kind          AWS implementation           config block
+#   relational    Aurora PostgreSQL Sv2        relational   (optional)
+#   keyValue      DynamoDB                     keyValue     (REQUIRED — a table
+#                                                            has no default
+#                                                            partition key)
+#   objectStore   S3                           objectStore  (optional)
+#   queue         SQS (+ DLQ when redrive set) queue        (optional)
+#   cache         ElastiCache (Valkey/Redis)   cache        (optional)
+#   stream        MSK Serverless (IAM auth)    none
+#
+# A block may only be set for its own kind; omitting an optional block takes the
+# young/light defaults the CRD declares. deletionPolicy defaults to Retain, so
+# `kubectl delete platform` orphans the data rather than taking it with them —
+# and the operator holds no delete permission on any datastore regardless, so
+# Delete is a declaration handed to the module, not a power the operator wields.
+#
+# NAME BUDGET: platform.name + datastore name must total <= 28 characters (they
+# compose into bucket / table / queue names against S3's 63-char ceiling), and
+# <= 27 for kind=cache, whose ElastiCache replication-group id is capped at 40
+# including the longest environment token. The chart checks both.
+#
+# ACU values (relational.minACU / maxACU) are STRINGS per the Kubernetes
+# convention for fractional numbers — write "0.5", not 0.5.
+#
+#   datastores:
+#     - name: docs
+#       kind: objectStore
+#       objectStore:
+#         versioning: true
+#     - name: sessions
+#       kind: keyValue
+#       keyValue:
+#         partitionKey:
+#           name: sessionId
+#           type: S
+#     - name: work
+#       kind: queue
+#       queue:
+#         maxReceiveCount: 5
+datastores: []
 
 budget:
   monthlyUsd: 500

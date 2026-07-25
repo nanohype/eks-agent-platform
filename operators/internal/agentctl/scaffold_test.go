@@ -138,3 +138,68 @@ func TestScaffoldTenant_RenderEmitsMultiDoc(t *testing.T) {
 		t.Errorf("expected 5 document separators, got %d", strings.Count(got, "---\n"))
 	}
 }
+
+// The two scaffolders share one parser, so the vocabulary has to reach the typed
+// Platform here the same way it reaches the encoder's output in
+// platform_new_test.go. This is the surface `agentctl tenant init` uses.
+func TestScaffoldTenant_CarriesVocabulary(t *testing.T) {
+	vocab, err := ParseVocabulary("demo", VocabularyFlags{
+		Datastores: []string{
+			"name=tickets,kind=keyValue,partitionKey=ticketId:S",
+			"name=work,kind=queue",
+		},
+		Capabilities:      []string{"eventBridgeScheduler"},
+		DirectSecretReads: []string{"zendesk/api-token"},
+		Operators:         []string{"operator@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("ParseVocabulary: %v", err)
+	}
+	res, err := ScaffoldTenant(ScaffoldOptions{TenantName: "demo", Persona: "support", Vocabulary: vocab})
+	if err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	spec := res.Platform.Spec
+	if len(spec.Datastores) != 2 {
+		t.Fatalf("want 2 datastores, got %d", len(spec.Datastores))
+	}
+	if spec.Datastores[0].KeyValue == nil || spec.Datastores[0].KeyValue.PartitionKey.Name != "ticketId" {
+		t.Errorf("keyValue partition key did not reach the spec: %+v", spec.Datastores[0].KeyValue)
+	}
+	if len(spec.Identity.Capabilities) != 1 || spec.Identity.Capabilities[0] != "eventBridgeScheduler" {
+		t.Errorf("capabilities: got %v", spec.Identity.Capabilities)
+	}
+	if len(spec.Identity.DirectSecretReads) != 1 || spec.Identity.DirectSecretReads[0] != "zendesk/api-token" {
+		t.Errorf("directSecretReads: got %v", spec.Identity.DirectSecretReads)
+	}
+	if spec.Attribution == nil || len(spec.Attribution.Operators) != 1 {
+		t.Fatalf("attribution did not reach the spec: %+v", spec.Attribution)
+	}
+	// The model-family choice must survive alongside the new identity fields —
+	// they share one IdentitySpec literal.
+	if len(spec.Identity.AllowedModelFamilies) == 0 {
+		t.Error("allowedModelFamilies was dropped when the new identity fields landed")
+	}
+
+	// Declaring nothing must leave the spec free of empty blocks: attribution in
+	// particular fails admission if present with no operators.
+	bare, err := ScaffoldTenant(ScaffoldOptions{TenantName: "demo", Persona: "support"})
+	if err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+	if bare.Platform.Spec.Attribution != nil {
+		t.Error("attribution must be nil when no operator is named")
+	}
+	if bare.Platform.Spec.Datastores != nil {
+		t.Error("datastores must be nil when none are declared")
+	}
+	out, err := bare.Render()
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, key := range []string{"attribution:", "datastores:", "capabilities:", "directSecretReads:"} {
+		if strings.Contains(string(out), key) {
+			t.Errorf("%q should be omitted from a no-vocabulary scaffold", key)
+		}
+	}
+}

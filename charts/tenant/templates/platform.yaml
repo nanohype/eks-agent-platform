@@ -1,6 +1,100 @@
 {{- if not .Values.platform.name -}}{{ fail "platform.name is required" }}{{- end -}}
 {{- if not .Values.platform.tenant -}}{{ fail "platform.tenant is required" }}{{- end -}}
 {{- if not .Values.platform.persona -}}{{ fail "platform.persona is required (one of: sales-ops, support, finance, ops, founder, eng, marketing, legal, generic)" }}{{- end -}}
+{{- /*
+  ── Datastore + capability + secret-read validation ─────────────────────────
+  Every check below mirrors a CRD constraint (a CEL rule, a pattern, a required
+  field, a MaxItems cap) or a downstream AWS naming limit that the CRD's own
+  ceiling does not cover. The CRD rejects a bad declaration at admission and the
+  tenant-substrate module rejects it at its variable boundary — but both fire
+  long after render, and portal's tenant-apply worker records a render error on
+  the operation row it already surfaces. Failing here turns an apply that lands
+  broken into a message at vend time.
+*/ -}}
+{{- $platformName := .Values.platform.name }}
+{{- $datastores := .Values.datastores | default list }}
+{{- $configBlocks := list "relational" "keyValue" "objectStore" "queue" "cache" }}
+{{- $kinds := concat $configBlocks (list "stream") }}
+{{- $queueNames := list }}
+{{- range $d := $datastores }}
+{{- $dsName := $d.name | default "" }}
+{{- if not $dsName }}{{ fail "every datastores[] entry needs a name" }}{{ end }}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,16}[a-z0-9])?$" $dsName) }}
+{{- fail (printf "datastore %q: name must be a short RFC-1123 label, at most 18 characters (lowercase alphanumeric and hyphens, starting and ending alphanumeric)" $dsName) }}
+{{- end }}
+{{- $kind := $d.kind | default "" }}
+{{- if not (has $kind $kinds) }}
+{{- fail (printf "datastore %q: kind must be one of %s (got %q)" $dsName (join "|" $kinds) $kind) }}
+{{- end }}
+{{- /* The CEL rule composes the ceiling from metadata.name, i.e. platform.name —
+       not spec.tenant. A cache is one tighter: ElastiCache caps a
+       replication-group id at 40 including the longest environment token. */ -}}
+{{- $budget := 28 }}
+{{- if eq $kind "cache" }}{{ $budget = 27 }}{{ end }}
+{{- $combined := add (len $platformName) (len $dsName) }}
+{{- if gt $combined $budget }}
+{{- fail (printf "datastore %q: platform.name (%s) plus the datastore name is %d characters, over the %d-character budget for kind=%s — they compose into the provisioned resource name" $dsName $platformName $combined $budget $kind) }}
+{{- end }}
+{{- range $block := $configBlocks }}
+{{- if and (hasKey $d $block) (ne $block $kind) }}
+{{- fail (printf "datastore %q declares kind=%s but carries a %q config block; a block may only be set for its own kind, and kind=stream carries none" $dsName $kind $block) }}
+{{- end }}
+{{- end }}
+{{- if eq $kind "keyValue" }}
+{{- $kv := $d.keyValue | default dict }}
+{{- $pk := $kv.partitionKey | default dict }}
+{{- /* Presence, not truthiness: an unquoted `type: N` parses to the boolean
+       false, which a truthiness test reports as a missing field — hiding the
+       real problem behind the wrong message. Test for the key, then let the
+       value check below name what is actually wrong. */ -}}
+{{- if not (and $pk.name (hasKey $pk "type")) }}
+{{- fail (printf "datastore %q: kind=keyValue requires keyValue.partitionKey.name and .type (S|N|B) — a DynamoDB table has no default partition key" $dsName) }}
+{{- end }}
+{{- $keys := list $pk }}
+{{- if $kv.sortKey }}{{ $keys = append $keys $kv.sortKey }}{{ end }}
+{{- range $gsi := ($kv.globalSecondaryIndexes | default list) }}
+{{- $gpk := $gsi.partitionKey | default dict }}
+{{- if not (and $gsi.name $gpk.name (hasKey $gpk "type")) }}
+{{- fail (printf "datastore %q: every keyValue.globalSecondaryIndexes[] entry needs a name and a partitionKey with name and type" $dsName) }}
+{{- end }}
+{{- $keys = append $keys $gpk }}
+{{- if $gsi.sortKey }}{{ $keys = append $keys $gsi.sortKey }}{{ end }}
+{{- end }}
+{{- /* `N` is a YAML 1.1 boolean. An unquoted `type: N` on a numeric key parses
+       as false, reaches the API server as a bool against a string enum, and
+       fails admission with a type error that names neither the datastore nor the
+       quoting. Catch every key attribute — partition, sort, and both on each
+       GSI — and say what to type instead. */ -}}
+{{- range $key := $keys }}
+{{- if not (has ($key.type | toString) (list "S" "N" "B")) }}
+{{- fail (printf "datastore %q: attribute type for key %q must be the string S, N, or B (got %v). Quote it — an unquoted N is a YAML boolean, so write type: \"N\"" $dsName ($key.name | default "?") $key.type) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if eq $kind "queue" }}{{ $queueNames = append $queueNames $dsName }}{{ end }}
+{{- end }}
+{{- $capabilities := .Values.identity.capabilities | default list }}
+{{- if gt (len $capabilities) 8 }}{{ fail "identity.capabilities holds at most 8 entries" }}{{ end }}
+{{- range $cap := $capabilities }}
+{{- if not (has $cap (list "ses" "eventBridgeScheduler")) }}
+{{- fail (printf "identity.capabilities: %q is not a capability (ses|eventBridgeScheduler)" $cap) }}
+{{- end }}
+{{- if and (eq $cap "eventBridgeScheduler") (eq (len $queueNames) 0) }}
+{{- fail "identity.capabilities includes eventBridgeScheduler but no datastores[] entry has kind=queue — the operator scopes the minted scheduler-invoke role's SendMessage to the tenant's own queues, so with none declared the role is created carrying no grant and the capability silently does nothing" }}
+{{- end }}
+{{- end }}
+{{- $secretReads := .Values.identity.directSecretReads | default list }}
+{{- if gt (len $secretReads) 16 }}{{ fail "identity.directSecretReads holds at most 16 entries" }}{{ end }}
+{{- range $secret := $secretReads }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9/_+=.@-]*$" $secret) }}
+{{- fail (printf "identity.directSecretReads: %q is not a Secrets Manager name (start alphanumeric, then alphanumerics and / _ + = . @ -)" $secret) }}
+{{- end }}
+{{- if hasPrefix (printf "%s/" $platformName) $secret }}
+{{- fail (printf "identity.directSecretReads: %q already starts with the platform name, but entries are PREFIX-RELATIVE — the operator composes the ARN as <platform>/<environment>/<entry>, so this would grant on the prefix twice. Drop the leading %q segment." $secret $platformName) }}
+{{- end }}
+{{- end }}
+{{- $attribution := .Values.attribution | default dict }}
+{{- $operators := $attribution.operators | default list }}
 apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
 metadata:
@@ -33,6 +127,30 @@ spec:
 {{- fail "identity: set one of allowedModels or allowedModelFamilies" }}
 {{- end }}
     extraPolicyArns: {{- toYaml .Values.identity.extraPolicyArns | nindent 6 }}
+{{- with $capabilities }}
+    capabilities: {{- toYaml . | nindent 6 }}
+{{- end }}
+{{- with $secretReads }}
+    directSecretReads: {{- toYaml . | nindent 6 }}
+{{- end }}
   compliance:
     hipaa: {{ .Values.platform.compliance.hipaa }}
     soc2: {{ .Values.platform.compliance.soc2 }}
+{{- /* Attribution is opt-in by content, not by flag: the CRD requires at least
+       one operator whenever the block is present, so an empty list must omit the
+       block entirely rather than emit `attribution: {}`. */ -}}
+{{- with $operators }}
+  attribution:
+    operators: {{- toYaml . | nindent 6 }}
+    sessionRoleMaxDurationSeconds: {{ $attribution.sessionRoleMaxDurationSeconds | default 3600 | int64 }}
+{{- end }}
+{{- /* Pass the declaration through whole rather than emitting field by field:
+       the CRD's own defaults then apply at admission instead of being restated
+       here, and toYaml serializes a number the way its Go type reads it. Portal
+       renders this chart programmatically from a JSON values blob, where every
+       number arrives as a float64 — `{{ .n }}` on one renders 1209600 as
+       1.2096e+06, which is not an integer to the API server. toYaml does not.
+       Emit datastore numbers through toYaml, never through interpolation. */ -}}
+{{- with $datastores }}
+  datastores: {{- toYaml . | nindent 4 }}
+{{- end }}

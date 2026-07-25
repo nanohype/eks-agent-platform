@@ -74,6 +74,17 @@ task tofu:apply ENVIRONMENT=dev COMPONENT=eval-runtime
 agentctl tenant init my-team --persona support --slack '#my-team' \
   | kubectl apply -f -
 agentctl tenant get my-team
+
+# …declaring the tenant's stateful substrate and the rest of the vocabulary
+# as you scaffold it. A datastore declaration grants access and reports state;
+# the resource is provisioned when it reaches landing-zone's tenant-substrate.
+agentctl tenant init my-team --persona support \
+  --datastore name=tickets,kind=keyValue,partitionKey=ticketId:S \
+  --datastore name=work,kind=queue \
+  --capability eventBridgeScheduler \
+  --secret-read zendesk/api-token \
+  --attribution-operator operator@example.com \
+  | kubectl apply -f -
 ```
 
 ### Bootstrap note (first-time setup)

@@ -13,7 +13,7 @@ Model ids are the org defaults from `nanohype/standards/llm-policy.json`. Tools 
 
 ```bash
 kubectl apply -f platform.yaml
-kubectl wait --for=condition=Ready platform/support-desk -n eks-agent-platform --timeout=5m
+kubectl wait --for=jsonpath='{.status.phase}'=Ready platform/support-desk -n eks-agent-platform --timeout=5m
 kubectl get -n tenants-support-desk agentfleet,scaledobject,pods
 ```
 

@@ -2,7 +2,10 @@ apiVersion: v2
 name: tenant
 description: Opinionated tenant scaffold — a Platform CR + ModelGateway + AgentFleet + BudgetPolicy + EvalSuite, parameterized by persona.
 type: application
-version: 0.1.0
+# 0.2.0 carries the full Platform vocabulary: spec.datastores,
+# identity.capabilities, identity.directSecretReads and spec.attribution, plus
+# the render-time guards for the CRD and tofu-module constraints behind them.
+version: 0.2.0
 appVersion: "0.1.0"
 maintainers:
   - name: stxkxs

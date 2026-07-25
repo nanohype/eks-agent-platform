@@ -1,0 +1,8 @@
+# expect: kind must be one of relational|keyValue|objectStore|queue|cache|stream
+# CRD enum on DatastoreKind.
+platform:
+  name: cover
+  tenant: coverco
+datastores:
+  - name: store
+    kind: documentDb
