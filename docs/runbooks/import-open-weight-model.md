@@ -23,10 +23,15 @@ Persona: ops. Do the steps in order.
 ## Prerequisites
 
 - The **`model-import`** landing-zone component is applied in the target
-  account + region. It provisions the staging bucket and the Bedrock import
-  service role, and publishes both to SSM:
-  - `/eks-agent-platform/model-import/staging_bucket_name`
-  - `/eks-agent-platform/model-import/import_role_arn`
+  environment + account + region. It provisions the staging bucket and the
+  Bedrock import service role, and publishes both to SSM under the environment
+  it was applied in:
+  - `/eks-agent-platform/<environment>/model-import/staging_bucket_name`
+  - `/eks-agent-platform/<environment>/model-import/import_role_arn`
+
+  The substrate is shared by every cluster in that environment, and scoped to it:
+  two environments in one account each get their own bucket, role and parameters.
+
 - The model is in **Hugging Face weights format** and its architecture is
   supported: Mistral, Mixtral, Flan (T5), Llama 2/3/3.1/3.2/3.3 + Mllama,
   GPTBigCode, or Qwen2/2.5/Qwen3. Anything outside the list can't be imported.
@@ -40,8 +45,9 @@ Persona: ops. Do the steps in order.
 Resolve the substrate the `model-import` component published:
 
 ```bash
-BUCKET=$(aws ssm get-parameter --name /eks-agent-platform/model-import/staging_bucket_name --query Parameter.Value --output text)
-ROLE=$(aws ssm get-parameter --name /eks-agent-platform/model-import/import_role_arn --query Parameter.Value --output text)
+ENVIRONMENT=development   # the environment whose substrate you are importing into
+BUCKET=$(aws ssm get-parameter --name "/eks-agent-platform/$ENVIRONMENT/model-import/staging_bucket_name" --query Parameter.Value --output text)
+ROLE=$(aws ssm get-parameter --name "/eks-agent-platform/$ENVIRONMENT/model-import/import_role_arn" --query Parameter.Value --output text)
 ```
 
 **1. Stage the weights.** Upload the Hugging Face files (`config.json`,
@@ -127,12 +133,38 @@ story — Custom Model Import gives open-weight flexibility through the ordinary
 Bedrock runtime with no accelerators. Adding a GPU-adjacent feature does not
 reopen in-cluster serving.
 
+## What survives what
+
+Two independent lifetimes, and conflating them is the usual source of confusion:
+
+|                              | Owned by                                      | Survives a cluster teardown | Survives a `model-import` destroy |
+| ---------------------------- | --------------------------------------------- | --------------------------- | --------------------------------- |
+| the imported model           | Bedrock (AWS-managed storage, account-scoped) | yes                         | yes                               |
+| staged weights in S3         | the `model-import` component                  | yes                         | no                                |
+| the import role + SSM params | the `model-import` component                  | yes                         | no                                |
+
+The imported model is **not** in the staging bucket. Bedrock copies the weights
+into its own encrypted storage during the import job and serves from there; the
+S3 URI is read only while the job runs. So:
+
+- **Tearing down a cluster** costs you nothing here. The model stays served, and
+  any other cluster in the account can keep routing to it. No re-import needed.
+- **Destroying the `model-import` component** removes the ability to start a _new_
+  import, the staged source, and the discovery parameters — but not the model. If
+  you later want to re-import, you re-stage the weights first.
+- **An import job in flight when the substrate is destroyed will fail**, because
+  the role it assumed and the source it reads both disappear under it. Let running
+  jobs finish before tearing the environment down.
+
 ## Teardown
 
 ```bash
 aws bedrock delete-imported-model --model-identifier my-model   # stops the storage charge
 aws s3 rm "s3://$BUCKET/my-model/" --recursive                  # staged weights are re-uploadable
 ```
+
+Two separate acts, deliberately — the first is what stops serving and billing, the
+second only reclaims staging space.
 
 Remove the imported route from the tenant's `ModelGateway` first, so nothing
 routes to a model that's about to disappear.
