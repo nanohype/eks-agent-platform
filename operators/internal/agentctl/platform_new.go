@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // platform new scaffolds a single-Platform tenant directory: a five-document
@@ -38,6 +40,10 @@ type PlatformNewOptions struct {
 	Persona    string
 	MonthlyUsd int
 	Output     string
+	// Vocabulary is the optional half of the Platform declaration. The zero
+	// value emits none of it, keeping the persona scaffolds byte-identical to
+	// their golden fixtures.
+	Vocabulary PlatformVocabulary
 }
 
 // scaffoldCopy is the persona-specific starter agent: a name and a system
@@ -76,6 +82,7 @@ func newPlatformNewCmd() *cobra.Command {
 		persona    string
 		monthlyUsd int
 		output     string
+		vocab      VocabularyFlags
 	)
 	cmd := &cobra.Command{
 		Use:   "new",
@@ -86,14 +93,31 @@ using persona-flexed defaults. Apply with:
     agentctl platform new --name marketing-team --tenant acme --persona marketing --monthly-usd 2500
     kubectl apply -f marketing-team/platform.yaml
 
+Declare the tenant's stateful substrate and the rest of the Platform vocabulary
+as you scaffold it:
+
+    agentctl platform new --name docs-rag --tenant ragco --persona eng \
+      --datastore name=corpus,kind=objectStore \
+      --datastore name=chunks,kind=keyValue,partitionKey=docId:S,sortKey=chunk:N \
+      --secret-read vendor/embed-api-key
+
+A datastore declaration grants the tenant role access to the resource and reports
+it under status.datastores; the resource itself is provisioned when the
+declaration reaches landing-zone's tenant-substrate input.
+
 List supported personas with 'agentctl persona list'.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			parsed, err := ParseVocabulary(name, vocab)
+			if err != nil {
+				return err
+			}
 			path, err := WritePlatformNew(PlatformNewOptions{
 				Name:       name,
 				Tenant:     tenant,
 				Persona:    persona,
 				MonthlyUsd: monthlyUsd,
 				Output:     output,
+				Vocabulary: parsed,
 			})
 			if err != nil {
 				return err
@@ -107,6 +131,7 @@ List supported personas with 'agentctl persona list'.`,
 	cmd.Flags().StringVar(&persona, "persona", "generic", "one of: sales-ops, support, finance, ops, founder, eng, marketing, legal, generic")
 	cmd.Flags().IntVar(&monthlyUsd, "monthly-usd", 500, "monthly USD budget")
 	cmd.Flags().StringVar(&output, "output", ".", "output directory")
+	RegisterVocabularyFlags(cmd, &vocab)
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("tenant")
 	return cmd
@@ -161,6 +186,40 @@ func RenderPlatformNew(opts PlatformNewOptions) ([]byte, string, error) {
 	}
 
 	name := opts.Name
+	vocab := opts.Vocabulary
+
+	// Built imperatively rather than in the fluent chain below, because every key
+	// here is omit-when-absent: the encoder's set() is unconditional, so an
+	// empty capabilities list would emit `capabilities:` with a null value, and a
+	// nil *bool would render as `false` — collapsing the CRD's
+	// unset-versus-explicitly-false distinction.
+	identity := newMap().set("allowedModelFamilies", strSeq(model.Family))
+	if len(vocab.Capabilities) > 0 {
+		identity = identity.set("capabilities", strSeq(capabilityStrings(vocab.Capabilities)...))
+	}
+	if len(vocab.DirectSecretReads) > 0 {
+		identity = identity.set("directSecretReads", strSeq(vocab.DirectSecretReads...))
+	}
+
+	spec := newMap().
+		set("displayName", str(name)).
+		set("persona", str(opts.Persona)).
+		set("tenant", str(opts.Tenant)).
+		set("isolation", str("namespace")).
+		set("budget", newMap().set("name", str(name+"-budget"))).
+		set("identity", identity).
+		set("compliance", newMap().
+			set("soc2", boolean(true)).
+			set("hipaa", boolean(opts.Persona == "legal")))
+	if attribution := vocab.Attribution(); attribution != nil {
+		spec = spec.set("attribution", newMap().
+			set("operators", strSeq(attribution.Operators...)).
+			set("sessionRoleMaxDurationSeconds", integer(int(*attribution.SessionRoleMaxDurationSeconds))))
+	}
+	if len(vocab.Datastores) > 0 {
+		spec = spec.set("datastores", mapSeq(datastoreNodes(vocab.Datastores)...))
+	}
+
 	docs := []*ynode{
 		newMap().
 			set("apiVersion", str("platform.nanohype.dev/v1alpha1")).
@@ -170,16 +229,7 @@ func RenderPlatformNew(opts PlatformNewOptions) ([]byte, string, error) {
 				set("labels", newMap().
 					set("agents.nanohype.dev/persona", str(opts.Persona)).
 					set("agents.nanohype.dev/tenant", str(opts.Tenant)))).
-			set("spec", newMap().
-				set("displayName", str(name)).
-				set("persona", str(opts.Persona)).
-				set("tenant", str(opts.Tenant)).
-				set("isolation", str("namespace")).
-				set("budget", newMap().set("name", str(name+"-budget"))).
-				set("identity", newMap().set("allowedModelFamilies", strSeq(model.Family))).
-				set("compliance", newMap().
-					set("soc2", boolean(true)).
-					set("hipaa", boolean(opts.Persona == "legal")))),
+			set("spec", spec),
 		newMap().
 			set("apiVersion", str("governance.nanohype.dev/v1alpha1")).
 			set("kind", str("BudgetPolicy")).
@@ -252,6 +302,50 @@ func RenderPlatformNew(opts PlatformNewOptions) ([]byte, string, error) {
 
 	readme := fmt.Sprintf("# %s\n\nGenerated tenant scaffold for persona **%s**.\n\nApply: `kubectl apply -f platform.yaml`.\n", name, opts.Persona)
 	return yamlBytes, readme, nil
+}
+
+// capabilityStrings unwraps the typed capability names for the encoder, which
+// deals in plain strings.
+func capabilityStrings(caps []platformv1alpha1.Capability) []string {
+	out := make([]string, len(caps))
+	for i, c := range caps {
+		out[i] = string(c)
+	}
+	return out
+}
+
+// datastoreNodes renders the declaration into encoder nodes. Only the fields the
+// scaffolder's flags can set are emitted — everything else takes the CRD's
+// defaults at admission rather than being restated here, which is also what keeps
+// the emitted YAML short enough to read and edit.
+func datastoreNodes(datastores []platformv1alpha1.DatastoreSpec) []*ynode {
+	out := make([]*ynode, 0, len(datastores))
+	for _, d := range datastores {
+		item := newMap().
+			set("name", str(d.Name)).
+			set("kind", str(string(d.Kind)))
+		if d.DeletionPolicy != "" {
+			item = item.set("deletionPolicy", str(d.DeletionPolicy))
+		}
+		if d.KeyValue != nil {
+			kv := newMap().set("partitionKey", attributeNode(d.KeyValue.PartitionKey))
+			if d.KeyValue.SortKey != nil {
+				kv = kv.set("sortKey", attributeNode(*d.KeyValue.SortKey))
+			}
+			item = item.set("keyValue", kv)
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// attributeNode renders a DynamoDB key attribute. The type is emitted through
+// str(), which quotes it: an unquoted N is a YAML 1.1 boolean, so a scaffold that
+// emitted it bare would parse back as false against a string enum.
+func attributeNode(a platformv1alpha1.AttributeSchema) *ynode {
+	return newMap().
+		set("name", str(a.Name)).
+		set("type", str(a.Type))
 }
 
 func unknownPersonaErr(name string) error {
@@ -393,6 +487,13 @@ func needsDoubleQuote(s string) bool {
 	}
 	switch strings.ToLower(s) {
 	case "true", "false", "null", "~", "yes", "no", "on", "off":
+		return true
+	// The single-letter forms are booleans in YAML 1.1, which is the dialect
+	// kubectl and sigs.k8s.io/yaml read — so a bare `type: N` on a DynamoDB
+	// numeric key round-trips as `false` against a string enum. eemeli/yaml
+	// writes YAML 1.2 core, where they are plain strings, so matching its
+	// quoting exactly would emit a scalar its own consumer misreads.
+	case "y", "n":
 		return true
 	}
 	if yamlIntRe.MatchString(s) || yamlFloatRe.MatchString(s) {

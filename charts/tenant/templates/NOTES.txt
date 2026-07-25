@@ -29,8 +29,12 @@ five things in order (see ADR 0004 + docs/architecture.md):
  Verify
 ──────────────────────────────────────────────────────────────────────────────
 
-  kubectl get platform/{{ .Values.platform.name }} -n {{ .Release.Namespace }}
-  kubectl wait --for=condition=Ready platform/{{ .Values.platform.name }} -n {{ .Release.Namespace }} --timeout=5m
+  kubectl get platform/{{ .Values.platform.name }} -n {{ .Values.controlPlaneNamespace | default .Release.Namespace }}
+  kubectl wait --for=jsonpath='{.status.phase}'=Ready platform/{{ .Values.platform.name }} -n {{ .Values.controlPlaneNamespace | default .Release.Namespace }} --timeout=5m
+
+Readiness rides on status.phase, not a Ready condition — a `--for=condition=Ready`
+wait never satisfies and burns the whole timeout on a healthy tenant. Neither form
+fails fast on phase=Failed, so read the phase if the wait times out.
 
 ──────────────────────────────────────────────────────────────────────────────
  Persona-specific guide

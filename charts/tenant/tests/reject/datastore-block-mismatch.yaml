@@ -1,0 +1,10 @@
+# expect: a block may only be set for its own kind
+# CRD CEL: a datastore's config block must match its kind.
+platform:
+  name: cover
+  tenant: coverco
+datastores:
+  - name: work
+    kind: queue
+    cache:
+      engine: valkey

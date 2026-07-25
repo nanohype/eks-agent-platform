@@ -4,7 +4,7 @@ The smallest viable Platform: one agent, one route, one budget, one daily smoke-
 
 ```bash
 kubectl apply -f platform.yaml
-kubectl wait --for=condition=Ready platform/blank --timeout=5m
+kubectl wait --for=jsonpath='{.status.phase}'=Ready platform/blank -n eks-agent-platform --timeout=5m
 kubectl get -n tenants-blank pods
 ```
 

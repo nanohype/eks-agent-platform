@@ -1,0 +1,10 @@
+# expect: over the 27-character budget for kind=cache
+# One tighter than the CRD's 28: ElastiCache caps a replication-group id at 40
+# characters including the longest environment token, so a cache at exactly 28
+# passes admission and then fails the tenant-substrate module.
+platform:
+  name: twenty-two-chars-here
+  tenant: coverco
+datastores:
+  - name: hotcache
+    kind: cache

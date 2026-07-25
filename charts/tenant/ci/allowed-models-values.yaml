@@ -1,0 +1,25 @@
+# Coverage render #2 — the allowedModels branch, plus the no-substrate default.
+#
+# spec.identity.allowedModels and spec.identity.allowedModelFamilies are mutually
+# exclusive in the CRD, so no single render can cover both. This render exists so
+# the union of ci/ renders still reaches allowedModels; everything else here is a
+# minimal tenant (no datastores, no capabilities, no attribution) which is also
+# the shape the default values.yaml produces.
+controlPlaneNamespace: eks-agent-platform
+
+platform:
+  name: models-only
+  tenant: coverco
+  persona: generic
+
+identity:
+  allowedModelFamilies: []
+  allowedModels:
+    - us.anthropic.claude-sonnet-4-6
+  extraPolicyArns: []
+
+budget:
+  monthlyUsd: 100
+
+evalSuite:
+  enabled: true

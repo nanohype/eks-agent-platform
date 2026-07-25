@@ -18,6 +18,44 @@ helm template marketing-team ./charts/tenant \
   --set budget.monthlyUsd=2500
 ```
 
+## The full Platform vocabulary
+
+Beyond identity and budget, a Platform declares three more things. Each is
+optional and off by default, and `charts/tenant/ci/full-values.yaml` is the
+worked example with every field set.
+
+- **`datastores`** — the tenant's stateful substrate: relational, keyValue,
+  objectStore, queue, cache, stream. A declaration, not a component: the generic
+  `tenant-substrate` tofu module provisions the resource from this same list and
+  the operator generates the scoped IAM policy that reaches it.
+
+  Two steps, two owners. Declaring a datastore grants the tenant role access to
+  the resource's ARN and reports it under `status.datastores`. The resource is
+  provisioned when the declaration reaches landing-zone's `tenant-substrate`
+  `tenants` input — until it does, the tenant holds a grant on a name that does
+  not exist yet.
+
+- **`identity.capabilities`** — managed AWS capabilities outside the datastore
+  vocabulary (`ses`, `eventBridgeScheduler`), each driving an operator-generated
+  inline policy rather than a hand-written managed policy referenced by ARN.
+
+- **`identity.directSecretReads`** — the application secrets the tenant's pods
+  read through the pod role, granted by exact name with no wildcard. Entries are
+  prefix-relative to `<platform>/<environment>/`.
+
+- **`attribution.operators`** — per-session human attribution. A non-empty list
+  provisions a session role carrying the named human as STS `SourceIdentity` plus
+  apiserver impersonation, so an agent's AWS and Kubernetes actions both
+  attribute to a person. There is no boolean: the list _is_ the switch.
+
+The chart rejects a declaration the CRD or the tofu module would, at render time
+rather than at admission or apply — a name over the composed-resource budget, a
+config block that does not match its kind, a `keyValue` store with no partition
+key, an unquoted `type: N` (a YAML boolean), `eventBridgeScheduler` with no queue
+to send to, a secret read that already carries its own prefix.
+`scripts/check-chart-crd-parity.py` asserts both halves: that the chart can emit
+every field the CRD defines, and that it still refuses the ones it should.
+
 ## Personas
 
 The `platform.persona` field drives downstream defaults across `ModelGateway` (preferred model family), Grafana dashboard panels, and CLI scaffold output. Valid values:

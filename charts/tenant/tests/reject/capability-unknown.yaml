@@ -1,0 +1,8 @@
+# expect: is not a capability (ses|eventBridgeScheduler)
+# CRD enum on Capability.
+platform:
+  name: cover
+  tenant: coverco
+identity:
+  capabilities:
+    - lambdaInvoke

@@ -28,6 +28,10 @@ type ScaffoldOptions struct {
 	Namespace    string // namespace where the Platform/Budget/Gateway/Fleet/Eval CRs land
 	Schedule     string // EvalSuite cron schedule; empty disables eval scheduling
 	SlackChannel string
+	// Vocabulary is the optional half of the Platform declaration — datastores,
+	// capabilities, direct secret reads, attribution. Zero value scaffolds a
+	// Platform with none of them, which is the young-tenant default.
+	Vocabulary PlatformVocabulary
 }
 
 // ScaffoldedResources is the set of CRs emitted by ScaffoldTenant.
@@ -93,8 +97,14 @@ func ScaffoldTenant(opts ScaffoldOptions) (*ScaffoldedResources, error) {
 				Tenant:      opts.TenantName,
 				Isolation:   "namespace",
 				Budget:      platformv1alpha1.BudgetRef{Name: budgetName},
-				Identity:    platformv1alpha1.IdentitySpec{AllowedModelFamilies: allowedFamiliesFor(pdefs)},
+				Identity: platformv1alpha1.IdentitySpec{
+					AllowedModelFamilies: allowedFamiliesFor(pdefs),
+					Capabilities:         opts.Vocabulary.Capabilities,
+					DirectSecretReads:    opts.Vocabulary.DirectSecretReads,
+				},
 				Compliance:  pdefs.Compliance,
+				Attribution: opts.Vocabulary.Attribution(),
+				Datastores:  opts.Vocabulary.Datastores,
 			},
 		},
 		Budget: &governancev1alpha1.BudgetPolicy{

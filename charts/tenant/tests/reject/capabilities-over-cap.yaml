@@ -1,0 +1,8 @@
+# expect: identity.capabilities holds at most 8 entries
+# CRD MaxItems=8. Duplicated entries are enough to trip the count; the CRD's own
+# rejection would be an item-count error naming no field.
+platform:
+  name: cover
+  tenant: coverco
+identity:
+  capabilities: [ses, ses, ses, ses, ses, ses, ses, ses, ses]

@@ -1,0 +1,14 @@
+# expect: an unquoted N is a YAML boolean
+# `type: N` is a YAML 1.1 boolean, so it reaches the API server as false against
+# a string enum. The chart names the quoting rather than letting admission emit a
+# type error that mentions neither the datastore nor the fix.
+platform:
+  name: cover
+  tenant: coverco
+datastores:
+  - name: sessions
+    kind: keyValue
+    keyValue:
+      partitionKey:
+        name: sessionId
+        type: N

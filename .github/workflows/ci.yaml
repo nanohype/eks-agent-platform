@@ -81,6 +81,28 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-chart-rbac.py
 
+  # ── Chart↔CRD parity gate ────────────────────────────────────────────────
+  # The Platform CRD is mirrored in four places. Three were gated: the generated
+  # CRD + reference (crd-docs job), packages/core/src/schemas.ts
+  # (check-schema-drift), and the operator chart's RBAC (chart-rbac). charts/tenant
+  # was not, and it drifted — the CRD grew spec.datastores,
+  # identity.capabilities, identity.directSecretReads and spec.attribution while
+  # the chart every vending path renders could express none of them. Nothing
+  # failed: the rendered Platform was valid, it just declared less than a tenant
+  # needs.
+  #
+  # A field the chart cannot emit is a field agentctl, portal and ArgoCD cannot
+  # set. This asserts the chart reaches all of them, emits nothing outside the
+  # CRD, and still rejects the declarations the CRD would.
+  chart-crd-parity:
+    name: chart covers the Platform CRD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: pip install pyyaml
+      - run: ./scripts/check-chart-crd-parity.py
+
   helm:
     name: helm lint + template
     runs-on: ubuntu-latest

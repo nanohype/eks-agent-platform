@@ -18,7 +18,7 @@ pnpm --filter @eks-agent-example/bedrock-rag typecheck
 
 ```bash
 kubectl apply -f platform.yaml
-kubectl wait --for=condition=Ready platform/docs-rag -n eks-agent-platform --timeout=5m
+kubectl wait --for=jsonpath='{.status.phase}'=Ready platform/docs-rag -n eks-agent-platform --timeout=5m
 ```
 
 Validate against the installed CRDs without a cluster write:

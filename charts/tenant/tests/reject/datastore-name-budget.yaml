@@ -1,0 +1,9 @@
+# expect: over the 28-character budget
+# CRD CEL: metadata.name + datastore name <= 28, because the two compose into the
+# provisioned bucket / table / queue name against S3's 63-char ceiling.
+platform:
+  name: platform-with-a-longish-name
+  tenant: coverco
+datastores:
+  - name: ledger
+    kind: stream

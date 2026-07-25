@@ -213,6 +213,104 @@ func TestWritePlatformNew_WritesAndRefusesOverwrite(t *testing.T) {
 	}
 }
 
+// vocabularyFixtureOptions is the one scaffold that exercises the optional half
+// of the Platform declaration. Kept beside the fixture it pins so the two move
+// together.
+func vocabularyFixtureOptions(t *testing.T) PlatformNewOptions {
+	t.Helper()
+	vocab, err := ParseVocabulary("acme-assist", VocabularyFlags{
+		Datastores: []string{
+			"name=corpus,kind=objectStore",
+			"name=chunks,kind=keyValue,partitionKey=docId:S,sortKey=chunk:N",
+			"name=work,kind=queue,deletionPolicy=Delete",
+		},
+		Capabilities:      []string{"eventBridgeScheduler"},
+		DirectSecretReads: []string{"vendor/embed-api-key"},
+		Operators:         []string{"operator@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("ParseVocabulary: %v", err)
+	}
+	return PlatformNewOptions{
+		Name: "acme-assist", Tenant: "acme", Persona: "eng", MonthlyUsd: 250,
+		Vocabulary: vocab,
+	}
+}
+
+// TestPlatformNew_VocabularyFixture pins the bytes of a scaffold that carries
+// datastores, capabilities, direct secret reads and attribution. The nine persona
+// fixtures all render with the vocabulary off, so without this case the whole
+// emission path is unpinned — every optional key is omit-when-absent, and the
+// absent branch is the only one they cover.
+func TestPlatformNew_VocabularyFixture(t *testing.T) {
+	got, _, err := RenderPlatformNew(vocabularyFixtureOptions(t))
+	if err != nil {
+		t.Fatalf("RenderPlatformNew: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "platform-new", "vocabulary.yaml"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("vocabulary scaffold is not byte-identical to the golden fixture.\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// TestPlatformNew_AttributeTypeSurvivesRoundTrip is the regression case for a
+// scalar the encoder got wrong: `N` is a boolean in YAML 1.1, the dialect kubectl
+// and sigs.k8s.io/yaml read. Emitted bare, a DynamoDB numeric key's type parses
+// back as `false` against a string enum — valid YAML, rejected at admission, and
+// invisible in the emitted file to anyone who does not know the dialect.
+func TestPlatformNew_AttributeTypeSurvivesRoundTrip(t *testing.T) {
+	yamlBytes, _, err := RenderPlatformNew(vocabularyFixtureOptions(t))
+	if err != nil {
+		t.Fatalf("RenderPlatformNew: %v", err)
+	}
+	if !strings.Contains(string(yamlBytes), `type: "N"`) {
+		t.Error(`the numeric key's type must be emitted quoted as type: "N"`)
+	}
+
+	docs := parseDocs(t, yamlBytes)
+	spec, _ := docs[0]["spec"].(map[string]any)
+	datastores, _ := spec["datastores"].([]any)
+	if len(datastores) != 3 {
+		t.Fatalf("want 3 datastores, got %d", len(datastores))
+	}
+	chunks, _ := datastores[1].(map[string]any)
+	keyValue, _ := chunks["keyValue"].(map[string]any)
+	sortKey, _ := keyValue["sortKey"].(map[string]any)
+	if sortKey["type"] != "N" {
+		t.Errorf("sort key type round-tripped as %#v, want the string \"N\"", sortKey["type"])
+	}
+	partitionKey, _ := keyValue["partitionKey"].(map[string]any)
+	if partitionKey["type"] != "S" {
+		t.Errorf("partition key type round-tripped as %#v, want the string \"S\"", partitionKey["type"])
+	}
+}
+
+// TestPlatformNew_OmitsAbsentVocabulary asserts the encoder omits every optional
+// key rather than emitting it empty. set() is unconditional, so an empty list
+// would render `capabilities:` with a null value — which the API server reads as
+// an explicit null, not as absent.
+func TestPlatformNew_OmitsAbsentVocabulary(t *testing.T) {
+	yamlBytes, _, err := RenderPlatformNew(PlatformNewOptions{
+		Name: "acme-assist", Tenant: "acme", Persona: "generic", MonthlyUsd: 250,
+	})
+	if err != nil {
+		t.Fatalf("RenderPlatformNew: %v", err)
+	}
+	for _, key := range []string{"datastores", "attribution", "capabilities", "directSecretReads"} {
+		if strings.Contains(string(yamlBytes), key+":") {
+			t.Errorf("%q should be omitted entirely when not declared, but appears in the output", key)
+		}
+	}
+	docs := parseDocs(t, yamlBytes)
+	spec, _ := docs[0]["spec"].(map[string]any)
+	if _, present := spec["datastores"]; present {
+		t.Error("spec.datastores should be absent, not null")
+	}
+}
+
 // parseDocs splits a multi-document YAML byte slice and unmarshals each into a
 // generic map for assertions.
 func parseDocs(t *testing.T, b []byte) []map[string]any {
