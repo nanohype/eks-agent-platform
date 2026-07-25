@@ -9,11 +9,17 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
@@ -29,8 +35,9 @@ import (
 const datastorePolicyName = "datastore-access"
 
 // Per-kind action sets. Each is the minimum a tenant workload needs against its
-// own store; none is wildcarded, and every Resource is scoped to the datastore's
-// own name prefix.
+// own store. Every Resource is scoped to the datastore's own name prefix, except
+// the relational secret grant, whose ARN cannot be composed from the naming
+// convention at all — see resolveRelationalSecretARNs.
 var (
 	datastoreDynamoActions = []string{
 		"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan",
@@ -68,17 +75,24 @@ func sidToken(s string) string {
 // declared datastores. tenant is the platform token composed into every name
 // (spec.datastores resources are named <env>-<platform>-<datastore> by the
 // tenant-substrate module, matching this). cache stores contribute no statement
-// (ElastiCache data-plane access is network + auth-token, not IAM); relational
-// stores share one secret grant because the RDS-managed master secret has an
-// AWS-generated name and is scoped by the rds!cluster- prefix.
-func datastorePolicyStatements(p *platformv1alpha1.Platform, env string, scope arnScope) []policyStatement {
+// (ElastiCache data-plane access is network + auth-token, not IAM).
+//
+// secretARNs carries the resolved RDS-managed master-secret ARN per relational
+// datastore name, looked up from SSM by resolveRelationalSecretARNs. A relational
+// datastore with no resolved ARN contributes no grant: RDS names that secret from
+// the Aurora cluster's own AWS-generated resource id, so there is no convention to
+// fall back on, and the only pattern that would match without the real ARN is the
+// account-wide rds!cluster-* prefix — which is every other tenant's master
+// credentials. No grant is the correct failure mode; the caller surfaces the
+// unresolved datastore and requeues.
+func datastorePolicyStatements(p *platformv1alpha1.Platform, env string, scope arnScope, secretARNs map[string]string) []policyStatement {
 	part := scope.partition()
 	region := scope.region()
 	account := scope.account()
 	tenant := p.Name
 
 	stmts := make([]policyStatement, 0, len(p.Spec.Datastores))
-	needSecret := false
+	var resolvedSecrets []string
 
 	for _, d := range p.Spec.Datastores {
 		base := fmt.Sprintf("%s-%s-%s", env, tenant, d.Name)
@@ -121,17 +135,22 @@ func datastorePolicyStatements(p *platformv1alpha1.Platform, env string, scope a
 				},
 			})
 		case platformv1alpha1.DatastoreRelational:
-			needSecret = true
+			if arn := secretARNs[d.Name]; arn != "" {
+				resolvedSecrets = append(resolvedSecrets, arn)
+			}
 		case platformv1alpha1.DatastoreCache:
 			// no IAM statement — access is network + auth token
 		}
 	}
 
-	if needSecret {
+	if len(resolvedSecrets) > 0 {
+		// Sorted so an unchanged declaration marshals to an unchanged document
+		// and ensureDatastorePolicy's drift comparison stays stable.
+		sort.Strings(resolvedSecrets)
 		stmts = append(stmts, policyStatement{
 			Sid: "relationalSecrets", Effect: "Allow",
 			Action:   datastoreSecretActions,
-			Resource: []string{fmt.Sprintf("arn:%s:secretsmanager:%s:%s:secret:rds!cluster-*", part, region, account)},
+			Resource: resolvedSecrets,
 		})
 	}
 
@@ -152,6 +171,58 @@ func datastorePolicyDoc(stmts []policyStatement) (string, error) {
 	return string(b), nil
 }
 
+// masterSecretParamPath is where the tenant-substrate component publishes a
+// relational datastore's RDS-managed master-secret ARN. Keyed on the full cluster
+// name — the same /eks-agent-platform/<cluster>/ subtree the operator resolves the
+// rest of its configuration from, so co-located sibling clusters stay isolated.
+func masterSecretParamPath(clusterName, platform, datastore string) string {
+	return fmt.Sprintf("/eks-agent-platform/%s/tenant-substrate/%s/%s/master_secret_arn",
+		clusterName, platform, datastore)
+}
+
+// resolveRelationalSecretARNs reads the published master-secret ARN for every
+// relational datastore the Platform declares.
+//
+// A missing parameter is not an error. The substrate applies independently of the
+// CR, so a Platform can legitimately reconcile before its Aurora cluster exists;
+// that datastore comes back in the unresolved list, contributes no grant, and the
+// caller reports it. The alternative — granting on the rds!cluster-* prefix until
+// the real ARN shows up — is what made this cross-tenant in the first place.
+func (r *PlatformReconciler) resolveRelationalSecretARNs(
+	ctx context.Context, p *platformv1alpha1.Platform, clusterName string,
+) (map[string]string, []string, error) {
+	resolved := map[string]string{}
+	var unresolved []string
+
+	for _, d := range p.Spec.Datastores {
+		if d.Kind != platformv1alpha1.DatastoreRelational {
+			continue
+		}
+		// No SSM client or no cluster name means the lookup cannot be made at
+		// all — unresolved, never a fallback to a broader pattern.
+		if r.SSM == nil || clusterName == "" {
+			unresolved = append(unresolved, d.Name)
+			continue
+		}
+
+		path := masterSecretParamPath(clusterName, p.Name, d.Name)
+		out, err := r.SSM.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(path)})
+		var notFound *ssmtypes.ParameterNotFound
+		switch {
+		case errors.As(err, &notFound):
+			unresolved = append(unresolved, d.Name)
+		case err != nil:
+			return nil, nil, fmt.Errorf("ssm GetParameter %s: %w", path, err)
+		case out == nil || out.Parameter == nil || aws.ToString(out.Parameter.Value) == "":
+			unresolved = append(unresolved, d.Name)
+		default:
+			resolved[d.Name] = aws.ToString(out.Parameter.Value)
+		}
+	}
+
+	return resolved, unresolved, nil
+}
+
 // ensureDatastorePolicy reconciles the datastore-access inline policy on a tenant
 // role. When the Platform declares no datastores needing IAM, the policy is
 // removed so a cleared declaration leaves no stale grant. Idempotent: reads the
@@ -163,7 +234,23 @@ func (r *PlatformReconciler) ensureDatastorePolicy(ctx context.Context, roleName
 		return nil
 	}
 
-	stmts := datastorePolicyStatements(p, cfg.Environment, arnScopeFromRole(roleARN, cfg.Region))
+	secretARNs, unresolved, err := r.resolveRelationalSecretARNs(ctx, p, cfg.ClusterName)
+	if err != nil {
+		return err
+	}
+	if len(unresolved) > 0 {
+		// Visible rather than silent: the tenant's database credential is
+		// unreachable until the substrate publishes, and an operator debugging a
+		// pod that cannot read its own secret needs to land here, not on an
+		// unexplained AccessDenied.
+		log.FromContext(ctx).Info(
+			"relational datastore has no published master-secret ARN yet; granting no Secrets Manager access for it",
+			"platform", p.Name, "datastores", unresolved,
+			"expectedParameter", masterSecretParamPath(cfg.ClusterName, p.Name, unresolved[0]),
+		)
+	}
+
+	stmts := datastorePolicyStatements(p, cfg.Environment, arnScopeFromRole(roleARN, cfg.Region), secretARNs)
 	desired, err := datastorePolicyDoc(stmts)
 	if err != nil {
 		return err //coverage:ignore only reachable if json.Marshal fails, which it cannot for this document

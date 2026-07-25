@@ -22,15 +22,18 @@ import (
 // the report needs no AWS call.
 //
 // The connection endpoints of Aurora, ElastiCache, and MSK carry an
-// AWS-generated id, and the RDS-managed master-secret name is likewise generated
-// (see SecretName below) — those are resolved out-of-band by the module outputs,
-// not computed here, so Endpoint/SecretName are left empty for those kinds.
+// AWS-generated id, so Endpoint is left empty for those kinds — it is resolved
+// out-of-band by the module outputs, not computed here. SecretName is the
+// exception: the RDS-managed master-secret ARN is published to SSM by
+// tenant-substrate and passed in, because the datastore-access policy has to be
+// scoped to that exact ARN anyway. Reporting the same value the grant names
+// keeps the two from disagreeing.
 //
 // Per-datastore Phase mirrors the Platform's own phase (identity + access
 // readiness): a still-provisioning datastore does not gate the Platform's
 // top-level Ready (that reflects namespace + identity), and its live AWS state
 // is the module's concern rather than a phase the operator observes.
-func datastoreStatuses(p *platformv1alpha1.Platform, env string, scope arnScope, phase string) []platformv1alpha1.DatastoreStatus {
+func datastoreStatuses(p *platformv1alpha1.Platform, env string, scope arnScope, phase string, secretARNs map[string]string) []platformv1alpha1.DatastoreStatus {
 	if len(p.Spec.Datastores) == 0 {
 		return nil
 	}
@@ -66,6 +69,12 @@ func datastoreStatuses(p *platformv1alpha1.Platform, env string, scope arnScope,
 			st.ARN = fmt.Sprintf("arn:%s:kafka:%s:%s:cluster/%s", part, region, account, base)
 		case platformv1alpha1.DatastoreRelational:
 			st.ARN = fmt.Sprintf("arn:%s:rds:%s:%s:cluster:%s", part, region, account, base)
+			// The one field here that is not derivable: RDS names the managed
+			// master secret from the cluster's own AWS-generated resource id.
+			// It arrives from the ARN tenant-substrate publishes, the same
+			// lookup the datastore-access policy is scoped by, so status and
+			// grant can never disagree about which secret this tenant owns.
+			st.SecretName = secretARNs[d.Name]
 		}
 
 		out = append(out, st)
