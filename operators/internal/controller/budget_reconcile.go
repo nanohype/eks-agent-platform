@@ -66,7 +66,7 @@ var errAthenaNotConfigured = errors.New("athena workgroup/database not configure
 // athenaIdentifierRE is the validator applied to Athena workgroup +
 // database names before they're interpolated into a query. SSM values
 // are operator-resolved at startup, but they aren't a pre-trusted
-// channel — anyone with write access to /eks-agent-platform/<env>/
+// channel — anyone with write access to /eks-agent-platform/<cluster>/
 // could otherwise inject SQL via the spend rollup. AWS Athena's own
 // identifier rules are stricter than this; this is a paranoid subset.
 var athenaIdentifierRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)

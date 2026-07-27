@@ -41,7 +41,7 @@ See [README.md](./README.md#what-you-get) and [ARCHITECTURE.md](./ARCHITECTURE.m
 
 1. Create `terraform/components/<name>/` with `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `README.md`.
 2. Add a Terragrunt unit in `terraform/live/<env>/<name>/terragrunt.hcl`.
-3. Outputs published to SSM under `/eks-agent-platform/<env>/<component>/<key>`.
+3. Outputs published to SSM under `/eks-agent-platform/<cluster>/<component>/<key>`.
 4. Add `task tofu:validate` coverage.
 
 ## Cluster addons

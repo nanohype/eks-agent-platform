@@ -30,7 +30,7 @@ Pod identity. The `ScaledObject` has `identityOwner: pod`; a paired `TriggerAuth
   - read-only permission (the tenant can't write to or delete other queues),
   - the kill-switch tag still suspends the entire baseline policy attachment.
 
-  Acceptable. Documented in the inline comment in `terraform/components/agent-iam/main.tf`.
+  Acceptable. Documented in the inline comment in `landing-zone/components/aws/agent-iam/main.tf`.
 
 - **TriggerAuthentication needs to land before the ScaledObject.** KEDA tolerates this transiently (it retries reconciles), but we emit the `TriggerAuthentication` before the `ScaledObject` in `ensureKEDAScaledObject` to avoid a brief 'TA-not-found' status.
 
@@ -45,5 +45,5 @@ Pod identity. The `ScaledObject` has `identityOwner: pod`; a paired `TriggerAuth
 ## Cross-references
 
 - Implementation: `operators/internal/controller/agentfleet_reconcile.go` (`ensureKEDAScaledObject`, `ensureKEDATriggerAuth`).
-- Baseline policy: `terraform/components/agent-iam/main.tf` (`KEDASQSScalerRead` statement).
+- Baseline policy: `landing-zone/components/aws/agent-iam/main.tf` (`KEDASQSScalerRead` statement).
 - Cross-component contract: ADR 0003 (tenant role naming).

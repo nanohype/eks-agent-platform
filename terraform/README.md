@@ -15,14 +15,14 @@ OpenTofu + Terragrunt for the platform's AWS-side substrate. Sits on top of [`la
 
 ## Dependency graph
 
-Every component reads landing-zone's outputs — the cluster VPC / subnet / route-table / security-group IDs and CMK ARNs (as `TF_VAR_*`), and the operator role + tenant baseline from the `agent-iam` SSM contract (`/eks-agent-platform/<env>/agent-iam/*`, owned by landing-zone, not this tree). Intra-tree dependencies are minimal:
+Every component reads landing-zone's outputs — the cluster VPC / subnet / route-table / security-group IDs and CMK ARNs (as `TF_VAR_*`), and the operator role + tenant baseline from the `agent-iam` SSM contract (`/eks-agent-platform/<cluster>/agent-iam/*`, owned by landing-zone, not this tree). Intra-tree dependencies are minimal:
 
 ```
 eval-runtime → model-artifacts   (eval-reports bucket)
 cost-pipeline → bedrock          (invocation log group)
 ```
 
-Everything else (`model-artifacts`, `bedrock`, `agent-egress`, `accelerator-pools`, `kill-switch`, `batch-runtime`) applies independently. Each component writes its outputs to SSM (`/eks-agent-platform/<env>/*`), consumed by the operator in-cluster and by eks-gitops Helm values.
+Everything else (`model-artifacts`, `bedrock`, `agent-egress`, `accelerator-pools`, `kill-switch`, `batch-runtime`) applies independently. Each component writes its outputs to SSM (`/eks-agent-platform/<cluster>/*`), consumed by the operator in-cluster and by eks-gitops Helm values.
 
 ## Apply order
 
@@ -34,10 +34,11 @@ Across all environments, the landing-zone-supplied infrastructure identifiers �
 
 ## Outputs
 
-Every component publishes its outputs to SSM under:
+Every component publishes its outputs to SSM under the **cluster name** (same
+key the operator loads at startup), not the bare environment token:
 
 ```
-/eks-agent-platform/<environment>/<component>/<key>
+/eks-agent-platform/<cluster>/<component>/<key>
 ```
 
 Consumers:

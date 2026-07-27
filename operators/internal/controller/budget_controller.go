@@ -30,7 +30,7 @@ type AthenaConfig struct {
 	// CURTableName is the Glue table the CUR Crawler materialized. The
 	// table name is the report-name with hyphens normalized to
 	// underscores (e.g. "eks-agent-platform-dev" → "eks_agent_platform_dev").
-	// Resolved from SSM /eks-agent-platform/<env>/cost-pipeline/cur_table_name.
+	// Resolved from SSM /eks-agent-platform/<cluster>/cost-pipeline/cur_table_name.
 	CURTableName string
 }
 
