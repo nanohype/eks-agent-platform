@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
@@ -55,18 +56,32 @@ func hasCapability(p *platformv1alpha1.Platform, c platformv1alpha1.Capability) 
 // schedulerInvokeRoleName is the EventBridge Scheduler invoke role the operator
 // mints for a Platform declaring eventBridgeScheduler. The -scheduler-invoke
 // suffix is what the agent-iam SchedulerInvokeRolePass boundary keys its
-// PassRole allow-list on, so the name is load-bearing. Root path, so the ARN is
-// role/<env>-<platform>-scheduler-invoke and the tenant grant that passes it
-// scopes to exactly that.
-func schedulerInvokeRoleName(env string, p *platformv1alpha1.Platform) string {
-	return fmt.Sprintf("%s-%s-scheduler-invoke", env, p.Name)
+// PassRole allow-list on (role/*-scheduler-invoke), so the suffix is
+// load-bearing. Cluster-scoped (not env-scoped) so two co-located clusters that
+// share an account and environment can host a Platform of the same name without
+// one cluster's delete tearing down the other's invoke role — the same
+// isolation tenantRoleName gives the tenant role. Root path (deliberate: the
+// PassRole grant composes role/<name> with no path segment). Capped at 64 chars
+// with the same FNV-1a hash-truncation as tenantRoleName.
+func schedulerInvokeRoleName(clusterName string, p *platformv1alpha1.Platform) string {
+	const suffix = "-scheduler-invoke"
+	const maxLen = 64
+	full := clusterName + "-" + p.Name + suffix
+	if len(full) <= maxLen {
+		return full
+	}
+	prefix := clusterName + "-"
+	// budget = maxLen - len(prefix) - len(suffix) - 1(hyphen) - 8(hash)
+	budget := maxLen - len(prefix) - len(suffix) - 1 - 8
+	h := fnv1a64(p.Name)
+	return fmt.Sprintf("%s%s-%08x%s", prefix, p.Name[:budget], h&0xffffffff, suffix)
 }
 
 // schedulerInvokeRoleARN composes the invoke role's ARN from the same scope the
 // tenant role resolves to, so the tenant-role PassRole grant and the app's
 // SCHEDULER_ROLE_ARN name the same role.
-func schedulerInvokeRoleARN(env string, p *platformv1alpha1.Platform, scope arnScope) string {
-	return fmt.Sprintf("arn:%s:iam::%s:role/%s", scope.partition(), scope.account(), schedulerInvokeRoleName(env, p))
+func schedulerInvokeRoleARN(clusterName string, p *platformv1alpha1.Platform, scope arnScope) string {
+	return fmt.Sprintf("arn:%s:iam::%s:role/%s", scope.partition(), scope.account(), schedulerInvokeRoleName(clusterName, p))
 }
 
 // schedulerScheduleARN is the ARN pattern for the tenant's own schedules: the
@@ -98,8 +113,9 @@ func tenantQueueResources(p *platformv1alpha1.Platform, env string, scope arnSco
 // to the tenant's sending domain (the verified identity itself is account-level
 // mail infra, not provisioned here); eventBridgeScheduler grants schedule
 // management on the tenant's own schedules plus iam:PassRole on the minted
-// invoke role, capped to the Scheduler service.
-func capabilityPolicyStatements(p *platformv1alpha1.Platform, env string, scope arnScope) []policyStatement {
+// invoke role, capped to the Scheduler service. clusterName scopes the invoke
+// role; env scopes the schedule ARN prefix (schedules are env-keyed resources).
+func capabilityPolicyStatements(p *platformv1alpha1.Platform, env, clusterName string, scope arnScope) []policyStatement {
 	stmts := make([]policyStatement, 0, 4)
 
 	if hasCapability(p, platformv1alpha1.CapabilitySES) {
@@ -133,7 +149,7 @@ func capabilityPolicyStatements(p *platformv1alpha1.Platform, env string, scope 
 			policyStatement{
 				Sid: "schedulerPassInvokeRole", Effect: "Allow",
 				Action:   []string{"iam:PassRole"},
-				Resource: []string{schedulerInvokeRoleARN(env, p, scope)},
+				Resource: []string{schedulerInvokeRoleARN(clusterName, p, scope)},
 				Condition: map[string]map[string]string{
 					"StringEquals": {"iam:PassedToService": "scheduler.amazonaws.com"},
 				},
@@ -242,7 +258,7 @@ func (r *PlatformReconciler) ensureCapabilityPolicy(ctx context.Context, roleNam
 		return err
 	}
 
-	stmts := capabilityPolicyStatements(p, cfg.Environment, scope)
+	stmts := capabilityPolicyStatements(p, cfg.Environment, cfg.ClusterName, scope)
 	desired, err := capabilityPolicyDoc(stmts)
 	if err != nil {
 		return err //coverage:ignore only reachable if json.Marshal fails, which it cannot for this document
@@ -250,12 +266,12 @@ func (r *PlatformReconciler) ensureCapabilityPolicy(ctx context.Context, roleNam
 	return r.reconcileInlinePolicy(ctx, roleName, capabilityPolicyName, desired)
 }
 
-// ensureSchedulerInvokeRole mints (idempotently) the <env>-<platform>-scheduler-invoke
-// role — trusted by the Scheduler service, carrying the tenant permissions
-// boundary like every other operator-minted role — and reconciles its SendMessage
-// policy against the tenant's queue datastores.
+// ensureSchedulerInvokeRole mints (idempotently) the
+// <cluster>-<platform>-scheduler-invoke role — trusted by the Scheduler service,
+// carrying the tenant permissions boundary like every other operator-minted role
+// — and reconciles its SendMessage policy against the tenant's queue datastores.
 func (r *PlatformReconciler) ensureSchedulerInvokeRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig, scope arnScope) error {
-	name := schedulerInvokeRoleName(cfg.Environment, p)
+	name := schedulerInvokeRoleName(cfg.ClusterName, p)
 
 	_, getErr := r.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	if getErr != nil {
@@ -270,7 +286,7 @@ func (r *PlatformReconciler) ensureSchedulerInvokeRole(ctx context.Context, p *p
 			RoleName:                 aws.String(name),
 			AssumeRolePolicyDocument: aws.String(trust),
 			Description:              aws.String(fmt.Sprintf("EventBridge Scheduler invoke role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
-			Tags:                     tenantRoleTags(p, cfg),
+			Tags:                     schedulerInvokeRoleTags(p, cfg),
 		}
 		if cfg.TenantPermissionsBoundaryARN != "" {
 			createInput.PermissionsBoundary = aws.String(cfg.TenantPermissionsBoundaryARN)
@@ -295,6 +311,20 @@ func (r *PlatformReconciler) ensureSchedulerInvokeRole(ctx context.Context, p *p
 	return r.reconcileInlinePolicy(ctx, name, schedulerInvokeSendPolicyName, desired)
 }
 
+// schedulerInvokeRoleTags mirrors tenantRoleTags but marks Component as
+// scheduler-invoke so a tag-based compromise sweep can tell the root-path
+// invoke role apart from the path-prefixed tenant and session roles without
+// knowing every name formula.
+func schedulerInvokeRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag {
+	tags := tenantRoleTags(p, cfg)
+	for i := range tags {
+		if aws.ToString(tags[i].Key) == "Component" {
+			tags[i].Value = aws.String("scheduler-invoke")
+		}
+	}
+	return tags
+}
+
 // deleteSchedulerInvokeRole removes the invoke role. Used both when the
 // eventBridgeScheduler capability is dropped and on Platform finalization.
 // detachAndDeleteRole tolerates a role that was never created, so it is a safe
@@ -303,5 +333,5 @@ func (r *PlatformReconciler) deleteSchedulerInvokeRole(ctx context.Context, p *p
 	if r.IAM == nil {
 		return nil
 	}
-	return r.detachAndDeleteRole(ctx, schedulerInvokeRoleName(cfg.Environment, p))
+	return r.detachAndDeleteRole(ctx, schedulerInvokeRoleName(cfg.ClusterName, p))
 }
