@@ -518,9 +518,10 @@ spec:
                         itself is account-level mail infra\n\t                        (landing-zone),
                         not provisioned here.\n\teventBridgeScheduler -> scheduler:*Schedule
                         on the tenant's own schedules\n\t                        plus
-                        an operator-minted <env>-<platform>-scheduler-invoke\n\t                        role
-                        (trusted by scheduler.amazonaws.com, allowed to\n\t                        SendMessage
-                        to the tenant's own queue datastores) that\n\t                        the
+                        an operator-minted <cluster>-<platform>-scheduler-invoke\n\t
+                        \                       role (trusted by scheduler.amazonaws.com,
+                        allowed to\n\t                        SendMessage to the tenant's
+                        own queue datastores) that\n\t                        the
                         tenant passes when creating a schedule."
                       enum:
                       - ses

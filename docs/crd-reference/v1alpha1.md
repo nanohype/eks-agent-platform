@@ -835,7 +835,7 @@ need, not a hand-written managed policy the tenant references by ARN.
 	                        identity itself is account-level mail infra
 	                        (landing-zone), not provisioned here.
 	eventBridgeScheduler -> scheduler:*Schedule on the tenant's own schedules
-	                        plus an operator-minted <env>-<platform>-scheduler-invoke
+	                        plus an operator-minted <cluster>-<platform>-scheduler-invoke
 	                        role (trusted by scheduler.amazonaws.com, allowed to
 	                        SendMessage to the tenant's own queue datastores) that
 	                        the tenant passes when creating a schedule.

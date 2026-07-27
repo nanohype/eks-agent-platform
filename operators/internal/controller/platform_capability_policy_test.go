@@ -31,18 +31,19 @@ func platformWithCapabilities(name string, caps ...platformv1alpha1.Capability) 
 
 const (
 	capRoleARN     = "arn:aws:iam::123456789012:role/test-role"
-	invokeRoleName = "development-myplat-scheduler-invoke"
+	capClusterName = "development-platform"
+	invokeRoleName = "development-platform-myplat-scheduler-invoke"
 )
 
 func capCfg() IAMConfig {
-	return IAMConfig{Environment: "development", Region: "us-west-2"}
+	return IAMConfig{Environment: "development", Region: "us-west-2", ClusterName: capClusterName}
 }
 
 // TestCapabilityPolicy_SES proves the ses capability grants scoped SendEmail
 // (FromAddress-conditioned to the tenant's domain) plus the unconditioned
 // account-global GetSendQuota, and nothing else.
 func TestCapabilityPolicy_SES(t *testing.T) {
-	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), "development", testScope())
+	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), "development", capClusterName, testScope())
 
 	send := findStmt(stmts, "sesSend")
 	if send == nil || !hasResource(send, "*") {
@@ -65,14 +66,14 @@ func TestCapabilityPolicy_SES(t *testing.T) {
 // grants schedule management on the tenant's own schedule prefix plus a
 // service-capped PassRole on the minted invoke role.
 func TestCapabilityPolicy_Scheduler(t *testing.T) {
-	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), "development", testScope())
+	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), "development", capClusterName, testScope())
 
 	manage := findStmt(stmts, "schedulerManage")
 	if manage == nil || !hasResource(manage, "arn:aws:scheduler:us-west-2:123456789012:schedule/default/development-myplat-*") {
 		t.Fatalf("schedulerManage missing or misscoped: %+v", manage)
 	}
 	pass := findStmt(stmts, "schedulerPassInvokeRole")
-	if pass == nil || !hasResource(pass, "arn:aws:iam::123456789012:role/development-myplat-scheduler-invoke") {
+	if pass == nil || !hasResource(pass, "arn:aws:iam::123456789012:role/"+invokeRoleName) {
 		t.Fatalf("schedulerPassInvokeRole missing or misscoped: %+v", pass)
 	}
 	if got := pass.Condition["StringEquals"]["iam:PassedToService"]; got != "scheduler.amazonaws.com" {
@@ -86,7 +87,7 @@ func TestCapabilityPolicy_Scheduler(t *testing.T) {
 func TestCapabilityPolicy_BothAndNone(t *testing.T) {
 	both := capabilityPolicyStatements(
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES, platformv1alpha1.CapabilityEventBridgeScheduler),
-		"development", testScope(),
+		"development", capClusterName, testScope(),
 	)
 	for _, sid := range []string{"sesSend", "sesQuota", "schedulerManage", "schedulerPassInvokeRole"} {
 		if findStmt(both, sid) == nil {
@@ -101,12 +102,31 @@ func TestCapabilityPolicy_BothAndNone(t *testing.T) {
 		t.Errorf("both capabilities must yield a non-empty document")
 	}
 
-	none := capabilityPolicyStatements(platformWithCapabilities("myplat"), "development", testScope())
+	none := capabilityPolicyStatements(platformWithCapabilities("myplat"), "development", capClusterName, testScope())
 	if len(none) != 0 {
 		t.Errorf("no capability must yield no statements, got %d", len(none))
 	}
 	if d, _ := capabilityPolicyDoc(none); d != "" {
 		t.Errorf("no statements must yield an empty document, got %q", d)
+	}
+}
+
+// TestSchedulerInvokeRoleName_IsClusterScoped proves two co-located clusters
+// that share an environment mint distinct invoke roles for the same Platform
+// name — so one cluster's delete cannot tear down the other's role.
+func TestSchedulerInvokeRoleName_IsClusterScoped(t *testing.T) {
+	p := platformWithCapabilities("myplat")
+	a := schedulerInvokeRoleName("development-platform", p)
+	b := schedulerInvokeRoleName("development-platform-b", p)
+	if a == b {
+		t.Fatalf("co-located clusters must mint distinct invoke roles, both got %q", a)
+	}
+	if !strings.HasSuffix(a, "-scheduler-invoke") || !strings.HasSuffix(b, "-scheduler-invoke") {
+		t.Errorf("suffix is load-bearing for the agent-iam PassRole boundary: %q / %q", a, b)
+	}
+	// Env-keyed formula is exactly what this isolation replaces.
+	if a == "development-myplat-scheduler-invoke" {
+		t.Errorf("invoke role must not be env-keyed alone; got %q", a)
 	}
 }
 

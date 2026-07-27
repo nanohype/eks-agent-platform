@@ -42,18 +42,50 @@ jq -r '.Events[].EventName' /tmp/cloudtrail-events.json | sort | uniq -c | sort 
 
 The operator's legitimate API surface is documented in [ADR 0003](../adr/0003-threat-model.md). Compare actual calls to expected.
 
-## Sweep tenant roles created during the window
+## Sweep operator-minted roles created during the window
+
+The operator mints three role shapes, and only two of them live under the
+tenant path. A path-prefix list misses the rest:
+
+| Shape            | Name formula                            | Path                           | `Component` tag    |
+| ---------------- | --------------------------------------- | ------------------------------ | ------------------ |
+| tenant           | `<cluster>-<platform>-tenant`           | `/eks-agent-platform/tenants/` | `tenant-iam`       |
+| session          | `<cluster>-<platform>-session`          | `/eks-agent-platform/tenants/` | `session-iam`      |
+| scheduler-invoke | `<cluster>-<platform>-scheduler-invoke` | `/` (root)                     | `scheduler-invoke` |
+
+Every role the operator creates carries `ManagedBy=eks-agent-platform`. Sweep
+by that tag — not by path — so root-path invoke roles show up too.
 
 ```bash
-# List tenant roles under the operator-managed IAM path
-aws iam list-roles --path-prefix /eks-agent-platform/tenants/ \
-  --query 'Roles[?CreateDate >= `<suspect-window-start>`].RoleName' --output text \
-  > /tmp/suspect-tenant-roles.txt
+# Every operator-minted role (tenant, session, scheduler-invoke), regardless of path.
+# resourcegroupstaggingapi is the enumeration surface; IAM list-roles --path-prefix
+# cannot see the root-path scheduler-invoke roles.
+aws resourcegroupstaggingapi get-resources \
+  --resource-type-filters iam:role \
+  --tag-filters Key=ManagedBy,Values=eks-agent-platform \
+  --query 'ResourceTagMappingList[].[ResourceARN,Tags[?Key==`PlatformId`].Value|[0],Tags[?Key==`Component`].Value|[0]]' \
+  --output text \
+  > /tmp/operator-roles.txt
+
+# Narrow to roles created during the window (CreateDate is on the role, not the tag).
+: > /tmp/suspect-operator-roles.txt
+while read -r arn platform_id component; do
+  name=${arn##*/}
+  created=$(aws iam get-role --role-name "$name" --query 'Role.CreateDate' --output text)
+  # ISO-8601 compare: keep anything at or after the window start.
+  if [[ "$created" > "<suspect-window-start>" || "$created" == "<suspect-window-start>"* ]]; then
+    printf '%s\t%s\t%s\t%s\n' "$name" "$platform_id" "$component" "$created" \
+      >> /tmp/suspect-operator-roles.txt
+  fi
+done < /tmp/operator-roles.txt
 
 # Cross-reference against legitimate Platform CRs in the cluster
 kubectl get platforms -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort > /tmp/legit-platforms.txt
 
-# Anything in the IAM list but not in the cluster is orphan — investigate + delete
+# Anything whose PlatformId is not in the cluster is orphan — investigate + delete.
+# Scheduler-invoke and session roles share PlatformId with their parent Platform.
+awk '{print $2}' /tmp/suspect-operator-roles.txt | sort -u \
+  | comm -23 - /tmp/legit-platforms.txt
 ```
 
 ## Restore service (after audit)
