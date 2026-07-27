@@ -130,6 +130,25 @@ func TestSchedulerInvokeRoleName_IsClusterScoped(t *testing.T) {
 	}
 }
 
+// TestSchedulerInvokeRoleName_HashTruncatesOverLimit proves a long Platform
+// name still yields an IAM-legal invoke role that keeps the load-bearing
+// -scheduler-invoke suffix (the agent-iam PassRole boundary keys on it).
+func TestSchedulerInvokeRoleName_HashTruncatesOverLimit(t *testing.T) {
+	long := strings.Repeat("c", 80)
+	name := schedulerInvokeRoleName("production-cluster", platformWithCapabilities(long))
+	if len(name) > 64 {
+		t.Errorf("invoke role name over IAM's 64-char limit: %d (%s)", len(name), name)
+	}
+	const suffix = "-scheduler-invoke"
+	if !strings.HasSuffix(name, suffix) {
+		t.Errorf("truncated name must keep the %s suffix: %s", suffix, name)
+	}
+	// Truncation path must actually fire — a short name would not cover it.
+	if short := schedulerInvokeRoleName("production-cluster", platformWithCapabilities("myplat")); short == name {
+		t.Errorf("long-name formula must differ from the short-name formula")
+	}
+}
+
 // TestTenantQueueResources proves only queue datastores contribute an SQS ARN
 // prefix (the scheduler-invoke role's send target), and other kinds are skipped.
 func TestTenantQueueResources(t *testing.T) {
