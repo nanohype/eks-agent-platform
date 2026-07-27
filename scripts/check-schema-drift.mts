@@ -73,7 +73,7 @@ function deref(node: JsonNode, root: JsonNode): JsonNode {
 }
 
 function props(node: JsonNode): Record<string, JsonNode> | null {
-  if (node && node.properties && typeof node.properties === 'object') {
+  if (node?.properties && typeof node.properties === 'object') {
     return node.properties as Record<string, JsonNode>;
   }
   return null;

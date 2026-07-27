@@ -54,7 +54,7 @@ tasks:
   # === Format ===
 
   fmt:
-    desc: Format all files (tofu fmt + prettier + go fmt)
+    desc: Format all files (tofu fmt + biome + go fmt)
     cmds:
       - tofu fmt -recursive terraform/
       - pnpm format
