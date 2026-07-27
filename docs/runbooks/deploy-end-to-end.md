@@ -79,7 +79,7 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
    operator itself).
 5. `agent-iam` — the operator IRSA role (path-scoped, boundary-gated), the tenant
    permissions boundary + baseline policies, and the SSM params the operator
-   reads (`/eks-agent-platform/<env>/agent-iam/*`).
+   reads (`/eks-agent-platform/<cluster>/agent-iam/*`).
 6. Per tenant, `<app>-platform` (e.g. `competitive-intelligence-platform`) for
    Aurora / per-tenant IRSA / Secrets. OIDC is wired from the `cluster`
    dependency automatically.
@@ -95,10 +95,10 @@ Apply once `agent-iam` (B1 step 5) and the cluster exist. This tree is the
 operator's own AWS substrate — `bedrock`, `agent-egress`, `accelerator-pools`,
 `eval-runtime`, `cost-pipeline`, `kill-switch`, `batch-runtime` — and writes the
 SSM parameters the operator loads at startup
-(`/eks-agent-platform/<env>/{bedrock,kill-switch,cost-pipeline,eval-runtime,
+(`/eks-agent-platform/<cluster>/{bedrock,kill-switch,cost-pipeline,eval-runtime,
 batch-runtime}/*`). `agent-iam` is **not** here — landing-zone owns it (B1 step
 5), and it is also the sole owner of the model-artifacts + eval-reports buckets
-and their `/eks-agent-platform/<env>/model-artifacts/*` SSM keys; this tree reads
+and their `/eks-agent-platform/<cluster>/model-artifacts/*` SSM keys; this tree reads
 the operator role, tenant baseline, and the eval-reports/model-artifacts buckets
 from that landing-zone SSM contract.
 
@@ -137,7 +137,7 @@ can't hardcode — the operator IAM role ARN and the eval-reports bucket — fro
 the annotations `cluster-bootstrap` publishes on the ArgoCD cluster Secret (the
 eval-runner role is bound by Pod Identity, see B1b). The cluster name comes from
 SSM
-(`/eks-agent-platform/<env>/cluster/name`), read by the operator's config
+(`/eks-agent-platform/<cluster>/cluster/name`), read by the operator's config
 loader. So once B1 step 3
 landed, the operator (with the AWS reconcile ON and its eval-runtime + SLO
 bundles enabled by the chart defaults) is already on its way. Get the image

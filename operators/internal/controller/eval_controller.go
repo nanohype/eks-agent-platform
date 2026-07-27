@@ -35,7 +35,7 @@ type EvalReconciler struct {
 
 	// RunnerNamespace overrides the default eval-runner namespace used as
 	// the destination for emitted Workflow / CronWorkflow CRs. Resolved
-	// from SSM /eks-agent-platform/<env>/eval-runtime/runner_namespace.
+	// from SSM /eks-agent-platform/<cluster>/eval-runtime/runner_namespace.
 	// Empty falls back to the package default.
 	RunnerNamespace string
 }

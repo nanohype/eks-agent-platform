@@ -19,8 +19,9 @@ kubectl get budgetpolicies -A -o json | jq '.items[] | select(.spec.platformRef.
 ROLE_NAME=<env>-<platform-name>-tenant
 aws iam list-role-tags --role-name "$ROLE_NAME"
 
-# Recent kill-switch SFN executions
-aws stepfunctions list-executions --state-machine-arn $(aws ssm get-parameter --name "/eks-agent-platform/<env>/kill-switch/state_machine_arn" --query 'Parameter.Value' --output text) --max-results 10
+# Recent kill-switch SFN executions.
+# <cluster> is the EKS cluster name (e.g. development-platform), not bare <env>.
+aws stepfunctions list-executions --state-machine-arn $(aws ssm get-parameter --name "/eks-agent-platform/<cluster>/kill-switch/state_machine_arn" --query 'Parameter.Value' --output text) --max-results 10
 ```
 
 ## Most likely cause

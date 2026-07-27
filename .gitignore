@@ -92,3 +92,9 @@ packages/client/src/generated/
 
 # Local planning docs (org convention: plans are local-only)
 .plans/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python

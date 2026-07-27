@@ -40,7 +40,7 @@ Spend visibility for `BudgetPolicy` reconciliation.
 | `cur_crawler_schedule`                  | cron expression for the CUR Crawler               |
 | `athena_results_retention_days`         | per-env: dev 30, staging 90, prod 365+            |
 
-The operator role ARN and name are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<env>/agent-iam/operator_role_{arn,name}`), not passed as inputs.
+The operator role ARN and name are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<cluster>/agent-iam/operator_role_{arn,name}`), not passed as inputs.
 
 ## Outputs
 

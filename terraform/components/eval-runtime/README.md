@@ -20,7 +20,7 @@ AWS-side substrate for `EvalSuite` reconciliation. The Kubernetes-side
   errors (template parse failures, scheduling) have their own retention
   policy.
 * **SSM outputs** the operator picks up at startup:
-  `/eks-agent-platform/<env>/eval-runtime/runner_role_arn` (and
+  `/eks-agent-platform/<cluster>/eval-runtime/runner_role_arn` (and
   `runner_namespace`, `runner_service_account`, `eval_reports_bucket`).
 
 The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when

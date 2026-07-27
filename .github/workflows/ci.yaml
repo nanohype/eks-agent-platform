@@ -21,6 +21,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./scripts/no-placeholders.sh
 
+  doc-contracts:
+    name: doc contract gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-doc-contracts.sh
+
   format:
     name: format check
     runs-on: ubuntu-latest

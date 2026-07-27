@@ -6,8 +6,10 @@
 
 ```bash
 # 1. Identify the operator role
-ROLE_ARN=$(aws ssm get-parameter --name "/eks-agent-platform/<env>/agent-iam/operator_role_arn" --query 'Parameter.Value' --output text)
-ROLE_NAME=$(echo "$ROLE_ARN" | cut -d/ -f2)
+# <cluster> is the EKS cluster name (e.g. development-platform), not the
+# environment token alone — agent-iam publishes under the cluster-keyed tree.
+ROLE_ARN=$(aws ssm get-parameter --name "/eks-agent-platform/<cluster>/agent-iam/operator_role_arn" --query 'Parameter.Value' --output text)
+ROLE_NAME=${ROLE_ARN#*role/}
 
 # 2. Disable the role's trust policy — operator pods lose AWS access at
 #    next STS refresh (≤1 min).
@@ -57,21 +59,38 @@ kubectl get platforms -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{en
 ## Restore service (after audit)
 
 ```bash
-# Re-provision the operator role via terraform — stateless apart from
-# the role itself. Captures the latest baseline policy + trust.
-cd terraform/live/<env>/agent-iam
+# Re-provision the operator role via landing-zone agent-iam — the role is
+# owned there (not under this repo's terraform/). Stateless apart from the
+# role itself; captures the latest baseline policy + trust.
+cd ../landing-zone/live/aws/<account>/<region>/<env>/agent-iam
 terragrunt apply -auto-approve
 
 # Restart operator pods so they pick up the restored trust
 kubectl -n eks-agent-platform rollout restart deploy/operator
 ```
 
-## Rotate cmk-data if grants were tampered
+## Rotate data-plane CMKs if grants were tampered
+
+There is no single `data_kms_key_arn` SSM parameter under agent-iam. Model-
+artifacts SSE-KMS uses the cluster data CMK (a landing-zone input to
+agent-iam); each tenant's envelope + master-secret key is published by
+tenant-substrate at
+`/eks-agent-platform/<cluster>/tenant-substrate/<tenant>/kms_key_arn`.
 
 ```bash
-# List active KMS grants on cmk-data over the suspect window
-aws kms list-grants --key-id $(aws ssm get-parameter --name "/eks-agent-platform/<env>/agent-iam/data_kms_key_arn" --query 'Parameter.Value' --output text) \
+# Model-artifacts / shared data CMK — ARN from the landing-zone agent-iam
+# leaf inputs (or the key's alias in that account). List grants over the
+# suspect window:
+aws kms list-grants --key-id "<data-cmk-id-or-arn>" \
   --query 'Grants[?CreationDate >= `<suspect-window-start>`]'
+
+# Per-tenant keys the operator grants onto:
+for p in $(aws ssm get-parameters-by-path \
+  --path "/eks-agent-platform/<cluster>/tenant-substrate/" \
+  --recursive --query "Parameters[?ends_with(Name, '/kms_key_arn')].Value" --output text); do
+  aws kms list-grants --key-id "$p" \
+    --query 'Grants[?CreationDate >= `<suspect-window-start>`]'
+done
 ```
 
 If any grant has an unfamiliar `GranteePrincipal`, revoke it via `aws kms revoke-grant`. If many, rotate the key entirely (out of scope for this runbook — see your org's KMS rotation procedure).

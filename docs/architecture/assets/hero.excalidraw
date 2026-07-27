@@ -549,14 +549,14 @@
       "updated": 1700000000000,
       "link": null,
       "locked": false,
-      "text": "8 OpenTofu/Terragrunt components\nper-env wiring under terraform/live/{dev,staging,production}/\noutputs published to SSM /eks-agent-platform/<env>/",
+      "text": "8 OpenTofu/Terragrunt components\nper-env wiring under terraform/live/{dev,staging,production}/\noutputs published to SSM /eks-agent-platform/<cluster>/",
       "fontSize": 12,
       "fontFamily": 1,
       "textAlign": "left",
       "verticalAlign": "top",
       "baseline": 11,
       "containerId": null,
-      "originalText": "8 OpenTofu/Terragrunt components\nper-env wiring under terraform/live/{dev,staging,production}/\noutputs published to SSM /eks-agent-platform/<env>/",
+      "originalText": "8 OpenTofu/Terragrunt components\nper-env wiring under terraform/live/{dev,staging,production}/\noutputs published to SSM /eks-agent-platform/<cluster>/",
       "lineHeight": 1.25
     },
 

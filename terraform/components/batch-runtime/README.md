@@ -17,7 +17,7 @@ that submits it). This component creates that role, scoped to the shared
 - A scoped data-access policy: `s3:GetObject`/`s3:PutObject` on
   `<artifacts-bucket>/batch/*`, `s3:ListBucket` on that prefix, and
   `kms:Decrypt`/`GenerateDataKey` on `cmk-data` via S3.
-- An SSM parameter `/eks-agent-platform/<env>/batch-runtime/service_role_arn`
+- An SSM parameter `/eks-agent-platform/<cluster>/batch-runtime/service_role_arn`
   the operator reads at startup (`operatorconfig.BatchServiceRoleARN`).
 
 ## Boundary

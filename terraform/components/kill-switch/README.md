@@ -21,7 +21,7 @@ The operator closes the loop by **observation, not subscription** — there is n
 | `environment`, `region`, `cluster_name` | identifying |
 | `logs_kms_key_arn`                      | cmk-logs    |
 
-The operator role ARN (granted PutEvents on the bus), the tenant IAM path (DetachRolePolicy scope), and the tenant baseline policy ARN (detached on breach) are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<env>/agent-iam/*`), not passed as inputs.
+The operator role ARN (granted PutEvents on the bus), the tenant IAM path (DetachRolePolicy scope), and the tenant baseline policy ARN (detached on breach) are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<cluster>/agent-iam/*`), not passed as inputs.
 
 ## Outputs
 

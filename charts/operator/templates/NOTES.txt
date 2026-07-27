@@ -19,17 +19,17 @@ eks-agent-platform operator installed.
         annotations:
           eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<env>-<cluster>-eks-agent-platform-operator
 
-    Read the role ARN from SSM (provisioned by terraform/components/agent-iam):
+    Read the role ARN from SSM (provisioned by landing-zone agent-iam):
 
       aws ssm get-parameter \
-        --name /eks-agent-platform/<env>/agent-iam/operator_role_arn \
+        --name /eks-agent-platform/<cluster>/agent-iam/operator_role_arn \
         --query Parameter.Value --output text
 {{- end }}
 
-{{- if not .Values.config.environment }}
+{{- if not .Values.config.clusterName }}
 
-  ⚠ config.environment is empty. Set --set config.environment=dev|staging|production
-    so the operator reads the right SSM tree.
+  ⚠ config.clusterName is empty. Set --set config.clusterName=<eks-cluster-name>
+    so the operator reads the right SSM tree (/eks-agent-platform/<cluster>/…).
 {{- end }}
 
 ──────────────────────────────────────────────────────────────────────────────
