@@ -155,7 +155,7 @@ The mitigations above are not aspirational. Today, the platform ships:
 - [x] Kill-switch recovery is human-only (SSO permission-set elevation)
 - [x] Operator chart NetworkPolicy default-deny + explicit allows
 - [x] gitleaks pre-commit + CI secret scanning
-- [x] trivy config + fs vuln scan + tflint + gosec + golangci + eslint-security all in CI
+- [x] trivy config + fs vuln scan + tflint + gosec + golangci + Biome lint + golangci all in CI
 
 Planned hardening:
 

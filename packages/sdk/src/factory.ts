@@ -1,7 +1,7 @@
 import { AgentError, type CallEvent, type ModelFamily } from '@eks-agent/core';
 
 import { AnthropicBedrockAdapter } from './adapters/anthropic.js';
-import { type BedrockAdapter, type BedrockAdapterOptions } from './adapters/bedrock-base.js';
+import type { BedrockAdapter, BedrockAdapterOptions } from './adapters/bedrock-base.js';
 import { NovaBedrockAdapter } from './adapters/nova.js';
 import type { MessagesParams, MessagesResponse } from './types.js';
 
