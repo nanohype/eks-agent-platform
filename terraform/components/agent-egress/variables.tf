@@ -34,7 +34,7 @@ variable "cluster_security_group_id" {
 }
 
 variable "enable_waf" {
-  description = "Attach a WAF WebACL to the agentgateway ALB. ALB ARN read from SSM by name."
+  description = "Attach a WAF WebACL to the model gateway ALB. ALB ARN read from SSM by name."
   type        = bool
   default     = false
 }
@@ -45,8 +45,8 @@ variable "create_vpc_endpoints" {
   default     = true
 }
 
-variable "agentgateway_alb_arn" {
-  description = "ALB ARN for the agentgateway public listener (only when enable_waf=true)"
+variable "model_gateway_alb_arn" {
+  description = "ALB ARN for the model gateway public listener (only when enable_waf=true)"
   type        = string
   default     = ""
 }

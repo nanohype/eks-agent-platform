@@ -7,6 +7,6 @@ terraform {
 }
 
 inputs = {
-  enable_waf           = false
-  agentgateway_alb_arn = ""
+  enable_waf            = false
+  model_gateway_alb_arn = ""
 }

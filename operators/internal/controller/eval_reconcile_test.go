@@ -45,3 +45,24 @@ func TestBuildInlineCasesParam_Empty(t *testing.T) {
 		t.Errorf("empty: got %q want []", got)
 	}
 }
+
+// TestModelGatewayEndpoint_IsPerPlatform guards the address eval runs are
+// pointed at.
+//
+// Each Platform runs its own gateway in its own namespace, so a single shared
+// URL — which is what the chart used to carry — is correct for at most one
+// Platform and silently wrong for every other. Nothing downstream would notice:
+// the workflow starts, the parameter is populated, and the run just fails to
+// reach a model.
+func TestModelGatewayEndpoint_IsPerPlatform(t *testing.T) {
+	a := ModelGatewayEndpoint(newPlatform("acme", "team"))
+	b := ModelGatewayEndpoint(newPlatform("globex", "team"))
+
+	if a == b {
+		t.Fatalf("two Platforms resolved to the same gateway endpoint (%q) — the address must be per-Platform", a)
+	}
+	const want = "http://acme-gateway.tenants-acme.svc.cluster.local:8080"
+	if a != want {
+		t.Errorf("endpoint: got %q want %q", a, want)
+	}
+}

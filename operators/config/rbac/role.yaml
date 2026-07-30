@@ -29,19 +29,6 @@ rules:
   verbs:
   - impersonate
 - apiGroups:
-  - agentgateway.dev
-  resources:
-  - agentgatewaybackends
-  - agentgatewaypolicies
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - agents.nanohype.dev
   resources:
   - agentfleets
@@ -81,6 +68,20 @@ rules:
   resources:
   - agentsandboxes
   verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - aigateway.envoyproxy.io
+  resources:
+  - aigatewayroutes
+  - aiservicebackends
+  - backendsecuritypolicies
+  verbs:
+  - create
   - delete
   - get
   - list
@@ -137,10 +138,25 @@ rules:
   - update
   - watch
 - apiGroups:
+  - gateway.envoyproxy.io
+  resources:
+  - backends
+  - backendtrafficpolicies
+  - clienttrafficpolicies
+  - envoyproxies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - gateway.networking.k8s.io
   resources:
+  - backendtlspolicies
   - gateways
-  - httproutes
   verbs:
   - create
   - delete

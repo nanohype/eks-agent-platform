@@ -128,3 +128,39 @@ func TestEnsureFleetCiliumEgress_DeniesIngressAndSelectsFleet(t *testing.T) {
 		t.Errorf("fleet CNP endpointSelector must select %s=researchers: got %v", LabelFleet, sel)
 	}
 }
+
+// TestTenantEgressCiliumRules_ReachesTheModelGateway guards the same class of
+// bug as the Pod Identity rule above, for the gateway.
+//
+// The Platform's gateway runs in the tenant's own namespace, and default-deny
+// egress applies to same-namespace traffic too — so a rule scoped to some other
+// namespace, or no rule at all, leaves the tenant unable to reach its own
+// gateway. Nothing else in the suite would notice: every CR still applies, the
+// Platform still reports Ready, and only real inference traffic fails.
+func TestTenantEgressCiliumRules_ReachesTheModelGateway(t *testing.T) {
+	for _, raw := range tenantEgressCiliumRules() {
+		rule, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		eps, ok := rule["toEndpoints"].([]interface{})
+		if !ok || len(eps) == 0 {
+			continue
+		}
+		labels, ok := eps[0].(map[string]interface{})["matchLabels"].(map[string]interface{})
+		if !ok || labels["k8s:app.kubernetes.io/name"] != "envoy" {
+			continue
+		}
+		// A namespace label here would scope the rule away from the tenant's own
+		// namespace, which is exactly where the gateway lives.
+		if _, scoped := labels["k8s:io.kubernetes.pod.namespace"]; scoped {
+			t.Error("the gateway rule must stay same-namespace: a namespace selector points it at the wrong place")
+		}
+		port := rule["toPorts"].([]interface{})[0].(map[string]interface{})["ports"].([]interface{})[0].(map[string]interface{})
+		if port["port"] != "8080" || port["protocol"] != "TCP" {
+			t.Errorf("gateway egress port: got %v/%v want 8080/TCP", port["port"], port["protocol"])
+		}
+		return
+	}
+	t.Fatal("tenant cilium egress must allow the Envoy proxy pods on TCP 8080 — without it every model call fails")
+}

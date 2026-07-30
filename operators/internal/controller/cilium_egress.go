@@ -21,8 +21,20 @@ const NetworkEngineCilium = "cilium"
 // ArgoCD AppProject.
 var ciliumNetworkPolicyGVK = schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumNetworkPolicy"}
 
+// envoyProxyPodLabels selects the Envoy pods Envoy Gateway renders for a
+// Gateway. These are upstream's own labels for every proxy resource
+// (internal/infrastructure/kubernetes/proxy: EnvoyAppLabel), not ones the
+// operator sets, so they are the stable handle for reaching the data plane.
+func envoyProxyPodLabels() map[string]interface{} {
+	return map[string]interface{}{
+		"k8s:app.kubernetes.io/name":       "envoy",
+		"k8s:app.kubernetes.io/component":  "proxy",
+		"k8s:app.kubernetes.io/managed-by": "envoy-gateway",
+	}
+}
+
 // tenantEgressCiliumRules is the egress allow-list shared by the per-tenant and
-// per-fleet CiliumNetworkPolicies: kube-dns, agentgateway, the OTel collector,
+// per-fleet CiliumNetworkPolicies: kube-dns, the model gateway, the OTel collector,
 // and — the reason this whole path exists — the EKS Pod Identity credential
 // endpoint at 169.254.170.23:80. Under cilium that endpoint is the reserved
 // `host` entity, which a vanilla k8s NetworkPolicy ipBlock CANNOT match, so a
@@ -41,10 +53,13 @@ func tenantEgressCiliumRules() []interface{} {
 				map[string]interface{}{"port": "53", "protocol": "TCP"},
 			}}},
 		},
-		map[string]interface{}{ // agentgateway
-			"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": map[string]interface{}{
-				"k8s:io.kubernetes.pod.namespace": "agentgateway",
-			}}},
+		map[string]interface{}{ // the Platform's model gateway
+			// The gateway's Envoy runs in this same namespace, so the selector
+			// carries no namespace label — cilium scopes a bare toEndpoints to
+			// the policy's own namespace. Default-deny egress covers
+			// same-namespace traffic too, so without this rule the tenant cannot
+			// reach its own gateway and every model call fails.
+			"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": envoyProxyPodLabels()}},
 			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
 				map[string]interface{}{"port": "8080", "protocol": "TCP"},
 			}}},

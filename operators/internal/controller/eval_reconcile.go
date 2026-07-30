@@ -122,6 +122,10 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 			// platform name would strip the wrong segment.
 			{"name": "suite-name", "value": suite.Name},
 			{"name": "pass-threshold", "value": suite.Spec.PassThreshold},
+			// Each Platform runs its own gateway in its own namespace, so the
+			// eval run has to be told which one. A chart-level default would be
+			// wrong for every Platform but the first.
+			{"name": "gateway-url", "value": ModelGatewayEndpoint(platform)},
 		}
 		if suite.Spec.CasesFromManifest != "" {
 			params = append(params, map[string]any{"name": "cases-manifest", "value": suite.Spec.CasesFromManifest})

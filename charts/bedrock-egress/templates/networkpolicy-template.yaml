@@ -49,10 +49,16 @@ data:
               protocol: UDP
             - port: 53
               protocol: TCP
+        # The Platform's gateway runs in this same namespace, so the peer
+        # carries no namespaceSelector. Default-deny egress covers
+        # same-namespace traffic too, so without this rule a tenant cannot
+        # reach its own gateway.
         - to:
-            - namespaceSelector:
+            - podSelector:
                 matchLabels:
-                  kubernetes.io/metadata.name: {{ .Values.networkPolicy.agentgatewayNamespace }}
+                  app.kubernetes.io/name: envoy
+                  app.kubernetes.io/component: proxy
+                  app.kubernetes.io/managed-by: envoy-gateway
           ports:
             - port: 8080
               protocol: TCP

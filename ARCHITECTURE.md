@@ -10,7 +10,7 @@ The system organizes around nine bounded contexts. Each gets a CRD, a reconciler
 | ----------------- | -------------- | ---------- | ------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Tenancy**       | `Tenant`       | `tenant`   | —                              | `tenant`         | Cluster-scoped aggregate of a team's `Platform`s; rolls up readiness, spend, and suspension into a single dashboard surface                                                                                                             |
 | **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IRSA role + KMS grant + S3 bucket policy                                         |
-| **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | agentgateway `Route` per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attachment, per-route rate limits                                                                                                                |
+| **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | Envoy AI Gateway `AIGatewayRoute` rule per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attached as request headers, per-route rate limits                                                                             |
 | **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`            | —                | kagent `Agent` + `ModelConfig` per agent, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, tenant `ServiceAccount` bound to the tenant IAM role via EKS Pod Identity                                                  |
 | **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                       |
 | **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`              | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore` |
@@ -40,7 +40,7 @@ OpenTofu owns: invocation logging buckets, base IAM, EventBridge bus, cost pipel
 
 `AgentFleet` reconciles into upstream kagent `Agent` + `ModelConfig` + `ToolServer` CRs plus the platform-specific scaffolding (IRSA binding, KEDA scaler, NetworkPolicy, OTel attrs, BudgetPolicy reference). When kagent ships a new feature it's available immediately; when our composite adds value, that value is concentrated in the operator.
 
-Same with agentgateway: `ModelGateway` reconciles into upstream agentgateway `Route` + `Listener` resources.
+Same with Envoy AI Gateway: `ModelGateway` reconciles into a Gateway-API `Gateway` plus upstream `AIGatewayRoute` / `AIServiceBackend` / `BackendSecurityPolicy` resources.
 
 ### Accelerator node substrate
 
@@ -94,7 +94,7 @@ agent pod → OTLP (localhost:4317) → OTel Collector
 
 The platform-tenant contract requires `agents.tenant` and `agents.platform` (plus `agents.model_family` / `agents.model_id` for AI workloads) on every pod. The operator honors this on the pods it builds itself. AgentSandbox session pods and SandboxPool workers get `OTEL_RESOURCE_ATTRIBUTES` stamped directly onto the PodSpec from the owning Platform (`operators/internal/controller/otel.go`), with `agents.model_family` added when the Platform pins exactly one family. The eval-runner workflow step is not an operator-built PodSpec — it runs from the eval-runtime WorkflowTemplate (`charts/operator/files/eval-runtime/workflow-template.yaml`), whose `run-cases` container sets `agents.tenant` / `agents.platform` from workflow parameters the operator fills in from the owning Platform (`operators/internal/controller/eval_reconcile.go`). That step does not carry `agents.model_family`: an eval run drives the fleet's gateway rather than a single pinned model family.
 
-AgentFleet and ModelGateway runtime pods are a deliberate exception, and it is a real limitation rather than a gap papered over. The operator emits a kagent `Agent` (+ `ModelConfig`) and agentgateway `Gateway` / `HTTPRoute` / `Backend` CR; kagent and agentgateway render the actual Deployments and pods. The operator never builds those PodSpecs, and neither the kagent `Agent` v1alpha2 declarative schema nor the agentgateway backend schema exposes an env or pod-template passthrough, so the env-var mechanism cannot reach them. What the operator does stamp is `agents.platform` / `agents.fleet` / `agents.agent` labels on the CRs it emits — the hook a collector-side attribution processor keys on — so these pods are attributable by label, just not by the env-var self-report. Closing the gap fully is upstream work on the kagent / agentgateway CRDs (a pod-template or resource-attribute field); the platform does not reintroduce a mutating webhook to force it.
+AgentFleet and ModelGateway runtime pods are a deliberate exception, and it is a real limitation rather than a gap papered over. The operator emits a kagent `Agent` (+ `ModelConfig`) and a Gateway-API `Gateway` plus its Envoy AI Gateway resources; kagent and Envoy Gateway render the actual Deployments and pods. The operator never builds those PodSpecs, and neither the kagent `Agent` v1alpha2 declarative schema nor the `AIServiceBackend` schema exposes an env passthrough, so the env-var mechanism cannot reach them. What the operator does stamp is `agents.platform` / `agents.fleet` / `agents.agent` labels on the CRs it emits — the hook a collector-side attribution processor keys on — so these pods are attributable by label, just not by the env-var self-report. The gateway's proxy is the closer case: `EnvoyProxy` does expose a pod template, so the shape of a fix exists there even though the label path already covers attribution.
 
 Per-persona Grafana dashboards live in `eks-gitops` (`dashboards/`, rendered by the grafana-operator as `GrafanaDashboard` CRs):
 
@@ -105,13 +105,17 @@ Per-persona Grafana dashboards live in `eks-gitops` (`dashboards/`, rendered by 
 ## Data flow: a single agent invocation
 
 ```
-1. App pod (tenant) builds a Messages request via @eks-agent/sdk
-2. SDK signs request with tenant IRSA → POSTs to agentgateway via cluster service
-3. agentgateway resolves the ModelRoute named on AgentFleet → Bedrock model ID
-4. Bedrock Guardrails attached at the route level run input policy
-5. agentgateway issues bedrock-runtime InvokeModel via PrivateLink VPC endpoint
+1. App pod (tenant) builds an Anthropic Messages request
+2. Request goes to the Platform's gateway Service in the tenant namespace — the
+   app holds no AWS credential and signs nothing
+3. The AIGatewayRoute matches the route name and rewrites it to the Bedrock model
+   ID via modelNameOverride
+4. Bedrock Guardrails attached as request headers run input policy
+5. Envoy, running under the tenant ServiceAccount and its Pod Identity
+   association, signs and issues bedrock-runtime InvokeModel via the PrivateLink
+   VPC endpoint
 6. Bedrock response flows back through Guardrails output policy
-7. agentgateway emits OTel span with cost attrs (input/output tokens × pricing)
+7. The gateway emits OTel spans with cost attrs (input/output tokens × pricing)
 8. SDK in app pod emits OTel span with correlation_id linking the request
 9. Collector exports to CloudWatch + (optional) Datadog
 10. invocation-cost-publisher Lambda tails the Bedrock invocation log group, emits
@@ -130,5 +134,5 @@ See [README.md](./README.md#what-you-get).
 
 - **Not a model host.** Bedrock runs inference outside the cluster. This platform does not change that. Self-hosted models on Neuron/NVIDIA are out of scope for v1: the accelerator node substrate is provisioned (see [Accelerator node substrate](#accelerator-node-substrate)), but fleet-level accelerator scheduling — the AgentFleet API to request a device class and the reconcile path onto these pools — is tracked in [#106](https://github.com/nanohype/eks-agent-platform/issues/106).
 - **Not multi-cloud.** EKS only.
-- **Not a replacement for kagent or agentgateway.** It composes them.
+- **Not a replacement for kagent or Envoy AI Gateway.** It composes them.
 - **Not a cluster bootstrap.** The cluster + ArgoCD must already exist (via `landing-zone` OpenTofu or equivalent).

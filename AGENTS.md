@@ -10,7 +10,7 @@ A Kubernetes-native control plane that lets you declare agent platforms as CRDs 
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Tenant`       | Cluster-scoped aggregate of a team's Platforms. Rolls up readiness, spend, and suspension state                                                                                            |
 | `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IRSA role + KMS grant + S3 bucket policy                                          |
-| `ModelGateway` | agentgateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                                                             |
+| `ModelGateway` | Envoy AI Gateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                                                        |
 | `AgentFleet`   | kagent Agent + ModelConfig per agent, KEDA ScaledObject, per-fleet NetworkPolicy, tenant ServiceAccount bound to the tenant IAM role via EKS Pod Identity                                  |
 | `SandboxPool`  | Pull-based pool of always-on Managed Agents sandbox workers — a worker Deployment, default-deny NetworkPolicy, and a KEDA-autoscaled metrics bridge keyed on work-queue depth              |
 | `AgentSandbox` | Single-use hardened pod for one agent role-session — push-dispatched, Platform-gated, default-deny networked, garbage-collected after a TTL                                                |
@@ -84,7 +84,7 @@ The association the operator created is reported on `Platform.status.podIdentity
 3. The operator reconciles:
    - Namespace `tenants-<team>` (with `pod-security.kubernetes.io/enforce: restricted` label)
    - `ResourceQuota` + `LimitRange` defaults
-   - Default-deny `NetworkPolicy` plus egress allow-list (DNS, agentgateway, OTel collector)
+   - Default-deny `NetworkPolicy` plus egress allow-list (DNS, the model gateway, OTel collector)
    - ArgoCD `AppProject` scoped to the tenant namespace
    - IAM role `<cluster>-<app>-tenant` bound to the `tenant-runtime` SA via an EKS Pod Identity association; attaches baseline Bedrock policy + everything in `spec.identity.extraPolicyArns`, and reconciles a `bedrock-model-scoping` inline policy that limits Bedrock invoke to the ARNs `spec.identity.allowedModelFamilies` / `allowedModels` expand to (both unset = all model invoke denied)
 4. Status reaches `Ready`; the app's ApplicationSet entry can start syncing.

@@ -202,7 +202,7 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 	dnsPort := intstr.FromInt(53)
 	otlpGRPC := intstr.FromInt(4317)
 	otlpHTTP := intstr.FromInt(4318)
-	agentgatewayPort := intstr.FromInt(8080)
+	gatewayPort := intstr.FromInt(8080)
 	credsPort := intstr.FromInt(80)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = labelsForPlatform(p)
@@ -238,14 +238,22 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 					},
 				},
 				{
-					// agentgateway service in its own namespace on :8080.
+					// The Platform's model gateway, whose Envoy runs in this
+					// same namespace. A peer with no NamespaceSelector means
+					// "this namespace" — and default-deny egress applies to
+					// same-namespace traffic too, so without this rule the
+					// tenant cannot reach its own gateway at all.
 					To: []networkingv1.NetworkPolicyPeer{{
-						NamespaceSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{"kubernetes.io/metadata.name": "agentgateway"},
+						PodSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"app.kubernetes.io/name":       "envoy",
+								"app.kubernetes.io/component":  "proxy",
+								"app.kubernetes.io/managed-by": "envoy-gateway",
+							},
 						},
 					}},
 					Ports: []networkingv1.NetworkPolicyPort{
-						{Protocol: &tcp, Port: &agentgatewayPort},
+						{Protocol: &tcp, Port: &gatewayPort},
 					},
 				},
 				{

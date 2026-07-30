@@ -156,7 +156,7 @@ func TestPlatformReconciler_InstallsNetworkPolicy(t *testing.T) {
 		t.Errorf("policy types: got %+v want [Egress]", np.Spec.PolicyTypes)
 	}
 	if len(np.Spec.Egress) != 4 {
-		t.Errorf("expected 4 egress rules (Pod Identity creds, DNS, agentgateway, OTel); got %d", len(np.Spec.Egress))
+		t.Errorf("expected 4 egress rules (Pod Identity creds, DNS, model gateway, OTel); got %d", len(np.Spec.Egress))
 	}
 	// The envtest reconciler runs the default (empty) network engine, i.e. the
 	// non-cilium path, so the Pod Identity creds endpoint (169.254.170.23:80) is

@@ -7,11 +7,11 @@
 ![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps-EF7B4D?logo=argo)
 ![License](https://img.shields.io/badge/License-Apache--2.0-green)
 
-A Kubernetes-native, AWS-native **platform-of-platforms**. Each team's agent workloads are declared as a `Tenant` CR; the operator provisions the per-tenant IRSA, KMS grants, S3 prefixes, agentgateway routes, kagent runtime, KEDA scaling, budget kill-switch, and Argo-Workflows eval pipeline. Eight personas (sales-ops, support, finance, ops, founder, eng, marketing, legal) are first-class users with their own onboarding playbooks + agentctl scaffolding.
+A Kubernetes-native, AWS-native **platform-of-platforms**. Each team's agent workloads are declared as a `Tenant` CR; the operator provisions the per-tenant IAM identity, KMS grants, S3 prefixes, model gateway, kagent runtime, KEDA scaling, budget kill-switch, and Argo-Workflows eval pipeline. Eight personas (sales-ops, support, finance, ops, founder, eng, marketing, legal) are first-class users with their own onboarding playbooks + agentctl scaffolding.
 
 **AI clients / agents start here:** [`AGENTS.md`](AGENTS.md). For the stack-wide view, see the [Platform Reference](https://github.com/nanohype/nanohype/blob/main/docs/platform-reference.md).
 
-Bedrock for model access, [kagent](https://www.cncf.io/projects/kagent/) for the agent runtime, [agentgateway](https://agentgateway.dev/) for the model/tool data plane, [DRA](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/) for accelerator scheduling.
+Bedrock for model access, [kagent](https://www.cncf.io/projects/kagent/) for the agent runtime, [Envoy AI Gateway](https://aigateway.envoyproxy.io/) for the model data plane, [DRA](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/) for accelerator scheduling.
 
 Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragrunt org/account/cluster scaffolding) and [eks-gitops](https://github.com/nanohype/eks-gitops) (general-purpose ArgoCD addons).
 
@@ -44,7 +44,7 @@ Split across three capability groups under the `nanohype.dev` domain (version `v
 | -------------- | ---------- | ---------------------------------------------------------------------------------------- |
 | `Tenant`       | Cluster    | Aggregate budget + readiness + suspension across a tenant's Platforms                    |
 | `Platform`     | Namespaced | Tenant workload namespace, IRSA role, KMS grant, S3 bucket policy, ArgoCD AppProject     |
-| `ModelGateway` | Namespaced | agentgateway Route per ModelRoute (Bedrock backend + Guardrail attachment)               |
+| `ModelGateway` | Namespaced | Envoy AI Gateway route per ModelRoute (Bedrock backend + Guardrail attachment)          |
 | `AgentFleet`   | Namespaced | kagent Agent + ModelConfig per agent, KEDA ScaledObject (SQS or CPU), NetworkPolicy      |
 | `BudgetPolicy` | Namespaced | Hourly Athena CUR aggregation + CloudWatch in-flight estimate; kill-switch event at 120% |
 | `EvalSuite`    | Namespaced | Argo Workflow/CronWorkflow against the fleet; status writeback by the runner template    |
@@ -118,7 +118,7 @@ This repo **builds the product**: the operator (`charts/operator` — CRDs, Depl
 Cluster delivery lives in [`eks-gitops`](https://github.com/nanohype/eks-gitops):
 
 - `addons-agent-operator` git-sources `charts/operator` and injects per-cluster IRSA/OIDC (operator role, eval-runner role ARN, report bucket) from the cluster-Secret annotations `cluster-bootstrap` sets.
-- `addons-ai-platform` delivers kagent + agentgateway.
+- `addons-ai-platform` delivers kagent + Envoy AI Gateway.
 - `addons-argo-platform` delivers Argo Workflows + Rollouts + Events.
 - `addons-accelerators-{helm,kustomize}` deliver the GPU operator, NVIDIA DRA driver, and AWS Neuron device plugin.
 
