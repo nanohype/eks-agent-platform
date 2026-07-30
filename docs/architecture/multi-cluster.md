@@ -20,8 +20,8 @@ The eks-agent-platform supports a hub-and-spoke ArgoCD topology for hosting tena
      │  us-west-2   │  │  us-east-1   │  │  eu-west-1   │
      │              │  │              │  │              │
      │  • operator  │  │  • operator  │  │  • operator  │
-     │  • agtgw     │  │  • agtgw     │  │  • agtgw     │
-     │  • kagent    │  │  • kagent    │  │  • kagent    │
+     │  • gateway   │  │  • gateway   │  │  • gateway   │
+     │  • keda      │  │  • keda      │  │  • keda      │
      │  • argo wf   │  │  • argo wf   │  │  • argo wf   │
      │              │  │              │  │              │
      │  Tenants:    │  │  Tenants:    │  │  Tenants:    │
@@ -46,7 +46,7 @@ The eks-agent-platform supports a hub-and-spoke ArgoCD topology for hosting tena
 **Per-cluster** (one of each, on every cluster):
 
 - Operator deployment + CRDs.
-- agentgateway, kagent, KEDA, Argo Workflows, Argo Rollouts.
+- Envoy AI Gateway, KEDA, Argo Workflows, Argo Rollouts.
 - Tenant workload namespaces (`tenants-<platform>`).
 - KEDA TriggerAuthentications, ScaledObjects.
 

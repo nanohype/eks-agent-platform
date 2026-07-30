@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"strings"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,17 +30,11 @@ import (
 
 const agentFleetFinalizer = "agents.nanohype.dev/agentfleet-finalizer"
 
-// External CRD groups the AgentFleet reconciler emits into. Each is
-// tolerant of missing — clusters without kagent / KEDA installed see
-// the missing-CRD as a Pending state, not a reconcile error.
-var (
-	kagentGV = schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha1"}
-	// Agent's storage version is v1alpha2 (declarative wrapper); ModelConfig
-	// is emitted at v1alpha1 (its fields convert cleanly to the v1alpha2
-	// storage version).
-	kagentAgentGV = schema.GroupVersion{Group: "kagent.dev", Version: "v1alpha2"}
-	kedaGV        = schema.GroupVersion{Group: "keda.sh", Version: "v1alpha1"}
-)
+// The one external CRD group the AgentFleet reconciler emits into. KEDA's
+// absence is tolerated: scaling is optional, and the Deployment runs at its
+// static replica count without it. The agents themselves are core Deployments,
+// so they need no addon at all.
+var kedaGV = schema.GroupVersion{Group: "keda.sh", Version: "v1alpha1"}
 
 // tenantSAName is the ServiceAccount tenant pods run under; matches the
 // Pod Identity association ensureIamRole creates in platform_iam.go, which
@@ -175,22 +171,29 @@ func (r *AgentFleetReconciler) ensureFleetCiliumEgress(ctx context.Context, flee
 	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "fleet-"+fleet.Name, map[string]interface{}{LabelFleet: fleet.Name}, labels, true)
 }
 
-// ensureKagentAgents emits, per AgentSpec in the fleet, a kagent ModelConfig
-// and a kagent Agent bound to it. The ModelConfig is provider=OpenAI pointed
-// at the Platform's agentgateway route — agentgateway exposes an
-// OpenAI-compatible endpoint and proxies to Bedrock (applying the route's
-// guardrail + rate limit), authenticating with its own IRSA. No client API
-// key is set: the gateway does the auth, and the operator does not write
-// Secrets (tenant credentials flow through ExternalSecrets). Idempotent;
-// tolerates absent kagent CRDs (NoKindMatch → Pending).
-func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+// ensureAgentDeployments emits one Deployment per AgentSpec: the tenant's own
+// agent image, running in the tenant's namespace under the tenant
+// ServiceAccount.
+//
+// There is no platform-supplied agent runtime and no tool server. The agent
+// loop and its tools are code in the tenant's image, executing in that process
+// as the tenant — so an action the agent takes appears in the Kubernetes audit
+// log under the tenant's identity, and the agent's own account of what it did
+// can be checked against it. A tool server executing under a service identity
+// of its own is precisely what breaks that: the record names the tool server,
+// and no claim can be confirmed or refuted against it.
+//
+// The model reaches the agent as an endpoint and a route name, never as a
+// credential or a model id. Idempotent.
+func (r *AgentFleetReconciler) ensureAgentDeployments(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
-	// The Platform's gateway runs in the tenant's own namespace, under the
-	// tenant ServiceAccount, so its Service is a sibling of the agents it fronts.
-	gwHost := fmt.Sprintf("%s-gateway.%s.svc.cluster.local:%d", p.Name, ns, gatewayListenerPort)
-	for _, agent := range fleet.Spec.Agents {
-		base := kagentAgentName(fleet, agent.Name)
-		configName := base + "-config"
+	// The Platform's gateway runs in this same namespace under the same
+	// ServiceAccount, so it is a sibling of the agents it fronts.
+	gatewayEndpoint := ModelGatewayEndpoint(p)
+
+	for i := range fleet.Spec.Agents {
+		agent := &fleet.Spec.Agents[i]
+		name := agentDeploymentName(fleet, agent.Name)
 		labels := map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  p.Name,
@@ -198,105 +201,105 @@ func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, tc client
 			LabelAgent:                     agent.Name,
 		}
 
-		// kagent ModelConfig — provider OpenAI pointed at the route's
-		// OpenAI-compatible endpoint on the per-Platform Gateway. The
-		// agentgateway backend pins the real Bedrock model; the model here
-		// is the OpenAI passthrough identifier (set to the resolved model so
-		// it stays correct whether or not the gateway overrides it).
-		mc := &unstructured.Unstructured{}
-		mc.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: "ModelConfig"})
-		mc.SetName(configName)
-		mc.SetNamespace(ns)
-		if _, err := controllerutil.CreateOrUpdate(ctx, tc, mc, func() error {
-			mc.SetLabels(labels)
-			spec := map[string]any{
-				"provider": "OpenAI",
-				"model":    r.resolveRouteModel(ctx, fleet, agent.ModelRoute),
-				"openAI": map[string]any{
-					"baseUrl": fmt.Sprintf("http://%s/%s-%s/v1", gwHost, p.Name, agent.ModelRoute),
-				},
+		deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, tc, deploy, func() error {
+			// Replicas are KEDA's once anything has set them. Writing the floor
+			// on every reconcile would fight the ScaledObject: the operator
+			// would undo each scale-up moments after KEDA made it, and the two
+			// controllers would flap against each other for as long as the
+			// fleet existed — with the Deployment reporting healthy throughout.
+			//
+			// Keyed on the field being unset rather than on the object looking
+			// new: a creation timestamp is not reliably populated before the
+			// write lands, so "is this the first reconcile" is the wrong
+			// question. "Does anyone already have an opinion" is the right one.
+			if deploy.Spec.Replicas == nil {
+				minReplicas, _ := fleetScalingMinMax(fleet, agent)
+				deploy.Spec.Replicas = &minReplicas
 			}
-			return unstructured.SetNestedField(mc.Object, spec, "spec")
-		}); err != nil {
-			if isNoKindMatch(err) {
-				return errKagentNotInstalled
-			}
-			return fmt.Errorf("kagent ModelConfig %s/%s: %w", ns, configName, err)
-		}
 
-		// kagent Agent — bound to the ModelConfig. The storage version is
-		// kagent.dev/v1alpha2, which nests the agent config in a
-		// `declarative` block under spec.type=Declarative; the flat
-		// v1alpha1 fields are dropped on conversion, so emit v1alpha2
-		// directly. systemMessage is the instruction text (renamed from
-		// systemPrompt in the API this operator originally targeted).
-		ag := &unstructured.Unstructured{}
-		ag.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentAgentGV.Group, Version: kagentAgentGV.Version, Kind: "Agent"})
-		ag.SetName(base)
-		ag.SetNamespace(ns)
-		if _, err := controllerutil.CreateOrUpdate(ctx, tc, ag, func() error {
-			ag.SetLabels(labels)
-			declarative := map[string]any{
-				"modelConfig":   configName,
-				"systemMessage": agent.SystemPrompt,
+			deploy.Labels = labels
+			deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{
+				LabelFleet: fleet.Name,
+				LabelAgent: agent.Name,
+			}}
+			deploy.Spec.Template.ObjectMeta.Labels = labels
+			deploy.Spec.Template.Spec = corev1.PodSpec{
+				// The tenant ServiceAccount, bound by a Pod Identity association
+				// to the tenant IAM role. This is what makes the agent's actions
+				// attributable — and it is the same account the gateway runs
+				// under, so the model call and the agent share one identity.
+				ServiceAccountName: tenantSAName,
+				SecurityContext:    restrictedPodSecurityContext(),
+				Containers: []corev1.Container{{
+					Name:            "agent",
+					Image:           agent.Image,
+					SecurityContext: restrictedContainerSecurityContext(),
+					Env: withAgentOTelAttrs([]corev1.EnvVar{
+						// An endpoint and a route name. The agent never holds an
+						// AWS credential and never names a model: the gateway
+						// resolves the route, applies the guardrail, and signs.
+						{Name: "MODEL_GATEWAY_ENDPOINT", Value: gatewayEndpoint},
+						{Name: "MODEL_ROUTE", Value: agent.ModelRoute},
+						{Name: "AGENT_NAME", Value: agent.Name},
+						{Name: "AGENT_SYSTEM_PROMPT", Value: agent.SystemPrompt},
+					}, p, fleet.Name, agent.Name),
+					Resources: agentResources(agent),
+				}},
 			}
-			if len(agent.Tools) > 0 {
-				toolRefs := make([]any, 0, len(agent.Tools))
-				for _, t := range agent.Tools {
-					toolRefs = append(toolRefs, map[string]any{
-						"type":      "McpServer",
-						"mcpServer": map[string]any{"toolServer": t.Name},
-					})
-				}
-				declarative["tools"] = toolRefs
-			}
-			spec := map[string]any{
-				"type":        "Declarative",
-				"declarative": declarative,
-				"description": fmt.Sprintf("%s fleet agent %q", fleet.Name, agent.Name),
-			}
-			return unstructured.SetNestedField(ag.Object, spec, "spec")
+			return nil
 		}); err != nil {
-			if isNoKindMatch(err) {
-				return errKagentNotInstalled
-			}
-			return fmt.Errorf("kagent Agent %s/%s: %w", ns, base, err)
+			return fmt.Errorf("agent Deployment %s/%s: %w", ns, name, err)
 		}
 	}
 	return nil
 }
 
-// resolveRouteModel finds the effective Bedrock model id for a named route
-// on the fleet's Platform ModelGateway (cross-region inference profile when
-// set, else the bare model id). Falls back to the route name when the
-// gateway/route can't be found — the agentgateway backend pins the real
-// model regardless, so this is only the OpenAI "model" passthrough.
-func (r *AgentFleetReconciler) resolveRouteModel(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, routeName string) string {
-	var gws agentsv1alpha1.ModelGatewayList
-	if err := r.List(ctx, &gws, client.InNamespace(fleet.Namespace)); err == nil {
-		for i := range gws.Items {
-			mg := &gws.Items[i]
-			if mg.Spec.PlatformRef.Name != fleet.Spec.PlatformRef.Name {
-				continue
-			}
-			for _, rt := range mg.Spec.Routes {
-				if rt.Name != routeName {
-					continue
-				}
-				if rt.CrossRegionProfile != "" {
-					return rt.CrossRegionProfile
-				}
-				return rt.ModelID
-			}
-		}
+// defaultAgentResources is the per-agent container shape when the AgentSpec
+// does not override it. Requests and limits are both set: the tenant namespace
+// carries a ResourceQuota, and a container with no request is rejected at
+// admission rather than scheduled at zero.
+func defaultAgentResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("250m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
+		},
 	}
-	return routeName
 }
 
-var (
-	errKagentNotInstalled = errors.New("kagent.dev CRDs not installed on this cluster")
-	errKEDANotInstalled   = errors.New("keda.sh CRDs not installed on this cluster")
-)
+func agentResources(agent *agentsv1alpha1.AgentSpec) corev1.ResourceRequirements {
+	if agent.Resources != nil {
+		return *agent.Resources
+	}
+	return defaultAgentResources()
+}
+
+// withAgentOTelAttrs adds the fleet and agent to the tenant/platform resource
+// attributes every operator-built pod carries.
+//
+// The agent SDK reports its own `gen_ai.agent.id`, which defaults to a constant
+// — so without these the spans from every agent in the fleet are
+// indistinguishable, and a claim stream that cannot say which agent made a
+// claim cannot be reconciled against a record that names one. Resource
+// attributes ride every span the process emits, so setting them here covers
+// the whole agent rather than the calls it remembers to annotate.
+func withAgentOTelAttrs(env []corev1.EnvVar, p *platformv1alpha1.Platform, fleetName, agentName string) []corev1.EnvVar {
+	out := withOTelResourceAttrs(env, p, platformModelFamily(p))
+	for i := range out {
+		if out[i].Name != otelResourceAttrsEnvName {
+			continue
+		}
+		out[i].Value += ",agents.fleet=" + fleetName + ",agents.agent=" + agentName
+	}
+	return out
+}
+
+var errKEDANotInstalled = errors.New("keda.sh CRDs not installed on this cluster")
 
 // awsRegionFromQueueURL extracts the region segment from an SQS URL
 // (https://sqs.<region>.amazonaws.com/<account>/<queue>). The shape is
@@ -315,14 +318,12 @@ func awsRegionFromQueueURL(url string) string {
 	return rest[:dot]
 }
 
-// kagentAgentName is the name kagent gives the workload it renders from a
-// fleet agent. The operator creates one kagent Agent per AgentSpec named
-// <fleet>-<agent> (ensureKagentAgents), and kagent's translator sets the
-// Deployment's metadata.name to the Agent's name verbatim — no prefix, no
-// suffix. A KEDA ScaledObject's scaleTargetRef must resolve to this exact
-// name; anything else points at a Deployment nothing creates and autoscaling
-// silently never fires.
-func kagentAgentName(fleet *agentsv1alpha1.AgentFleet, agentName string) string {
+// agentDeploymentName is the name the operator gives the workload it renders for a
+// fleet agent. The operator creates one Deployment per AgentSpec named
+// <fleet>-<agent>, and a KEDA ScaledObject's scaleTargetRef must resolve to
+// this exact name; anything else points at a Deployment nothing creates and
+// autoscaling silently never fires.
+func agentDeploymentName(fleet *agentsv1alpha1.AgentFleet, agentName string) string {
 	return fleet.Name + "-" + agentName
 }
 
@@ -390,8 +391,8 @@ func fleetScalingTriggers(fleet *agentsv1alpha1.AgentFleet, queueURL string) []a
 }
 
 // ensureKEDAScaledObject emits one KEDA ScaledObject per agent in the fleet,
-// each targeting the kagent-rendered Deployment for that agent
-// (kagentAgentName). kagent creates a Deployment per Agent, so a single
+// each targeting the Deployment the operator renders for that agent
+// (agentDeploymentName). There is one Deployment per agent, so a single
 // fleet-wide ScaledObject could only ever scale one of them — per-agent
 // ScaledObjects scale every agent's runtime. When scaling.queueUrl is set the
 // TriggerAuthentication is emitted once up front (all agents reference it);
@@ -419,11 +420,11 @@ func (r *AgentFleetReconciler) ensureKEDAScaledObject(ctx context.Context, tc cl
 }
 
 // ensureAgentScaledObject emits the ScaledObject for a single agent, targeting
-// the kagent Deployment (kagentAgentName) — the workload kagent actually
-// creates from the Agent CR. Per-agent minReplicaCount honors
+// the agent Deployment (agentDeploymentName) — the workload the operator
+// creates for it. Per-agent minReplicaCount honors
 // AgentSpec.Replicas; maxReplicaCount is the fleet-wide ceiling.
 func (r *AgentFleetReconciler) ensureAgentScaledObject(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, agent *agentsv1alpha1.AgentSpec, p *platformv1alpha1.Platform, queueURL string) error {
-	name := kagentAgentName(fleet, agent.Name)
+	name := agentDeploymentName(fleet, agent.Name)
 	minR, maxR := fleetScalingMinMax(fleet, agent)
 	so := &unstructured.Unstructured{}
 	so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
@@ -491,31 +492,22 @@ func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, tc cli
 }
 
 // cleanupFleetResources is the finalizer counterpart: deletes the
-// kagent Agents, ModelConfigs, KEDA ScaledObject, and fleet
+// agent Deployments, KEDA ScaledObject, and fleet
 // NetworkPolicy. Tenant ServiceAccount is owned by Platform finalizer.
 func (r *AgentFleetReconciler) cleanupFleetResources(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
-	// kagent + KEDA objects live wherever the fleet reconciled them — the host for
+	// Workload + KEDA objects live wherever the fleet reconciled them — the host for
 	// the namespace tier, the virtual cluster for the vcluster tier — so they are
 	// deleted through the same target client that created them.
 	for _, agent := range fleet.Spec.Agents {
-		base := kagentAgentName(fleet, agent.Name)
-		for _, kind := range []string{"Agent", "ModelConfig"} {
-			suffix := "-config"
-			if kind == "Agent" {
-				suffix = ""
-			}
-			o := &unstructured.Unstructured{}
-			o.SetGroupVersionKind(schema.GroupVersionKind{Group: kagentGV.Group, Version: kagentGV.Version, Kind: kind})
-			o.SetName(base + suffix)
-			o.SetNamespace(ns)
-			if err := tc.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
-				return fmt.Errorf("delete kagent %s %s: %w", kind, o.GetName(), err)
-			}
+		base := agentDeploymentName(fleet, agent.Name)
+		deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: base, Namespace: ns}}
+		if err := tc.Delete(ctx, deploy); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete agent Deployment %s: %w", base, err)
 		}
-		// Per-agent KEDA ScaledObject (named after the kagent Deployment it
-		// scales). Delete it before the shared TriggerAuthentication below so
-		// KEDA can't try to re-resolve a TA we're about to remove.
+		// Per-agent KEDA ScaledObject (named after the Deployment it scales).
+		// Delete it before the shared TriggerAuthentication below so KEDA can't
+		// try to re-resolve a TA we're about to remove.
 		so := &unstructured.Unstructured{}
 		so.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "ScaledObject"})
 		so.SetName(base)
@@ -564,7 +556,7 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 		}
 		return "", 0, err
 	}
-	// Platform Suspended: tear down the fleet's kagent Agents + KEDA
+	// Platform Suspended: tear down the fleet's agent Deployments + KEDA
 	// scaler so no pods can serve traffic until the kill-switch is
 	// cleared. The tenant SA + NetworkPolicy stay in place so a
 	// recovery doesn't have to recreate them.
@@ -579,7 +571,7 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	}
 
 	// Resolve the target client: the host client for the namespace tier, the
-	// Platform's virtual-cluster client for the vcluster tier. kagent + KEDA
+	// Platform's virtual-cluster client for the vcluster tier. Workload + KEDA
 	// objects (which produce the fleet's pods) land through this client so the
 	// tenant's pods see the vcluster API; the fleet's host containment
 	// (NetworkPolicy/Cilium egress) always stays on the host client below.
@@ -601,10 +593,10 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	if err := r.ensureFleetCiliumEgress(ctx, fleet, platform); err != nil {
 		return "", 0, fmt.Errorf("ensure CiliumNetworkPolicy: %w", err)
 	}
-	if err := r.ensureKagentAgents(ctx, tc, fleet, platform); err != nil {
-		if errors.Is(err, errKagentNotInstalled) {
-			return phasePending, 0, nil
-		}
+	// No missing-CRD branch here: a Deployment is a core Kubernetes object, so
+	// unlike the CRD-backed runtime this replaced there is no cluster where the
+	// kind is absent and the fleet has to wait for an addon to install.
+	if err := r.ensureAgentDeployments(ctx, tc, fleet, platform); err != nil {
 		return "", 0, err
 	}
 	if err := r.ensureKEDAScaledObject(ctx, tc, fleet, platform); err != nil {
@@ -642,7 +634,7 @@ func (r *AgentFleetReconciler) applyFleetStatus(ctx context.Context, fleet *agen
 	default:
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = phasePending
-		cond.Message = "waiting on Platform readiness or kagent CRDs"
+		cond.Message = "waiting on Platform readiness"
 	}
 	upsertCondition(&fleet.Status.Conditions, cond)
 	return r.Status().Update(ctx, fleet)

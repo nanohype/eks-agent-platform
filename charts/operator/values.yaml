@@ -160,9 +160,10 @@ podDisruptionBudget:
 # ── vcluster hard-isolation tier ─────────────────────────────────────────────
 # Config for Platform.spec.isolation: vcluster. The operator declares a
 # per-Platform virtual cluster as an ArgoCD Application pinned to chart.version,
-# and bootstraps the fleet's control plane (kagent) + autoscaler (KEDA) INSIDE
-# each vcluster via the chart's init-charts, so the tenant's control+data plane
-# live entirely within the isolation boundary. ArgoCD is a hard prerequisite for
+# and bootstraps the fleet's autoscaler (KEDA) INSIDE each vcluster via the
+# chart's init-charts, so the tenant's control+data plane live entirely within
+# the isolation boundary. The agents themselves need no init-chart: they are
+# plain Deployments, which every cluster already serves. ArgoCD is a hard prerequisite for
 # this tier (see docs/adr/0009-vcluster-isolation-tier.md); the namespace tier
 # ignores this block entirely.
 vcluster:
@@ -173,21 +174,12 @@ vcluster:
     # reviews majors — the operator never auto-upgrades a running vcluster.
     version: "0.35.2"
   # initCharts are deployed inside every per-Platform vcluster on startup
-  # (experimental.deploy.vcluster.helm). The recommended placement for kagent +
-  # KEDA. Set to [] to ship a containment-only vcluster (no in-vcluster fleet
-  # control plane). Field names are the operator flag's JSON contract
+  # (experimental.deploy.vcluster.helm) — the placement for anything a fleet
+  # needs that the virtual cluster does not ship with. KEDA is the only one:
+  # without it a fleet still runs, at its static replica count. Set to [] for a
+  # containment-only vcluster. Field names are the operator flag's JSON contract
   # (chartName/repoURL/version/releaseName/namespace/values).
   initCharts:
-    - chartName: kagent-crds
-      repoURL: oci://ghcr.io/kagent-dev/kagent/helm/kagent-crds
-      version: "0.9.11"
-      releaseName: kagent-crds
-      namespace: kagent
-    - chartName: kagent
-      repoURL: oci://ghcr.io/kagent-dev/kagent/helm/kagent
-      version: "0.9.11"
-      releaseName: kagent
-      namespace: kagent
     - chartName: keda
       repoURL: https://kedacore.github.io/charts
       version: "2.20.1"

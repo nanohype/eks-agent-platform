@@ -11,7 +11,7 @@ A Kubernetes-native control plane that lets you declare agent platforms as CRDs 
 | `Tenant`       | Cluster-scoped aggregate of a team's Platforms. Rolls up readiness, spend, and suspension state                                                                                            |
 | `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IRSA role + KMS grant + S3 bucket policy                                          |
 | `ModelGateway` | Envoy AI Gateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                                                        |
-| `AgentFleet`   | kagent Agent + ModelConfig per agent, KEDA ScaledObject, per-fleet NetworkPolicy, tenant ServiceAccount bound to the tenant IAM role via EKS Pod Identity                                  |
+| `AgentFleet`   | Deployment per agent running the tenant's own image, KEDA ScaledObject, per-fleet NetworkPolicy, all under the tenant ServiceAccount bound to the tenant IAM role via EKS Pod Identity      |
 | `SandboxPool`  | Pull-based pool of always-on Managed Agents sandbox workers — a worker Deployment, default-deny NetworkPolicy, and a KEDA-autoscaled metrics bridge keyed on work-queue depth              |
 | `AgentSandbox` | Single-use hardened pod for one agent role-session — push-dispatched, Platform-gated, default-deny networked, garbage-collected after a TTL                                                |
 | `BatchJob`     | Amazon Bedrock batch-inference job (CreateModelInvocationJob) — S3 JSONL in, S3 JSONL out; one CR per run, idempotent on spec, no schedule                                                 |
@@ -93,7 +93,7 @@ The association the operator created is reported on `Platform.status.podIdentity
 
 1. Confirm the tenant Platform is `Ready`.
 2. Apply a `ModelGateway` CR (optional but recommended) declaring the model routes the agents will hit.
-3. Apply an `AgentFleet` CR referencing the Platform. The operator reconciles kagent `Agent` + `ModelConfig` + `ToolServer` resources plus the KEDA scaler.
+3. Apply an `AgentFleet` CR referencing the Platform. The operator reconciles a Deployment per agent — the tenant's own image, under the tenant ServiceAccount — plus the KEDA scaler.
 4. Fleet pods run as the `tenant-runtime` SA; the Pod Identity association the operator created vends the tenant IAM role's credentials to them.
 
 ## Kill-switch

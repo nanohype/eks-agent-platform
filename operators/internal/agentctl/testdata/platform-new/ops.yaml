@@ -64,6 +64,7 @@ spec:
     - name: oncall-summarizer
       systemPrompt: You summarize on-call incidents into a runbook update candidate.
       modelRoute: primary
+      image: REPLACE_WITH_YOUR_AGENT_IMAGE
 ---
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite

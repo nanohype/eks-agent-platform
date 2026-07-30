@@ -44,7 +44,7 @@ func TestBuildVClusterValues_LoadBearingKeys(t *testing.T) {
 
 	// With init-charts: the experimental.deploy.vcluster.helm list is rendered.
 	withCharts := buildVClusterValues(p, VClusterConfig{InitCharts: []VClusterInitChart{
-		{ChartName: "kagent", RepoURL: "https://kagent.dev/charts", Version: "0.3.0", ReleaseName: "kagent", Namespace: "kagent", Values: "replicas: 1"},
+		{ChartName: "keda", RepoURL: "https://kedacore.github.io/charts", Version: "2.20.1", ReleaseName: "keda", Namespace: "keda", Values: "replicas: 1"},
 		{ChartName: "keda", RepoURL: "https://kedacore.github.io/charts", Version: "2.14.0", ReleaseName: "keda", Namespace: "keda"},
 	}})
 	helm := withCharts["experimental"].(map[string]interface{})["deploy"].(map[string]interface{})["vcluster"].(map[string]interface{})["helm"].([]interface{})

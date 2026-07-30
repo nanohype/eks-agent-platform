@@ -106,7 +106,7 @@ func main() {
 
 	// vcluster hard-isolation tier config. The operator declares a per-Platform
 	// vcluster as an ArgoCD Application pinned to this chart version; the
-	// init-charts JSON bootstraps kagent + KEDA inside each vcluster. See
+	// init-charts JSON bootstraps KEDA inside each vcluster. See
 	// docs/adr/0009-vcluster-isolation-tier.md.
 	var vclusterChartRepo string
 	var vclusterChartVersion string
@@ -154,7 +154,7 @@ func main() {
 	flag.BoolVar(&disableAWS, "disable-aws", false, "Skip AWS client init + SSM config load (k8s-side reconciliation only).")
 	flag.StringVar(&vclusterChartRepo, "vcluster-chart-repo", os.Getenv("AGENTS_VCLUSTER_CHART_REPO"), "vcluster Helm chart repository the operator declares per vcluster-tier Platform (default https://charts.loft.sh).")
 	flag.StringVar(&vclusterChartVersion, "vcluster-chart-version", os.Getenv("AGENTS_VCLUSTER_CHART_VERSION"), "Pinned vcluster chart version (targetRevision). Renovate proposes bumps; a human reviews — never auto-upgraded.")
-	flag.StringVar(&vclusterInitChartsJSON, "vcluster-init-charts", os.Getenv("AGENTS_VCLUSTER_INIT_CHARTS"), "JSON array of Helm charts bootstrapped INSIDE each per-Platform vcluster (kagent, KEDA) via experimental.deploy.vcluster.helm. Empty ships a containment-only vcluster.")
+	flag.StringVar(&vclusterInitChartsJSON, "vcluster-init-charts", os.Getenv("AGENTS_VCLUSTER_INIT_CHARTS"), "JSON array of Helm charts bootstrapped INSIDE each per-Platform vcluster (KEDA) via experimental.deploy.vcluster.helm. Empty ships a containment-only vcluster — a fleet still runs, at its static replica count.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()

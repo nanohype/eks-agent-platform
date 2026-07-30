@@ -47,9 +47,11 @@ per-Platform virtual cluster on top of the unchanged host-side provisioning:
   ModelGateway, EvalSuite) resolves a **target client** at the top of reconcile: the
   host client for the `namespace` tier, a cached client built from the vcluster's
   kubeconfig Secret for the `vcluster` tier. The reconcile logic is unchanged — only
-  the API it writes to moves inside the virtual cluster. kagent + KEDA are
-  bootstrapped **inside** each vcluster (via the chart's init-charts), so the fleet's
-  control and data plane live entirely within the isolation boundary.
+  the API it writes to moves inside the virtual cluster. KEDA is bootstrapped
+  **inside** each vcluster (via the chart's init-charts), so the fleet's autoscaler
+  and its pods live entirely within the isolation boundary. Nothing else needs
+  bootstrapping: an agent is a `Deployment`, which every virtual cluster already
+  serves.
 - **Contain from outside.** Every host-side primitive — the `tenants-<name>`
   namespace, its `ResourceQuota`, `LimitRange`, PSS-`restricted`, default-deny
   `NetworkPolicy`/Cilium egress, and the `AppProject` — stays on the host client and

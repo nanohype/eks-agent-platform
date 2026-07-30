@@ -55,7 +55,7 @@ func TestAgentFleetReconciler_PendingWhenPlatformMissing(t *testing.T) {
 		Spec: agentsv1alpha1.AgentFleetSpec{
 			PlatformRef: commonv1alpha1.LocalRef{Name: "no-such-platform"},
 			Agents: []agentsv1alpha1.AgentSpec{
-				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary"},
+				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary", Image: "ghcr.io/acme/agent:v1"},
 			},
 		},
 	}
@@ -71,7 +71,7 @@ func TestAgentFleetReconciler_PendingWhenPlatformMissing(t *testing.T) {
 	}
 }
 
-func TestAgentFleetReconciler_PendingWhenKagentMissing(t *testing.T) {
+func TestAgentFleetReconciler_ReadyOnceThePlatformIs(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
@@ -104,7 +104,7 @@ func TestAgentFleetReconciler_PendingWhenKagentMissing(t *testing.T) {
 		Spec: agentsv1alpha1.AgentFleetSpec{
 			PlatformRef: commonv1alpha1.LocalRef{Name: pName},
 			Agents: []agentsv1alpha1.AgentSpec{
-				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary"},
+				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary", Image: "ghcr.io/acme/agent:v1"},
 			},
 		},
 	}
@@ -115,10 +115,11 @@ func TestAgentFleetReconciler_PendingWhenKagentMissing(t *testing.T) {
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: fleet.Name, Namespace: fleet.Namespace}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	// envtest has no kagent.dev CRDs installed → reconciler tolerates
-	// NoKindMatch on Agent/ModelConfig and surfaces Pending. This proves
-	// the platform-ready gate works AND that missing kagent is non-fatal.
-	if got.Status.Phase != phasePending {
-		t.Errorf("status.phase: got %q want phasePending (kagent CRDs not installed in envtest)", got.Status.Phase)
+	// An agent is a plain Deployment now, so there is no addon whose absence
+	// holds the fleet in Pending — reaching Ready on a bare envtest cluster is
+	// the point. KEDA is still absent here and still non-fatal: the fleet runs
+	// at its static replica count without it.
+	if got.Status.Phase != phaseReady {
+		t.Errorf("status.phase: got %q want phaseReady (an agent Deployment needs no addon)", got.Status.Phase)
 	}
 }

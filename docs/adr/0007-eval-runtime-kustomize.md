@@ -19,7 +19,7 @@ The eval-runtime deliverable includes:
 Two options for where the k8s-side pieces live:
 
 1. **Inside the operator chart** (`charts/operator/templates/`) — packaged with the operator binary, version-locked to the operator release.
-2. **In gitops/addons/eval-runtime/ as a kustomize package** — separate ArgoCD Application, delivered alongside other addons (agentgateway, kagent, KEDA, etc.).
+2. **In gitops/addons/eval-runtime/ as a kustomize package** — separate ArgoCD Application, delivered alongside other addons (the model gateway, KEDA, etc.).
 
 ## Decision
 

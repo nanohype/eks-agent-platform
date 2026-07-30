@@ -3,7 +3,7 @@
 | Example                           | What it shows                                                                                                         |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | [`blank-tenant`](./blank-tenant/) | The minimal Platform — one agent, one route, daily smoke-test eval. The "did it work?" check after install.           |
-| [`agent-fleet`](./agent-fleet/)   | Multi-agent Platform: two model routes, two agents, KEDA SQS autoscaling, and a kagent ToolServer reference.          |
+| [`agent-fleet`](./agent-fleet/)   | Multi-agent Platform: two model routes, two agents on their own images, KEDA SQS autoscaling.          |
 | [`bedrock-rag`](./bedrock-rag/)   | Retrieval-augmented tenant + a typechecked `@eks-agent/sdk` client: cached corpus prefix, fallback router, streaming. |
 
 `blank-tenant` is the canonical "minimum viable tenant" — copy it, rename, edit the persona / models / agent system-prompts to your use case. `agent-fleet` and `bedrock-rag` are complete Platform CR sets that each layer on one subsystem (SQS-driven autoscaling with tools; SDK-side retrieval and prompt caching), so you can lift the piece you need into your own tenant.

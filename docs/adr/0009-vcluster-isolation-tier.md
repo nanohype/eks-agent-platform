@@ -156,9 +156,9 @@ instead.
 
 Once the vcluster is up, the workload CRDs the operator reconciles from
 (`AgentFleet`, `AgentSandbox`, `BatchJob`, `ModelGateway`, `EvalSuite`) must land
-their objects — kagent `Agent`/`ModelConfig`/`ToolServer`, KEDA `ScaledObject`,
-sandbox pods — inside the virtual cluster's API, so that the tenant's pods see the
-vcluster API server rather than the host's.
+their objects — agent `Deployment`s, KEDA `ScaledObject`s, sandbox pods — inside
+the virtual cluster's API, so that the tenant's pods see the vcluster API server
+rather than the host's.
 
 The reconcile _logic_ (what objects a fleet or sandbox decomposes into) is identical
 regardless of tier; only the _target API_ differs. So the seam is a **client swap at
@@ -189,17 +189,22 @@ operator runs as a single leader (leader election), so a process-local cache is
 sufficient — the same reasoning that lets `bucketPolicyMu` be a process-local mutex
 (`platform_controller.go:64-70`).
 
-**Open for implementation (Target 7):** the fleet's in-cluster dependencies — the
-kagent CRDs+controller and KEDA — must be present _inside_ the virtual cluster for
-the operator to create `Agent`/`ScaledObject` objects there and have them reconcile
-to pods. The recommended default is to bootstrap them into the vcluster via the
-chart's init-manifests/init-charts, so the tenant's fleet control plane and data
-plane live entirely inside the isolation boundary (the honest "hard isolation"
-shape: the tenant gets its own API server, its own kagent, its own KEDA). The
-alternative — sync the host's kagent/KEDA CRDs into the vcluster and let host
-controllers act on them — leaks the host control plane back into the boundary and is
-not recommended. Per-tenant controller overhead is the accepted cost of climbing to
-this tier; the host `ResourceQuota` caps it. kx validation confirms the choice.
+The fleet's in-cluster dependency is KEDA, and only KEDA. Agents are plain
+`Deployment`s, which every virtual cluster serves out of the box — so the tier
+needs no agent runtime bootstrapped into it, and a fleet whose vcluster ships
+nothing extra still runs, at its static replica count.
+
+KEDA is bootstrapped into the vcluster via the chart's init-charts, so the
+tenant's autoscaler lives inside the isolation boundary along with its pods. The
+alternative — syncing the host's KEDA CRDs into the vcluster and letting host
+controllers act on them — leaks the host control plane back into the boundary and
+is not taken. Per-tenant controller overhead is the accepted cost of climbing to
+this tier; the host `ResourceQuota` caps it.
+
+The surface this tier has to bootstrap is therefore one optional chart rather
+than a control plane, which is the practical consequence of the agents being
+core workload objects: less to install inside the boundary, and less that can be
+absent when a fleet needs it.
 
 ### Contain from outside: host primitives are unchanged and still load-bearing
 
@@ -372,9 +377,9 @@ app chart must land in the **virtual** cluster. Two ways were weighed:
 
 Note the deliberate split, which mirrors the host tier exactly:
 
-- **operator-owned control objects** (kagent `Agent`, `ModelConfig`, KEDA
-  `ScaledObject`, sandbox pods) reconcile into the vcluster through the **target-client
-  swap** — they are reconciled from CRs, not GitOps-delivered;
+- **operator-owned workload objects** (agent `Deployment`s, KEDA
+  `ScaledObject`s, sandbox pods) reconcile into the vcluster through the
+  **target-client swap** — they are reconciled from CRs, not GitOps-delivered;
 - **tenant-owned app chart** reconciles into the vcluster through **ArgoCD via the
   cluster Secret** — it is GitOps-delivered.
 
@@ -469,7 +474,7 @@ operator-rendered Application, surfaced as a `vcluster.chartVersion` value on th
 operator chart and rolled per-env like every other pinned chart version. Control-plane
 upgrades are in-place (StatefulSet rolling update). Renovate proposes bumps; a human
 reviews majors — the same chart-pin discipline ADR 0003's supply-chain section already
-applies to kagent/agentgateway. The cross-version risk is specifically the synced-SA
+applies to the model gateway. The cross-version risk is specifically the synced-SA
 naming algorithm (`SafeConcatName`), which is vcluster-internal and could change across
 majors — which is exactly why the Pod Identity design discovers the synced SA by label
 and cross-checks the computed name: an upgrade that changes naming fails observably
@@ -531,7 +536,7 @@ than inheriting a number from this ADR.
   host containment controls, but it is real added surface — accounted for in the threat
   delta.
 - **Per-tenant control-plane overhead.** Each vcluster-tier Platform runs a control-
-  plane pod (and, on the recommended design, its own kagent + KEDA). That is the cost
+  plane pod (and its own KEDA). That is the cost
   of the tier; the host `ResourceQuota` caps it, and only tenants that need hard
   isolation pay it.
 - **ArgoCD becomes a hard dependency** for this tier (it is optional for the namespace

@@ -8,6 +8,7 @@ package controller
 
 import (
 	"context"
+	appsv1 "k8s.io/api/apps/v1"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 )
 
 // scalingFleet builds a scaling-enabled fleet with two agents. The whole point
-// of the KEDA fix is that each agent becomes its own kagent Deployment, so the
+// of the KEDA fix is that each agent becomes its own Deployment, so the
 // two-agent shape exercises the per-agent ScaledObject path.
 func scalingFleet(queueURL string) *agentsv1alpha1.AgentFleet {
 	return &agentsv1alpha1.AgentFleet{
@@ -31,8 +32,8 @@ func scalingFleet(queueURL string) *agentsv1alpha1.AgentFleet {
 		Spec: agentsv1alpha1.AgentFleetSpec{
 			PlatformRef: commonv1alpha1.LocalRef{Name: ctrlTestPlatform},
 			Agents: []agentsv1alpha1.AgentSpec{
-				{Name: "triage", SystemPrompt: "you triage", ModelRoute: "chat"},
-				{Name: "responder", SystemPrompt: "you respond", ModelRoute: "chat"},
+				{Name: "triage", SystemPrompt: "you triage", ModelRoute: "chat", Image: "ghcr.io/acme/agent:v1"},
+				{Name: "responder", SystemPrompt: "you respond", ModelRoute: "chat", Image: "ghcr.io/acme/agent:v1"},
 			},
 			Scaling: agentsv1alpha1.ScalingSpec{Enabled: true, QueueURL: queueURL},
 		},
@@ -40,13 +41,13 @@ func scalingFleet(queueURL string) *agentsv1alpha1.AgentFleet {
 }
 
 // TestScaledObjectTargetsKagentDeployment is the regression for the bug where
-// the ScaledObject targeted "fleet-<name>" — a Deployment kagent never
-// creates. kagent names the Deployment it renders after the Agent CR verbatim,
+// the ScaledObject targeted "fleet-<name>" — a Deployment nothing creates.
+// The operator names each agent's Deployment "<fleet>-<agent>",
 // and the operator names each Agent <fleet>-<agent>; the ScaledObject's
 // scaleTargetRef must resolve to that exact name. The assertion cross-checks
-// the ScaledObject target against the kagent Agent the reconcile path actually
+// the ScaledObject target against the Deployment the reconcile path actually
 // created, so it can never again point at a phantom Deployment.
-func TestScaledObjectTargetsKagentDeployment(t *testing.T) {
+func TestScaledObjectTargetsAgentDeployment(t *testing.T) {
 	ctx := context.Background()
 	s := fleetScheme(t)
 	p := readyPlatformIn()
@@ -60,18 +61,15 @@ func TestScaledObjectTargetsKagentDeployment(t *testing.T) {
 	}
 
 	ns := PlatformNamespace(p)
-	agentGVK := schema.GroupVersionKind{Group: "kagent.dev", Version: "v1alpha2", Kind: "Agent"}
 	soGVK := schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"}
 
 	for _, agent := range fleet.Spec.Agents {
-		want := kagentAgentName(fleet, agent.Name)
+		want := agentDeploymentName(fleet, agent.Name)
 
-		// The kagent Agent the reconcile path created (kagent turns this into a
-		// Deployment of the same name).
-		ag := &unstructured.Unstructured{}
-		ag.SetGroupVersionKind(agentGVK)
-		if err := cl.Get(ctx, types.NamespacedName{Name: want, Namespace: ns}, ag); err != nil {
-			t.Fatalf("kagent Agent %s/%s not created: %v", ns, want, err)
+		// The Deployment the reconcile path created for this agent.
+		deploy := &appsv1.Deployment{}
+		if err := cl.Get(ctx, types.NamespacedName{Name: want, Namespace: ns}, deploy); err != nil {
+			t.Fatalf("agent Deployment %s/%s not created: %v", ns, want, err)
 		}
 
 		// A per-agent ScaledObject exists, targeting that Deployment name.
@@ -84,8 +82,8 @@ func TestScaledObjectTargetsKagentDeployment(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("scaleTargetRef.name missing on ScaledObject %s: found=%v err=%v", want, found, err)
 		}
-		if target != ag.GetName() {
-			t.Errorf("ScaledObject %s targets Deployment %q, but the only kagent workload is named %q — target must resolve to a real object", want, target, ag.GetName())
+		if target != deploy.Name {
+			t.Errorf("ScaledObject %s targets Deployment %q, but the agent's Deployment is named %q — the target must resolve to a real object or autoscaling silently never fires", want, target, deploy.Name)
 		}
 		kind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
 		if kind != "Deployment" {
@@ -130,7 +128,7 @@ func TestScaledObjectSQSTrigger(t *testing.T) {
 
 	so := &unstructured.Unstructured{}
 	so.SetGroupVersionKind(schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"})
-	if err := cl.Get(ctx, types.NamespacedName{Name: kagentAgentName(fleet, "triage"), Namespace: ns}, so); err != nil {
+	if err := cl.Get(ctx, types.NamespacedName{Name: agentDeploymentName(fleet, "triage"), Namespace: ns}, so); err != nil {
 		t.Fatalf("ScaledObject not created: %v", err)
 	}
 	triggers, _, _ := unstructured.NestedSlice(so.Object, "spec", "triggers")

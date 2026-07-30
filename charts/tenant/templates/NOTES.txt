@@ -23,7 +23,7 @@ five things in order (see ADR 0004 + docs/architecture.md):
   2. IRSA role + Bedrock-access policy   /eks-agent-platform/tenants/{{ .Values.platform.name }}/
   3. KMS grant on cmk-data               (per-Platform encryption boundary)
   4. agentgateway routes                 (one per ModelRoute)
-  5. kagent Agent + ToolServer CRs       (one per Fleet agent)
+  5. a Deployment per Fleet agent        (the tenant's own image)
 
 ──────────────────────────────────────────────────────────────────────────────
  Verify

@@ -97,19 +97,21 @@ spec:
     queueDepthTrigger: 20
     queueUrl: https://sqs.us-west-2.amazonaws.com/111111111111/support-desk-work
   agents:
-    # First-line classifier on the cheap route, no tools.
+    # First-line classifier on the cheap route. Its image carries an agent that
+    # makes one model call and returns two labels — no tools, because there is
+    # nothing to look up.
     - name: triage-bot
       systemPrompt: |
         Classify the incoming support message by intent (billing, bug, how-to,
         account) and urgency (low, normal, high). Reply with only the two labels.
       modelRoute: triage
-    # Resolver on the heavier route, with a knowledge-base lookup tool. The tool
-    # names reference kagent ToolServer CRs delivered separately (addons-ai-platform
-    # + External Secrets); the fleet only references them by name.
+      image: ghcr.io/example-org/support-desk-triage:v1.4.0
+    # Resolver on the heavier route. Its knowledge-base lookup is a tool inside
+    # this image, not a separate tool server — so the lookup runs under the
+    # tenant's identity and the audit log names the agent that asked for it.
     - name: resolver
       systemPrompt: |
         Draft a customer reply grounded in the knowledge base. Cite the article id
         you used. If nothing matches, escalate to a human and say so.
       modelRoute: resolve
-      tools:
-        - name: knowledge-base-search
+      image: ghcr.io/example-org/support-desk-resolver:v1.4.0

@@ -11,7 +11,7 @@
 ## What is and isn't affected
 
 - **Unaffected**: host-side Platform provisioning (namespace, `ResourceQuota`, `LimitRange`, `NetworkPolicy`, IAM/KMS) is independent and keeps succeeding. Already-running synced pods on the host **keep running** — a control-plane blip does not evict the data plane.
-- **Affected**: new workload reconciles _into_ the vcluster (AgentFleet kagent Agents, AgentSandbox pods, KEDA scalers) error and requeue with backoff until the vcluster recovers. The Pod Identity binding for the synced ServiceAccount is not (re)created until the SA is back.
+- **Affected**: new workload reconciles _into_ the vcluster (AgentFleet agent Deployments, AgentSandbox pods, KEDA scalers) error and requeue with backoff until the vcluster recovers. The Pod Identity binding for the synced ServiceAccount is not (re)created until the SA is back.
 
 ## Diagnose
 
@@ -39,7 +39,7 @@ kubectl -n "$NS" get serviceaccount -l vcluster.loft.sh/managed-by=vcluster
 
 1. **`ArgoCDRequired`** (condition reason) — ArgoCD is not installed on this cluster. The vcluster tier fails closed by design; it cannot install the vcluster without ArgoCD. Either install ArgoCD (`eks-gitops` addon) or move the tenant back to `isolation: namespace` (re-create the Platform — the field is immutable).
 2. **vcluster control-plane pod down** — OOMKilled or evicted. Check `kubectl -n "$NS" get pod` for the vcluster StatefulSet pod's state and the host `ResourceQuota` (`kubectl -n "$NS" describe resourcequota tenant-default`) — the tenant quota caps the vcluster's resource use, so a too-tight quota can starve it.
-3. **ArgoCD Application OutOfSync/Degraded** — the vcluster chart failed to render or install (bad `vcluster.chart.version`, a values error, or an init-chart — kagent/KEDA — failing inside the vcluster). Read the Application's conditions and the vcluster syncer logs.
+3. **ArgoCD Application OutOfSync/Degraded** — the vcluster chart failed to render or install (bad `vcluster.chart.version`, a values error, or the KEDA init-chart failing inside the vcluster). Read the Application's conditions and the vcluster syncer logs.
 4. **Naming mismatch** (condition message names the discovered vs computed SA) — a vcluster upgrade changed its host-name algorithm. The operator refuses to bind Pod Identity to the wrong name. Pin `vcluster.chart.version` back to the known-good line and reconcile `pkg/util/translate.SafeConcatName` in `operators/internal/controller/vcluster_naming.go` against the new upstream before bumping.
 
 ## Mitigate

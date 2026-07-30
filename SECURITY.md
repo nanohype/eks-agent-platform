@@ -24,7 +24,7 @@ Two workload-isolation tiers, dialed per Platform by `spec.isolation` and immuta
 ### Identity
 
 - No long-lived credentials anywhere. Pods get tokens via Workload Identity (IRSA). The operator itself runs with an IRSA role scoped to the tenant IAM path + KMS grant + Bedrock policy attach/detach.
-- Tool credentials projected into kagent `ToolServer` pods via External Secrets Operator (already in `eks-gitops`), backed by AWS Secrets Manager.
+- Tool credentials projected into agent pods via External Secrets Operator (already in `eks-gitops`), backed by AWS Secrets Manager. Tools run in the agent's own process, so a tool's credential is scoped to the agent that uses it rather than to a shared tool server.
 
 ### Encryption
 
