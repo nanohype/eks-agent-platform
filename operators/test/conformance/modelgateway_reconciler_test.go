@@ -31,6 +31,9 @@ func newModelGatewayReconciler() *controller.ModelGatewayReconciler {
 		Client:      k8sClient,
 		Scheme:      scheme,
 		Concurrency: 1,
+		// The Bedrock upstream address and signing region are both derived
+		// from this, so the reconciler refuses to render without it.
+		Region: "us-west-2",
 	}
 }
 
@@ -112,13 +115,14 @@ func TestModelGatewayReconciler_PendingWhenPlatformNotReady(t *testing.T) {
 	}
 }
 
-func TestModelGatewayReconciler_ReadyWhenPlatformReadyAndAgentgatewayMissing(t *testing.T) {
+func TestModelGatewayReconciler_PendingWhenPlatformReadyAndGatewayCRDsMissing(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	// envtest doesn't install the agentgateway.dev CRD; the reconciler
-	// should detect that and surface Pending (not error). When we add the
-	// CRD to the test scheme in a future iteration this becomes Ready.
+	// envtest installs no Envoy AI Gateway CRDs, so the reconciler should
+	// detect that and surface Pending rather than erroring — a cluster that
+	// has the operator but not the data plane is a normal bootstrap ordering,
+	// not a failure.
 	pName := uniqueName(t, "platfo")
 	p := &platformv1alpha1.Platform{
 		ObjectMeta: metav1.ObjectMeta{Name: pName, Namespace: testNs},
@@ -154,10 +158,10 @@ func TestModelGatewayReconciler_ReadyWhenPlatformReadyAndAgentgatewayMissing(t *
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: mg.Name, Namespace: mg.Namespace}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	// envtest has no agentgateway CRDs installed → reconciler surfaces
-	// Pending. The path that succeeds here proves the platform-ready gate
-	// works AND that missing-CRD is tolerated rather than thrown.
+	// No data-plane CRDs → Pending. Reaching this proves both that the
+	// platform-ready gate passed and that the missing CRDs were tolerated
+	// rather than thrown.
 	if got.Status.Phase != phasePending {
-		t.Errorf("status.phase: got %q want phasePending (agentgateway CRD not installed in envtest)", got.Status.Phase)
+		t.Errorf("status.phase: got %q want phasePending (Envoy AI Gateway CRDs not installed in envtest)", got.Status.Phase)
 	}
 }

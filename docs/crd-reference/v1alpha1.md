@@ -284,7 +284,7 @@ _Appears in:_
 
 
 
-ModelGatewayStatus surfaces the agentgateway Route/Listener state.
+ModelGatewayStatus surfaces the gateway's route and listener state.
 
 
 
@@ -317,8 +317,8 @@ _Appears in:_
 | `modelFamily` _string_ | ModelFamily is the Bedrock model family for a foundation route:<br />anthropic \| meta \| mistral \| cohere \| amazon-titan \| amazon-nova \|<br />stability. Required for a foundation route, rejected for an imported one<br />(enforced by the route-level CEL rules above). |  | Enum: [anthropic meta mistral cohere amazon-titan amazon-nova stability] <br />Optional: \{\} <br /> |
 | `modelId` _string_ | ModelID is the route's model. For a foundation route it is the canonical<br />Bedrock model ID or inference-profile ID; for an imported route it is the<br />imported-model ARN<br />(arn:<partition>:bedrock:<region>:<account>:imported-model/<id>). |  |  |
 | `crossRegionProfile` _string_ | CrossRegionProfile enables a Bedrock cross-region inference profile.<br />Foundation routes only; rejected on an imported route. |  | Optional: \{\} <br /> |
-| `rateLimit` _integer_ | RateLimit caps requests per minute (not tokens) on this route. The<br />operator renders it into an agentgateway local rate-limit policy with<br />unit=Minutes; 0 or unset disables rate limiting for the route. |  | Optional: \{\} <br /> |
-| `guardrailRef` _[LocalRef](#localref)_ | GuardrailRef overrides the gateway's default guardrail. On a foundation<br />route the guardrail attaches inline to the Bedrock backend. On an imported<br />route an inline guardrail is not applicable (Bedrock inline guardrails are<br />foundation-model-only), so the route is served without one and the gateway<br />surfaces an ImportedRouteGuardrailUnenforced condition — enforcement via<br />ApplyGuardrail is a tracked follow-up. |  | Optional: \{\} <br /> |
+| `rateLimit` _integer_ | RateLimit caps requests per minute (not tokens) on this route. The<br />operator renders it into a local rate-limit rule on the gateway's<br />BackendTrafficPolicy; 0 or unset disables rate limiting for the route. |  | Optional: \{\} <br /> |
+| `guardrailRef` _[LocalRef](#localref)_ | GuardrailRef overrides the gateway's default guardrail. On a foundation<br />route the guardrail attaches as request headers the caller cannot<br />override. On an imported<br />route an inline guardrail is not applicable (Bedrock inline guardrails are<br />foundation-model-only), so the route is served without one and the gateway<br />surfaces an ImportedRouteGuardrailUnenforced condition — enforcement via<br />ApplyGuardrail is a tracked follow-up. |  | Optional: \{\} <br /> |
 
 
 #### ModelSource

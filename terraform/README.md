@@ -8,7 +8,7 @@ OpenTofu + Terragrunt for the platform's AWS-side substrate. Sits on top of [`la
 | ------------------- | ----------------------------------------------------------------------------------------------- |
 | `bedrock`           | Invocation logging (S3 + Object Lock + CloudWatch Logs) + baseline Guardrail                    |
 | `model-artifacts`   | KMS-encrypted S3 buckets for LoRA/adapter weights and eval reports                              |
-| `agent-egress`      | VPC interface + gateway endpoints + optional WAF on the agentgateway ALB                        |
+| `agent-egress`      | VPC interface + gateway endpoints + optional WAF on the model gateway ALB                        |
 | `accelerator-pools` | Pod Identity roles for the NVIDIA GPU Operator + Neuron device plugin + pool catalog (SSM JSON) |
 | `kill-switch`       | EventBridge bus + Step Functions state machine for budget-breach detach                         |
 | `cost-pipeline`     | CUR 2.0 + Athena workgroup + Glue database + operator cost-read policy                          |

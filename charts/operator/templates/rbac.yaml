@@ -75,11 +75,19 @@ rules:
   - apiGroups: ["kagent.dev"]
     resources: ["agents", "modelconfigs", "toolservers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["agentgateway.dev"]
-    resources: ["agentgatewaybackends", "agentgatewaypolicies"]
+  # Envoy AI Gateway — the ModelGateway data plane. The AI Gateway controller
+  # derives the HTTPRoute from the AIGatewayRoute, so the operator never writes
+  # one itself.
+  - apiGroups: ["aigateway.envoyproxy.io"]
+    resources: ["aigatewayroutes", "aiservicebackends", "backendsecuritypolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Envoy Gateway's own extensions: the proxy's shape and identity, the Bedrock
+  # upstream address, and the buffer/rate-limit policies.
+  - apiGroups: ["gateway.envoyproxy.io"]
+    resources: ["envoyproxies", "backends", "clienttrafficpolicies", "backendtrafficpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["gateways", "httproutes"]
+    resources: ["gateways", "backendtlspolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["keda.sh"]
     resources: ["scaledobjects", "triggerauthentications"]

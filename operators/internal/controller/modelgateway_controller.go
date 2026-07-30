@@ -21,12 +21,15 @@ import (
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
-// ModelGatewayReconciler reconciles ModelGateway CRs into upstream
-// agentgateway Route CRs in the agentgateway namespace, attaches Bedrock
-// Guardrails per route (per-route ref → gateway default → cluster
-// baseline from SSM), and wires cross-region inference profiles when
-// set. Bedrock-side guardrails are managed by terraform/components/
-// bedrock; the operator only references the IDs it gets from SSM.
+// ModelGatewayReconciler reconciles ModelGateway CRs into an Envoy AI Gateway
+// data plane in the tenant's own namespace: a Gateway whose Envoy runs under
+// the tenant ServiceAccount, one AIServiceBackend per route, and a single
+// Bedrock upstream. It attaches Bedrock Guardrails per route (per-route ref →
+// gateway default → cluster baseline from SSM) as request headers the caller
+// cannot override, and resolves cross-region inference profiles into the
+// route's upstream model id. Bedrock-side guardrails are managed by
+// terraform/components/bedrock; the operator only references the IDs it gets
+// from SSM.
 type ModelGatewayReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
@@ -38,17 +41,19 @@ type ModelGatewayReconciler struct {
 	GuardrailID      string
 	GuardrailVersion string
 
-	// Region is the AWS region stamped onto each AgentgatewayBackend's
-	// Bedrock provider. Empty falls back to the agentgateway pod's ambient
-	// region (its IRSA/credential-chain region).
+	// Region is the AWS region the gateway signs for and whose Bedrock
+	// endpoint it dials. It is required: the Backend address is built from it,
+	// so an empty value would point the gateway at a hostname with a hole in
+	// it rather than falling back to anything.
 	Region string
 }
 
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways/finalizers,verbs=update
-// +kubebuilder:rbac:groups=agentgateway.dev,resources=agentgatewaybackends;agentgatewaypolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=aigateway.envoyproxy.io,resources=aigatewayroutes;aiservicebackends;backendsecuritypolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=envoyproxies;backends;clienttrafficpolicies;backendtrafficpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;backendtlspolicies,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives a ModelGateway CR toward its desired state.
 func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -89,7 +94,7 @@ func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)
 	}
 	// Pending → re-queue with backoff so we pick up Platform-becoming-Ready
-	// or agentgateway-CRDs-installing without waiting for the next CR write.
+	// or gateway-CRDs-installing without waiting for the next CR write.
 	if phase == phasePending {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}

@@ -83,13 +83,14 @@ type ModelRouteSpec struct {
 	CrossRegionProfile string `json:"crossRegionProfile,omitempty"`
 
 	// RateLimit caps requests per minute (not tokens) on this route. The
-	// operator renders it into an agentgateway local rate-limit policy with
-	// unit=Minutes; 0 or unset disables rate limiting for the route.
+	// operator renders it into a local rate-limit rule on the gateway's
+	// BackendTrafficPolicy; 0 or unset disables rate limiting for the route.
 	// +optional
 	RateLimit int32 `json:"rateLimit,omitempty"`
 
 	// GuardrailRef overrides the gateway's default guardrail. On a foundation
-	// route the guardrail attaches inline to the Bedrock backend. On an imported
+	// route the guardrail attaches as request headers the caller cannot
+	// override. On an imported
 	// route an inline guardrail is not applicable (Bedrock inline guardrails are
 	// foundation-model-only), so the route is served without one and the gateway
 	// surfaces an ImportedRouteGuardrailUnenforced condition — enforcement via
@@ -98,7 +99,7 @@ type ModelRouteSpec struct {
 	GuardrailRef *commonv1alpha1.LocalRef `json:"guardrailRef,omitempty"`
 }
 
-// ModelGatewayStatus surfaces the agentgateway Route/Listener state.
+// ModelGatewayStatus surfaces the gateway's route and listener state.
 type ModelGatewayStatus struct {
 	// Phase: Pending, Provisioning, Ready, Failed.
 	// +optional

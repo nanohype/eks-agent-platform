@@ -217,8 +217,6 @@ evalRuntime:
   # S3 bucket the eval workflow writes reports to (terraform eval-runtime output).
   # Injected per-cluster; empty in the base chart.
   evalReportsBucket: ""
-  # ModelGateway endpoint every fleet routes through.
-  gatewayUrl: http://agentgateway.agentgateway.svc.cluster.local:8080
   # The eval-runner image the WorkflowTemplate's run/score/writeback steps run.
   # Built + cosign-signed + SBOM-attested by release.yaml on an eval-runner-v*
   # tag; the tag here is the released version, never a floating :latest.

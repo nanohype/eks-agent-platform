@@ -11,8 +11,8 @@ terraform {
 #   - vpc_id, private_subnet_ids, route_table_ids  (from lz-network)
 #   - cluster_security_group_id                    (from lz-cluster)
 inputs = {
-  enable_waf           = false
-  agentgateway_alb_arn = ""
+  enable_waf            = false
+  model_gateway_alb_arn = ""
 
   # lz-network already provisioned s3/sts/ssm/secretsmanager/kms/logs/ecr/
   # eks/dynamodb endpoints in this VPC; defer endpoint ownership to it.

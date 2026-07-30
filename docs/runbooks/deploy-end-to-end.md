@@ -16,7 +16,7 @@ kind mirror), `portal` (tenant ops UI).
 ```bash
 cd kx
 task up                          # kind + core stack (cilium, cert-manager, argocd, …)
-task stack:ai-platform:enable    # kagent + agentgateway + the operator
+task stack:ai-platform:enable    # kagent + Envoy AI Gateway + the operator
 ```
 
 `ai-platform:enable` now installs the operator too (built from the sibling
@@ -33,7 +33,7 @@ kubectl get platform blank -n eks-agent-platform -o jsonpath='{.status.phase}'  
 There is no AWS side under `--disable-aws`, so the tenant-role and Pod Identity
 checks are skipped with a note and the k8s-side audit reports clean. The agent
 plane (ModelGateway/AgentFleet) reaches Ready against the local
-kagent/agentgateway.
+kagent / Envoy AI Gateway.
 
 ---
 
@@ -73,7 +73,7 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
    label, the operator-role-arn annotation the operator ApplicationSet reads, and
    the `monitoring/grafana-url` annotation the dashboards ApplicationSet injects
    into the Grafana CR. ArgoCD then syncs the addon catalog onto every labeled
-   cluster: `addons-ai-platform` (kagent + agentgateway), `addons-argo-platform`
+   cluster: `addons-ai-platform` (kagent + Envoy AI Gateway), `addons-argo-platform`
    (argo-workflows/rollouts/events), the `accelerators` category (gpu-operator,
    NVIDIA DRA driver, AWS Neuron device plugin), and `addons-agent-operator` (the
    operator itself).
@@ -85,7 +85,7 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
    dependency automatically.
 
 Confirm addons converge: `kubectl --context <cluster> get applications -n argocd`
-(cert-manager, external-secrets, cilium, kagent, agentgateway, argo-workflows,
+(cert-manager, external-secrets, cilium, kagent, envoy-ai-gateway, argo-workflows,
 gpu-operator, nvidia-dra-driver, neuron-device-plugin, the operator + its
 eval-runtime, … Synced/Healthy).
 
@@ -241,7 +241,7 @@ with the permissions boundary attached and a trust policy scoped to exactly
   pre-release suffix (`v1.35.x-eks-…`). (Fixed.)
 - **Upstream chart value schemas:** don't inject `clusterName`/`vpcId` (or other
   unknown `--set` values) into upstream charts with strict schemas (cert-manager,
-  kagent, agentgateway) — they fail to render. (Fixed in the ApplicationSets.)
+  kagent, envoy-ai-gateway) — they fail to render. (Fixed in the ApplicationSets.)
 - **Operator IAM idempotency GetRole:** authorizes against the bare-name (root)
   ARN before the role exists, so the operator role allows GetRole on the
   `<env>-*-tenant` name pattern as well as the scoped path. (In `agent-iam`.)

@@ -50,9 +50,11 @@ spec:
         # Quoted so an empty substitution stays an empty string, not YAML null —
         # Argo Workflows v4.0+ rejects a null parameter value (must be a string).
         value: "REPLACE_BY_APPLICATIONSET"
-      # ModelGateway endpoint — every fleet routes through agentgateway.
+      # The Platform's own ModelGateway endpoint. Each Platform runs its own
+      # gateway in its own namespace, so the EvalSuite reconciler supplies this
+      # per run; the value here is only what an unparameterised manual run sees.
       - name: gateway-url
-        value: http://agentgateway.agentgateway.svc.cluster.local:8080
+        value: "REPLACE_BY_EVALSUITE"
 
   entrypoint: pipeline
 

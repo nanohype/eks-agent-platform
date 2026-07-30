@@ -23,7 +23,7 @@ import (
 
 // AgentFleetReconciler reconciles AgentFleet CRs into kagent Agent +
 // ModelConfig CRs, a KEDA ScaledObject (when scaling.enabled), a per-
-// fleet NetworkPolicy locking egress to agentgateway + OTel only, and a
+// fleet NetworkPolicy locking egress to the model gateway + OTel only, and a
 // tenant ServiceAccount with the IRSA annotation pointing at the
 // Platform's IAM role minted by PlatformReconciler.
 //

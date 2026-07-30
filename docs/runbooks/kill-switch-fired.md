@@ -16,10 +16,10 @@ If any Platform shows `Suspended`, follow [platform-suspended.md](./platform-sus
 
 Three independent failure modes — diagnose in parallel:
 
-### Mode A: agentgateway can't reach Bedrock
+### Mode A: the gateway can't reach Bedrock
 
 ```bash
-# Check agentgateway pod logs for InvokeModel errors
+# Check gateway pod logs for InvokeModel errors
 kubectl -n agentgateway logs -l app.kubernetes.io/name=agentgateway --tail=100 | grep -i "bedrock\|invoke"
 
 # Test the route directly from inside the tenant ns

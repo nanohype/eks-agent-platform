@@ -14,6 +14,6 @@ output "gateway_endpoint_ids" {
 }
 
 output "waf_web_acl_arn" {
-  description = "ARN of the WAF WebACL protecting agentgateway (null if disabled)"
-  value       = var.enable_waf ? aws_wafv2_web_acl.agentgateway[0].arn : null
+  description = "ARN of the WAF WebACL protecting the model gateway (null if disabled)"
+  value       = var.enable_waf ? aws_wafv2_web_acl.model_gateway[0].arn : null
 }

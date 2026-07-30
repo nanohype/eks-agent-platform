@@ -106,8 +106,8 @@ Six threat categories, evaluated per architecture component.
 | Tenant A reads Tenant B's S3 prefix                         | **I**nformation Disclosure | Tenant roles scope `s3:GetObject` to `tenants/<own-platform-id>/*` via path-prefix policy. KMS grant on cmk-data is also scoped per-tenant via `kms:EncryptionContext` matching. |
 | Tenant A invokes Bedrock with Tenant B's model-access ARNs  | **E**levation of Privilege | Per-tenant roles only attach the Bedrock policies generated for their own Platform. Cross-tenant ARNs aren't in the policy.                                                      |
 | Tenant A reads Tenant B's CloudWatch logs                   | **I**nformation Disclosure | Per-tenant log groups namespaced by `/eks-agent-platform/<cluster>/tenants/<platform-id>/*`. Tenant role only has `logs:PutLogEvents` on its own path.                           |
-| Tenant A exhausts shared Bedrock quota → Tenant B throttled | **D**enial of Service      | Per-route rate limits in `ModelGateway.spec.routes[].rateLimit` enforced by agentgateway. Bedrock account-level quotas remain a shared concern — call out in the runbook.        |
-| Tenant A spams agentgateway → cluster-wide perf hit         | **D**enial of Service      | Per-tenant `NetworkPolicy` egress restricts to agentgateway service; agentgateway has its own KEDA scaling + PDB; tenant `ResourceQuota` caps pod count.                         |
+| Tenant A exhausts shared Bedrock quota → Tenant B throttled | **D**enial of Service      | Per-route rate limits in `ModelGateway.spec.routes[].rateLimit` enforced by a local `BackendTrafficPolicy` on the gateway. Bedrock account-level quotas remain a shared concern — call out in the runbook.        |
+| Tenant A spams its gateway → cluster-wide perf hit          | **D**enial of Service      | Each Platform gets its own gateway in its own namespace, so the blast radius is one tenant; per-tenant `NetworkPolicy` egress restricts to that gateway; tenant `ResourceQuota` caps pod count. |
 
 ### Tenant attacks operator
 
@@ -121,8 +121,8 @@ Six threat categories, evaluated per architecture component.
 
 | Threat                                                                  | STRIDE               | Mitigation                                                                                                                                                                                                                                                          |
 | ----------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| External attacker bypasses agentgateway → reaches a tenant pod directly | **S**poofing / **I** | `NetworkPolicy` default-deny inbound on every tenant namespace. Only agentgateway service can reach tenant pods. Cilium enforces.                                                                                                                                   |
-| External attacker reaches the agentgateway listener                     | **I** / **E**oP      | ALB ingress is `scheme: internal` by default; WAF rule set (Common + KnownBadInputs + rate limit) when public. Bedrock Guardrails attached at every route catch injection attempts in payload.                                                                      |
+| External attacker bypasses the gateway → reaches a tenant pod directly | **S**poofing / **I** | `NetworkPolicy` default-deny inbound on every tenant namespace. Only the Platform's gateway service can reach tenant pods. Cilium enforces.                                                                                                                                   |
+| External attacker reaches the gateway listener                          | **I** / **E**oP      | ALB ingress is `scheme: internal` by default; WAF rule set (Common + KnownBadInputs + rate limit) when public. Bedrock Guardrails attached at every route catch injection attempts in payload.                                                                      |
 | External attacker steals a leaked tenant credential                     | **S**                | EKS Pod Identity credentials are short-lived, vended per-pod by the Pod Identity agent over the local credential endpoint and not mounted as a long-lived token; the role is assumable only via `pods.eks.amazonaws.com` for the bound (namespace, ServiceAccount). |
 
 ### Supply-chain attacks
@@ -132,7 +132,7 @@ Six threat categories, evaluated per architecture component.
 | Compromised operator image pushed to GHCR        | **T**ampering | All operator images signed with cosign (keyless OIDC) + SBOM attestation. Kyverno verify-images policy in `eks-gitops` rejects unsigned images cluster-wide. |
 | Compromised npm package in `@eks-agent/sdk` deps | **T**         | Renovate vulnerability alerts always-on, never auto-merge. OSV alerts enabled. Trivy fs scan in CI fails on HIGH/CRITICAL.                                   |
 | Compromised Helm chart pulled by ArgoCD          | **T**         | OCI charts published with signed metadata. AppProject `sourceRepos` allowlist is closed-set; only the named OCI registries are reachable.                    |
-| Compromised kagent or agentgateway upstream      | **T**         | Pinned chartVersion in ApplicationSet matrix; Renovate proposes bumps but human reviews majors. Cluster-wide image-verification policy applies.              |
+| Compromised kagent or Envoy AI Gateway upstream  | **T**         | Pinned chartVersion in ApplicationSet matrix; Renovate proposes bumps but human reviews majors. Cluster-wide image-verification policy applies.              |
 
 ### Audit + non-repudiation
 

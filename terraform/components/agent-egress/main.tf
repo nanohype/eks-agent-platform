@@ -80,14 +80,14 @@ resource "aws_vpc_endpoint" "gateway" {
 }
 
 ################################################################################
-# WAF for the agentgateway ALB (opt-in)
+# WAF for the model gateway ALB (opt-in)
 ################################################################################
 
-resource "aws_wafv2_web_acl" "agentgateway" {
+resource "aws_wafv2_web_acl" "model_gateway" {
   count = var.enable_waf ? 1 : 0
 
-  name        = "${local.prefix}-agentgateway"
-  description = "Protects agentgateway public listener"
+  name        = "${local.prefix}-model-gateway"
+  description = "Protects model gateway public listener"
   scope       = "REGIONAL"
 
   default_action {
@@ -153,17 +153,17 @@ resource "aws_wafv2_web_acl" "agentgateway" {
 
   visibility_config {
     cloudwatch_metrics_enabled = true
-    metric_name                = "${local.prefix}-agentgateway"
+    metric_name                = "${local.prefix}-model-gateway"
     sampled_requests_enabled   = true
   }
 
   tags = local.tags
 }
 
-resource "aws_wafv2_web_acl_association" "agentgateway" {
+resource "aws_wafv2_web_acl_association" "model_gateway" {
   count        = var.enable_waf ? 1 : 0
-  resource_arn = var.agentgateway_alb_arn
-  web_acl_arn  = aws_wafv2_web_acl.agentgateway[0].arn
+  resource_arn = var.model_gateway_alb_arn
+  web_acl_arn  = aws_wafv2_web_acl.model_gateway[0].arn
 }
 
 ################################################################################

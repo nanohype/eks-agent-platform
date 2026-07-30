@@ -24,31 +24,57 @@ import (
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
-// modelGatewayFinalizer is set on every ModelGateway so we can reap the
-// agentgateway Gateway/HTTPRoute/Backend/Policy CRs before the CR is
-// deleted. Without it, rapid Create→Delete would leave orphan resources.
+// modelGatewayFinalizer is set on every ModelGateway so we can reap the data
+// plane's Gateway/EnvoyProxy/AIGatewayRoute/AIServiceBackend/Backend/policy
+// resources before the CR is deleted. Without it, rapid Create→Delete would
+// leave orphans — and an orphaned Gateway keeps an Envoy Deployment running.
 const modelGatewayFinalizer = "agents.nanohype.dev/modelgateway-finalizer"
 
-// agentgatewayGV / gatewayAPIGV are the GroupVersions the operator
-// generates into. A ModelGateway becomes a Gateway-API Gateway + per-route
-// HTTPRoute pointing at an AgentgatewayBackend (the Bedrock LLM backend),
-// with an AgentgatewayPolicy carrying the per-route rate limit. Lazy detect
-// at reconcile time — clusters without agentgateway / Gateway-API installed
+// The GroupVersions the operator generates into. A ModelGateway becomes a
+// Gateway-API Gateway backed by an Envoy AI Gateway AIGatewayRoute, one
+// AIServiceBackend per route, and a single Bedrock Backend. Lazy detect at
+// reconcile time — clusters without Envoy AI Gateway / Gateway-API installed
 // see a NoKindMatch and the reconciler surfaces phase=Pending, not an error.
 var (
-	agentgatewayGV = schema.GroupVersion{Group: "agentgateway.dev", Version: "v1alpha1"}
+	aiGatewayGV = schema.GroupVersion{Group: "aigateway.envoyproxy.io", Version: "v1beta1"}
+	// envoyGatewayGV carries Envoy Gateway's own extensions: EnvoyProxy (data
+	// plane shape), Backend (upstream address), ClientTrafficPolicy (buffer
+	// limits) and BackendTrafficPolicy (rate limits).
+	envoyGatewayGV = schema.GroupVersion{Group: "gateway.envoyproxy.io", Version: "v1alpha1"}
 	gatewayAPIGV   = schema.GroupVersion{Group: "gateway.networking.k8s.io", Version: "v1"}
+	// BackendTLSPolicy is still v1alpha3 in Gateway API; it has not graduated
+	// with the rest of the types this file uses.
+	gatewayAPIPolicyGV = schema.GroupVersion{Group: "gateway.networking.k8s.io", Version: "v1alpha3"}
 )
 
-// agentgatewayNamespace is where the Gateway, AgentgatewayBackend,
-// HTTPRoute, and AgentgatewayPolicy land so the agentgateway controller
-// (which watches that namespace) picks them up.
-const agentgatewayNamespace = "agentgateway"
+// gatewayClassName is the GatewayClass the Envoy AI Gateway install provides.
+const gatewayClassName = "envoy-ai-gateway"
 
-// gatewayListenerPort is the HTTP listener port on the per-Platform
-// Gateway. agentgateway provisions a data-plane Service named after the
-// Gateway exposing this port; tenant ModelConfigs target it.
+// gatewayListenerPort is the HTTP listener port on the per-Platform Gateway.
+// Envoy Gateway provisions a data-plane Service exposing it; tenant workloads
+// point their model client's base URL at it.
 const gatewayListenerPort = 8080
+
+// bedrockAnthropicVersion is the Anthropic API version Bedrock speaks. The
+// AIServiceBackend carries it so the gateway stamps it on translated requests;
+// it is Bedrock's own constant, not a model or SDK version.
+const bedrockAnthropicVersion = "bedrock-2023-05-31"
+
+// clientBufferLimit raises Envoy's request buffer from its 32KiB default.
+// Upstream calls this out directly: the default "is not sufficient for AI
+// workloads". A long prompt exceeds it, so leaving it unset fails on real
+// traffic while passing every smoke test.
+const clientBufferLimit = "50Mi"
+
+// Bedrock applies a guardrail to InvokeModel through request headers rather
+// than the body, which is what lets the gateway enforce one the caller cannot
+// opt out of: headerMutation `set` overwrites whatever the client sent.
+//
+//	https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+const (
+	guardrailIDHeader      = "X-Amzn-Bedrock-GuardrailIdentifier"
+	guardrailVersionHeader = "X-Amzn-Bedrock-GuardrailVersion"
+)
 
 // resolvePlatform fetches the Platform a ModelGateway references and
 // returns the resolved tenant namespace + readiness. Returns nil platform
@@ -79,201 +105,348 @@ func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agents
 	return getReferencedPlatform(ctx, r.Client, mg.Namespace, mg.Spec.PlatformRef.Name, errPlatformNotFound)
 }
 
-// ensureGatewayResources renders a ModelGateway into the agentgateway data
-// plane: one Gateway-API Gateway per Platform, then per ModelRoute an
-// AgentgatewayBackend (the Bedrock LLM backend), an HTTPRoute exposing it at
-// /<platform>-<route>, and — when the route sets a rate limit — an
-// AgentgatewayPolicy. Idempotent (CreateOrUpdate keyed by stable
-// Platform+route names). Returns the in-cluster endpoint of the Gateway's
-// data-plane Service (the base URL tenant ModelConfigs target).
-func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg *agentsv1alpha1.ModelGateway, guardrailID, guardrailVersion string) (string, []string, error) {
-	platformName := mg.Spec.PlatformRef.Name
-	gwName := platformName + "-gateway"
-
-	// 1. The Gateway. agentgateway provisions a data-plane Service named
-	//    after it, exposing the HTTP listener port.
-	gw := &unstructured.Unstructured{}
-	gw.SetGroupVersionKind(schema.GroupVersionKind{Group: gatewayAPIGV.Group, Version: gatewayAPIGV.Version, Kind: "Gateway"})
-	gw.SetName(gwName)
-	gw.SetNamespace(agentgatewayNamespace)
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, gw, func() error {
-		gw.SetLabels(gatewayLabels(platformName))
-		spec := map[string]any{
-			"gatewayClassName": "agentgateway",
-			"listeners": []any{
-				map[string]any{
-					"name":     "http",
-					"protocol": "HTTP",
-					"port":     int64(gatewayListenerPort),
-					"allowedRoutes": map[string]any{
-						"namespaces": map[string]any{"from": "All"},
-					},
-				},
-			},
-		}
-		return unstructured.SetNestedField(gw.Object, spec, "spec")
-	})
-	if err != nil {
-		if isNoKindMatch(err) {
-			return "", nil, errAgentgatewayNotInstalled
-		}
-		return "", nil, fmt.Errorf("ensure Gateway %s: %w", gwName, err)
+// backendSchemaFor maps a route to the Envoy AI Gateway upstream schema that
+// serves it.
+//
+// AWSAnthropic accepts native Anthropic Messages on /v1/messages and OpenAI
+// chat completions on /v1/chat/completions, translating either to Bedrock —
+// so an Anthropic-family route keeps the model's own wire shape end to end,
+// with thinking blocks, cache points and tool use intact.
+//
+// Everything else — the other foundation families and imported open-weight
+// models — goes through AWSBedrock, which translates OpenAI-shaped requests to
+// Bedrock's Converse API.
+func backendSchemaFor(route agentsv1alpha1.ModelRouteSpec) string {
+	if route.ModelSource != agentsv1alpha1.ModelSourceImported && route.ModelFamily == "anthropic" {
+		return "AWSAnthropic"
 	}
-
-	// Imported routes whose configured guardrail could not attach inline
-	// (Bedrock inline guardrails are foundation-model-only); surfaced as a
-	// status condition so an unguarded imported route is never silent.
-	var unenforcedGuardrail []string
-
-	// 2. Per route: backend + HTTPRoute + (optional) rate-limit policy.
-	for _, route := range mg.Spec.Routes {
-		routeName := platformName + "-" + route.Name
-		imported := route.ModelSource == agentsv1alpha1.ModelSourceImported
-
-		// Effective model: an imported route carries the imported-model ARN
-		// directly; a foundation route uses its cross-region inference profile
-		// when set, else the bare model id.
-		effectiveModel := route.ModelID
-		if !imported && route.CrossRegionProfile != "" {
-			effectiveModel = route.CrossRegionProfile
-		}
-		// Guardrail: per-route ref wins; else gateway default; else the SSM
-		// baseline (id + version). AgentgatewayBackend requires both
-		// identifier + version, so a name-only ref pins the DRAFT version.
-		gID, gVer := guardrailID, guardrailVersion
-		switch {
-		case route.GuardrailRef != nil && route.GuardrailRef.Name != "":
-			gID, gVer = route.GuardrailRef.Name, "DRAFT"
-		case mg.Spec.DefaultGuardrailRef != nil && mg.Spec.DefaultGuardrailRef.Name != "":
-			gID, gVer = mg.Spec.DefaultGuardrailRef.Name, "DRAFT"
-		}
-		// Inline Bedrock guardrails are foundation-model-only, so an imported
-		// route cannot carry one: drop it and record the route so the gateway
-		// surfaces the gap rather than serving it silently unguarded.
-		// Enforcement via ApplyGuardrail is a tracked follow-up.
-		if imported && gID != "" {
-			unenforcedGuardrail = append(unenforcedGuardrail, route.Name)
-			gID, gVer = "", ""
-		}
-		// Family label: an imported route has no model family, so it carries the
-		// source as the label value.
-		famLabel := route.ModelFamily
-		if imported {
-			famLabel = string(agentsv1alpha1.ModelSourceImported)
-		}
-
-		// 2a. AgentgatewayBackend — the Bedrock LLM backend.
-		backend := &unstructured.Unstructured{}
-		backend.SetGroupVersionKind(schema.GroupVersionKind{Group: agentgatewayGV.Group, Version: agentgatewayGV.Version, Kind: "AgentgatewayBackend"})
-		backend.SetName(routeName)
-		backend.SetNamespace(agentgatewayNamespace)
-		if _, berr := controllerutil.CreateOrUpdate(ctx, r.Client, backend, func() error {
-			backend.SetLabels(routeLabels(platformName, famLabel))
-			bedrock := map[string]any{"model": effectiveModel}
-			if r.Region != "" {
-				bedrock["region"] = r.Region
-			}
-			if gID != "" && gVer != "" {
-				bedrock["guardrail"] = map[string]any{"identifier": gID, "version": gVer}
-			}
-			spec := map[string]any{
-				"ai": map[string]any{
-					"provider": map[string]any{"bedrock": bedrock},
-				},
-			}
-			return unstructured.SetNestedField(backend.Object, spec, "spec")
-		}); berr != nil {
-			if isNoKindMatch(berr) {
-				return "", nil, errAgentgatewayNotInstalled
-			}
-			return "", nil, fmt.Errorf("ensure AgentgatewayBackend %s: %w", routeName, berr)
-		}
-
-		// 2b. HTTPRoute — exposes the backend at /<platform>-<route>.
-		hr := &unstructured.Unstructured{}
-		hr.SetGroupVersionKind(schema.GroupVersionKind{Group: gatewayAPIGV.Group, Version: gatewayAPIGV.Version, Kind: "HTTPRoute"})
-		hr.SetName(routeName)
-		hr.SetNamespace(agentgatewayNamespace)
-		if _, herr := controllerutil.CreateOrUpdate(ctx, r.Client, hr, func() error {
-			hr.SetLabels(routeLabels(platformName, famLabel))
-			spec := map[string]any{
-				"parentRefs": []any{
-					map[string]any{"name": gwName},
-				},
-				"rules": []any{
-					map[string]any{
-						"matches": []any{
-							map[string]any{
-								"path": map[string]any{"type": "PathPrefix", "value": "/" + routeName},
-							},
-						},
-						"backendRefs": []any{
-							map[string]any{
-								"name":  routeName,
-								"group": agentgatewayGV.Group,
-								"kind":  "AgentgatewayBackend",
-							},
-						},
-					},
-				},
-			}
-			return unstructured.SetNestedField(hr.Object, spec, "spec")
-		}); herr != nil {
-			if isNoKindMatch(herr) {
-				return "", nil, errAgentgatewayNotInstalled
-			}
-			return "", nil, fmt.Errorf("ensure HTTPRoute %s: %w", routeName, herr)
-		}
-
-		// 2c. AgentgatewayPolicy — per-route local rate limit (req/min).
-		if rerr := r.ensureRouteRateLimit(ctx, platformName, routeName, route.RateLimit); rerr != nil {
-			return "", nil, rerr
-		}
-	}
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", gwName, agentgatewayNamespace, gatewayListenerPort), unenforcedGuardrail, nil
+	return "AWSBedrock"
 }
 
-// ensureRouteRateLimit attaches an AgentgatewayPolicy carrying the route's
-// requests-per-minute local rate limit, targeting the HTTPRoute. When the
-// route sets no limit it removes any stale policy so disabling a limit
-// takes effect.
-func (r *ModelGatewayReconciler) ensureRouteRateLimit(ctx context.Context, platformName, routeName string, rpm int32) error {
-	policyName := routeName + "-ratelimit"
-	pol := &unstructured.Unstructured{}
-	pol.SetGroupVersionKind(schema.GroupVersionKind{Group: agentgatewayGV.Group, Version: agentgatewayGV.Version, Kind: "AgentgatewayPolicy"})
-	pol.SetName(policyName)
-	pol.SetNamespace(agentgatewayNamespace)
-	if rpm <= 0 {
-		if err := r.Delete(ctx, pol); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
-			return fmt.Errorf("delete AgentgatewayPolicy %s: %w", policyName, err)
-		}
-		return nil
+// effectiveModelID is the identifier the gateway sends upstream: an imported
+// route's model ARN, or a foundation route's cross-region inference profile
+// when set, else its bare model id.
+func effectiveModelID(route agentsv1alpha1.ModelRouteSpec) string {
+	if route.ModelSource != agentsv1alpha1.ModelSourceImported && route.CrossRegionProfile != "" {
+		return route.CrossRegionProfile
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pol, func() error {
-		pol.SetLabels(gatewayLabels(platformName))
-		spec := map[string]any{
-			"targetRefs": []any{
-				map[string]any{
-					"group": gatewayAPIGV.Group,
-					"kind":  "HTTPRoute",
-					"name":  routeName,
+	return route.ModelID
+}
+
+// resolveGuardrail picks the guardrail for a route: a per-route ref wins, then
+// the gateway default, then the cluster baseline resolved from SSM. A named ref
+// carries no version, so it pins DRAFT.
+//
+// Bedrock's inline guardrails are foundation-model-only, so an imported route
+// cannot carry one. Rather than serve it silently unguarded, the route is
+// returned with no guardrail and reported to the caller, which surfaces it as a
+// status condition.
+func resolveGuardrail(mg *agentsv1alpha1.ModelGateway, route agentsv1alpha1.ModelRouteSpec, baselineID, baselineVersion string) (id, version string, unenforced bool) {
+	id, version = baselineID, baselineVersion
+	switch {
+	case route.GuardrailRef != nil && route.GuardrailRef.Name != "":
+		id, version = route.GuardrailRef.Name, "DRAFT"
+	case mg.Spec.DefaultGuardrailRef != nil && mg.Spec.DefaultGuardrailRef.Name != "":
+		id, version = mg.Spec.DefaultGuardrailRef.Name, "DRAFT"
+	}
+	if route.ModelSource == agentsv1alpha1.ModelSourceImported && id != "" {
+		return "", "", true
+	}
+	return id, version, false
+}
+
+// routeFamilyLabel is the model-family label value for a route. An imported
+// route has no model family, so it carries the source instead.
+func routeFamilyLabel(route agentsv1alpha1.ModelRouteSpec) string {
+	if route.ModelSource == agentsv1alpha1.ModelSourceImported {
+		return string(agentsv1alpha1.ModelSourceImported)
+	}
+	return route.ModelFamily
+}
+
+// gatewayNames derives every generated resource name from the Platform name so
+// they stay stable across reconciles and collide with nothing else in the
+// tenant namespace.
+type gatewayNames struct {
+	namespace string
+	gateway   string
+	backend   string
+}
+
+func namesFor(platform *platformv1alpha1.Platform) gatewayNames {
+	name := platform.Name + "-gateway"
+	return gatewayNames{
+		namespace: PlatformNamespace(platform),
+		gateway:   name,
+		backend:   platform.Name + "-bedrock",
+	}
+}
+
+// ModelGatewayEndpoint is the in-cluster base URL for a Platform's gateway.
+//
+// It is derived rather than looked up so callers that need the address without
+// reading ModelGateway status — the eval workflow, for one — cannot drift from
+// what the reconciler publishes. The EnvoyProxy pins the Service name, so this
+// stays true for as long as both come from here.
+func ModelGatewayEndpoint(platform *platformv1alpha1.Platform) string {
+	n := namesFor(platform)
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", n.gateway, n.namespace, gatewayListenerPort)
+}
+
+// ensureGatewayResources renders a ModelGateway into an Envoy AI Gateway data
+// plane living in the tenant's own namespace, and returns the in-cluster
+// endpoint tenant workloads target.
+//
+// The Envoy proxy runs under the tenant ServiceAccount, which already carries a
+// Pod Identity association to the tenant IAM role. Two things follow: the
+// gateway reaches Bedrock with no credential of its own, and Bedrock sees the
+// tenant's role ARN on every invocation — so per-tenant cost attribution keeps
+// working exactly as it did when the app called Bedrock directly.
+//
+// Idempotent (CreateOrUpdate keyed by stable Platform+route names).
+func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg *agentsv1alpha1.ModelGateway, platform *platformv1alpha1.Platform, guardrailID, guardrailVersion string) (string, []string, error) {
+	n := namesFor(platform)
+	labels := gatewayLabels(platform.Name)
+
+	// 1. EnvoyProxy — the data-plane shape. Two settings carry weight:
+	//
+	//    envoyServiceAccount pins the proxy to the tenant ServiceAccount, which
+	//    is what makes the gateway inherit the tenant's Bedrock identity.
+	//
+	//    envoyService forces ClusterIP and a deterministic name. The Service
+	//    type defaults to LoadBalancer, so leaving it unset provisions an AWS
+	//    load balancer per Platform — billed hourly, idle, for a gateway whose
+	//    only consumers are in-cluster. The name pin is what keeps the endpoint
+	//    below predictable rather than an Envoy-generated one.
+	if err := r.ensureUnstructured(ctx, envoyGatewayGV, "EnvoyProxy", n.namespace, n.gateway, labels, map[string]any{
+		"provider": map[string]any{
+			"type": "Kubernetes",
+			"kubernetes": map[string]any{
+				"envoyServiceAccount": map[string]any{"name": tenantSAName},
+				"envoyService": map[string]any{
+					"name": n.gateway,
+					"type": "ClusterIP",
 				},
 			},
-			"traffic": map[string]any{
-				"rateLimit": map[string]any{
-					"local": []any{
-						map[string]any{"requests": int64(rpm), "unit": "Minutes"},
+		},
+	}); err != nil {
+		return "", nil, err
+	}
+
+	// 2. The Gateway itself, pointed at that EnvoyProxy.
+	if err := r.ensureUnstructured(ctx, gatewayAPIGV, "Gateway", n.namespace, n.gateway, labels, map[string]any{
+		"gatewayClassName": gatewayClassName,
+		"listeners": []any{
+			map[string]any{
+				"name":     "http",
+				"protocol": "HTTP",
+				"port":     int64(gatewayListenerPort),
+				"allowedRoutes": map[string]any{
+					"namespaces": map[string]any{"from": "All"},
+				},
+			},
+		},
+		"infrastructure": map[string]any{
+			"parametersRef": map[string]any{
+				"group": envoyGatewayGV.Group,
+				"kind":  "EnvoyProxy",
+				"name":  n.gateway,
+			},
+		},
+	}); err != nil {
+		return "", nil, err
+	}
+
+	// 3. Raise the client buffer limit off its 32KiB default (see the const).
+	if err := r.ensureUnstructured(ctx, envoyGatewayGV, "ClientTrafficPolicy", n.namespace, n.gateway+"-buffer", labels, map[string]any{
+		"targetRefs": []any{gatewayTargetRef(n.gateway)},
+		"connection": map[string]any{"bufferLimit": clientBufferLimit},
+	}); err != nil {
+		return "", nil, err
+	}
+
+	// 4. One Bedrock upstream for the whole gateway. Routes differ by model,
+	//    not by endpoint, so they share it.
+	bedrockHost := fmt.Sprintf("bedrock-runtime.%s.amazonaws.com", r.Region)
+	if err := r.ensureUnstructured(ctx, envoyGatewayGV, "Backend", n.namespace, n.backend, labels, map[string]any{
+		"endpoints": []any{
+			map[string]any{
+				"fqdn": map[string]any{"hostname": bedrockHost, "port": int64(443)},
+			},
+		},
+	}); err != nil {
+		return "", nil, err
+	}
+	if err := r.ensureUnstructured(ctx, gatewayAPIPolicyGV, "BackendTLSPolicy", n.namespace, n.backend+"-tls", labels, map[string]any{
+		"targetRefs": []any{
+			map[string]any{"group": envoyGatewayGV.Group, "kind": "Backend", "name": n.backend},
+		},
+		"validation": map[string]any{
+			"wellKnownCACertificates": "System",
+			"hostname":                bedrockHost,
+		},
+	}); err != nil {
+		return "", nil, err
+	}
+
+	// 5. Per route: an AIServiceBackend carrying the upstream wire schema, and a
+	//    BackendSecurityPolicy telling the gateway to sign for Bedrock. The
+	//    policy names only a region — the AWS default credential chain resolves
+	//    the Pod Identity association bound to the tenant ServiceAccount, so no
+	//    static credential is stored anywhere.
+	var unenforcedGuardrail []string
+	rules := make([]any, 0, len(mg.Spec.Routes))
+	rateLimitRules := make([]any, 0, len(mg.Spec.Routes))
+
+	for _, route := range mg.Spec.Routes {
+		routeName := platform.Name + "-" + route.Name
+		routeLbls := routeLabels(platform.Name, routeFamilyLabel(route))
+
+		if err := r.ensureUnstructured(ctx, aiGatewayGV, "AIServiceBackend", n.namespace, routeName, routeLbls, map[string]any{
+			"schema": map[string]any{
+				"name":    backendSchemaFor(route),
+				"version": bedrockAnthropicVersion,
+			},
+			"backendRef": map[string]any{
+				"group": envoyGatewayGV.Group,
+				"kind":  "Backend",
+				"name":  n.backend,
+			},
+		}); err != nil {
+			return "", nil, err
+		}
+
+		if err := r.ensureUnstructured(ctx, aiGatewayGV, "BackendSecurityPolicy", n.namespace, routeName, routeLbls, map[string]any{
+			"targetRefs": []any{
+				map[string]any{"group": aiGatewayGV.Group, "kind": "AIServiceBackend", "name": routeName},
+			},
+			"type":           "AWSCredentials",
+			"awsCredentials": map[string]any{"region": r.Region},
+		}); err != nil {
+			return "", nil, err
+		}
+
+		// The route rule. Callers select a route by its name — a stable alias
+		// like "default" or "escalation" — and modelNameOverride swaps in the
+		// real Bedrock identifier upstream. That keeps model ids inside this CR
+		// instead of scattered through tenant application config.
+		backendRef := map[string]any{
+			"name":              routeName,
+			"modelNameOverride": effectiveModelID(route),
+		}
+		gID, gVer, unenforced := resolveGuardrail(mg, route, guardrailID, guardrailVersion)
+		if unenforced {
+			unenforcedGuardrail = append(unenforcedGuardrail, route.Name)
+		}
+		if gID != "" && gVer != "" {
+			// `set` overwrites, so a caller that sends its own guardrail headers
+			// has them replaced rather than honoured.
+			backendRef["headerMutation"] = map[string]any{
+				"set": []any{
+					map[string]any{"name": guardrailIDHeader, "value": gID},
+					map[string]any{"name": guardrailVersionHeader, "value": gVer},
+				},
+			}
+		}
+		rules = append(rules, map[string]any{
+			"matches": []any{
+				map[string]any{
+					"headers": []any{
+						map[string]any{"type": "Exact", "name": "x-ai-eg-model", "value": route.Name},
 					},
 				},
 			},
+			"backendRefs": []any{backendRef},
+		})
+
+		if route.RateLimit > 0 {
+			rateLimitRules = append(rateLimitRules, map[string]any{
+				"clientSelectors": []any{
+					map[string]any{
+						"headers": []any{
+							map[string]any{"name": "x-ai-eg-model", "value": route.Name},
+						},
+					},
+				},
+				"limit": map[string]any{"requests": int64(route.RateLimit), "unit": "Minute"},
+			})
 		}
-		return unstructured.SetNestedField(pol.Object, spec, "spec")
+	}
+
+	// 6. One AIGatewayRoute holding every rule. Envoy AI Gateway derives the
+	//    x-ai-eg-model header from the request body, so the match above routes
+	//    on what the caller asked for.
+	if err := r.ensureUnstructured(ctx, aiGatewayGV, "AIGatewayRoute", n.namespace, n.gateway, labels, map[string]any{
+		"parentRefs": []any{
+			map[string]any{"name": n.gateway, "kind": "Gateway", "group": gatewayAPIGV.Group},
+		},
+		"rules": rules,
+	}); err != nil {
+		return "", nil, err
+	}
+
+	// 7. Rate limits, as one policy on the Gateway with a per-route rule.
+	//    Local rather than global: it needs no Redis, matching what the routes
+	//    asked for (requests per minute, not tokens).
+	if err := r.ensureRateLimitPolicy(ctx, n, labels, rateLimitRules); err != nil {
+		return "", nil, err
+	}
+
+	return ModelGatewayEndpoint(platform), unenforcedGuardrail, nil
+}
+
+// gatewayTargetRef is the policy targetRef shape shared by the traffic policies.
+func gatewayTargetRef(name string) map[string]any {
+	return map[string]any{"group": gatewayAPIGV.Group, "kind": "Gateway", "name": name}
+}
+
+// ensureRateLimitPolicy attaches the per-route request rate limits to the
+// Gateway. With no rate-limited route it removes any stale policy, so clearing
+// the last limit actually takes effect rather than leaving the old one serving.
+func (r *ModelGatewayReconciler) ensureRateLimitPolicy(ctx context.Context, n gatewayNames, labels map[string]string, rules []any) error {
+	name := n.gateway + "-ratelimit"
+	if len(rules) == 0 {
+		return r.deleteUnstructured(ctx, envoyGatewayGV, "BackendTrafficPolicy", n.namespace, name)
+	}
+	return r.ensureUnstructured(ctx, envoyGatewayGV, "BackendTrafficPolicy", n.namespace, name, labels, map[string]any{
+		"targetRefs": []any{gatewayTargetRef(n.gateway)},
+		"rateLimit": map[string]any{
+			"local": map[string]any{"rules": rules},
+		},
+	})
+}
+
+// ensureUnstructured creates or updates one generated resource. A NoKindMatch
+// means the data-plane CRDs are not installed on this cluster, which is a
+// Pending state rather than a failure — so it is mapped to a sentinel the
+// caller can recognise.
+func (r *ModelGatewayReconciler) ensureUnstructured(ctx context.Context, gv schema.GroupVersion, kind, namespace, name string, labels map[string]string, spec map[string]any) error {
+	o := &unstructured.Unstructured{}
+	o.SetGroupVersionKind(gv.WithKind(kind))
+	o.SetName(name)
+	o.SetNamespace(namespace)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, o, func() error {
+		o.SetLabels(labels)
+		return unstructured.SetNestedField(o.Object, spec, "spec")
 	})
 	if err != nil {
 		if isNoKindMatch(err) {
-			return errAgentgatewayNotInstalled
+			return errGatewayCRDsNotInstalled
 		}
-		return fmt.Errorf("ensure AgentgatewayPolicy %s: %w", policyName, err)
+		return fmt.Errorf("ensure %s %s: %w", kind, name, err)
+	}
+	return nil
+}
+
+// deleteUnstructured removes one generated resource, tolerating both an absent
+// object and absent CRDs.
+func (r *ModelGatewayReconciler) deleteUnstructured(ctx context.Context, gv schema.GroupVersion, kind, namespace, name string) error {
+	o := &unstructured.Unstructured{}
+	o.SetGroupVersionKind(gv.WithKind(kind))
+	o.SetName(name)
+	o.SetNamespace(namespace)
+	if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
+		return fmt.Errorf("delete %s %s: %w", kind, name, err)
 	}
 	return nil
 }
@@ -291,44 +464,72 @@ func routeLabels(platformName, modelFamily string) map[string]string {
 	return l
 }
 
-// cleanupGatewayResources is the finalizer counterpart: deletes the
-// per-route AgentgatewayPolicy/HTTPRoute/AgentgatewayBackend and the
-// Platform Gateway. Tolerates NoKindMatch (agentgateway / Gateway-API not
+// cleanupGatewayResources is the finalizer counterpart: removes everything
+// ensureGatewayResources creates. Tolerates NoKindMatch (data-plane CRDs not
 // installed) and NotFound.
+//
+// The Gateway goes last. Deleting it first would tear down the Envoy Deployment
+// while routes still pointed at it, so in-flight requests would fail rather than
+// drain.
 func (r *ModelGatewayReconciler) cleanupGatewayResources(ctx context.Context, mg *agentsv1alpha1.ModelGateway) error {
-	platformName := mg.Spec.PlatformRef.Name
-	del := func(group, version, kind, name string) error {
-		o := &unstructured.Unstructured{}
-		o.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: version, Kind: kind})
-		o.SetName(name)
-		o.SetNamespace(agentgatewayNamespace)
-		if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
-			return fmt.Errorf("delete %s %s: %w", kind, name, err)
+	platform, err := r.resolvePlatform(ctx, mg)
+	if err != nil {
+		// A Platform deleted before its ModelGateway takes the whole tenant
+		// namespace with it, so there is nothing left to reap.
+		if errors.Is(err, errPlatformNotFound) {
+			return nil
 		}
-		return nil
+		return err
 	}
+	n := namesFor(platform)
+
 	for _, route := range mg.Spec.Routes {
-		routeName := platformName + "-" + route.Name
-		if err := del(agentgatewayGV.Group, agentgatewayGV.Version, "AgentgatewayPolicy", routeName+"-ratelimit"); err != nil {
+		routeName := platform.Name + "-" + route.Name
+		if err := r.deleteUnstructured(ctx, aiGatewayGV, "BackendSecurityPolicy", n.namespace, routeName); err != nil {
 			return err
 		}
-		if err := del(gatewayAPIGV.Group, gatewayAPIGV.Version, "HTTPRoute", routeName); err != nil {
-			return err
-		}
-		if err := del(agentgatewayGV.Group, agentgatewayGV.Version, "AgentgatewayBackend", routeName); err != nil {
+		if err := r.deleteUnstructured(ctx, aiGatewayGV, "AIServiceBackend", n.namespace, routeName); err != nil {
 			return err
 		}
 	}
-	return del(gatewayAPIGV.Group, gatewayAPIGV.Version, "Gateway", platformName+"-gateway")
+	for _, res := range []struct {
+		gv   schema.GroupVersion
+		kind string
+		name string
+	}{
+		{envoyGatewayGV, "BackendTrafficPolicy", n.gateway + "-ratelimit"},
+		{aiGatewayGV, "AIGatewayRoute", n.gateway},
+		{gatewayAPIPolicyGV, "BackendTLSPolicy", n.backend + "-tls"},
+		{envoyGatewayGV, "Backend", n.backend},
+		{envoyGatewayGV, "ClientTrafficPolicy", n.gateway + "-buffer"},
+		{gatewayAPIGV, "Gateway", n.gateway},
+		{envoyGatewayGV, "EnvoyProxy", n.gateway},
+	} {
+		if err := r.deleteUnstructured(ctx, res.gv, res.kind, n.namespace, res.name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-var errAgentgatewayNotInstalled = errors.New("agentgateway.dev / Gateway-API CRDs not installed on this cluster")
+var (
+	errGatewayCRDsNotInstalled = errors.New("Envoy AI Gateway / Gateway-API CRDs not installed on this cluster")
+	errRegionUnset             = errors.New("ModelGatewayReconciler.Region is unset: the Bedrock upstream address and request signing region are both derived from it")
+)
 
 // reconcileSelf does the substantive work of ModelGatewayReconciler.
 // Returns (phase, endpoint, error). 'Ready' = gateway resources emitted;
-// 'Pending' = waiting on agentgateway/Gateway-API CRDs or Platform
-// readiness; error = real failure to retry.
+// 'Pending' = waiting on the data-plane CRDs or Platform readiness;
+// error = real failure to retry.
 func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (string, string, []string, error) {
+	// The Bedrock upstream address is built from the region, so an empty one
+	// would emit a Backend pointing at "bedrock-runtime..amazonaws.com" and a
+	// BackendSecurityPolicy signing for nowhere. Both would apply cleanly and
+	// fail at request time, so refuse to render instead.
+	if r.Region == "" {
+		return "", "", nil, errRegionUnset
+	}
+
 	platform, err := r.resolvePlatform(ctx, mg)
 	if err != nil {
 		if errors.Is(err, errPlatformNotFound) {
@@ -336,16 +537,17 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 		}
 		return "", "", nil, err
 	}
-	// Don't emit routes until the Platform itself is Ready (status.namespace
-	// populated + IRSA role minted). Otherwise agentgateway would route
-	// requests to a tenant role that doesn't exist yet → AccessDenied.
+	// Don't emit routes until the Platform itself is Ready. The gateway runs
+	// under the tenant ServiceAccount, so before the Platform has minted that
+	// account and its Pod Identity association the Envoy pod would come up with
+	// no path to Bedrock and every request would fail AccessDenied.
 	if platform.Status.Phase != phaseReady {
 		return phasePending, "", nil, nil
 	}
 
-	endpoint, unenforcedGuardrail, err := r.ensureGatewayResources(ctx, mg, r.GuardrailID, r.GuardrailVersion)
+	endpoint, unenforcedGuardrail, err := r.ensureGatewayResources(ctx, mg, platform, r.GuardrailID, r.GuardrailVersion)
 	if err != nil {
-		if errors.Is(err, errAgentgatewayNotInstalled) {
+		if errors.Is(err, errGatewayCRDsNotInstalled) {
 			return phasePending, "", nil, nil
 		}
 		return "", "", nil, err
@@ -369,7 +571,7 @@ func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg
 	if phase != phaseReady {
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = phasePending
-		cond.Message = "waiting on Platform or agentgateway / Gateway-API CRDs"
+		cond.Message = "waiting on Platform or Envoy AI Gateway / Gateway-API CRDs"
 	}
 	upsertCondition(&mg.Status.Conditions, cond)
 

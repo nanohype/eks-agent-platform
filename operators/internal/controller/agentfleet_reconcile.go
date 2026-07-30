@@ -75,8 +75,8 @@ func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platfor
 
 // ensureFleetNetworkPolicy installs an Egress NetworkPolicy in the
 // tenant namespace selecting fleet pods (label
-// agents.nanohype.dev/fleet=<name>). Egress narrows to: kube-dns,
-// agentgateway, observability OTel. Ingress is denied entirely — no one
+// agents.nanohype.dev/fleet=<name>). Egress narrows to: kube-dns, the
+// Platform's model gateway, observability OTel. Ingress is denied entirely — no one
 // reaches a fleet pod from outside the tenant namespace.
 //
 // policy (same destinations, different podSelector); a shared helper here
@@ -101,7 +101,7 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 	dnsPort := intstr.FromInt(53)
 	otlpGRPC := intstr.FromInt(4317)
 	otlpHTTP := intstr.FromInt(4318)
-	agentgatewayPort := intstr.FromInt(8080)
+	gatewayPort := intstr.FromInt(8080)
 	credsPort := intstr.FromInt(80)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = map[string]string{
@@ -131,10 +131,18 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &udp, Port: &dnsPort}, {Protocol: &tcp, Port: &dnsPort}},
 				},
 				{
+					// The Platform's gateway, in this same namespace. A peer with
+					// no NamespaceSelector means "this namespace"; default-deny
+					// egress covers same-namespace traffic, so without this rule
+					// fleet pods cannot reach their own gateway.
 					To: []networkingv1.NetworkPolicyPeer{{
-						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "agentgateway"}},
+						PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+							"app.kubernetes.io/name":       "envoy",
+							"app.kubernetes.io/component":  "proxy",
+							"app.kubernetes.io/managed-by": "envoy-gateway",
+						}},
 					}},
-					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &agentgatewayPort}},
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &gatewayPort}},
 				},
 				{
 					To: []networkingv1.NetworkPolicyPeer{{
@@ -177,7 +185,9 @@ func (r *AgentFleetReconciler) ensureFleetCiliumEgress(ctx context.Context, flee
 // tolerates absent kagent CRDs (NoKindMatch → Pending).
 func (r *AgentFleetReconciler) ensureKagentAgents(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
-	gwHost := fmt.Sprintf("%s-gateway.%s.svc.cluster.local:%d", p.Name, agentgatewayNamespace, gatewayListenerPort)
+	// The Platform's gateway runs in the tenant's own namespace, under the
+	// tenant ServiceAccount, so its Service is a sibling of the agents it fronts.
+	gwHost := fmt.Sprintf("%s-gateway.%s.svc.cluster.local:%d", p.Name, ns, gatewayListenerPort)
 	for _, agent := range fleet.Spec.Agents {
 		base := kagentAgentName(fleet, agent.Name)
 		configName := base + "-config"

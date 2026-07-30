@@ -35,7 +35,7 @@ Two workload-isolation tiers, dialed per Platform by `spec.isolation` and immuta
 ### Egress
 
 - VPC endpoints for `bedrock-runtime`, `sts`, `s3`, `secretsmanager`, `logs`, `monitoring`.
-- WAF on the public-facing agentgateway listener.
+- WAF on the public-facing model gateway listener.
 - Bedrock invocation logging written to a tamper-evident S3 bucket with Object Lock (governance mode by default, compliance mode for regulated tenants).
 
 ### Supply chain
@@ -50,7 +50,7 @@ A `BudgetPolicy` breach at ≥120% publishes a `BudgetBreach` event that an Even
 
 ## Known limitations
 
-- Bedrock Guardrails are region-gated: the `bedrock` component creates the baseline Guardrail only where the service is available and publishes a null id elsewhere, and a route runs without a guardrail rather than failing when none resolves. Guardrails attach per route through `ModelGateway.spec.routes[].guardrailRef` (falling back to the gateway's `defaultGuardrailRef`, then the account baseline); the gateway reconciler stamps the resolved `{identifier, version}` onto the agentgateway Bedrock backend, which enforces it on input and output.
+- Bedrock Guardrails are region-gated: the `bedrock` component creates the baseline Guardrail only where the service is available and publishes a null id elsewhere, and a route runs without a guardrail rather than failing when none resolves. Guardrails attach per route through `ModelGateway.spec.routes[].guardrailRef` (falling back to the gateway's `defaultGuardrailRef`, then the account baseline); the gateway reconciler stamps the resolved `{identifier, version}` onto the route's request headers, which Bedrock enforces on input and output. The mutation uses `set` rather than `add`, so a caller that sends its own guardrail headers has them overwritten rather than honoured.
 - DRA is beta in Kubernetes; behavior depends on the `featureGates` enabled in your EKS cluster version.
 - The `vcluster` tier adds API-server-level isolation, not compute isolation — synced pods share the host's nodes and kernel. Pair it with the tainted sandbox node pool when node-level separation is required. It also depends on ArgoCD and a vcluster-internal naming algorithm; the operator discovers the syncer-renamed host ServiceAccount by label and cross-checks it against a byte-identical replica of vcluster's algorithm, so an upstream naming change on upgrade fails loud rather than binding Pod Identity to the wrong name.
 

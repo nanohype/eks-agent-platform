@@ -7,9 +7,9 @@ Accepted (2026-06-07). Supersedes [ADR 0007](0007-eval-runtime-kustomize.md).
 ## Context
 
 The cluster-delivery of the agent platform consolidated into one catalog. Cluster addons
-(operator, agentgateway, kagent, GPU/Neuron, argo) are deployed by `eks-gitops`; this repo
+(operator, envoy-ai-gateway, kagent, GPU/Neuron, argo) are deployed by `eks-gitops`; this repo
 _builds_ the operator (chart, CRDs, terraform) and is no longer a deploy catalog. The
-`gitops/` overlay — a second ArgoCD source that duplicated operator/agentgateway/kagent and
+`gitops/` overlay — a second ArgoCD source that duplicated operator/gateway/kagent and
 also carried the eval-runtime + SLO kustomize — was retired.
 
 That left two homes for the operator's own runtime pieces — the eval-runtime

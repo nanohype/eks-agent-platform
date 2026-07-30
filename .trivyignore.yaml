@@ -50,7 +50,7 @@ misconfigurations:
     paths:
       - "operators/config/rbac/role.yaml"
       - "charts/operator/templates/rbac.yaml"
-    statement: "Operator owns per-tenant NetworkPolicies (egress isolation to agentgateway + OTel only). See docs/adr/0003-threat-model.md."
+    statement: "Operator owns per-tenant NetworkPolicies (egress isolation to the model gateway + OTel only). See docs/adr/0003-threat-model.md."
 
   # ----------------------------------------------------------------------------
   # Operator ClusterRole — reconciles tenant Secrets by design
