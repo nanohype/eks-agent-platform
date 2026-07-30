@@ -6,57 +6,57 @@
   "models": {
     "anthropic.claude-sonnet-4-6": {
       "family": "anthropic",
-      "inputPerMillion": 3.0,
-      "outputPerMillion": 15.0,
+      "inputPerMillion": 3,
+      "outputPerMillion": 15,
       "cacheReadPerMillion": 0.3,
       "cacheWritePerMillion": 3.75
     },
     "anthropic.claude-sonnet-5": {
       "family": "anthropic",
-      "inputPerMillion": 3.0,
-      "outputPerMillion": 15.0,
+      "inputPerMillion": 3,
+      "outputPerMillion": 15,
       "cacheReadPerMillion": 0.3,
       "cacheWritePerMillion": 3.75
     },
     "anthropic.claude-opus-4-8": {
       "family": "anthropic",
-      "inputPerMillion": 5.0,
-      "outputPerMillion": 25.0,
+      "inputPerMillion": 5,
+      "outputPerMillion": 25,
       "cacheReadPerMillion": 0.5,
       "cacheWritePerMillion": 6.25
     },
     "anthropic.claude-opus-4-6-v1": {
       "family": "anthropic",
-      "inputPerMillion": 5.0,
-      "outputPerMillion": 25.0,
+      "inputPerMillion": 5,
+      "outputPerMillion": 25,
       "cacheReadPerMillion": 0.5,
       "cacheWritePerMillion": 6.25
     },
     "anthropic.claude-haiku-4-5-20251001-v1:0": {
       "family": "anthropic",
-      "inputPerMillion": 1.0,
-      "outputPerMillion": 5.0,
+      "inputPerMillion": 1,
+      "outputPerMillion": 5,
       "cacheReadPerMillion": 0.1,
       "cacheWritePerMillion": 1.25
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
       "family": "anthropic",
-      "inputPerMillion": 3.0,
-      "outputPerMillion": 15.0,
+      "inputPerMillion": 3,
+      "outputPerMillion": 15,
       "cacheReadPerMillion": 0.3,
       "cacheWritePerMillion": 3.75
     },
     "anthropic.claude-3-5-haiku-20241022-v1:0": {
       "family": "anthropic",
       "inputPerMillion": 0.8,
-      "outputPerMillion": 4.0,
+      "outputPerMillion": 4,
       "cacheReadPerMillion": 0.08,
-      "cacheWritePerMillion": 1.0
+      "cacheWritePerMillion": 1
     },
     "anthropic.claude-3-opus-20240229-v1:0": {
       "family": "anthropic",
-      "inputPerMillion": 15.0,
-      "outputPerMillion": 75.0
+      "inputPerMillion": 15,
+      "outputPerMillion": 75
     },
     "anthropic.claude-3-haiku-20240307-v1:0": {
       "family": "anthropic",
@@ -65,38 +65,38 @@
     },
     "amazon.nova-pro-v1:0": {
       "family": "amazon",
-      "inputPerMillion": 0.8,
-      "outputPerMillion": 3.2
+      "inputPerMillion": 1.68,
+      "outputPerMillion": 1.92
     },
     "amazon.nova-lite-v1:0": {
       "family": "amazon",
-      "inputPerMillion": 0.06,
-      "outputPerMillion": 0.24
+      "inputPerMillion": 0.0375,
+      "outputPerMillion": 0.13
     },
     "amazon.nova-micro-v1:0": {
       "family": "amazon",
-      "inputPerMillion": 0.035,
-      "outputPerMillion": 0.14
+      "inputPerMillion": 0.00875,
+      "outputPerMillion": 0.152
     },
     "meta.llama3-1-70b-instruct-v1:0": {
       "family": "meta",
-      "inputPerMillion": 0.99,
-      "outputPerMillion": 0.99
+      "inputPerMillion": 0.72,
+      "outputPerMillion": 0.72
     },
     "meta.llama3-1-8b-instruct-v1:0": {
       "family": "meta",
-      "inputPerMillion": 0.22,
+      "inputPerMillion": 0.11,
       "outputPerMillion": 0.22
     },
     "mistral.mistral-large-2407-v1:0": {
       "family": "mistral",
-      "inputPerMillion": 2.0,
-      "outputPerMillion": 6.0
+      "inputPerMillion": 5.2,
+      "outputPerMillion": 12
     },
     "cohere.command-r-plus-v1:0": {
       "family": "cohere",
-      "inputPerMillion": 3.0,
-      "outputPerMillion": 15.0
+      "inputPerMillion": 3,
+      "outputPerMillion": 15
     },
     "cohere.command-r-v1:0": {
       "family": "cohere",

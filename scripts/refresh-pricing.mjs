@@ -41,7 +41,10 @@ const repoRoot = join(here, '..');
 const SSOT = join(repoRoot, 'packages/pricing/src/data/bedrock-pricing.json');
 
 const REGION = process.env.AWS_PRICING_REGION ?? 'us-east-1';
-const SERVICE = 'api.pricing';
+// The SigV4 credential scope for the Price List Query API is `pricing`, which is
+// not the hostname's first label — signing with `api.pricing` is rejected with
+// `InvalidSignatureException: Credential should be scoped to correct service`.
+const SERVICE = 'pricing';
 const HOST = `api.pricing.${REGION}.amazonaws.com`;
 const TARGET = 'AWSPriceListService.GetProducts';
 
@@ -143,15 +146,28 @@ function classifyDirection(attrs, pd) {
   return undefined;
 }
 
-/** Price per unit → USD per 1,000,000 tokens, using the dimension's unit. */
+/**
+ * Price per unit → USD per 1,000,000 tokens, using the dimension's unit.
+ *
+ * Scaling a per-token price up by a million is binary floating point, so it
+ * lands on values like 1.6800000000000002 and 0.008749999999999999. This file
+ * is a hand-reviewed source of truth refreshed on a schedule — unrounded noise
+ * makes every weekly diff unreadable and buries the price change that actually
+ * moved. Six decimals is finer than any published Bedrock token price and
+ * leaves the real value intact.
+ */
 function toPerMillion(usd, unit) {
   const per = Number(usd);
   if (!Number.isFinite(per) || per <= 0) return undefined;
   const u = norm(unit);
-  if (u.includes('1ktokens') || u.includes('1000tokens')) return per * 1000;
-  if (u.includes('1mtokens') || u.includes('1000000tokens')) return per;
-  if (u.includes('tokens')) return per * 1_000_000; // per single token
+  if (u.includes('1ktokens') || u.includes('1000tokens')) return round6(per * 1000);
+  if (u.includes('1mtokens') || u.includes('1000000tokens')) return round6(per);
+  if (u.includes('tokens')) return round6(per * 1_000_000); // per single token
   return undefined;
+}
+
+function round6(n) {
+  return Number(n.toFixed(6));
 }
 
 async function main() {
