@@ -514,7 +514,7 @@ func (r *ModelGatewayReconciler) cleanupGatewayResources(ctx context.Context, mg
 }
 
 var (
-	errGatewayCRDsNotInstalled = errors.New("Envoy AI Gateway / Gateway-API CRDs not installed on this cluster")
+	errGatewayCRDsNotInstalled = errors.New("envoy AI Gateway / Gateway-API CRDs not installed on this cluster")
 	errRegionUnset             = errors.New("ModelGatewayReconciler.Region is unset: the Bedrock upstream address and request signing region are both derived from it")
 )
 

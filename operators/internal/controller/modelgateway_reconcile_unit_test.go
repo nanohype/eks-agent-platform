@@ -40,14 +40,14 @@ func mgwScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// readyPlatform builds a Platform in the phase the gateway reconciler requires,
-// plus a client holding it.
-func readyPlatform(t *testing.T, s *runtime.Scheme) (*platformv1alpha1.Platform, client.Client) {
+// readyPlatform returns a client holding a Platform in the phase the gateway
+// reconciler requires before it will render anything.
+func readyPlatform(t *testing.T, s *runtime.Scheme) client.Client {
 	t.Helper()
 	p := newPlatform(ctrlTestPlatform, "team")
 	p.Namespace = ctrlTestNS
 	p.Status.Phase = phaseReady
-	return p, fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	return fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
 }
 
 // getRendered fetches one generated resource by kind and name from the tenant
@@ -98,9 +98,9 @@ func TestModelGatewayResolvePlatform(t *testing.T) {
 
 // twoRouteGateway carries one plain foundation route with a rate limit and one
 // using a cross-region inference profile.
-func twoRouteGateway(ns string) *agentsv1alpha1.ModelGateway {
+func twoRouteGateway() *agentsv1alpha1.ModelGateway {
 	return &agentsv1alpha1.ModelGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: ctrlTestNS},
 		Spec: agentsv1alpha1.ModelGatewaySpec{
 			PlatformRef: commonv1alpha1.LocalRef{Name: ctrlTestPlatform},
 			Routes: []agentsv1alpha1.ModelRouteSpec{
@@ -117,7 +117,7 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 	t.Run("platform not found is pending", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).Build()
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
-		phase, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway(ctrlTestNS))
+		phase, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway())
 		if err != nil || phase != phasePending {
 			t.Fatalf("missing platform: got (%q, %v)", phase, err)
 		}
@@ -128,7 +128,7 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 		p.Namespace = ctrlTestNS
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
-		phase, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway(ctrlTestNS))
+		phase, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway())
 		if err != nil || phase != phasePending {
 			t.Fatalf("not-ready platform: got (%q, %v)", phase, err)
 		}
@@ -139,17 +139,17 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 	// which applies cleanly and fails only once traffic arrives — so it has to
 	// fail here instead.
 	t.Run("unset region refuses to render", func(t *testing.T) {
-		_, cl := readyPlatform(t, s)
+		cl := readyPlatform(t, s)
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s}
-		if _, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway(ctrlTestNS)); !errors.Is(err, errRegionUnset) {
+		if _, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway()); !errors.Is(err, errRegionUnset) {
 			t.Fatalf("an unset region must be refused, got %v", err)
 		}
 	})
 
 	t.Run("ready platform renders the gateway data plane", func(t *testing.T) {
-		_, cl := readyPlatform(t, s)
+		cl := readyPlatform(t, s)
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
-		phase, endpoint, unenforced, err := r.reconcileSelf(context.Background(), twoRouteGateway(ctrlTestNS))
+		phase, endpoint, unenforced, err := r.reconcileSelf(context.Background(), twoRouteGateway())
 		if err != nil {
 			t.Fatalf("reconcileSelf (ready): %v", err)
 		}
@@ -182,9 +182,9 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 // reachable in-cluster. The name pin is what keeps the endpoint predictable.
 func TestModelGatewayEnvoyProxyIdentityAndService(t *testing.T) {
 	s := mgwScheme(t)
-	_, cl := readyPlatform(t, s)
+	cl := readyPlatform(t, s)
 	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
-	if _, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway(ctrlTestNS)); err != nil {
+	if _, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway()); err != nil {
 		t.Fatalf("reconcileSelf: %v", err)
 	}
 
@@ -216,9 +216,9 @@ func TestModelGatewayEnvoyProxyIdentityAndService(t *testing.T) {
 // baseline guardrail is attached as headers.
 func TestModelGatewayAnthropicRoute(t *testing.T) {
 	s := mgwScheme(t)
-	_, cl := readyPlatform(t, s)
+	cl := readyPlatform(t, s)
 	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2", GuardrailID: "baseline-gr", GuardrailVersion: "1"}
-	if _, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway(ctrlTestNS)); err != nil {
+	if _, _, _, err := r.reconcileSelf(context.Background(), twoRouteGateway()); err != nil {
 		t.Fatalf("reconcileSelf: %v", err)
 	}
 
@@ -274,7 +274,7 @@ func TestModelGatewayAnthropicRoute(t *testing.T) {
 // reported as unenforced rather than dropped silently.
 func TestModelGatewayImportedRoute(t *testing.T) {
 	s := mgwScheme(t)
-	_, cl := readyPlatform(t, s)
+	cl := readyPlatform(t, s)
 	// A baseline guardrail is configured cluster-wide; an imported route cannot
 	// carry it, so it must surface as unenforced.
 	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2", GuardrailID: "baseline-gr", GuardrailVersion: "1"}
@@ -324,11 +324,11 @@ func TestModelGatewayImportedRoute(t *testing.T) {
 // leaving the old one enforcing.
 func TestModelGatewayRateLimit(t *testing.T) {
 	s := mgwScheme(t)
-	_, cl := readyPlatform(t, s)
+	cl := readyPlatform(t, s)
 	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
 	ctx := context.Background()
 
-	if _, _, _, err := r.reconcileSelf(ctx, twoRouteGateway(ctrlTestNS)); err != nil {
+	if _, _, _, err := r.reconcileSelf(ctx, twoRouteGateway()); err != nil {
 		t.Fatalf("reconcileSelf: %v", err)
 	}
 	pol := getRendered(t, cl, envoyGatewayGV, "BackendTrafficPolicy", ctrlTestPlatform+"-gateway-ratelimit")
@@ -347,7 +347,7 @@ func TestModelGatewayRateLimit(t *testing.T) {
 	}
 
 	// Clearing the limit must retract the policy.
-	cleared := twoRouteGateway(ctrlTestNS)
+	cleared := twoRouteGateway()
 	cleared.Spec.Routes[0].RateLimit = 0
 	if _, _, _, err := r.reconcileSelf(ctx, cleared); err != nil {
 		t.Fatalf("reconcileSelf (cleared): %v", err)
@@ -407,9 +407,9 @@ func TestCleanupGatewayResources(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("removes everything it rendered", func(t *testing.T) {
-		_, cl := readyPlatform(t, s)
+		cl := readyPlatform(t, s)
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
-		mg := twoRouteGateway(ctrlTestNS)
+		mg := twoRouteGateway()
 		if _, _, _, err := r.reconcileSelf(ctx, mg); err != nil {
 			t.Fatalf("reconcileSelf: %v", err)
 		}
@@ -445,7 +445,7 @@ func TestCleanupGatewayResources(t *testing.T) {
 		// nothing left to reap and the finalizer must not wedge.
 		cl := fake.NewClientBuilder().WithScheme(s).Build()
 		r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
-		if err := r.cleanupGatewayResources(ctx, twoRouteGateway(ctrlTestNS)); err != nil {
+		if err := r.cleanupGatewayResources(ctx, twoRouteGateway()); err != nil {
 			t.Fatalf("cleanup with no Platform must be a no-op: %v", err)
 		}
 	})
