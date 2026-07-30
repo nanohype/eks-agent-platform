@@ -14,7 +14,8 @@ import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };
  * missing from the table prices as an unmetered 0 (priced:false via
  * {@link priceModel}), so add new models to the JSON before they bill.
  *
- * Prices are USD per 1,000,000 tokens.
+ * Prices are USD per 1,000,000 tokens, for the region named in the JSON's
+ * `region` field, at the cross-region-inference rate where a model offers one.
  */
 export interface ModelPrice {
   inputPerMillion: number;
@@ -25,12 +26,22 @@ export interface ModelPrice {
 
 interface PricingEntry extends ModelPrice {
   family: string;
+  /**
+   * The name this model carries in the AWS Price List, which the refresh script
+   * joins on. Declared rather than derived: the Price List calls
+   * `meta.llama3-1-70b-instruct-v1:0` "Llama 3.1 70B", and no rule gets from one
+   * to the other.
+   */
+  awsProductName: string;
 }
 
 const PRICING_DATA = bedrockPricing.models as Record<string, PricingEntry>;
 
 export const PRICES: Record<string, ModelPrice> = Object.fromEntries(
-  Object.entries(PRICING_DATA).map(([id, { family: _family, ...price }]) => [id, price]),
+  Object.entries(PRICING_DATA).map(([id, { family: _f, awsProductName: _n, ...price }]) => [
+    id,
+    price,
+  ]),
 );
 
 /**

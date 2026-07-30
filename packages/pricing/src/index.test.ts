@@ -53,6 +53,39 @@ describe('estimateCost', () => {
     expect(usd).toBeCloseTo(0.3, 4);
   });
 
+  // A cache field is absent when the Price List carries no cache dimension for
+  // that model, or carries one at zero (Nova charges nothing to write). Absent
+  // must mean free, not "fall back to a multiple of the input price" — the
+  // difference shows up as invented spend on models that never billed for it.
+  it('charges nothing for cache tokens on a model with no cache price', () => {
+    const usd = estimateCost({
+      modelId: 'anthropic.claude-3-opus-20240229-v1:0',
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 5_000_000,
+        cacheWriteTokens: 5_000_000,
+      },
+    });
+    expect(PRICES['anthropic.claude-3-opus-20240229-v1:0']?.cacheReadPerMillion).toBeUndefined();
+    expect(PRICES['anthropic.claude-3-opus-20240229-v1:0']?.cacheWritePerMillion).toBeUndefined();
+    expect(usd).toBe(0);
+  });
+
+  it('prices cache reads but not cache writes on Nova, which writes for free', () => {
+    const usd = estimateCost({
+      modelId: 'amazon.nova-pro-v1:0',
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 1_000_000,
+        cacheWriteTokens: 1_000_000,
+      },
+    });
+    expect(PRICES['amazon.nova-pro-v1:0']?.cacheWritePerMillion).toBeUndefined();
+    expect(usd).toBeCloseTo(0.2, 4);
+  });
+
   it.each([
     ['us', 'us.anthropic.claude-sonnet-4-6'],
     ['eu', 'eu.anthropic.claude-sonnet-4-6'],

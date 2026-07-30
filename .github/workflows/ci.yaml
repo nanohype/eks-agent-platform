@@ -236,6 +236,12 @@ jobs:
         with:
           node-version-file: package.json
       - run: node scripts/gen-lambda-pricing.mjs --check
+      # The refresh script's own checks: the Price List classifiers, and that
+      # every model in the SSOT declares the AWS product name the refresh joins
+      # on. Needs no AWS credentials — a model with no declaration, or a
+      # dimension parsed as the wrong price, is caught here rather than on
+      # whoever next runs the credentialed refresh.
+      - run: node scripts/refresh-pricing.mjs --self-test
 
   # ── TS↔CRD schema mirror drift gate ──────────────────────────────────────
   # packages/core/src/schemas.ts declares zod schemas mirroring the operator's
