@@ -536,6 +536,40 @@ resource "aws_glue_catalog_table" "estimates" {
 # match exactly; a saved `CREATE OR REPLACE VIEW` is plain, reviewable SQL that
 # the operator (or an analyst) runs once to materialize the view in the cost
 # database. The finance dashboard reads the materialized view by name.
+#
+# ── Two Bedrock product codes, not one ─────────────────────────────────────
+#
+# Anthropic models do not bill as `AmazonBedrock`. They are sold through AWS
+# Marketplace, so each model is its own billing product with its own opaque
+# `line_item_product_code` — measured in a live account, `35bl0uzthq3u3dp0hocpb4n84`
+# is Claude Sonnet 5, and its monthly unblended cost matches Cost Explorer's
+# "Claude Sonnet 5 (Amazon Bedrock Edition)" to the cent. Those codes are per
+# product and are not stable identifiers to enumerate, so this filters on the
+# product *name*, which is the same string Cost Explorer shows as the service and
+# the same string the Price List returns in `servicename`.
+#
+# Filtering on `AmazonBedrock` alone captured $0.01 of $0.78 of Claude spend in
+# the month this was measured — Amazon's own models (Nova, Titan) and the Bedrock
+# service charges, and none of Anthropic's.
+#
+# ── This view is inert until per-tenant tags reach CUR ─────────────────────
+#
+# The join key is a cost allocation tag, and no Bedrock line item in the measured
+# account carried one — neither the marketplace rows nor the `AmazonBedrock` rows.
+# Two things have to be true before it can, and neither is yet:
+#
+#  1. An InvokeModel call has no taggable resource of its own. Attaching a tag to
+#     `bedrock-runtime` spend requires invoking through a per-tenant *application
+#     inference profile* whose tags flow to CUR, in place of the raw model or
+#     cross-region profile ID.
+#  2. `platformid` must be activated as a cost allocation tag in Billing.
+#     Activation is not retroactive, so nothing before it is ever attributed.
+#
+# Until both land, `cur_truth_usd` is NULL for every row. That is reported as
+# `match_state = 'no_cur_row'` rather than as a NULL delta, because a
+# reconciliation that returns nothing and a reconciliation that finds no
+# disagreement render identically on a dashboard, and the first one was being read
+# as the second.
 resource "aws_athena_named_query" "spend_reconciliation" {
   name        = "${local.prefix}-reconciliation"
   workgroup   = aws_athena_workgroup.cost.id
@@ -550,6 +584,10 @@ resource "aws_athena_named_query" "spend_reconciliation" {
       e.estimate_usd                      AS estimate_usd,
       c.cur_truth_usd                     AS cur_truth_usd,
       (e.estimate_usd - c.cur_truth_usd)  AS delta_usd,
+      CASE WHEN c.cur_truth_usd IS NULL THEN 'no_cur_row'
+           WHEN c.cur_truth_usd = 0      THEN 'cur_row_zero_cost'
+           ELSE 'compared'
+      END                                 AS match_state,
       CASE WHEN c.cur_truth_usd > 0
            THEN abs(e.estimate_usd - c.cur_truth_usd) / c.cur_truth_usd
            ELSE NULL
@@ -564,7 +602,9 @@ resource "aws_athena_named_query" "spend_reconciliation" {
              date_format(line_item_usage_start_date, '%Y-%m-%d') AS day,
              SUM(line_item_unblended_cost)                       AS cur_truth_usd
       FROM ${local.cur_table_name}
-      WHERE line_item_product_code = 'AmazonBedrock'
+      WHERE (line_item_product_code = 'AmazonBedrock'
+             OR product_product_name LIKE '%(Amazon Bedrock Edition)%')
+        AND line_item_line_item_type = 'Usage'
         AND resource_tags_user_platformid <> ''
       GROUP BY resource_tags_user_platformid,
                date_format(line_item_usage_start_date, '%Y-%m-%d')
