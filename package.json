@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Kubernetes-native AWS-native platform-of-platforms. Bedrock + kagent + Envoy AI Gateway + DRA. Hosts agent workloads as declarative tenants via CRDs and operators.",
+  "description": "Kubernetes-native AWS-native platform-of-platforms. Bedrock + Envoy AI Gateway + DRA. Hosts agent workloads as declarative tenants via CRDs and operators.",
   "homepage": "https://github.com/nanohype/eks-agent-platform",
   "repository": {
     "type": "git",

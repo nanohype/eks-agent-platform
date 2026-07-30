@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Multi-agent Platform with KEDA SQS autoscaling and kagent tools.",
+  "description": "Multi-agent Platform with KEDA SQS autoscaling; each agent runs its own image.",
   "scripts": {
     "apply": "kubectl apply -f platform.yaml",
     "destroy": "kubectl delete -f platform.yaml"

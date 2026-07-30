@@ -64,6 +64,7 @@ spec:
     - name: campaign-brief
       systemPrompt: You draft campaign briefs in 5 sections. Be concise and concrete.
       modelRoute: primary
+      image: REPLACE_WITH_YOUR_AGENT_IMAGE
 ---
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite

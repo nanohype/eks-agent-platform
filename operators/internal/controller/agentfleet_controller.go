@@ -21,13 +21,13 @@ import (
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
-// AgentFleetReconciler reconciles AgentFleet CRs into kagent Agent +
+// AgentFleetReconciler reconciles AgentFleet CRs into per-agent Deployments +
 // ModelConfig CRs, a KEDA ScaledObject (when scaling.enabled), a per-
 // fleet NetworkPolicy locking egress to the model gateway + OTel only, and a
 // tenant ServiceAccount with the IRSA annotation pointing at the
 // Platform's IAM role minted by PlatformReconciler.
 //
-// kagent + KEDA absence is tolerated — both Pending out via status, no
+// KEDA absence is tolerated — the fleet runs at its static replica count, no
 // reconcile error.
 type AgentFleetReconciler struct {
 	client.Client
@@ -40,7 +40,7 @@ type AgentFleetReconciler struct {
 
 	// VCluster resolves the per-Platform virtual-cluster client for the vcluster
 	// isolation tier. nil in the namespace tier and k8s-only test paths. When the
-	// owning Platform is vcluster-tier, the fleet's kagent Agents/ModelConfigs and
+	// owning Platform is vcluster-tier, the fleet's agent Deployments and
 	// KEDA ScaledObject land in the virtual cluster's API through this client (the
 	// target-client swap); the fleet's host containment (NetworkPolicy) always
 	// stays on the host client.
@@ -51,7 +51,6 @@ type AgentFleetReconciler struct {
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=agentfleets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=agents.nanohype.dev,resources=modelgateways,verbs=get;list;watch
-// +kubebuilder:rbac:groups=kagent.dev,resources=agents;modelconfigs;toolservers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects;triggerauthentications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete

@@ -268,7 +268,13 @@ func RenderPlatformNew(opts PlatformNewOptions) ([]byte, string, error) {
 					newMap().
 						set("name", str(sc.AgentName)).
 						set("systemPrompt", str(sc.SystemPrompt)).
-						set("modelRoute", str("primary"))))),
+						set("modelRoute", str("primary")).
+						// The tenant's own agent image, carrying its agent loop
+						// and its tools. Scaffolded as a placeholder because
+						// there is nothing else it could be: the platform ships
+						// no agent runtime, and an image the tenant did not
+						// build would run somebody else's code as this tenant.
+						set("image", str("REPLACE_WITH_YOUR_AGENT_IMAGE"))))),
 		newMap().
 			set("apiVersion", str("governance.nanohype.dev/v1alpha1")).
 			set("kind", str("EvalSuite")).

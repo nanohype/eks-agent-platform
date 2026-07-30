@@ -87,6 +87,7 @@ spec:
     - name: adr-drafter
       systemPrompt: You draft Architectural Decision Records. Show trade-offs explicitly.
       modelRoute: primary
+      image: REPLACE_WITH_YOUR_AGENT_IMAGE
 ---
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite

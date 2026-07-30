@@ -28,7 +28,7 @@ func TestAgentFleet_CreateGetDelete(t *testing.T) {
 		Spec: agentsv1alpha1.AgentFleetSpec{
 			PlatformRef: commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			Agents: []agentsv1alpha1.AgentSpec{
-				{Name: "assistant", SystemPrompt: "you help", ModelRoute: "primary"},
+				{Name: "assistant", SystemPrompt: "you help", ModelRoute: "primary", Image: "ghcr.io/acme/agent:v1"},
 			},
 		},
 	}
@@ -59,7 +59,7 @@ func TestAgentFleet_ScalingMinZeroRoundTrips(t *testing.T) {
 			PlatformRef: commonv1alpha1.LocalRef{Name: "conformance-platform"},
 			Scaling:     agentsv1alpha1.ScalingSpec{Enabled: false, Min: ptrI32(0), Max: ptrI32(1)},
 			Agents: []agentsv1alpha1.AgentSpec{
-				{Name: "assistant", SystemPrompt: "you help", ModelRoute: "primary"},
+				{Name: "assistant", SystemPrompt: "you help", ModelRoute: "primary", Image: "ghcr.io/acme/agent:v1"},
 			},
 		},
 	}

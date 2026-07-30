@@ -3,7 +3,7 @@
 #
 # Default mode: --disable-aws + blank-tenant smoke test. Validates that
 # the operator's CR emission paths work against kx's real upstream
-# CRDs (kagent / agentgateway / KEDA / Argo Workflows).
+# CRDs (Envoy AI Gateway / KEDA / Argo Workflows).
 #
 # --with-bedrock: also runs aws-creds-secret.sh which mounts a Secret
 # with static AWS creds onto the agentgateway pod so it can actually
@@ -33,7 +33,7 @@ into the kind-kx cluster.
 
 Prereq: kx slices enabled —
   cd ../kx
-  task stack:ai-platform:enable     # kagent + agentgateway
+  task stack:ai-platform:enable     # Envoy AI Gateway
   task stack:autoscaling:enable     # KEDA
   task stack:argo-platform:enable   # argo-workflows + argo-rollouts
 EOF
@@ -58,7 +58,7 @@ fi
 # 2. upstream CRD presence check
 echo "checking kx prerequisites..."
 declare -A crd_to_slice=(
-  ["agents.kagent.dev"]="task -d ../kx stack:ai-platform:enable     # kagent"
+  ["aigatewayroutes.aigateway.envoyproxy.io"]="task -d ../kx stack:ai-platform:enable     # Envoy AI Gateway"
   ["routes.agentgateway.dev"]="task -d ../kx stack:ai-platform:enable     # agentgateway"
   ["scaledobjects.keda.sh"]="task -d ../kx stack:autoscaling:enable   # KEDA"
   ["workflows.argoproj.io"]="task -d ../kx stack:argo-platform:enable  # argo-workflows"
@@ -102,7 +102,7 @@ echo "operator:                  $(kubectl -n eks-agent-platform get deploy oper
 echo "platform 'blank':          $(kubectl get platform blank -n eks-agent-platform -o jsonpath='{.status.phase}' 2>/dev/null || echo Pending)"
 echo "tenant namespace:          $(kubectl get ns tenants-blank --no-headers 2>/dev/null | awk '{print $1, $2}' || echo not-yet-created)"
 echo "agentgateway routes:       $(kubectl get -n agentgateway routes.agentgateway.dev -l 'agents.nanohype.dev/platform=blank' --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-echo "kagent agents:             $(kubectl get -n tenants-blank agents.kagent.dev --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+echo "agent deployments:        $(kubectl get -n tenants-blank deploy --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 echo "keda scaledobjects:        $(kubectl get -n tenants-blank scaledobjects.keda.sh --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 echo
 

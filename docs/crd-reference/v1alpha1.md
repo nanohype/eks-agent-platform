@@ -23,9 +23,10 @@ Package v1alpha1 contains API Schema definitions for the agents v1alpha1 API gro
 
 
 
-AgentFleet is a Platform-scoped composition of one or more agents on top
-of upstream kagent CRs. The scale subresource is deliberately omitted:
-`kubectl scale` would be ambiguous (min? max? per-agent?) for a fleet,
+AgentFleet is a Platform-scoped declaration of one or more agents, each
+reconciled into a Deployment running under the tenant's identity. The scale
+subresource is deliberately omitted: `kubectl scale` would be ambiguous
+(min? max? per-agent?) for a fleet,
 so per-agent replica overrides live on AgentSpec.Replicas and fleet-wide
 behavior is driven by .spec.scaling (KEDA) instead.
 
@@ -46,8 +47,16 @@ behavior is driven by .spec.scaling (KEDA) instead.
 
 
 
-AgentFleetSpec composes kagent Agent / ModelConfig / ToolServer CRs plus
-platform-specific scaffolding (KEDA, NetworkPolicy, IRSA binding).
+AgentFleetSpec declares one or more agents and the platform scaffolding
+around them (KEDA scaling, NetworkPolicy, the tenant identity binding).
+
+Each agent runs as a Deployment in the tenant's namespace, under the tenant
+ServiceAccount, executing the tenant's own image. The agent loop and its
+tools live in that image and run in that process — so an action the agent
+takes is taken *as the tenant*, and the Kubernetes audit log records the
+tenant's identity against it. That is the property the platform exists to
+provide: an agent's claim about what it did can be checked against the
+record of what happened, because both name the same principal.
 
 
 
@@ -167,8 +176,9 @@ _Appears in:_
 | `name` _string_ |  |  |  |
 | `systemPrompt` _string_ | SystemPrompt is the agent's instruction text. |  |  |
 | `modelRoute` _string_ | ModelRoute is the named route on the Platform's ModelGateway. |  |  |
-| `tools` _[ToolRef](#toolref) array_ | Tools is the list of kagent ToolServer references. |  | Optional: \{\} <br /> |
+| `image` _string_ | Image is the container the agent runs — the tenant's own build, carrying<br />its agent loop and its tools.<br />There is no platform-supplied agent runtime and no separate tool server.<br />A tool server would execute the agent's actions under its own identity,<br />which is exactly what makes an action untraceable to the agent that<br />requested it: the audit log names the tool server, and the agent's claim<br />to have done something cannot be confirmed or refuted. Tools run in the<br />agent's process, as the tenant, so the two records line up. |  |  |
 | `replicas` _integer_ | Replicas overrides the fleet-wide scaling minimum for this agent. |  | Optional: \{\} <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#resourcerequirements-v1-core)_ | Resources overrides the default container resources. The tenant's<br />ResourceQuota applies either way; this is for an agent that needs a<br />different shape than the default. |  | Optional: \{\} <br /> |
 
 
 #### BatchJob
@@ -450,22 +460,6 @@ _Appears in:_
 | `max` _integer_ | Max replicas. | 10 | Minimum: 1 <br />Optional: \{\} <br /> |
 | `queueDepthTrigger` _integer_ | QueueDepthTrigger: scale up when SQS depth exceeds this value. | 10 | Minimum: 1 <br />Optional: \{\} <br /> |
 | `queueUrl` _string_ | QueueUrl is the SQS queue the fleet's work originates from. When<br />set the operator emits a KEDA aws-sqs-queue trigger; otherwise a<br />CPU-utilization placeholder. The tenant IRSA role must have<br />sqs:GetQueueAttributes on this queue (granted via the agent-iam<br />baseline policy + an in-policy resource ARN derived from the URL). |  | Pattern: `^https://sqs\.[a-z0-9-]+\.amazonaws\.com/[0-9]\{12\}/[A-Za-z0-9_-]+(\.fifo)?$` <br />Optional: \{\} <br /> |
-
-
-#### ToolRef
-
-
-
-ToolRef references a kagent ToolServer by name.
-
-
-
-_Appears in:_
-- [AgentSpec](#agentspec)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `name` _string_ |  |  |  |
 
 
 

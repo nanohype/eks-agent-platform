@@ -7,13 +7,22 @@ Licensed under the Apache License, Version 2.0 (the "License");
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 )
 
-// AgentFleetSpec composes kagent Agent / ModelConfig / ToolServer CRs plus
-// platform-specific scaffolding (KEDA, NetworkPolicy, IRSA binding).
+// AgentFleetSpec declares one or more agents and the platform scaffolding
+// around them (KEDA scaling, NetworkPolicy, the tenant identity binding).
+//
+// Each agent runs as a Deployment in the tenant's namespace, under the tenant
+// ServiceAccount, executing the tenant's own image. The agent loop and its
+// tools live in that image and run in that process — so an action the agent
+// takes is taken *as the tenant*, and the Kubernetes audit log records the
+// tenant's identity against it. That is the property the platform exists to
+// provide: an agent's claim about what it did can be checked against the
+// record of what happened, because both name the same principal.
 type AgentFleetSpec struct {
 	PlatformRef commonv1alpha1.LocalRef `json:"platformRef"`
 
@@ -36,18 +45,26 @@ type AgentSpec struct {
 	// ModelRoute is the named route on the Platform's ModelGateway.
 	ModelRoute string `json:"modelRoute"`
 
-	// Tools is the list of kagent ToolServer references.
-	// +optional
-	Tools []ToolRef `json:"tools,omitempty"`
+	// Image is the container the agent runs — the tenant's own build, carrying
+	// its agent loop and its tools.
+	//
+	// There is no platform-supplied agent runtime and no separate tool server.
+	// A tool server would execute the agent's actions under its own identity,
+	// which is exactly what makes an action untraceable to the agent that
+	// requested it: the audit log names the tool server, and the agent's claim
+	// to have done something cannot be confirmed or refuted. Tools run in the
+	// agent's process, as the tenant, so the two records line up.
+	Image string `json:"image"`
 
 	// Replicas overrides the fleet-wide scaling minimum for this agent.
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
-}
 
-// ToolRef references a kagent ToolServer by name.
-type ToolRef struct {
-	Name string `json:"name"`
+	// Resources overrides the default container resources. The tenant's
+	// ResourceQuota applies either way; this is for an agent that needs a
+	// different shape than the default.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // ScalingSpec configures KEDA.
@@ -115,9 +132,10 @@ type AgentFleetStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyAgents`
 
-// AgentFleet is a Platform-scoped composition of one or more agents on top
-// of upstream kagent CRs. The scale subresource is deliberately omitted:
-// `kubectl scale` would be ambiguous (min? max? per-agent?) for a fleet,
+// AgentFleet is a Platform-scoped declaration of one or more agents, each
+// reconciled into a Deployment running under the tenant's identity. The scale
+// subresource is deliberately omitted: `kubectl scale` would be ambiguous
+// (min? max? per-agent?) for a fleet,
 // so per-agent replica overrides live on AgentSpec.Replicas and fleet-wide
 // behavior is driven by .spec.scaling (KEDA) instead.
 type AgentFleet struct {

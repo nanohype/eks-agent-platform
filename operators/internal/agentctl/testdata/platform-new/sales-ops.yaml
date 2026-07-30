@@ -65,6 +65,7 @@ spec:
       systemPrompt: You help sales-ops staff handle customer objections with cited
         references.
       modelRoute: primary
+      image: REPLACE_WITH_YOUR_AGENT_IMAGE
 ---
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite

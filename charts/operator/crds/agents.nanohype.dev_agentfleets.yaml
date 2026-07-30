@@ -30,9 +30,10 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          AgentFleet is a Platform-scoped composition of one or more agents on top
-          of upstream kagent CRs. The scale subresource is deliberately omitted:
-          `kubectl scale` would be ambiguous (min? max? per-agent?) for a fleet,
+          AgentFleet is a Platform-scoped declaration of one or more agents, each
+          reconciled into a Deployment running under the tenant's identity. The scale
+          subresource is deliberately omitted: `kubectl scale` would be ambiguous
+          (min? max? per-agent?) for a fleet,
           so per-agent replica overrides live on AgentSpec.Replicas and fleet-wide
           behavior is driven by .spec.scaling (KEDA) instead.
         properties:
@@ -55,14 +56,34 @@ spec:
             type: object
           spec:
             description: |-
-              AgentFleetSpec composes kagent Agent / ModelConfig / ToolServer CRs plus
-              platform-specific scaffolding (KEDA, NetworkPolicy, IRSA binding).
+              AgentFleetSpec declares one or more agents and the platform scaffolding
+              around them (KEDA scaling, NetworkPolicy, the tenant identity binding).
+
+              Each agent runs as a Deployment in the tenant's namespace, under the tenant
+              ServiceAccount, executing the tenant's own image. The agent loop and its
+              tools live in that image and run in that process — so an action the agent
+              takes is taken *as the tenant*, and the Kubernetes audit log records the
+              tenant's identity against it. That is the property the platform exists to
+              provide: an agent's claim about what it did can be checked against the
+              record of what happened, because both name the same principal.
             properties:
               agents:
                 description: Agents is the list of agents to provision in this fleet.
                 items:
                   description: AgentSpec is one agent in the fleet.
                   properties:
+                    image:
+                      description: |-
+                        Image is the container the agent runs — the tenant's own build, carrying
+                        its agent loop and its tools.
+
+                        There is no platform-supplied agent runtime and no separate tool server.
+                        A tool server would execute the agent's actions under its own identity,
+                        which is exactly what makes an action untraceable to the agent that
+                        requested it: the audit log names the tool server, and the agent's claim
+                        to have done something cannot be confirmed or refuted. Tools run in the
+                        agent's process, as the tenant, so the two records line up.
+                      type: string
                     modelRoute:
                       description: ModelRoute is the named route on the Platform's
                         ModelGateway.
@@ -74,21 +95,73 @@ spec:
                         for this agent.
                       format: int32
                       type: integer
+                    resources:
+                      description: |-
+                        Resources overrides the default container resources. The tenant's
+                        ResourceQuota applies either way; this is for an agent that needs a
+                        different shape than the default.
+                      properties:
+                        claims:
+                          description: |-
+                            Claims lists the names of resources, defined in spec.resourceClaims,
+                            that are used by this container.
+
+                            This field depends on the
+                            DynamicResourceAllocation feature gate.
+
+                            This field is immutable. It can only be set for containers.
+                          items:
+                            description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                            properties:
+                              name:
+                                description: |-
+                                  Name must match the name of one entry in pod.spec.resourceClaims of
+                                  the Pod where this field is used. It makes that resource available
+                                  inside a container.
+                                type: string
+                              request:
+                                description: |-
+                                  Request is the name chosen for a request in the referenced claim.
+                                  If empty, everything from the claim is made available, otherwise
+                                  only the result of this request.
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Limits describes the maximum amount of compute resources allowed.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Requests describes the minimum amount of compute resources required.
+                            If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                            otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                      type: object
                     systemPrompt:
                       description: SystemPrompt is the agent's instruction text.
                       type: string
-                    tools:
-                      description: Tools is the list of kagent ToolServer references.
-                      items:
-                        description: ToolRef references a kagent ToolServer by name.
-                        properties:
-                          name:
-                            type: string
-                        required:
-                        - name
-                        type: object
-                      type: array
                   required:
+                  - image
                   - modelRoute
                   - name
                   - systemPrompt

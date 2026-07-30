@@ -339,7 +339,7 @@ spec:
             persona: ops
           annotations:
             summary: "AgentFleet {{ $labels.name }} Ready but readyAgents=0"
-            description: "Reconciler reports Ready but no downstream agents are alive. Probable cause: kagent CRDs missing or ModelGateway routing misconfigured."
+            description: "Reconciler reports Ready but no downstream agents are alive. Probable cause: the agent image is failing to start, or ModelGateway routing is misconfigured."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/kill-switch-fired.md
 
         # EvalSuite last run failed.

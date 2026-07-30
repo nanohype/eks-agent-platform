@@ -12,7 +12,7 @@ It is not a deploy catalog. Nothing in this repo applies itself to a cluster.
 ## What eks-gitops deploys
 
 - **The operator** — `applicationsets/addons-agent-operator.yaml` git-sources `charts/operator`. It injects the per-cluster IRSA role ARNs and EKS OIDC wiring (provider ARN + issuer host) from the cluster-Secret annotations that `cluster-bootstrap` sets, so no account-specific values are ever committed to the chart. The same ApplicationSet injects the eval-runner role ARN and report bucket (see eval-runtime below).
-- **kagent + Envoy AI Gateway** — `applicationsets/addons-ai-platform.yaml`.
+- **Envoy AI Gateway** — `applicationsets/addons-ai-platform.yaml`.
 - **Argo Workflows / Rollouts / Events** — `applicationsets/addons-argo-platform.yaml`. These are prerequisites for the operator's eval-runtime and SLO.
 - **Accelerators** — the GPU operator, NVIDIA DRA driver, and AWS Neuron device plugin land via the `accelerators` category: `applicationsets/addons-accelerators-{helm,kustomize}.yaml`, with values under `addons/accelerators/<addon>/` (gpu sync wave 6, dra wave 7, neuron wave 6).
 - **Dashboards** — the seven persona dashboards ship as `GrafanaDashboard` CRs under `dashboards/base/platform/agent-*.yaml`.

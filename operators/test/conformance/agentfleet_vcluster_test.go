@@ -10,6 +10,7 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,12 +29,12 @@ import (
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
-// kagentAwareVCluster builds an in-memory vcluster client whose scheme knows the
-// kagent + KEDA custom kinds (as unstructured), so the fleet reconciler's kagent
-// Agent/ModelConfig objects can actually land there — proving the target-client
-// swap routes workload objects into the virtual cluster rather than merely
-// tolerating their absence.
-func kagentAwareVCluster() client.Client {
+// workloadAwareVCluster builds an in-memory vcluster client whose scheme knows
+// the core workload kinds plus KEDA's custom kinds, so the fleet reconciler's
+// Deployments and ScaledObjects can actually land there — proving the
+// target-client swap routes workload objects into the virtual cluster rather
+// than merely tolerating their absence.
+func workloadAwareVCluster() client.Client {
 	s := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(s)
 	register := func(group, version, kind string) {
@@ -45,18 +46,17 @@ func kagentAwareVCluster() client.Client {
 		ul.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: version, Kind: kind + "List"})
 		s.AddKnownTypeWithName(ul.GroupVersionKind(), ul)
 	}
-	register("kagent.dev", "v1alpha1", "ModelConfig")
-	register("kagent.dev", "v1alpha2", "Agent")
 	register("keda.sh", "v1alpha1", "ScaledObject")
 	register("keda.sh", "v1alpha1", "TriggerAuthentication")
 	return fake.NewClientBuilder().WithScheme(s).Build()
 }
 
-// TestAgentFleetReconciler_VClusterTier_RoutesKagentIntoVCluster proves a WORKLOAD
-// reconciler honors the isolation tier: for a vcluster-tier Platform, the fleet's
-// kagent Agent + ModelConfig land in the virtual cluster (through the target-client
-// swap), not on the host — while the fleet's NetworkPolicy stays host containment.
-func TestAgentFleetReconciler_VClusterTier_RoutesKagentIntoVCluster(t *testing.T) {
+// TestAgentFleetReconciler_VClusterTier_RoutesWorkloadIntoVCluster proves a
+// WORKLOAD reconciler honors the isolation tier: for a vcluster-tier Platform the
+// fleet's agent Deployments land in the virtual cluster (through the
+// target-client swap), not on the host — while the fleet's NetworkPolicy stays
+// host containment.
+func TestAgentFleetReconciler_VClusterTier_RoutesWorkloadIntoVCluster(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
@@ -85,7 +85,7 @@ func TestAgentFleetReconciler_VClusterTier_RoutesKagentIntoVCluster(t *testing.T
 	}
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, tenantNSObj) })
 
-	vc := kagentAwareVCluster()
+	vc := workloadAwareVCluster()
 	r := &controller.AgentFleetReconciler{
 		Client:      k8sClient,
 		Scheme:      scheme,
@@ -98,7 +98,7 @@ func TestAgentFleetReconciler_VClusterTier_RoutesKagentIntoVCluster(t *testing.T
 		Spec: agentsv1alpha1.AgentFleetSpec{
 			PlatformRef: commonv1alpha1.LocalRef{Name: pName},
 			Agents: []agentsv1alpha1.AgentSpec{
-				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary"},
+				{Name: "primary", SystemPrompt: "be brief", ModelRoute: "primary", Image: "ghcr.io/acme/agent:v1"},
 			},
 		},
 	}
@@ -115,11 +115,10 @@ func TestAgentFleetReconciler_VClusterTier_RoutesKagentIntoVCluster(t *testing.T
 
 	agentName := fleet.Name + "-primary"
 
-	// The kagent Agent landed in the VIRTUAL cluster.
-	vcAgent := &unstructured.Unstructured{}
-	vcAgent.SetGroupVersionKind(schema.GroupVersionKind{Group: "kagent.dev", Version: "v1alpha2", Kind: "Agent"})
-	if err := vc.Get(ctx, types.NamespacedName{Name: agentName, Namespace: tenantNS}, vcAgent); err != nil {
-		t.Errorf("kagent Agent should exist in the virtual cluster: %v", err)
+	// The agent Deployment landed in the VIRTUAL cluster.
+	var vcDeploy appsv1.Deployment
+	if err := vc.Get(ctx, types.NamespacedName{Name: agentName, Namespace: tenantNS}, &vcDeploy); err != nil {
+		t.Errorf("agent Deployment should exist in the virtual cluster: %v", err)
 	}
 
 	// The tenant SA also landed in the virtual cluster (syncs to host from there).
@@ -128,12 +127,12 @@ func TestAgentFleetReconciler_VClusterTier_RoutesKagentIntoVCluster(t *testing.T
 		t.Errorf("tenant-runtime SA should exist in the virtual cluster: %v", err)
 	}
 
-	// The Agent must NOT be on the host (envtest has no kagent CRDs anyway, so a
-	// host write would have errored — this asserts the reconcile didn't target the
-	// host client for workload objects).
-	hostAgent := &unstructured.Unstructured{}
-	hostAgent.SetGroupVersionKind(schema.GroupVersionKind{Group: "kagent.dev", Version: "v1alpha2", Kind: "Agent"})
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: agentName, Namespace: tenantNS}, hostAgent); err == nil {
-		t.Error("kagent Agent must not be created on the host in the vcluster tier")
+	// And must NOT be on the host. A Deployment is a core kind, so unlike the
+	// CRD-backed runtime this replaced, a stray host write would have *succeeded*
+	// rather than erroring on a missing CRD — which makes this the assertion that
+	// actually proves the reconcile targeted the virtual cluster.
+	var hostDeploy appsv1.Deployment
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: agentName, Namespace: tenantNS}, &hostDeploy); err == nil {
+		t.Error("agent Deployment must not be created on the host in the vcluster tier")
 	}
 }

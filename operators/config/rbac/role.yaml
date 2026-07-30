@@ -194,20 +194,6 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - kagent.dev
-  resources:
-  - agents
-  - modelconfigs
-  - toolservers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - keda.sh
   resources:
   - scaledobjects

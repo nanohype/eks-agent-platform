@@ -8,7 +8,7 @@
 
   <!-- ──────── title ──────── -->
   <text x="900" y="60"  text-anchor="middle" font-size="34" font-weight="700" fill="#1e293b">eks-agent-platform</text>
-  <text x="900" y="100" text-anchor="middle" font-size="16" fill="#475569">Tenant CRs → six reconcilers → per-tenant IAM / KMS / S3 / agentgateway / kagent / KEDA / budget / eval</text>
+  <text x="900" y="100" text-anchor="middle" font-size="16" fill="#475569">Tenant CRs → six reconcilers → per-tenant IAM / KMS / S3 / gateway / agents / KEDA / budget / eval</text>
 
   <!-- ──────── AWS account (left) ──────── -->
   <rect x="60"  y="140" width="480" height="740" rx="16" ry="16" fill="#fff4e6" stroke="#d97706" stroke-width="2"/>
@@ -59,7 +59,7 @@
   <!-- Addons strip -->
   <rect x="600" y="345" width="620" height="80" rx="10" fill="#cffafe" stroke="#0e7490"/>
   <text x="620" y="372" font-size="14" font-weight="600" fill="#0e7490">Upstream addons</text>
-  <text x="620" y="402" font-size="14" fill="#1e293b">agentgateway  ·  kagent  ·  KEDA  ·  Argo Workflows + Rollouts</text>
+  <text x="620" y="402" font-size="14" fill="#1e293b">Envoy AI Gateway  ·  KEDA  ·  Argo Workflows + Rollouts</text>
 
   <!-- Tenant namespaces -->
   <rect x="600" y="445" width="620" height="280" rx="10" fill="#dcfce7" stroke="#15803d"/>
@@ -70,7 +70,7 @@
     <text x="632" y="512" font-size="12" font-weight="700">tenants-acme-support</text>
     <text x="632" y="540">SA + IRSA</text>
     <text x="632" y="558">NetworkPolicy</text>
-    <text x="632" y="576">kagent Agents</text>
+    <text x="632" y="576">agent Deployments</text>
     <text x="632" y="594">KEDA-scaled pods</text>
     <text x="632" y="612">ResourceQuota</text>
     <text x="632" y="630">LimitRange</text>
@@ -79,7 +79,7 @@
     <text x="832" y="512" font-size="12" font-weight="700">tenants-acme-sales-ops</text>
     <text x="832" y="540">SA + IRSA</text>
     <text x="832" y="558">NetworkPolicy</text>
-    <text x="832" y="576">kagent Agents</text>
+    <text x="832" y="576">agent Deployments</text>
     <text x="832" y="594">KEDA + SQS scaler</text>
     <text x="832" y="612">ResourceQuota</text>
     <text x="832" y="630">LimitRange</text>
@@ -88,7 +88,7 @@
     <text x="1032" y="512" font-size="12" font-weight="700">tenants-idea-mesh</text>
     <text x="1032" y="540">SA + IRSA</text>
     <text x="1032" y="558">NetworkPolicy</text>
-    <text x="1032" y="576">kagent Agents</text>
+    <text x="1032" y="576">agent Deployments</text>
     <text x="1032" y="594">CPU scaler (min=0)</text>
     <text x="1032" y="612">ResourceQuota</text>
     <text x="1032" y="630">LimitRange</text>

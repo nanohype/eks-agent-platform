@@ -44,7 +44,7 @@ misconfigurations:
     paths:
       - "operators/config/rbac/role.yaml"
       - "charts/operator/templates/rbac.yaml"
-    statement: "Operator owns per-tenant Deployments (kagent runtime hosts) and StatefulSets where applicable. See docs/adr/0003-threat-model.md for the blast-radius analysis."
+    statement: "Operator owns per-tenant Deployments (agent workloads) and StatefulSets where applicable. See docs/adr/0003-threat-model.md for the blast-radius analysis."
 
   - id: KSV056
     paths:

@@ -64,6 +64,7 @@ spec:
     - name: assistant
       systemPrompt: You are a helpful assistant.
       modelRoute: primary
+      image: REPLACE_WITH_YOUR_AGENT_IMAGE
 ---
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite

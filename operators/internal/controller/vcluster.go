@@ -40,7 +40,7 @@ var errArgoCDRequired = errors.New("isolation: vcluster requires ArgoCD (AppProj
 
 // VClusterConfig carries the operator-chart-configured coordinates for the
 // vcluster Helm chart the operator declares per Platform, plus the in-vcluster
-// init-charts that bootstrap the tenant's fleet control plane (kagent) and
+// init-charts that bootstrap the tenant's fleet autoscaler (KEDA) and
 // autoscaler (KEDA) inside the isolation boundary.
 type VClusterConfig struct {
 	// ChartRepoURL is the vcluster chart repository (https://charts.loft.sh, or
@@ -52,7 +52,7 @@ type VClusterConfig struct {
 	ChartVersion string
 	// InitCharts are deployed INSIDE each per-Platform vcluster on startup via the
 	// chart's experimental.deploy.vcluster.helm. The recommended placement for
-	// kagent + KEDA so the tenant's control+data plane live entirely inside the
+	// KEDA so the tenant's control+data plane live entirely inside the
 	// virtual cluster. Empty ships a containment-only vcluster.
 	InitCharts []VClusterInitChart
 }
@@ -102,7 +102,7 @@ func vclusterClusterSecretName(p *platformv1alpha1.Platform) string {
 //     Pod Identity association.
 //   - exportKubeConfig.server — the in-cluster Service endpoint, so the published
 //     kubeconfig is reachable by the operator and by in-cluster ArgoCD.
-//   - experimental.deploy.vcluster.helm — kagent + KEDA bootstrapped inside the
+//   - experimental.deploy.vcluster.helm — KEDA bootstrapped inside the
 //     virtual cluster (when configured), the recommended fleet placement.
 //
 // It deliberately does NOT enable multi-namespace sync: single-namespace mode is

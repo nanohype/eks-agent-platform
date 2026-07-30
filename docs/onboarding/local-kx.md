@@ -2,7 +2,7 @@
 
 Land the eks-agent-platform operator + a smoke-test tenant on the [`kx`](https://github.com/nanohype/kx) kind cluster. Two modes:
 
-- **k8s-only** — operator runs `--disable-aws`; validates the CR-emission paths (Platform → tenant ns + agentgateway Route + kagent Agent + KEDA ScaledObject) without touching AWS. Useful when you're iterating on the operator binary or debugging upstream CRD version drift.
+- **k8s-only** — operator runs `--disable-aws`; validates the CR-emission paths (Platform → tenant ns + Gateway + agent Deployment + KEDA ScaledObject) without touching AWS. Useful when you're iterating on the operator binary or debugging upstream CRD version drift.
 - **bedrock** — also mounts your laptop's AWS creds onto the agentgateway pod so the full loop works end-to-end (tenant pod → agentgateway → Bedrock → response). Real model calls, real cost.
 
 ## Prereqs
@@ -11,7 +11,7 @@ kx already ships every upstream we need. Enable the three slices first:
 
 ```bash
 cd ../kx
-task stack:ai-platform:enable     # kagent + agentgateway
+task stack:ai-platform:enable     # Envoy AI Gateway
 task stack:autoscaling:enable     # KEDA
 task stack:argo-platform:enable   # argo-workflows + argo-rollouts
 ```
@@ -19,7 +19,7 @@ task stack:argo-platform:enable   # argo-workflows + argo-rollouts
 Verify the CRDs landed:
 
 ```bash
-kubectl get crd agents.kagent.dev routes.agentgateway.dev scaledobjects.keda.sh workflows.argoproj.io
+kubectl get crd aigatewayroutes.aigateway.envoyproxy.io gateways.gateway.networking.k8s.io scaledobjects.keda.sh workflows.argoproj.io
 ```
 
 `kx up` should already have given you `cert-manager`, `ArgoCD`, `prometheus-operator-crds` from `stack/core/`.
@@ -54,8 +54,8 @@ kubectl get -n tenants-blank ns,quota,limitrange,networkpolicy
 kubectl get -n agentgateway routes.agentgateway.dev -l 'agents.nanohype.dev/platform=blank'
 # blank-primary route present
 
-kubectl get -n tenants-blank agents.kagent.dev modelconfigs.kagent.dev scaledobjects.keda.sh
-# kagent Agent + ModelConfig + KEDA ScaledObject all emitted
+kubectl get -n tenants-blank deploy scaledobjects.keda.sh
+# an agent Deployment per AgentSpec + the KEDA ScaledObject targeting it
 ```
 
 If you built `bin/agentctl` (`make -C operators build-agentctl`):
@@ -110,7 +110,6 @@ Removes the operator, the blank tenant, the tenant workload namespace, the opera
 | Symptom                                          | Cause / fix                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Platform/blank` stays `Pending`                 | `kubectl describe platform blank -n eks-agent-platform` shows the failing step. Most common: a CRD wasn't installed (re-run `task stack:*:enable` in kx).                                                                                                                                                     |
-| `agents.kagent.dev` shape rejected               | kagent version drift between kx and our reconciler's emitted spec. Check `kubectl explain agent.spec` against `operators/internal/controller/agentfleet_reconcile.go:ensureKagentAgents`; bump kx's kagent chart version if needed.                                                                           |
 | Bedrock `AccessDeniedException`                  | The static cred mounted on agentgateway doesn't have `bedrock:InvokeModel`. Confirm what the pod sees with `kubectl exec -n agentgateway deploy/agentgateway -- printenv AWS_ACCESS_KEY_ID` and cross-check with `aws sts get-caller-identity` for the same identity.                                         |
 | Bedrock `ResourceNotFoundException` on the model | Your account doesn't have access to `claude-3-5-sonnet-20241022-v2:0` (the route's model). Either request access in the AWS console → Bedrock → Model access, or edit `examples/blank-tenant/platform.yaml`'s `ModelRouteSpec.modelId` to a model you do have.                                                |
 | Operator pod crash-loops                         | `kubectl logs -n eks-agent-platform -l app.kubernetes.io/name=operator --tail=200`. Likely cause: a chart values knob that requires an integration we disabled (e.g. `metrics.serviceMonitor.enabled` without the Prometheus-operator CRDs, or `evalRuntime.rollouts.enabled` without the Argo Rollouts CRD). |

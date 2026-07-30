@@ -63,7 +63,7 @@ sequenceDiagram
   PR->>IAM: attachBaselineIfMissing<br/>· reattaches baseline
   PR->>PR: Status.phase=Ready<br/>Status.suspendedAt=nil
   Note over AR: next AgentFleet reconcile
-  AR->>AR: Platform.phase=Ready<br/>ensure SA + NetworkPolicy + kagent Agents + KEDA
+  AR->>AR: Platform.phase=Ready<br/>ensure SA + NetworkPolicy + agent Deployments + KEDA
   AR->>AR: Status.phase=Ready
 ```
 

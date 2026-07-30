@@ -64,6 +64,7 @@ spec:
     - name: ticket-summarizer
       systemPrompt: You summarize support tickets into a one-paragraph diagnosis + next step.
       modelRoute: primary
+      image: REPLACE_WITH_YOUR_AGENT_IMAGE
 ---
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite

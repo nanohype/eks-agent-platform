@@ -23,7 +23,7 @@ Each controller has typical bottlenecks:
 | -------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `platform`     | IAM throttling (CreateRole / AttachRolePolicy), KMS CreateGrant rate                                               |
 | `modelgateway` | agentgateway CRD create/update latency                                                                             |
-| `agentfleet`   | kagent CRD ordering (Agent before ModelConfig)                                                                     |
+| `agentfleet`   | image pull for the tenant's agent Deployment, then KEDA reconciling its ScaledObject                                |
 | `budget`       | Athena query slow (CUR not crawled lately, Glue partition pruning poor)                                            |
 | `eval`         | Argo Workflows CRD latency                                                                                         |
 | `tenant`       | cluster-wide Platform list — see [reconcile-errors.md](./reconcile-errors.md) for the 1000+ Platforms scaling note |
