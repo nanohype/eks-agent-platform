@@ -8,9 +8,9 @@
 # regenerate — never hand-edit this file.
 
 PRICING: dict[str, dict[str, float]] = {
-    "amazon.nova-lite-v1:0": {"input": 0.0375, "output": 0.13},
-    "amazon.nova-micro-v1:0": {"input": 0.00875, "output": 0.152},
-    "amazon.nova-pro-v1:0": {"input": 1.68, "output": 1.92},
+    "amazon.nova-lite-v1:0": {"input": 0.06, "output": 0.24},
+    "amazon.nova-micro-v1:0": {"input": 0.035, "output": 0.14},
+    "amazon.nova-pro-v1:0": {"input": 0.8, "output": 3.2},
     "anthropic.claude-3-5-haiku-20241022-v1:0": {"input": 0.8, "output": 4.0},
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {"input": 3.0, "output": 15.0},
     "anthropic.claude-3-haiku-20240307-v1:0": {"input": 0.25, "output": 1.25},
@@ -18,11 +18,12 @@ PRICING: dict[str, dict[str, float]] = {
     "anthropic.claude-haiku-4-5-20251001-v1:0": {"input": 1.0, "output": 5.0},
     "anthropic.claude-opus-4-6-v1": {"input": 5.0, "output": 25.0},
     "anthropic.claude-opus-4-8": {"input": 5.0, "output": 25.0},
+    "anthropic.claude-opus-5": {"input": 5.0, "output": 25.0},
     "anthropic.claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "anthropic.claude-sonnet-5": {"input": 3.0, "output": 15.0},
+    "anthropic.claude-sonnet-5": {"input": 2.0, "output": 10.0},
     "cohere.command-r-plus-v1:0": {"input": 3.0, "output": 15.0},
     "cohere.command-r-v1:0": {"input": 0.5, "output": 1.5},
     "meta.llama3-1-70b-instruct-v1:0": {"input": 0.72, "output": 0.72},
-    "meta.llama3-1-8b-instruct-v1:0": {"input": 0.11, "output": 0.22},
-    "mistral.mistral-large-2407-v1:0": {"input": 5.2, "output": 12.0},
+    "meta.llama3-1-8b-instruct-v1:0": {"input": 0.22, "output": 0.22},
+    "mistral.mistral-large-2407-v1:0": {"input": 2.0, "output": 6.0},
 }
