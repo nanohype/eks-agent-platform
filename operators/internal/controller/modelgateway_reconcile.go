@@ -41,10 +41,11 @@ var (
 	// plane shape), Backend (upstream address), ClientTrafficPolicy (buffer
 	// limits) and BackendTrafficPolicy (rate limits).
 	envoyGatewayGV = schema.GroupVersion{Group: "gateway.envoyproxy.io", Version: "v1alpha1"}
-	gatewayAPIGV   = schema.GroupVersion{Group: "gateway.networking.k8s.io", Version: "v1"}
-	// BackendTLSPolicy is still v1alpha3 in Gateway API; it has not graduated
-	// with the rest of the types this file uses.
-	gatewayAPIPolicyGV = schema.GroupVersion{Group: "gateway.networking.k8s.io", Version: "v1alpha3"}
+	// Gateway API v1 serves Gateway and BackendTLSPolicy alike. BackendTLSPolicy
+	// graduated to v1 in the standard channel; its older v1alpha3 is present in
+	// the CRD but `served: false`, so emitting that version would be rejected at
+	// apply time even though the kind exists.
+	gatewayAPIGV = schema.GroupVersion{Group: "gateway.networking.k8s.io", Version: "v1"}
 )
 
 // gatewayClassName is the GatewayClass the Envoy AI Gateway install provides.
@@ -277,7 +278,7 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 	}); err != nil {
 		return "", nil, err
 	}
-	if err := r.ensureUnstructured(ctx, gatewayAPIPolicyGV, "BackendTLSPolicy", n.namespace, n.backend+"-tls", labels, map[string]any{
+	if err := r.ensureUnstructured(ctx, gatewayAPIGV, "BackendTLSPolicy", n.namespace, n.backend+"-tls", labels, map[string]any{
 		"targetRefs": []any{
 			map[string]any{"group": envoyGatewayGV.Group, "kind": "Backend", "name": n.backend},
 		},
@@ -499,7 +500,7 @@ func (r *ModelGatewayReconciler) cleanupGatewayResources(ctx context.Context, mg
 	}{
 		{envoyGatewayGV, "BackendTrafficPolicy", n.gateway + "-ratelimit"},
 		{aiGatewayGV, "AIGatewayRoute", n.gateway},
-		{gatewayAPIPolicyGV, "BackendTLSPolicy", n.backend + "-tls"},
+		{gatewayAPIGV, "BackendTLSPolicy", n.backend + "-tls"},
 		{envoyGatewayGV, "Backend", n.backend},
 		{envoyGatewayGV, "ClientTrafficPolicy", n.gateway + "-buffer"},
 		{gatewayAPIGV, "Gateway", n.gateway},

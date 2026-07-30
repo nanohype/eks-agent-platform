@@ -425,7 +425,7 @@ func TestCleanupGatewayResources(t *testing.T) {
 			{envoyGatewayGV, "EnvoyProxy", ctrlTestPlatform + "-gateway"},
 			{envoyGatewayGV, "ClientTrafficPolicy", ctrlTestPlatform + "-gateway-buffer"},
 			{envoyGatewayGV, "Backend", ctrlTestPlatform + "-bedrock"},
-			{gatewayAPIPolicyGV, "BackendTLSPolicy", ctrlTestPlatform + "-bedrock-tls"},
+			{gatewayAPIGV, "BackendTLSPolicy", ctrlTestPlatform + "-bedrock-tls"},
 			{aiGatewayGV, "AIGatewayRoute", ctrlTestPlatform + "-gateway"},
 			{aiGatewayGV, "AIServiceBackend", ctrlTestPlatform + "-chat"},
 			{aiGatewayGV, "BackendSecurityPolicy", ctrlTestPlatform + "-chat"},
