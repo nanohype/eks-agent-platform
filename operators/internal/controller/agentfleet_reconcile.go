@@ -223,7 +223,7 @@ func (r *AgentFleetReconciler) ensureAgentDeployments(ctx context.Context, tc cl
 				LabelFleet: fleet.Name,
 				LabelAgent: agent.Name,
 			}}
-			deploy.Spec.Template.ObjectMeta.Labels = labels
+			deploy.Spec.Template.Labels = labels
 			deploy.Spec.Template.Spec = corev1.PodSpec{
 				// The tenant ServiceAccount, bound by a Pod Identity association
 				// to the tenant IAM role. This is what makes the agent's actions
