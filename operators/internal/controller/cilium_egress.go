@@ -7,6 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // NetworkEngineCilium is the network-engine value that makes the operator emit
@@ -80,6 +82,57 @@ func tenantEgressCiliumRules() []interface{} {
 			}}},
 		},
 	}
+}
+
+// gatewayEgressCiliumRules is the extra egress the model gateway's Envoy needs
+// and no other tenant pod may have: outbound TLS, which is how it reaches
+// Bedrock.
+//
+// It is a separate policy rather than another entry in the tenant allow-list
+// because network policies are additive. Selecting only the Envoy pods gives the
+// gateway outbound TLS while leaving every application pod without it — so the
+// gateway is the *only* path to a model, enforced by the network rather than by
+// asking applications to use it. Adding this rule to the shared tenant list
+// instead would hand every pod a direct route to Bedrock and reduce the gateway
+// to a convention.
+//
+// Scoped to 443 rather than a Bedrock FQDN: with the model plane on PrivateLink
+// the endpoint resolves to an in-VPC address, and FQDN matching would depend on
+// cilium's DNS proxy being enabled. The port bound plus the pod selector is the
+// boundary that holds without that dependency.
+func gatewayEgressCiliumRules() []interface{} {
+	return []interface{}{
+		map[string]interface{}{
+			"toEntities": []interface{}{"all"},
+			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
+				map[string]interface{}{"port": "443", "protocol": "TCP"},
+			}}},
+		},
+	}
+}
+
+// ensureGatewayCiliumEgress emits the gateway's outbound-TLS CiliumNetworkPolicy
+// on cilium clusters. No-op elsewhere, where the portable NetworkPolicy in
+// ensureGatewayEgressPolicy carries the same rule.
+func (r *PlatformReconciler) ensureGatewayCiliumEgress(ctx context.Context, p *platformv1alpha1.Platform) error {
+	if r.NetworkEngine != NetworkEngineCilium {
+		return nil
+	}
+	cnp := &unstructured.Unstructured{}
+	cnp.SetGroupVersionKind(ciliumNetworkPolicyGVK)
+	cnp.SetName("gateway-egress")
+	cnp.SetNamespace(PlatformNamespace(p))
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cnp, func() error {
+		cnp.SetLabels(labelsForPlatform(p))
+		return unstructured.SetNestedField(cnp.Object, map[string]interface{}{
+			"endpointSelector": map[string]interface{}{"matchLabels": envoyProxyPodLabels()},
+			"egress":           gatewayEgressCiliumRules(),
+		}, "spec")
+	})
+	if isNoKindMatch(err) {
+		return nil
+	}
+	return err
 }
 
 // ensureCiliumEgress creates/updates a CiliumNetworkPolicy named `name` in

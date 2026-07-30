@@ -275,6 +275,56 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 	return err
 }
 
+// ensureGatewayEgressPolicy grants the model gateway's Envoy the one thing no
+// other tenant pod gets: outbound TLS, which is how it reaches Bedrock.
+//
+// The tenant egress policy selects every pod in the namespace and allows DNS,
+// the gateway, the OTel collector and the Pod Identity endpoint — nothing on
+// 443. The gateway lives in that namespace, so without this second policy it
+// is denied the only call it exists to make, and every model request fails
+// while the Gateway reports itself healthy.
+//
+// A separate policy rather than another rule on the shared one: network
+// policies are additive, so selecting just the Envoy pods gives the gateway
+// outbound TLS and leaves application pods without it. That is what makes the
+// gateway the only route to a model — enforced by the network, not by asking
+// applications to prefer it. Widening the tenant list instead would hand every
+// pod a direct path to Bedrock.
+//
+// Emitted on non-cilium clusters only; ensureGatewayCiliumEgress is the twin.
+func (r *PlatformReconciler) ensureGatewayEgressPolicy(ctx context.Context, p *platformv1alpha1.Platform) error {
+	if r.NetworkEngine == NetworkEngineCilium {
+		return nil
+	}
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gateway-egress",
+			Namespace: PlatformNamespace(p),
+		},
+	}
+	tcp := corev1.ProtocolTCP
+	tlsPort := intstr.FromInt(443)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
+		np.Labels = labelsForPlatform(p)
+		np.Spec = networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{
+				"app.kubernetes.io/name":       "envoy",
+				"app.kubernetes.io/component":  "proxy",
+				"app.kubernetes.io/managed-by": "envoy-gateway",
+			}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{{
+				// No peer: any destination, on 443 only. Scoped to the port
+				// rather than a Bedrock address because on PrivateLink the
+				// endpoint resolves to an in-VPC IP that varies per cluster.
+				Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &tlsPort}},
+			}},
+		}
+		return nil
+	})
+	return err
+}
+
 // ensureTenantCiliumEgress emits the tenant egress CiliumNetworkPolicy on
 // cilium clusters (the default). It carries the same allow-list as the k8s NP
 // PLUS egress to the EKS Pod Identity creds endpoint (169.254.170.23:80, the
