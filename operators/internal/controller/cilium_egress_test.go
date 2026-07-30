@@ -164,3 +164,80 @@ func TestTenantEgressCiliumRules_ReachesTheModelGateway(t *testing.T) {
 	}
 	t.Fatal("tenant cilium egress must allow the Envoy proxy pods on TCP 8080 — without it every model call fails")
 }
+
+// TestGatewayEgress_ReachesBedrockAndTenantsDoNot is the regression guard for a
+// bug that shipped: moving the gateway into the tenant namespace put it under
+// the tenant egress policy, whose allow-list covers DNS, the gateway, the OTel
+// collector and the Pod Identity endpoint — and nothing on 443.
+//
+// The result was invisible in every way that usually catches things: the CRs
+// applied, the Gateway came up, the Platform reported Ready, and 100% of model
+// calls were denied at the network.
+//
+// The pair of assertions is the actual contract. The gateway must have outbound
+// TLS, and the shared tenant list must NOT — because that is what makes the
+// gateway the only route to a model rather than the preferred one.
+func TestGatewayEgress_ReachesBedrockAndTenantsDoNot(t *testing.T) {
+	tlsFrom := func(rules []interface{}) bool {
+		for _, raw := range rules {
+			rule, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ports, ok := rule["toPorts"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, p := range ports {
+				pm, ok := p.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				for _, e := range pm["ports"].([]interface{}) {
+					if e.(map[string]interface{})["port"] == "443" {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	if !tlsFrom(gatewayEgressCiliumRules()) {
+		t.Error("the gateway must be allowed outbound TLS — without it every model call is denied at the network while the Gateway reports healthy")
+	}
+	if tlsFrom(tenantEgressCiliumRules()) {
+		t.Error("the shared tenant allow-list must not carry 443: that hands every application pod a direct path to Bedrock and demotes the gateway to a convention")
+	}
+}
+
+// TestEnsureGatewayCiliumEgress_GatedByEngine mirrors the tenant policy's gate —
+// the CiliumNetworkPolicy is emitted only on cilium, where the portable
+// NetworkPolicy twin does not apply.
+func TestEnsureGatewayCiliumEgress_GatedByEngine(t *testing.T) {
+	p := newPlatform(ctrlTestPlatform, "team")
+	ctx := context.Background()
+
+	cl := ciliumTestClient(t)
+	r := &PlatformReconciler{Client: cl, NetworkEngine: "kubernetes"}
+	if err := r.ensureGatewayCiliumEgress(ctx, p); err != nil {
+		t.Fatalf("kubernetes-engine ensureGatewayCiliumEgress: %v", err)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(ciliumNetworkPolicyGVK)
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: PlatformNamespace(p), Name: "gateway-egress"}, u); err == nil {
+		t.Error("kubernetes engine must not emit a CiliumNetworkPolicy")
+	}
+
+	cl = ciliumTestClient(t)
+	r = &PlatformReconciler{Client: cl, NetworkEngine: NetworkEngineCilium}
+	if err := r.ensureGatewayCiliumEgress(ctx, p); err != nil {
+		t.Fatalf("cilium-engine ensureGatewayCiliumEgress: %v", err)
+	}
+	cnp := getCNP(t, cl, PlatformNamespace(p), "gateway-egress")
+	sel, _, _ := unstructured.NestedMap(cnp.Object, "spec", "endpointSelector", "matchLabels")
+	// Selecting anything broader would grant outbound TLS to tenant workloads.
+	if sel["k8s:app.kubernetes.io/name"] != "envoy" {
+		t.Errorf("gateway-egress must select only the Envoy proxy pods, got %v", sel)
+	}
+}

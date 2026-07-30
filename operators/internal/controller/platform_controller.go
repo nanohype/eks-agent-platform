@@ -209,6 +209,8 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		{"ensureLimitRange", r.ensureLimitRange},
 		{"ensureNetworkPolicy", r.ensureNetworkPolicy},
 		{"ensureTenantCiliumEgress", r.ensureTenantCiliumEgress},
+		{"ensureGatewayEgressPolicy", r.ensureGatewayEgressPolicy},
+		{"ensureGatewayCiliumEgress", r.ensureGatewayCiliumEgress},
 		{"ensureAppProject", r.ensureAppProject},
 	}
 	for _, s := range steps {
