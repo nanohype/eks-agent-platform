@@ -40,7 +40,7 @@
     "check:doc-contracts": "./scripts/check-doc-contracts.sh"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.5",
+    "@biomejs/biome": "2.5.6",
     "@changesets/cli": "^2.31.0",
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
