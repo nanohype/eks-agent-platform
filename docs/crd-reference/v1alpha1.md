@@ -304,7 +304,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase: Pending, Provisioning, Ready, Failed. |  | Optional: \{\} <br /> |
-| `endpoint` _string_ | Endpoint is the cluster-internal hostname of the gateway. |  | Optional: \{\} <br /> |
+| `endpoint` _string_ | Endpoint is the cluster-internal hostname of the gateway. It addresses<br />the gateway, not any one API on it — see Routes for the base URL a<br />client is actually configured with. |  | Optional: \{\} <br /> |
+| `routes` _[RouteStatus](#routestatus) array_ | Routes is the per-route client contract: the resolved wire format and<br />the base URL that format is served at. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the last spec.generation reconciled. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
 
@@ -327,6 +328,7 @@ _Appears in:_
 | `modelFamily` _string_ | ModelFamily is the Bedrock model family for a foundation route:<br />anthropic \| meta \| mistral \| cohere \| amazon-titan \| amazon-nova \|<br />stability. Required for a foundation route, rejected for an imported one<br />(enforced by the route-level CEL rules above). |  | Enum: [anthropic meta mistral cohere amazon-titan amazon-nova stability] <br />Optional: \{\} <br /> |
 | `modelId` _string_ | ModelID is the route's model. For a foundation route it is the canonical<br />Bedrock model ID or inference-profile ID; for an imported route it is the<br />imported-model ARN<br />(arn:<partition>:bedrock:<region>:<account>:imported-model/<id>). |  |  |
 | `crossRegionProfile` _string_ | CrossRegionProfile enables a Bedrock cross-region inference profile.<br />Foundation routes only; rejected on an imported route. |  | Optional: \{\} <br /> |
+| `api` _[RouteAPI](#routeapi)_ | API is the wire format callers speak to this route, and therefore which<br />base URL they must use — the gateway serves each format under its own<br />endpoint prefix. The reconciler publishes the resolved value and its base<br />URL on status.routes, so a caller reads the contract rather than assuming<br />it.<br />Left unset it is derived from the model: an anthropic-family foundation<br />route serves Anthropic, everything else serves OpenAI. There is no static<br />default, because one would be wrong for whichever kind of route it did<br />not describe — an embeddings route is not reachable as Anthropic, and<br />defaulting a Claude route to OpenAI would silently drop thinking blocks<br />and cache points.<br />Set it explicitly to pin the format across a model change: a route<br />declared OpenAI stays OpenAI when repointed from Claude to an<br />open-weight model, so the swap is a CR edit and the app is untouched. |  | Enum: [Anthropic OpenAI] <br />Optional: \{\} <br /> |
 | `rateLimit` _integer_ | RateLimit caps requests per minute (not tokens) on this route. The<br />operator renders it into a local rate-limit rule on the gateway's<br />BackendTrafficPolicy; 0 or unset disables rate limiting for the route. |  | Optional: \{\} <br /> |
 | `guardrailRef` _[LocalRef](#localref)_ | GuardrailRef overrides the gateway's default guardrail. On a foundation<br />route the guardrail attaches as request headers the caller cannot<br />override. On an imported<br />route an inline guardrail is not applicable (Bedrock inline guardrails are<br />foundation-model-only), so the route is served without one and the gateway<br />surfaces an ImportedRouteGuardrailUnenforced condition — enforcement via<br />ApplyGuardrail is a tracked follow-up. |  | Optional: \{\} <br /> |
 
@@ -355,6 +357,56 @@ _Appears in:_
 | --- | --- |
 | `foundation` | ModelSourceFoundation routes to a Bedrock foundation model / inference profile.<br /> |
 | `imported` | ModelSourceImported routes to a Custom Model Import open-weight model by ARN.<br /> |
+
+
+#### RouteAPI
+
+_Underlying type:_ _string_
+
+RouteAPI is the client-facing wire format a caller speaks to a route.
+
+It is not the same question as which upstream schema serves the route. A
+caller reaches every route through the same gateway, but the gateway serves
+each wire format under its own endpoint prefix, so the format decides the
+URL the caller must use — and which model families it can reach at all.
+
+  - Anthropic: native Anthropic Messages, at `<endpoint>/anthropic`. Keeps
+    the model's own shape end to end — thinking blocks, cache points, and
+    tool use survive. Anthropic-family foundation routes only.
+  - OpenAI: OpenAI chat completions and embeddings, at `<endpoint>/v1`. The
+    gateway translates to Bedrock. Reaches every family, which is what makes
+    a route repointable to a non-Anthropic model without touching the app.
+
+_Validation:_
+- Enum: [Anthropic OpenAI]
+
+_Appears in:_
+- [ModelRouteSpec](#modelroutespec)
+- [RouteStatus](#routestatus)
+
+| Field | Description |
+| --- | --- |
+| `Anthropic` | RouteAPIAnthropic is the native Anthropic Messages wire format.<br /> |
+| `OpenAI` | RouteAPIOpenAI is the OpenAI chat-completions / embeddings wire format.<br /> |
+
+
+#### RouteStatus
+
+
+
+RouteStatus is the published client contract for one route: what to call it
+with, and where.
+
+
+
+_Appears in:_
+- [ModelGatewayStatus](#modelgatewaystatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name is the route name callers send as the model field. |  |  |
+| `api` _[RouteAPI](#routeapi)_ | API is the resolved wire format — spec.routes[].api when set, otherwise<br />derived from the model family. |  | Enum: [Anthropic OpenAI] <br /> |
+| `baseURL` _string_ | BaseURL is the base a client of that wire format is configured with. It<br />is not status.endpoint: the gateway serves each format under its own<br />prefix, so the endpoint alone is not a usable base for any client. An<br />Anthropic SDK appends /v1/messages to this, an OpenAI one appends<br />/chat/completions or /embeddings. |  |  |
 
 
 #### SandboxPool

@@ -47,9 +47,34 @@ const (
 	ModelSourceImported ModelSource = "imported"
 )
 
+// RouteAPI is the client-facing wire format a caller speaks to a route.
+//
+// It is not the same question as which upstream schema serves the route. A
+// caller reaches every route through the same gateway, but the gateway serves
+// each wire format under its own endpoint prefix, so the format decides the
+// URL the caller must use — and which model families it can reach at all.
+//
+//   - Anthropic: native Anthropic Messages, at `<endpoint>/anthropic`. Keeps
+//     the model's own shape end to end — thinking blocks, cache points, and
+//     tool use survive. Anthropic-family foundation routes only.
+//   - OpenAI: OpenAI chat completions and embeddings, at `<endpoint>/v1`. The
+//     gateway translates to Bedrock. Reaches every family, which is what makes
+//     a route repointable to a non-Anthropic model without touching the app.
+//
+// +kubebuilder:validation:Enum=Anthropic;OpenAI
+type RouteAPI string
+
+const (
+	// RouteAPIAnthropic is the native Anthropic Messages wire format.
+	RouteAPIAnthropic RouteAPI = "Anthropic"
+	// RouteAPIOpenAI is the OpenAI chat-completions / embeddings wire format.
+	RouteAPIOpenAI RouteAPI = "OpenAI"
+)
+
 // ModelRouteSpec is a single named route.
 //
 // +kubebuilder:validation:XValidation:rule="self.modelSource != 'foundation' || has(self.modelFamily)",message="modelFamily is required for a foundation route"
+// +kubebuilder:validation:XValidation:rule="!has(self.api) || self.api != 'Anthropic' || (self.modelSource == 'foundation' && has(self.modelFamily) && self.modelFamily == 'anthropic')",message="api Anthropic is only available on an anthropic-family foundation route; every other model reaches callers as OpenAI"
 // +kubebuilder:validation:XValidation:rule="self.modelSource != 'imported' || !has(self.modelFamily)",message="modelFamily does not apply to an imported route and must be omitted"
 // +kubebuilder:validation:XValidation:rule="self.modelSource != 'imported' || !has(self.crossRegionProfile)",message="crossRegionProfile does not apply to an imported route and must be omitted"
 // +kubebuilder:validation:XValidation:rule="self.modelSource != 'imported' || self.modelId.startsWith('arn:')",message="an imported route's modelId must be the imported-model ARN"
@@ -82,6 +107,25 @@ type ModelRouteSpec struct {
 	// +optional
 	CrossRegionProfile string `json:"crossRegionProfile,omitempty"`
 
+	// API is the wire format callers speak to this route, and therefore which
+	// base URL they must use — the gateway serves each format under its own
+	// endpoint prefix. The reconciler publishes the resolved value and its base
+	// URL on status.routes, so a caller reads the contract rather than assuming
+	// it.
+	//
+	// Left unset it is derived from the model: an anthropic-family foundation
+	// route serves Anthropic, everything else serves OpenAI. There is no static
+	// default, because one would be wrong for whichever kind of route it did
+	// not describe — an embeddings route is not reachable as Anthropic, and
+	// defaulting a Claude route to OpenAI would silently drop thinking blocks
+	// and cache points.
+	//
+	// Set it explicitly to pin the format across a model change: a route
+	// declared OpenAI stays OpenAI when repointed from Claude to an
+	// open-weight model, so the swap is a CR edit and the app is untouched.
+	// +optional
+	API RouteAPI `json:"api,omitempty"`
+
 	// RateLimit caps requests per minute (not tokens) on this route. The
 	// operator renders it into a local rate-limit rule on the gateway's
 	// BackendTrafficPolicy; 0 or unset disables rate limiting for the route.
@@ -99,15 +143,42 @@ type ModelRouteSpec struct {
 	GuardrailRef *commonv1alpha1.LocalRef `json:"guardrailRef,omitempty"`
 }
 
+// RouteStatus is the published client contract for one route: what to call it
+// with, and where.
+type RouteStatus struct {
+	// Name is the route name callers send as the model field.
+	Name string `json:"name"`
+
+	// API is the resolved wire format — spec.routes[].api when set, otherwise
+	// derived from the model family.
+	API RouteAPI `json:"api"`
+
+	// BaseURL is the base a client of that wire format is configured with. It
+	// is not status.endpoint: the gateway serves each format under its own
+	// prefix, so the endpoint alone is not a usable base for any client. An
+	// Anthropic SDK appends /v1/messages to this, an OpenAI one appends
+	// /chat/completions or /embeddings.
+	BaseURL string `json:"baseURL"`
+}
+
 // ModelGatewayStatus surfaces the gateway's route and listener state.
 type ModelGatewayStatus struct {
 	// Phase: Pending, Provisioning, Ready, Failed.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
-	// Endpoint is the cluster-internal hostname of the gateway.
+	// Endpoint is the cluster-internal hostname of the gateway. It addresses
+	// the gateway, not any one API on it — see Routes for the base URL a
+	// client is actually configured with.
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
+
+	// Routes is the per-route client contract: the resolved wire format and
+	// the base URL that format is served at.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Routes []RouteStatus `json:"routes,omitempty"`
 
 	// ObservedGeneration is the last spec.generation reconciled.
 	// +optional
