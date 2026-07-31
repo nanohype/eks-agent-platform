@@ -106,6 +106,12 @@ func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agents
 	return getReferencedPlatform(ctx, r.Client, mg.Namespace, mg.Spec.PlatformRef.Name, errPlatformNotFound)
 }
 
+// modelFamilyAnthropic is the one family whose own wire format the gateway
+// serves directly. Both the upstream schema and the client-facing contract
+// branch on it, for related but distinct reasons — see backendSchemaFor and
+// effectiveRouteAPI.
+const modelFamilyAnthropic = "anthropic"
+
 // backendSchemaFor maps a route to the Envoy AI Gateway upstream schema that
 // serves it.
 //
@@ -118,10 +124,72 @@ func (r *ModelGatewayReconciler) resolvePlatform(ctx context.Context, mg *agents
 // models — goes through AWSBedrock, which translates OpenAI-shaped requests to
 // Bedrock's Converse API.
 func backendSchemaFor(route agentsv1alpha1.ModelRouteSpec) string {
-	if route.ModelSource != agentsv1alpha1.ModelSourceImported && route.ModelFamily == "anthropic" {
+	if route.ModelSource != agentsv1alpha1.ModelSourceImported && route.ModelFamily == modelFamilyAnthropic {
 		return "AWSAnthropic"
 	}
 	return "AWSBedrock"
+}
+
+// endpoint prefixes the gateway serves each client-facing wire format under.
+//
+// These are Envoy AI Gateway's own defaults, not a choice made here: the
+// extproc registers a body-parsing processor per endpoint path, so a request
+// to an unregistered path never gets the model name extracted from its body,
+// never receives the x-ai-eg-model header, and matches no route rule. The
+// caller sees a routing failure from a gateway that reports healthy, which is
+// why the base URL is published rather than left for callers to assemble.
+const (
+	anthropicAPIPrefix = "/anthropic"
+	openAIAPIPrefix    = "/v1"
+)
+
+// effectiveRouteAPI resolves the wire format callers speak to a route.
+//
+// An explicit spec.api wins; the CRD already rejects Anthropic on anything but
+// an anthropic-family foundation route, so a set value is known to be
+// serveable. Unset, it follows the model: only the Anthropic family is
+// reachable in its native shape, so everything else resolves to OpenAI.
+//
+// This deliberately mirrors backendSchemaFor rather than reusing it. They
+// answer different questions — one picks the upstream translator, the other
+// the client-facing contract — and an anthropic-family route can legitimately
+// be served as OpenAI while still using the AWSAnthropic backend.
+func effectiveRouteAPI(route agentsv1alpha1.ModelRouteSpec) agentsv1alpha1.RouteAPI {
+	if route.API != "" {
+		return route.API
+	}
+	if route.ModelSource != agentsv1alpha1.ModelSourceImported && route.ModelFamily == modelFamilyAnthropic {
+		return agentsv1alpha1.RouteAPIAnthropic
+	}
+	return agentsv1alpha1.RouteAPIOpenAI
+}
+
+// RouteBaseURL is the base URL a client of the given wire format is configured
+// with — the gateway endpoint plus the prefix that format is served under.
+//
+// Exported alongside ModelGatewayEndpoint because the endpoint alone is not a
+// usable base for any client, and every caller that has assembled one by hand
+// has had to know a prefix the platform is in a position to tell it.
+func RouteBaseURL(platform *platformv1alpha1.Platform, api agentsv1alpha1.RouteAPI) string {
+	prefix := openAIAPIPrefix
+	if api == agentsv1alpha1.RouteAPIAnthropic {
+		prefix = anthropicAPIPrefix
+	}
+	return ModelGatewayEndpoint(platform) + prefix
+}
+
+// routeStatuses is the published per-route client contract.
+func routeStatuses(mg *agentsv1alpha1.ModelGateway, platform *platformv1alpha1.Platform) []agentsv1alpha1.RouteStatus {
+	out := make([]agentsv1alpha1.RouteStatus, 0, len(mg.Spec.Routes))
+	for _, route := range mg.Spec.Routes {
+		api := effectiveRouteAPI(route)
+		out = append(out, agentsv1alpha1.RouteStatus{
+			Name:    route.Name,
+			API:     api,
+			BaseURL: RouteBaseURL(platform, api),
+		})
+	}
+	return out
 }
 
 // effectiveModelID is the identifier the gateway sends upstream: an imported
@@ -518,48 +586,71 @@ var (
 	errRegionUnset             = errors.New("ModelGatewayReconciler.Region is unset: the Bedrock upstream address and request signing region are both derived from it")
 )
 
+// gatewayReconcileResult is what one reconcile pass computed for status.
+// A struct rather than another positional return: the endpoint and the
+// per-route base URLs are easy to transpose at a call site, and doing so would
+// publish a contract that reads plausibly and routes nowhere.
+type gatewayReconcileResult struct {
+	phase    string
+	endpoint string
+	// routes is the published client contract, empty until phase is Ready.
+	routes []agentsv1alpha1.RouteStatus
+	// unenforcedGuardrail names imported routes served without their guardrail.
+	unenforcedGuardrail []string
+}
+
 // reconcileSelf does the substantive work of ModelGatewayReconciler.
-// Returns (phase, endpoint, error). 'Ready' = gateway resources emitted;
-// 'Pending' = waiting on the data-plane CRDs or Platform readiness;
-// error = real failure to retry.
-func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (string, string, []string, error) {
+// 'Ready' = gateway resources emitted; 'Pending' = waiting on the data-plane
+// CRDs or Platform readiness; error = real failure to retry.
+func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (gatewayReconcileResult, error) {
 	// The Bedrock upstream address is built from the region, so an empty one
 	// would emit a Backend pointing at "bedrock-runtime..amazonaws.com" and a
 	// BackendSecurityPolicy signing for nowhere. Both would apply cleanly and
 	// fail at request time, so refuse to render instead.
 	if r.Region == "" {
-		return "", "", nil, errRegionUnset
+		return gatewayReconcileResult{}, errRegionUnset
 	}
 
 	platform, err := r.resolvePlatform(ctx, mg)
 	if err != nil {
 		if errors.Is(err, errPlatformNotFound) {
-			return phasePending, "", nil, nil
+			return gatewayReconcileResult{phase: phasePending}, nil
 		}
-		return "", "", nil, err
+		return gatewayReconcileResult{}, err
 	}
 	// Don't emit routes until the Platform itself is Ready. The gateway runs
 	// under the tenant ServiceAccount, so before the Platform has minted that
 	// account and its Pod Identity association the Envoy pod would come up with
 	// no path to Bedrock and every request would fail AccessDenied.
 	if platform.Status.Phase != phaseReady {
-		return phasePending, "", nil, nil
+		return gatewayReconcileResult{phase: phasePending}, nil
 	}
 
 	endpoint, unenforcedGuardrail, err := r.ensureGatewayResources(ctx, mg, platform, r.GuardrailID, r.GuardrailVersion)
 	if err != nil {
 		if errors.Is(err, errGatewayCRDsNotInstalled) {
-			return phasePending, "", nil, nil
+			return gatewayReconcileResult{phase: phasePending}, nil
 		}
-		return "", "", nil, err
+		return gatewayReconcileResult{}, err
 	}
-	return phaseReady, endpoint, unenforcedGuardrail, nil
+	return gatewayReconcileResult{
+		phase:               phaseReady,
+		endpoint:            endpoint,
+		routes:              routeStatuses(mg, platform),
+		unenforcedGuardrail: unenforcedGuardrail,
+	}, nil
 }
 
-// modelGatewayApplyStatus writes the computed phase + endpoint + conditions.
-func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg *agentsv1alpha1.ModelGateway, phase, endpoint string, unenforcedGuardrail []string) error {
+// modelGatewayApplyStatus writes the computed phase + endpoint + routes +
+// conditions.
+func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg *agentsv1alpha1.ModelGateway, res gatewayReconcileResult) error {
+	phase, unenforcedGuardrail := res.phase, res.unenforcedGuardrail
 	mg.Status.Phase = phase
-	mg.Status.Endpoint = endpoint
+	mg.Status.Endpoint = res.endpoint
+	// Cleared rather than left stale on a non-Ready pass: a published base URL
+	// is a claim that the route is reachable there, and holding the last good
+	// one through a failed reconcile makes an unreachable gateway look served.
+	mg.Status.Routes = res.routes
 	mg.Status.ObservedGeneration = mg.Generation
 	cond := metav1.Condition{
 		Type:               "RoutesReconciled",

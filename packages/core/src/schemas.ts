@@ -235,6 +235,13 @@ export type ModelFamily = z.infer<typeof ModelFamily>;
 export const ModelSource = z.enum(['foundation', 'imported']);
 export type ModelSource = z.infer<typeof ModelSource>;
 
+/**
+ * RouteAPI mirrors the Go `RouteAPI` — the wire format a caller speaks to a
+ * route, and therefore which base URL it must use.
+ */
+export const RouteAPI = z.enum(['Anthropic', 'OpenAI']);
+export type RouteAPI = z.infer<typeof RouteAPI>;
+
 export const ModelRouteSpec = z.object({
   name: z.string(),
   // Defaults to foundation, so a route that omits it stays a foundation route.
@@ -246,6 +253,10 @@ export const ModelRouteSpec = z.object({
   // imported route the imported-model ARN.
   modelId: z.string(),
   crossRegionProfile: z.string().optional(),
+  // No default: the operator derives it from the model when unset, and any
+  // static default here would be wrong for whichever kind of route it did not
+  // describe. Read the resolved value from `status.routes[]`, not from here.
+  api: RouteAPI.optional(),
   rateLimit: z.number().int().positive().optional(),
   guardrailRef: z.object({ name: z.string() }).optional(),
 });
@@ -289,10 +300,27 @@ export const ModelGatewaySpec = z.object({
 });
 export type ModelGatewaySpec = z.infer<typeof ModelGatewaySpec>;
 
+/**
+ * RouteStatus mirrors the Go `RouteStatus` — the published client contract for
+ * one route: the resolved wire format, and the base URL a client of that
+ * format is configured with.
+ *
+ * `baseURL` is not `status.endpoint`. The gateway serves each wire format
+ * under its own endpoint prefix, so the endpoint alone is not a usable base
+ * for any client — this is the value to configure a model client with.
+ */
+export const RouteStatus = z.object({
+  name: z.string(),
+  api: RouteAPI,
+  baseURL: z.string(),
+});
+export type RouteStatus = z.infer<typeof RouteStatus>;
+
 /** ModelGatewayStatus mirrors the Go `ModelGatewayStatus`. */
 export const ModelGatewayStatus = z.object({
   phase: z.string().optional(),
   endpoint: z.string().optional(),
+  routes: z.array(RouteStatus).optional(),
   observedGeneration: z.number().int().optional(),
   conditions: z.array(Condition).optional(),
 });

@@ -85,17 +85,17 @@ func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{RequeueAfter: time.Millisecond * 100}, nil
 	}
 
-	phase, endpoint, unenforcedGuardrail, err := r.reconcileSelf(ctx, &gw)
+	res, err := r.reconcileSelf(ctx, &gw)
 	if err != nil {
 		logger.Error(err, "reconcile failed")
 		return ctrl.Result{}, err
 	}
-	if err := r.modelGatewayApplyStatus(ctx, &gw, phase, endpoint, unenforcedGuardrail); err != nil {
+	if err := r.modelGatewayApplyStatus(ctx, &gw, res); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)
 	}
 	// Pending → re-queue with backoff so we pick up Platform-becoming-Ready
 	// or gateway-CRDs-installing without waiting for the next CR write.
-	if phase == phasePending {
+	if res.phase == phasePending {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil

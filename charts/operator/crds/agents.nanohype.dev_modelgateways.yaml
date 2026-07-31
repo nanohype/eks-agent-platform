@@ -76,6 +76,28 @@ spec:
                 items:
                   description: ModelRouteSpec is a single named route.
                   properties:
+                    api:
+                      description: |-
+                        API is the wire format callers speak to this route, and therefore which
+                        base URL they must use — the gateway serves each format under its own
+                        endpoint prefix. The reconciler publishes the resolved value and its base
+                        URL on status.routes, so a caller reads the contract rather than assuming
+                        it.
+
+                        Left unset it is derived from the model: an anthropic-family foundation
+                        route serves Anthropic, everything else serves OpenAI. There is no static
+                        default, because one would be wrong for whichever kind of route it did
+                        not describe — an embeddings route is not reachable as Anthropic, and
+                        defaulting a Claude route to OpenAI would silently drop thinking blocks
+                        and cache points.
+
+                        Set it explicitly to pin the format across a model change: a route
+                        declared OpenAI stays OpenAI when repointed from Claude to an
+                        open-weight model, so the swap is a CR edit and the app is untouched.
+                      enum:
+                      - Anthropic
+                      - OpenAI
+                      type: string
                     crossRegionProfile:
                       description: |-
                         CrossRegionProfile enables a Bedrock cross-region inference profile.
@@ -144,6 +166,11 @@ spec:
                   x-kubernetes-validations:
                   - message: modelFamily is required for a foundation route
                     rule: self.modelSource != 'foundation' || has(self.modelFamily)
+                  - message: api Anthropic is only available on an anthropic-family
+                      foundation route; every other model reaches callers as OpenAI
+                    rule: '!has(self.api) || self.api != ''Anthropic'' || (self.modelSource
+                      == ''foundation'' && has(self.modelFamily) && self.modelFamily
+                      == ''anthropic'')'
                   - message: modelFamily does not apply to an imported route and must
                       be omitted
                     rule: self.modelSource != 'imported' || !has(self.modelFamily)
@@ -223,7 +250,10 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               endpoint:
-                description: Endpoint is the cluster-internal hostname of the gateway.
+                description: |-
+                  Endpoint is the cluster-internal hostname of the gateway. It addresses
+                  the gateway, not any one API on it — see Routes for the base URL a
+                  client is actually configured with.
                 type: string
               observedGeneration:
                 description: ObservedGeneration is the last spec.generation reconciled.
@@ -232,6 +262,44 @@ spec:
               phase:
                 description: 'Phase: Pending, Provisioning, Ready, Failed.'
                 type: string
+              routes:
+                description: |-
+                  Routes is the per-route client contract: the resolved wire format and
+                  the base URL that format is served at.
+                items:
+                  description: |-
+                    RouteStatus is the published client contract for one route: what to call it
+                    with, and where.
+                  properties:
+                    api:
+                      description: |-
+                        API is the resolved wire format — spec.routes[].api when set, otherwise
+                        derived from the model family.
+                      enum:
+                      - Anthropic
+                      - OpenAI
+                      type: string
+                    baseURL:
+                      description: |-
+                        BaseURL is the base a client of that wire format is configured with. It
+                        is not status.endpoint: the gateway serves each format under its own
+                        prefix, so the endpoint alone is not a usable base for any client. An
+                        Anthropic SDK appends /v1/messages to this, an OpenAI one appends
+                        /chat/completions or /embeddings.
+                      type: string
+                    name:
+                      description: Name is the route name callers send as the model
+                        field.
+                      type: string
+                  required:
+                  - api
+                  - baseURL
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             type: object
         type: object
     served: true
