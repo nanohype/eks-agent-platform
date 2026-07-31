@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strconv"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -16,6 +17,22 @@ import (
 // NetworkPolicies. It mirrors the chart's networkPolicy.engine value (default
 // "cilium" — the CNI on every cluster this operator runs on).
 const NetworkEngineCilium = "cilium"
+
+// collectorNamespace is where the OTel collector gateway runs, and therefore
+// the only namespace a workload's OTLP egress rule may name.
+//
+// It is a constant shared by every policy that opens OTLP rather than a
+// literal repeated per rule: telemetry failing is silent by construction —
+// pods stay healthy, the collector stays healthy, and nothing arrives — so a
+// single rule naming the wrong namespace has no symptom to notice. One
+// definition is checkable against the catalog; four literals are not.
+const collectorNamespace = "monitoring"
+
+// OTLP receiver ports on that collector: gRPC and HTTP.
+const (
+	otlpGRPCPort = 4317
+	otlpHTTPPort = 4318
+)
 
 // ciliumNetworkPolicyGVK is the cilium.io/v2 CiliumNetworkPolicy kind. The
 // operator manipulates it as unstructured to avoid pulling the cilium Go types
@@ -66,13 +83,13 @@ func tenantEgressCiliumRules() []interface{} {
 				map[string]interface{}{"port": "8080", "protocol": "TCP"},
 			}}},
 		},
-		map[string]interface{}{ // observability OTel collector
+		map[string]interface{}{ // the OTel collector gateway
 			"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": map[string]interface{}{
-				"k8s:io.kubernetes.pod.namespace": "observability",
+				"k8s:io.kubernetes.pod.namespace": collectorNamespace,
 			}}},
 			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
-				map[string]interface{}{"port": "4317", "protocol": "TCP"},
-				map[string]interface{}{"port": "4318", "protocol": "TCP"},
+				map[string]interface{}{"port": strconv.Itoa(otlpGRPCPort), "protocol": "TCP"},
+				map[string]interface{}{"port": strconv.Itoa(otlpHTTPPort), "protocol": "TCP"},
 			}}},
 		},
 		map[string]interface{}{ // EKS Pod Identity creds endpoint 169.254.170.23:80 (host entity)
@@ -106,6 +123,15 @@ func gatewayEgressCiliumRules() []interface{} {
 			"toEntities": []interface{}{"all"},
 			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
 				map[string]interface{}{"port": "443", "protocol": "TCP"},
+			}}},
+		},
+		map[string]interface{}{ // the OTel collector gateway
+			"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": map[string]interface{}{
+				"k8s:io.kubernetes.pod.namespace": collectorNamespace,
+			}}},
+			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
+				map[string]interface{}{"port": strconv.Itoa(otlpGRPCPort), "protocol": "TCP"},
+				map[string]interface{}{"port": strconv.Itoa(otlpHTTPPort), "protocol": "TCP"},
 			}}},
 		},
 	}

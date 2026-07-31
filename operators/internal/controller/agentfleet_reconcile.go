@@ -95,8 +95,8 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 	tcp := corev1.ProtocolTCP
 	udp := corev1.ProtocolUDP
 	dnsPort := intstr.FromInt(53)
-	otlpGRPC := intstr.FromInt(4317)
-	otlpHTTP := intstr.FromInt(4318)
+	otlpGRPC := intstr.FromInt(otlpGRPCPort)
+	otlpHTTP := intstr.FromInt(otlpHTTPPort)
 	gatewayPort := intstr.FromInt(8080)
 	credsPort := intstr.FromInt(80)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
@@ -142,7 +142,7 @@ func (r *AgentFleetReconciler) ensureFleetNetworkPolicy(ctx context.Context, fle
 				},
 				{
 					To: []networkingv1.NetworkPolicyPeer{{
-						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "observability"}},
+						NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": collectorNamespace}},
 					}},
 					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &otlpGRPC}, {Protocol: &tcp, Port: &otlpHTTP}},
 				},
