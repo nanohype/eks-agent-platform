@@ -200,8 +200,8 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 	tcp := corev1.ProtocolTCP
 	udp := corev1.ProtocolUDP
 	dnsPort := intstr.FromInt(53)
-	otlpGRPC := intstr.FromInt(4317)
-	otlpHTTP := intstr.FromInt(4318)
+	otlpGRPC := intstr.FromInt(otlpGRPCPort)
+	otlpHTTP := intstr.FromInt(otlpHTTPPort)
 	gatewayPort := intstr.FromInt(8080)
 	credsPort := intstr.FromInt(80)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
@@ -257,10 +257,14 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 					},
 				},
 				{
-					// OTel collector in observability namespace on :4317 + :4318.
+					// The OTel collector gateway, on :4317 + :4318. The
+					// namespace is `monitoring` — that is where the catalog
+					// deploys the collector and where the stable
+					// `telemetry.monitoring.svc` Service every tenant chart
+					// wires against lives.
 					To: []networkingv1.NetworkPolicyPeer{{
 						NamespaceSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{"kubernetes.io/metadata.name": "observability"},
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": collectorNamespace},
 						},
 					}},
 					Ports: []networkingv1.NetworkPolicyPort{
@@ -304,6 +308,8 @@ func (r *PlatformReconciler) ensureGatewayEgressPolicy(ctx context.Context, p *p
 	}
 	tcp := corev1.ProtocolTCP
 	tlsPort := intstr.FromInt(443)
+	otlpGRPC := intstr.FromInt(otlpGRPCPort)
+	otlpHTTP := intstr.FromInt(otlpHTTPPort)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = labelsForPlatform(p)
 		np.Spec = networkingv1.NetworkPolicySpec{
@@ -313,12 +319,32 @@ func (r *PlatformReconciler) ensureGatewayEgressPolicy(ctx context.Context, p *p
 				"app.kubernetes.io/managed-by": "envoy-gateway",
 			}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				// No peer: any destination, on 443 only. Scoped to the port
-				// rather than a Bedrock address because on PrivateLink the
-				// endpoint resolves to an in-VPC IP that varies per cluster.
-				Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &tlsPort}},
-			}},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					// No peer: any destination, on 443 only. Scoped to the port
+					// rather than a Bedrock address because on PrivateLink the
+					// endpoint resolves to an in-VPC IP that varies per cluster.
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &tlsPort}},
+				},
+				{
+					// The gateway's own telemetry. It records the routing
+					// decision — route name, resolved model, tokens, guardrail
+					// applied, and requests it refused before Bedrock ever saw
+					// them — none of which appears in Bedrock's invocation log.
+					// Without this rule the extproc exports into a closed
+					// egress and the ledger is empty, with nothing unhealthy
+					// to notice.
+					To: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": collectorNamespace},
+						},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Protocol: &tcp, Port: &otlpGRPC},
+						{Protocol: &tcp, Port: &otlpHTTP},
+					},
+				},
+			},
 		}
 		return nil
 	})
