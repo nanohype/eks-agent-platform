@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
@@ -60,15 +61,34 @@ func readyPlatformIn() *platformv1alpha1.Platform {
 	return p
 }
 
+// publishedGateway is a ModelGateway that has already published its route
+// contract, which is what a fleet reads to configure its agents' model client.
+func publishedGateway(p *platformv1alpha1.Platform, names ...string) *agentsv1alpha1.ModelGateway {
+	mg := &agentsv1alpha1.ModelGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: p.Namespace},
+		Spec: agentsv1alpha1.ModelGatewaySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: p.Name},
+		},
+	}
+	for _, name := range names {
+		mg.Status.Routes = append(mg.Status.Routes, agentsv1alpha1.RouteStatus{
+			Name:    name,
+			API:     agentsv1alpha1.RouteAPIAnthropic,
+			BaseURL: RouteBaseURL(p, agentsv1alpha1.RouteAPIAnthropic),
+		})
+	}
+	return mg
+}
+
 func TestReconcileFleetSelf(t *testing.T) {
 	s := fleetScheme(t)
 
 	t.Run("platform not found is pending", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).Build()
 		r := &AgentFleetReconciler{Client: cl, Scheme: s}
-		phase, ready, err := r.reconcileFleetSelf(context.Background(), agentFleet())
-		if err != nil || phase != phasePending || ready != 0 {
-			t.Fatalf("missing platform: got (%q, %d, %v)", phase, ready, err)
+		res, err := r.reconcileFleetSelf(context.Background(), agentFleet())
+		if err != nil || res.phase != phasePending || res.readyAgents != 0 {
+			t.Fatalf("missing platform: got (%q, %d, %v)", res.phase, res.readyAgents, err)
 		}
 	})
 
@@ -77,9 +97,9 @@ func TestReconcileFleetSelf(t *testing.T) {
 		p.Namespace = ctrlTestNS
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
 		r := &AgentFleetReconciler{Client: cl, Scheme: s}
-		phase, _, err := r.reconcileFleetSelf(context.Background(), agentFleet())
-		if err != nil || phase != phasePending {
-			t.Fatalf("not-ready platform: got (%q, %v)", phase, err)
+		res, err := r.reconcileFleetSelf(context.Background(), agentFleet())
+		if err != nil || res.phase != phasePending {
+			t.Fatalf("not-ready platform: got (%q, %v)", res.phase, err)
 		}
 	})
 
@@ -88,22 +108,22 @@ func TestReconcileFleetSelf(t *testing.T) {
 		p.Status.Phase = phaseSuspended
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
 		r := &AgentFleetReconciler{Client: cl, Scheme: s}
-		phase, ready, err := r.reconcileFleetSelf(context.Background(), agentFleet())
-		if err != nil || phase != phaseSuspended || ready != 0 {
-			t.Fatalf("suspended platform: got (%q, %d, %v)", phase, ready, err)
+		res, err := r.reconcileFleetSelf(context.Background(), agentFleet())
+		if err != nil || res.phase != phaseSuspended || res.readyAgents != 0 {
+			t.Fatalf("suspended platform: got (%q, %d, %v)", res.phase, res.readyAgents, err)
 		}
 	})
 
 	t.Run("ready platform renders the fleet", func(t *testing.T) {
 		p := readyPlatformIn()
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
 		r := &AgentFleetReconciler{Client: cl, Scheme: s}
-		phase, ready, err := r.reconcileFleetSelf(context.Background(), agentFleet())
+		res, err := r.reconcileFleetSelf(context.Background(), agentFleet())
 		if err != nil {
 			t.Fatalf("reconcileFleetSelf (ready): %v", err)
 		}
-		if phase != phaseReady || ready != 1 {
-			t.Errorf("ready fleet: got (%q, %d) want (Ready, 1)", phase, ready)
+		if res.phase != phaseReady || res.readyAgents != 1 {
+			t.Errorf("ready fleet: got (%q, %d) want (Ready, 1)", res.phase, res.readyAgents)
 		}
 		// The host containment NetworkPolicy landed on the host.
 		var np networkingv1.NetworkPolicy
@@ -157,10 +177,10 @@ func TestAgentDeploymentRunsAsTheTenant(t *testing.T) {
 	s := fleetScheme(t)
 	p := readyPlatformIn()
 	fleet := scalingFleet("")
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
 	r := &AgentFleetReconciler{Client: cl, Scheme: s}
 
-	if _, _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
+	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
 		t.Fatalf("reconcileFleetSelf: %v", err)
 	}
 
@@ -231,10 +251,10 @@ func TestAgentDeploymentLeavesReplicasToKEDA(t *testing.T) {
 	s := fleetScheme(t)
 	p := readyPlatformIn()
 	fleet := scalingFleet("")
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
 	r := &AgentFleetReconciler{Client: cl, Scheme: s}
 
-	if _, _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
+	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
 
@@ -254,7 +274,7 @@ func TestAgentDeploymentLeavesReplicasToKEDA(t *testing.T) {
 		t.Fatalf("simulate KEDA scale-up: %v", err)
 	}
 
-	if _, _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
+	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 
@@ -267,5 +287,195 @@ func TestAgentDeploymentLeavesReplicasToKEDA(t *testing.T) {
 			got = fmt.Sprint(*deploy.Spec.Replicas)
 		}
 		t.Errorf("replicas = %s after reconcile, want KEDA's %d left alone", got, scaled)
+	}
+}
+
+// TestAgentGetsTheBaseURLNotTheGatewayRoot is the regression for the failure
+// that had already been fixed in the tenant apps and was still live here.
+//
+// The gateway serves each wire format under its own prefix. Envoy AI Gateway's
+// extproc registers a body-parsing processor per endpoint path, so a request to
+// the bare root never has its model name read out of the body, never gets the
+// x-ai-eg-model header, and matches no route rule. An SDK handed the root
+// appends /v1/messages and lands exactly there — the gateway reports healthy
+// and every model call fails.
+//
+// So the assertion is not "an endpoint is set" but "the endpoint set is the one
+// the gateway published", checked against RouteBaseURL rather than a string
+// spelled out here, which would agree with a wrong value just as readily.
+func TestAgentGetsTheBaseURLNotTheGatewayRoot(t *testing.T) {
+	ctx := context.Background()
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	fleet := agentFleet()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
+	r := &AgentFleetReconciler{Client: cl, Scheme: s}
+
+	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
+		t.Fatalf("reconcileFleetSelf: %v", err)
+	}
+
+	deploy := &appsv1.Deployment{}
+	key := types.NamespacedName{
+		Name:      agentDeploymentName(fleet, fleet.Spec.Agents[0].Name),
+		Namespace: PlatformNamespace(p),
+	}
+	if err := cl.Get(ctx, key, deploy); err != nil {
+		t.Fatalf("get agent Deployment: %v", err)
+	}
+	env := map[string]string{}
+	for _, e := range deploy.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+
+	want := RouteBaseURL(p, agentsv1alpha1.RouteAPIAnthropic)
+	if env["MODEL_ROUTE_BASE_URL"] != want {
+		t.Errorf("MODEL_ROUTE_BASE_URL = %q, want the published base %q", env["MODEL_ROUTE_BASE_URL"], want)
+	}
+	if env["MODEL_ROUTE_BASE_URL"] == ModelGatewayEndpoint(p) {
+		t.Error("MODEL_ROUTE_BASE_URL is the bare gateway root; an SDK given that reaches no body processor")
+	}
+	if env["MODEL_ROUTE_API"] != string(agentsv1alpha1.RouteAPIAnthropic) {
+		t.Errorf("MODEL_ROUTE_API = %q, want the published wire format", env["MODEL_ROUTE_API"])
+	}
+	// The gateway's own address stays available, and stays distinct from the
+	// client's base URL — an agent may want one without the other.
+	if env["MODEL_GATEWAY_ENDPOINT"] != ModelGatewayEndpoint(p) {
+		t.Errorf("MODEL_GATEWAY_ENDPOINT = %q, want the gateway address", env["MODEL_GATEWAY_ENDPOINT"])
+	}
+}
+
+// TestFleetRefusesAnUnpublishedRoute covers the other half: a route name that
+// resolves to nothing.
+//
+// Emitting the Deployment anyway would produce a pod that starts, passes its
+// probes and fails every model call — worse than no pod, because the fleet
+// reports Ready. The status has to name the route and say what was available,
+// or whoever wrote the typo has nothing to go on.
+func TestFleetRefusesAnUnpublishedRoute(t *testing.T) {
+	ctx := context.Background()
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	fleet := agentFleet() // wants "chat"
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(p, publishedGateway(p, "analysis", "embeddings")).Build()
+	r := &AgentFleetReconciler{Client: cl, Scheme: s}
+
+	res, err := r.reconcileFleetSelf(ctx, fleet)
+	if err != nil {
+		t.Fatalf("a spec error must be reported as status, not returned: %v", err)
+	}
+	if res.phase != phaseFailed {
+		t.Errorf("phase = %q, want %q", res.phase, phaseFailed)
+	}
+	if res.reason != "RouteNotPublished" {
+		t.Errorf("reason = %q, want RouteNotPublished", res.reason)
+	}
+	for _, want := range []string{"chat", "analysis", "embeddings"} {
+		if !strings.Contains(res.message, want) {
+			t.Errorf("message %q does not mention %q", res.message, want)
+		}
+	}
+
+	// And no pod was written for it.
+	deploy := &appsv1.Deployment{}
+	key := types.NamespacedName{
+		Name:      agentDeploymentName(fleet, fleet.Spec.Agents[0].Name),
+		Namespace: PlatformNamespace(p),
+	}
+	if err := cl.Get(ctx, key, deploy); err == nil {
+		t.Error("a Deployment was created for an agent whose route does not exist")
+	}
+}
+
+// TestFleetWaitsForAnUnpublishedGateway separates timing from misconfiguration.
+// A gateway that has not reconciled yet resolves itself; reporting Failed there
+// would make an ordering artefact look like a broken manifest.
+func TestFleetWaitsForAnUnpublishedGateway(t *testing.T) {
+	ctx := context.Background()
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+
+	for _, tc := range []struct {
+		name    string
+		objects []client.Object
+	}{
+		{"no gateway at all", []client.Object{p}},
+		{"gateway with no published routes", []client.Object{p, publishedGateway(p)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := fake.NewClientBuilder().WithScheme(s).WithObjects(tc.objects...).Build()
+			r := &AgentFleetReconciler{Client: cl, Scheme: s}
+			res, err := r.reconcileFleetSelf(ctx, agentFleet())
+			if err != nil {
+				t.Fatalf("reconcileFleetSelf: %v", err)
+			}
+			if res.phase != phasePending {
+				t.Errorf("phase = %q, want %q — the gateway resolves itself", res.phase, phasePending)
+			}
+			if res.reason != "" {
+				t.Errorf("reason = %q, want none: this is ordering, not a spec error", res.reason)
+			}
+		})
+	}
+}
+
+// TestTwoGatewaysForOnePlatformIsRefused. Every rendered object is named from
+// the Platform, so two ModelGateways referencing one Platform are two writers of
+// one Gateway. Picking either would publish a contract the tenant may not be
+// getting — the failure would surface as intermittent routing, not as config.
+func TestTwoGatewaysForOnePlatformIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	second := publishedGateway(p, "chat")
+	second.Name = "gw-2"
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(p, publishedGateway(p, "chat"), second).Build()
+	r := &AgentFleetReconciler{Client: cl, Scheme: s}
+
+	res, err := r.reconcileFleetSelf(ctx, agentFleet())
+	if err != nil {
+		t.Fatalf("reconcileFleetSelf: %v", err)
+	}
+	if res.phase != phaseFailed || res.reason != "GatewayAmbiguous" {
+		t.Errorf("got (%q, %q), want (Failed, GatewayAmbiguous)", res.phase, res.reason)
+	}
+}
+
+// TestPublishedRoutesIgnoresAnotherPlatformsGateway. Gateways for every tenant
+// can share a namespace; matching on namespace alone would hand one tenant
+// another's routes.
+func TestPublishedRoutesIgnoresAnotherPlatformsGateway(t *testing.T) {
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	other := readyPlatformIn()
+	other.Name = "someone-else"
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(p, publishedGateway(other, "chat")).Build()
+
+	_, err := publishedRoutes(context.Background(), cl, p)
+	if !errors.Is(err, errGatewayNotFound) {
+		t.Fatalf("got %v, want errGatewayNotFound", err)
+	}
+}
+
+// TestGatewayToFleetsEnqueuesOnlyItsOwn. Without the watch, a route contract
+// published after a fleet went Ready never reaches it. Enqueueing every fleet
+// in the namespace instead would reconcile other tenants' fleets on one
+// tenant's gateway change.
+func TestGatewayToFleetsEnqueuesOnlyItsOwn(t *testing.T) {
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	mine := agentFleet()
+	theirs := agentFleet()
+	theirs.Name = "other-squad"
+	theirs.Spec.PlatformRef.Name = "someone-else"
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(mine, theirs).Build()
+	r := &AgentFleetReconciler{Client: cl, Scheme: s}
+
+	got := r.gatewayToFleets(context.Background(), publishedGateway(p, "chat"))
+	if len(got) != 1 || got[0].Name != mine.Name {
+		t.Fatalf("enqueued %v, want just %q", got, mine.Name)
 	}
 }

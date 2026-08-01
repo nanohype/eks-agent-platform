@@ -16,16 +16,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
-// AgentFleetReconciler reconciles AgentFleet CRs into per-agent Deployments +
-// ModelConfig CRs, a KEDA ScaledObject (when scaling.enabled), a per-
-// fleet NetworkPolicy locking egress to the model gateway + OTel only, and a
-// tenant ServiceAccount with the IRSA annotation pointing at the
-// Platform's IAM role minted by PlatformReconciler.
+// AgentFleetReconciler reconciles AgentFleet CRs into one Deployment per agent,
+// a KEDA ScaledObject (when scaling.enabled), a per-fleet NetworkPolicy locking
+// egress to the model gateway + OTel only, and the tenant ServiceAccount that
+// EKS Pod Identity binds to the Platform's IAM role.
+//
+// The agent loop and its tools are the tenant's own image; the platform supplies
+// the identity it runs as and the route contract it calls the model through.
 //
 // KEDA absence is tolerated — the fleet runs at its static replica count, no
 // reconcile error.
@@ -93,15 +97,15 @@ func (r *AgentFleetReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: time.Millisecond * 100}, nil
 	}
 
-	phase, readyAgents, err := r.reconcileFleetSelf(ctx, &fleet)
+	res, err := r.reconcileFleetSelf(ctx, &fleet)
 	if err != nil {
 		logger.Error(err, "reconcile failed")
 		return ctrl.Result{}, err
 	}
-	if err := r.applyFleetStatus(ctx, &fleet, phase, readyAgents); err != nil {
+	if err := r.applyFleetStatus(ctx, &fleet, res); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)
 	}
-	if phase == phasePending {
+	if res.phase == phasePending {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
@@ -115,7 +119,35 @@ func (r *AgentFleetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&agentsv1alpha1.AgentFleet{}).
+		Watches(&agentsv1alpha1.ModelGateway{}, handler.EnqueueRequestsFromMapFunc(r.gatewayToFleets)).
 		Named("agentfleet").
 		WithOptions(ctrlruntime.Options{MaxConcurrentReconciles: c}).
 		Complete(r)
+}
+
+// gatewayToFleets maps a ModelGateway event onto every fleet on the same
+// Platform.
+//
+// Without it the route contract only reaches a fleet on the 30s Pending
+// requeue, and never at all once the fleet is Ready — so a route removed or
+// renamed on a running fleet would leave its agents pointed at a base URL the
+// gateway no longer serves, with nothing reconciling and the fleet reporting
+// Ready. Namespace-scoped, matching how a fleet resolves its own gateway.
+func (r *AgentFleetReconciler) gatewayToFleets(ctx context.Context, obj client.Object) []reconcile.Request {
+	mg, ok := obj.(*agentsv1alpha1.ModelGateway)
+	if !ok || mg.Spec.PlatformRef.Name == "" {
+		return nil
+	}
+	var fleets agentsv1alpha1.AgentFleetList
+	if err := r.List(ctx, &fleets, client.InNamespace(mg.Namespace)); err != nil {
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range fleets.Items {
+		if fleets.Items[i].Spec.PlatformRef.Name != mg.Spec.PlatformRef.Name {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&fleets.Items[i])})
+	}
+	return out
 }
