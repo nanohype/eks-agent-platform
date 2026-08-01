@@ -52,12 +52,12 @@ func TestScaledObjectTargetsAgentDeployment(t *testing.T) {
 	s := fleetScheme(t)
 	p := readyPlatformIn()
 	fleet := scalingFleet("")
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
 	r := &AgentFleetReconciler{Client: cl, Scheme: s}
 
-	phase, _, err := r.reconcileFleetSelf(ctx, fleet)
-	if err != nil || phase != phaseReady {
-		t.Fatalf("reconcileFleetSelf: phase=%q err=%v", phase, err)
+	res, err := r.reconcileFleetSelf(ctx, fleet)
+	if err != nil || res.phase != phaseReady {
+		t.Fatalf("reconcileFleetSelf: phase=%q err=%v", res.phase, err)
 	}
 
 	ns := PlatformNamespace(p)
@@ -180,7 +180,7 @@ func TestApplyFleetStatusEmitsReadyGauge(t *testing.T) {
 	fleet := agentFleet()
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(fleet).WithStatusSubresource(fleet).Build()
 	r := &AgentFleetReconciler{Client: cl, Scheme: s}
-	if err := r.applyFleetStatus(ctx, fleet, phaseReady, 3); err != nil {
+	if err := r.applyFleetStatus(ctx, fleet, fleetResult{phase: phaseReady, readyAgents: 3}); err != nil {
 		t.Fatalf("applyFleetStatus: %v", err)
 	}
 	g := fleetReadyAgents.WithLabelValues(fleet.Namespace, fleet.Spec.PlatformRef.Name, fleet.Name)

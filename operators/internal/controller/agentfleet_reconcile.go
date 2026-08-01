@@ -183,9 +183,9 @@ func (r *AgentFleetReconciler) ensureFleetCiliumEgress(ctx context.Context, flee
 // of its own is precisely what breaks that: the record names the tool server,
 // and no claim can be confirmed or refuted against it.
 //
-// The model reaches the agent as an endpoint and a route name, never as a
-// credential or a model id. Idempotent.
-func (r *AgentFleetReconciler) ensureAgentDeployments(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
+// The model reaches the agent as a base URL, a wire format and a route name,
+// never as a credential or a model id. Idempotent.
+func (r *AgentFleetReconciler) ensureAgentDeployments(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform, routes map[string]agentsv1alpha1.RouteStatus) error {
 	ns := PlatformNamespace(p)
 	// The Platform's gateway runs in this same namespace under the same
 	// ServiceAccount, so it is a sibling of the agents it fronts.
@@ -193,6 +193,15 @@ func (r *AgentFleetReconciler) ensureAgentDeployments(ctx context.Context, tc cl
 
 	for i := range fleet.Spec.Agents {
 		agent := &fleet.Spec.Agents[i]
+		route, ok := routes[agent.ModelRoute]
+		if !ok {
+			// Caught before the Deployment is written rather than after. An
+			// agent pointed at a route the gateway does not serve starts
+			// cleanly, reports Ready, and fails at its first model call — so
+			// the fleet has to refuse the pod, not ship one that cannot work.
+			return fmt.Errorf("%w: agent %q wants route %q; gateway publishes %s",
+				errRouteNotPublished, agent.Name, agent.ModelRoute, strings.Join(routeNames(routes), ", "))
+		}
 		name := agentDeploymentName(fleet, agent.Name)
 		labels := map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
@@ -236,10 +245,24 @@ func (r *AgentFleetReconciler) ensureAgentDeployments(ctx context.Context, tc cl
 					Image:           agent.Image,
 					SecurityContext: restrictedContainerSecurityContext(),
 					Env: withAgentOTelAttrs([]corev1.EnvVar{
-						// An endpoint and a route name. The agent never holds an
-						// AWS credential and never names a model: the gateway
-						// resolves the route, applies the guardrail, and signs.
+						// The agent never holds an AWS credential and never names
+						// a model: the gateway resolves the route, applies the
+						// guardrail, and signs.
+						//
+						// MODEL_ROUTE_BASE_URL is what a model client is
+						// configured with — the gateway serves each wire format
+						// under its own prefix, so MODEL_GATEWAY_ENDPOINT
+						// addresses the gateway but is not a usable base for any
+						// SDK. Both are published because an agent may want the
+						// gateway's address for something other than inference;
+						// only one of them is the client's base URL.
+						//
+						// MODEL_ROUTE_API says which SDK to build. Reading it
+						// beats inferring from the route name, which carries no
+						// format, or from a model id the agent is never given.
 						{Name: "MODEL_GATEWAY_ENDPOINT", Value: gatewayEndpoint},
+						{Name: "MODEL_ROUTE_BASE_URL", Value: route.BaseURL},
+						{Name: "MODEL_ROUTE_API", Value: string(route.API)},
 						{Name: "MODEL_ROUTE", Value: agent.ModelRoute},
 						{Name: "AGENT_NAME", Value: agent.Name},
 						{Name: "AGENT_SYSTEM_PROMPT", Value: agent.SystemPrompt},
@@ -546,15 +569,35 @@ func (r *AgentFleetReconciler) cleanupTargetClient(ctx context.Context, p *platf
 	return tc
 }
 
+// errRouteNotPublished means an agent names a route its gateway does not serve.
+// Distinct from the gateway-not-ready errors because requeueing cannot fix it.
+var errRouteNotPublished = errors.New("route is not published by the Platform's ModelGateway")
+
+// fleetResult is what one reconcile pass concluded.
+//
+// A struct rather than more positional returns: phase, reason and message are
+// all strings, and a transposition among them would report a plausible-reading
+// status about the wrong thing — the same trap that turned reconcileSelf on the
+// gateway side into a result type.
+type fleetResult struct {
+	phase       string
+	readyAgents int32
+	// reason and message describe a failure the fleet's own spec caused, so the
+	// status can name the missing route instead of the generic wait-on-Platform
+	// text every other non-Ready phase shares.
+	reason  string
+	message string
+}
+
 // reconcileFleetSelf is the orchestration: resolve Platform, gate on
-// Ready, run k8s + external steps. Returns (phase, readyAgents, error).
-func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *agentsv1alpha1.AgentFleet) (string, int32, error) {
+// Ready, run k8s + external steps.
+func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *agentsv1alpha1.AgentFleet) (fleetResult, error) {
 	platform, err := r.resolvePlatform(ctx, fleet)
 	if err != nil {
 		if errors.Is(err, errPlatformNotFound) {
-			return phasePending, 0, nil
+			return fleetResult{phase: phasePending}, nil
 		}
-		return "", 0, err
+		return fleetResult{}, err
 	}
 	// Platform Suspended: tear down the fleet's agent Deployments + KEDA
 	// scaler so no pods can serve traffic until the kill-switch is
@@ -562,12 +605,29 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	// recovery doesn't have to recreate them.
 	if platform.Status.Phase == phaseSuspended {
 		if err := r.cleanupFleetResources(ctx, r.cleanupTargetClient(ctx, platform), fleet, platform); err != nil {
-			return "", 0, fmt.Errorf("suspend cleanup: %w", err)
+			return fleetResult{}, fmt.Errorf("suspend cleanup: %w", err)
 		}
-		return phaseSuspended, 0, nil
+		return fleetResult{phase: phaseSuspended}, nil
 	}
 	if platform.Status.Phase != phaseReady {
-		return phasePending, 0, nil
+		return fleetResult{phase: phasePending}, nil
+	}
+
+	// The route contract, read before anything is written. A fleet whose agents
+	// cannot be given a working base URL should emit no pods at all — a running
+	// agent that fails every model call is worse than an absent one, because it
+	// reports Ready.
+	routes, err := publishedRoutes(ctx, r.Client, platform)
+	if err != nil {
+		if errors.Is(err, errGatewayNotFound) || errors.Is(err, errGatewayNotPublished) {
+			// Ordering, not misconfiguration: the gateway reconciles
+			// independently and may not have published yet. Requeue.
+			return fleetResult{phase: phasePending}, nil
+		}
+		if errors.Is(err, errGatewayAmbiguous) {
+			return fleetResult{phase: phaseFailed, reason: "GatewayAmbiguous", message: err.Error()}, nil
+		}
+		return fleetResult{}, fmt.Errorf("read route contract: %w", err)
 	}
 
 	// Resolve the target client: the host client for the namespace tier, the
@@ -579,55 +639,68 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 	if err != nil {
 		if errors.Is(err, errVClusterNotReady) {
 			// vcluster still installing — nothing to write into yet; requeue.
-			return phasePending, 0, nil
+			return fleetResult{phase: phasePending}, nil
 		}
-		return "", 0, fmt.Errorf("resolve target client: %w", err)
+		return fleetResult{}, fmt.Errorf("resolve target client: %w", err)
 	}
 
 	if err := ensureTenantServiceAccount(ctx, tc, platform); err != nil {
-		return "", 0, fmt.Errorf("ensure ServiceAccount: %w", err)
+		return fleetResult{}, fmt.Errorf("ensure ServiceAccount: %w", err)
 	}
 	if err := r.ensureFleetNetworkPolicy(ctx, fleet, platform); err != nil {
-		return "", 0, fmt.Errorf("ensure NetworkPolicy: %w", err)
+		return fleetResult{}, fmt.Errorf("ensure NetworkPolicy: %w", err)
 	}
 	if err := r.ensureFleetCiliumEgress(ctx, fleet, platform); err != nil {
-		return "", 0, fmt.Errorf("ensure CiliumNetworkPolicy: %w", err)
+		return fleetResult{}, fmt.Errorf("ensure CiliumNetworkPolicy: %w", err)
 	}
 	// No missing-CRD branch here: a Deployment is a core Kubernetes object, so
 	// unlike the CRD-backed runtime this replaced there is no cluster where the
 	// kind is absent and the fleet has to wait for an addon to install.
-	if err := r.ensureAgentDeployments(ctx, tc, fleet, platform); err != nil {
-		return "", 0, err
+	if err := r.ensureAgentDeployments(ctx, tc, fleet, platform, routes); err != nil {
+		if errors.Is(err, errRouteNotPublished) {
+			// A spec error. Surfaced as status rather than returned, because a
+			// returned error retries with backoff forever and says nothing to
+			// whoever wrote the route name.
+			return fleetResult{phase: phaseFailed, reason: "RouteNotPublished", message: err.Error()}, nil
+		}
+		return fleetResult{}, err
 	}
 	if err := r.ensureKEDAScaledObject(ctx, tc, fleet, platform); err != nil {
 		if errors.Is(err, errKEDANotInstalled) {
 			// KEDA absence isn't fatal — scaling is optional. Log and
 			// move on; the deployment runs at the static replica count.
-			return phaseReady, safeAgentCount(fleet), nil
+			return fleetResult{phase: phaseReady, readyAgents: safeAgentCount(fleet)}, nil
 		}
-		return "", 0, err
+		return fleetResult{}, err
 	}
-	return phaseReady, safeAgentCount(fleet), nil
+	return fleetResult{phase: phaseReady, readyAgents: safeAgentCount(fleet)}, nil
 }
 
 //nolint:dupl // status writeback mirrors the other reconcilers by design
-func (r *AgentFleetReconciler) applyFleetStatus(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, phase string, readyAgents int32) error {
-	fleet.Status.Phase = phase
-	fleet.Status.ReadyAgents = readyAgents
+func (r *AgentFleetReconciler) applyFleetStatus(ctx context.Context, fleet *agentsv1alpha1.AgentFleet, res fleetResult) error {
+	fleet.Status.Phase = res.phase
+	fleet.Status.ReadyAgents = res.readyAgents
 	fleet.Status.ObservedGeneration = fleet.Generation
-	fleetReadyAgents.WithLabelValues(fleet.Namespace, fleet.Spec.PlatformRef.Name, fleet.Name).Set(float64(readyAgents))
+	fleetReadyAgents.WithLabelValues(fleet.Namespace, fleet.Spec.PlatformRef.Name, fleet.Name).Set(float64(res.readyAgents))
 	cond := metav1.Condition{
 		Type:               "AgentsReconciled",
 		Status:             metav1.ConditionTrue,
 		Reason:             "Reconciled",
-		Message:            fmt.Sprintf("%d agent(s) emitted", readyAgents),
+		Message:            fmt.Sprintf("%d agent(s) emitted", res.readyAgents),
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: fleet.Generation,
 	}
-	switch phase {
-	case phaseReady:
+	switch {
+	case res.phase == phaseReady:
 		// healthy — condition stays True
-	case phaseSuspended:
+	case res.reason != "":
+		// A spec error the fleet's own manifest caused. It gets its own reason
+		// and the message that names what is wrong, because the generic
+		// wait-on-Platform text would send the reader to the wrong object.
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = res.reason
+		cond.Message = res.message
+	case res.phase == phaseSuspended:
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = reasonPlatformSuspended
 		cond.Message = "Platform kill-switch fired; fleet scaled to zero"

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -190,6 +191,69 @@ func routeStatuses(mg *agentsv1alpha1.ModelGateway, platform *platformv1alpha1.P
 		})
 	}
 	return out
+}
+
+// Failures a caller of publishedRoutes has to tell apart. The first two are
+// timing — a gateway that has not reconciled yet resolves itself — and the
+// third is a spec error that never will.
+var (
+	errGatewayNotFound     = errors.New("no ModelGateway references this Platform")
+	errGatewayNotPublished = errors.New("ModelGateway has not published its route contract yet")
+	errGatewayAmbiguous    = errors.New("more than one ModelGateway references this Platform")
+)
+
+// publishedRoutes reads a Platform's route contract off ModelGateway status,
+// keyed by route name.
+//
+// Callers configure a model client from this rather than from
+// ModelGatewayEndpoint, because the endpoint alone is not a usable base URL for
+// any client — the gateway serves each wire format under its own prefix, and a
+// request to an unprefixed path reaches no body processor, gets no
+// x-ai-eg-model header, and matches no route rule. That failure looks like a
+// healthy gateway with a dead data path, which is why the base URL is read from
+// what the reconciler published rather than assembled by each caller.
+//
+// Ambiguity is an error, not a choice. Every rendered object is named from the
+// Platform (see namesFor), so two ModelGateways referencing one Platform are
+// two writers of one Gateway; picking either would report a contract the tenant
+// may not be getting.
+func publishedRoutes(ctx context.Context, c client.Client, platform *platformv1alpha1.Platform) (map[string]agentsv1alpha1.RouteStatus, error) {
+	var list agentsv1alpha1.ModelGatewayList
+	if err := c.List(ctx, &list, client.InNamespace(platform.Namespace)); err != nil {
+		return nil, fmt.Errorf("list ModelGateways: %w", err)
+	}
+	var found *agentsv1alpha1.ModelGateway
+	for i := range list.Items {
+		if list.Items[i].Spec.PlatformRef.Name != platform.Name {
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("%w: %s and %s", errGatewayAmbiguous, found.Name, list.Items[i].Name)
+		}
+		found = &list.Items[i]
+	}
+	if found == nil {
+		return nil, errGatewayNotFound
+	}
+	if len(found.Status.Routes) == 0 {
+		return nil, fmt.Errorf("%w: %s", errGatewayNotPublished, found.Name)
+	}
+	out := make(map[string]agentsv1alpha1.RouteStatus, len(found.Status.Routes))
+	for _, route := range found.Status.Routes {
+		out[route.Name] = route
+	}
+	return out, nil
+}
+
+// routeNames lists the published route names in sorted order, for an error
+// message that tells the reader what they could have asked for.
+func routeNames(routes map[string]agentsv1alpha1.RouteStatus) []string {
+	names := make([]string, 0, len(routes))
+	for name := range routes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // effectiveModelID is the identifier the gateway sends upstream: an imported

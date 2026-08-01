@@ -84,6 +84,7 @@ func TestAgentFleetReconciler_VClusterTier_RoutesWorkloadIntoVCluster(t *testing
 		t.Fatalf("create tenant ns: %v", err)
 	}
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, tenantNSObj) })
+	publishFleetGateway(ctx, t, p, "primary")
 
 	vc := workloadAwareVCluster()
 	r := &controller.AgentFleetReconciler{

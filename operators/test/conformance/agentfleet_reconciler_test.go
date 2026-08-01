@@ -30,6 +30,40 @@ func newAgentFleetReconciler() *controller.AgentFleetReconciler {
 	}
 }
 
+// publishFleetGateway gives a Platform a ModelGateway that has already
+// published the named routes.
+//
+// A fleet reads that contract to configure its agents' model client, so without
+// one there is no base URL to hand them and the fleet stays Pending by design.
+// Stubbed here the same way the Platform's own Ready status is: the gateway
+// reconciler has its own conformance coverage, and driving it would make every
+// fleet test depend on the Envoy AI Gateway CRDs being installed.
+func publishFleetGateway(ctx context.Context, t *testing.T, p *platformv1alpha1.Platform, routes ...string) {
+	t.Helper()
+	mg := &agentsv1alpha1.ModelGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "gw"), Namespace: p.Namespace},
+		Spec: agentsv1alpha1.ModelGatewaySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: p.Name},
+			Routes: []agentsv1alpha1.ModelRouteSpec{{
+				Name: routes[0], ModelSource: agentsv1alpha1.ModelSourceFoundation,
+				ModelFamily: "anthropic", ModelID: "anthropic.claude-sonnet-5",
+			}},
+		},
+	}
+	mustCreate(ctx, t, mg)
+	for _, name := range routes {
+		mg.Status.Routes = append(mg.Status.Routes, agentsv1alpha1.RouteStatus{
+			Name:    name,
+			API:     agentsv1alpha1.RouteAPIAnthropic,
+			BaseURL: controller.RouteBaseURL(p, agentsv1alpha1.RouteAPIAnthropic),
+		})
+	}
+	if err := k8sClient.Status().Update(ctx, mg); err != nil {
+		t.Fatalf("publish route contract: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, mg) })
+}
+
 func reconcileFleet(ctx context.Context, t *testing.T, fleet *agentsv1alpha1.AgentFleet) {
 	t.Helper()
 	r := newAgentFleetReconciler()
@@ -98,6 +132,7 @@ func TestAgentFleetReconciler_ReadyOnceThePlatformIs(t *testing.T) {
 		t.Fatalf("create tenant ns: %v", err)
 	}
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, tenantNs) })
+	publishFleetGateway(ctx, t, p, "primary")
 
 	fleet := &agentsv1alpha1.AgentFleet{
 		ObjectMeta: metav1.ObjectMeta{Name: uniqueName(t, "fleet"), Namespace: testNs},
