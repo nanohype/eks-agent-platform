@@ -58,6 +58,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from pricing_data import PRICING
 
@@ -146,9 +147,35 @@ def _imported_key(model_id: str) -> str:
 _ROLE_PLATFORM_CACHE: dict[str, str] = {}
 _ROLE_CACHE_MAX = 512
 
+# IAM errors that are a settled answer rather than a bad moment. These ARE cached:
+# the grant's scope and a role's existence do not change under a running container,
+# and every principal in the account appears in this log group — not just tenants —
+# so the unreadable ones are the common case, not the exception.
+_TERMINAL_LOOKUP_ERRORS = frozenset({"AccessDenied", "AccessDeniedException", "NoSuchEntity"})
+
 # Roles seen in this batch that yielded no PlatformId, so the gap is published
 # rather than absorbed into the "unknown" bucket silently. Reset per invocation.
 _UNTAGGED_ROLES: dict[str, int] = defaultdict(int)
+
+# Roles whose lookup failed TRANSIENTLY in this batch. Two scopes are in play and
+# conflating them is what makes this dangerous:
+#
+#   across invocations — a fresh look is right, so these are never written to
+#     _ROLE_PLATFORM_CACHE. Pinning a real tenant to "unknown" for the life of a
+#     warm container would turn a blip into hours of unattributed spend.
+#   within one batch — a role that just threw will throw again, and re-asking is
+#     pure amplification.
+#
+# The amplification is not one extra request. botocore's default retry mode is
+# legacy: up to 5 attempts with `rand() * 2^(n-1)` backoff, which is several
+# seconds of sleeping per sustained-throttled lookup, and this function's timeout
+# is 30s. A handful of such records exhausts it — and because every _emit_* call
+# happens AFTER the record loop, a timeout mid-loop publishes nothing at all: the
+# batch's cost metric, token metrics and estimate export are all lost, CloudWatch
+# Logs re-invokes, and the retry re-enters the same throttle. A degraded record
+# becomes a silent zero for the whole batch, which is the failure this Lambda is
+# supposed to have stopped having.
+_BATCH_FAILED_ROLES: set[str] = set()
 
 
 def _platform_id_for_role(role_name: str) -> str:
@@ -158,6 +185,10 @@ def _platform_id_for_role(role_name: str) -> str:
         if cached == "unknown":
             _UNTAGGED_ROLES[role_name] += 1
         return cached
+    if role_name in _BATCH_FAILED_ROLES:
+        # Already failed transiently in this batch; do not pay the retry storm again.
+        _UNTAGGED_ROLES[role_name] += 1
+        return "unknown"
 
     try:
         # Paginated, and NOT because a role can carry more tags than a page holds —
@@ -173,12 +204,32 @@ def _platform_id_for_role(role_name: str) -> str:
             for page in iam.get_paginator("list_role_tags").paginate(RoleName=role_name)
             for t in page["Tags"]
         ]
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in _TERMINAL_LOOKUP_ERRORS:
+            # A settled "no". AccessDenied means the role is outside the grant's IAM
+            # path — every principal in the account shows up in this log group, not
+            # just tenants, and none of the others are readable by design.
+            # NoSuchEntity means the role is gone. Neither answer changes while this
+            # container lives, and NOT caching them would mean one IAM call per log
+            # RECORD for every non-tenant Bedrock caller in the account, against a
+            # global throttled endpoint, in the hot path of an account-wide firehose.
+            logger.warning("cannot read tags for role %s (%s); attributing to 'unknown'", role_name, code)
+            _UNTAGGED_ROLES[role_name] += 1
+            if len(_ROLE_PLATFORM_CACHE) < _ROLE_CACHE_MAX:
+                _ROLE_PLATFORM_CACHE[role_name] = "unknown"
+            return "unknown"
+        # Transient (throttle, timeout, 5xx). NOT cached — a retry gets a fresh look,
+        # because pinning a real tenant to "unknown" for the life of a warm container
+        # would turn a blip into hours of spend attributed to nobody.
+        logger.warning("could not read tags for role %s (%s); attributing to 'unknown'", role_name, code or "unknown error")
+        _UNTAGGED_ROLES[role_name] += 1
+        _BATCH_FAILED_ROLES.add(role_name)
+        return "unknown"
     except Exception:
-        # Transient (throttle, timeout) or terminal (role deleted between the
-        # invocation and this read). Either way this batch cannot attribute the
-        # spend, and it is NOT cached — a retry gets a fresh look.
         logger.warning("could not read tags for role %s; attributing to 'unknown'", role_name, exc_info=True)
         _UNTAGGED_ROLES[role_name] += 1
+        _BATCH_FAILED_ROLES.add(role_name)
         return "unknown"
 
     platform_id = next((t["Value"] for t in tags if t["Key"] == PLATFORM_ID_TAG), "")
@@ -444,6 +495,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     # went untagged once should not keep re-reporting on every later invocation
     # the warm container serves.
     _UNTAGGED_ROLES.clear()
+    _BATCH_FAILED_ROLES.clear()
 
     per_platform: dict[str, float] = defaultdict(float)
     aggregates: dict[tuple[str, str], dict[str, float]] = {}

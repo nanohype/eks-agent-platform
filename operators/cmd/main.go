@@ -169,7 +169,15 @@ func main() {
 	// they render one hyphen shorter and keep working, so a Platform's roles and
 	// its CUR rows silently drop the discriminator that keeps two clusters in one
 	// account apart. Refuse rather than mint them.
-	if clusterName == "" {
+	//
+	// Gated on the AWS path, because that is where the discriminator does work.
+	// Under --disable-aws there is no IAM client, so no role and no tag is ever
+	// created, and the chart ships clusterName empty by default for exactly that
+	// shape — the local kind install sets --disable-aws and nothing else. Refusing
+	// there would turn every documented local install into a CrashLoopBackOff
+	// without protecting anything. The budget reconciler holds the same line
+	// unconditionally at the point a missing name would produce a number.
+	if !disableAWS && clusterName == "" {
 		setupLog.Error(nil, "--cluster-name (or AGENTS_CLUSTER_NAME) is required and was empty; refusing to start",
 			"why", "it qualifies tenant role names and the PlatformId cost-attribution tag, and an empty value degrades silently rather than failing")
 		os.Exit(1)

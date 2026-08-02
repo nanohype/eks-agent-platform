@@ -41,6 +41,8 @@ from unittest import mock
 # module under test. No AWS calls are made — the clients are mocked per-test.
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
+from botocore.exceptions import ClientError  # noqa: E402
+
 import invocation_cost_publisher as iv  # noqa: E402
 
 # The role names the operator really mints, and the cost identity it stamps on
@@ -52,6 +54,7 @@ PLATFORM = "acme"
 COST_ID = f"{CLUSTER}-{PLATFORM}"  # operators: platformCostID(cluster, name)
 TENANT_ROLE = f"{CLUSTER}-{PLATFORM}-tenant"
 SESSION_ROLE = f"{CLUSTER}-{PLATFORM}-session"
+PLATFORM_ID_TAG_KEY = "PlatformId"
 
 
 def _arn(role_name: str) -> str:
@@ -106,6 +109,7 @@ class AttributionTestCase(unittest.TestCase):
     def setUp(self) -> None:
         iv._ROLE_PLATFORM_CACHE.clear()
         iv._UNTAGGED_ROLES.clear()
+        iv._BATCH_FAILED_ROLES.clear()
 
     def run_handler(self, records: list[dict], tags: dict | Exception | None = None):
         """Run the handler with IAM stubbed, returning (result, metrics, iam_mock)."""
@@ -231,15 +235,56 @@ class PlatformAttributionTest(AttributionTestCase):
         _result, _metrics, iam = self.run_handler([_record(TENANT_ROLE) for _ in range(5)])
         self.assertEqual(iam.get_paginator.return_value.paginate.call_count, 1)
 
-    def test_iam_failure_is_not_cached(self):
-        # A throttle must not pin a role to "unknown" for the rest of the warm
-        # container's life — that would turn a transient blip into hours of spend
-        # attributed to nobody, long after IAM recovered.
+    def test_access_denied_is_a_settled_answer_and_is_cached(self):
+        # The log group is account-wide — Bedrock invocation logging is one
+        # configuration per account+region, so every principal's invocations land in
+        # it, not just tenants'. The grant is scoped to the operator's IAM path, so
+        # AccessDenied on everything else is the DESIGN, not an incident, and it is
+        # the common case rather than the exception. Not caching it would mean one
+        # IAM call per log RECORD for every non-tenant Bedrock caller in the account,
+        # against a global throttled endpoint, in the hot path of a firehose.
+        for code in ("AccessDenied", "NoSuchEntity"):
+            with self.subTest(code=code):
+                iv._ROLE_PLATFORM_CACHE.clear()
+                err = ClientError({"Error": {"Code": code, "Message": "x"}}, "ListRoleTags")
+                with mock.patch.object(iv, "iam") as iam:
+                    paginate = _stub_iam(iam, err)
+                    for _ in range(4):
+                        self.assertEqual(iv._platform_id_for_role("some-other-role"), "unknown")
+                    self.assertEqual(paginate.call_count, 1)
+                self.assertEqual(iv._ROLE_PLATFORM_CACHE["some-other-role"], "unknown")
+
+    def test_a_transient_failure_is_asked_once_per_batch_not_once_per_record(self):
+        # The amplification this prevents is not one extra request. botocore's
+        # default retry mode is legacy — up to 5 attempts with rand()*2^(n-1)
+        # backoff — so a sustained throttle costs seconds of sleeping PER lookup,
+        # against a 30s function timeout. A handful of such records exhausts it,
+        # and every _emit_* call happens after the record loop, so a timeout
+        # mid-loop publishes NOTHING: the whole batch's cost metric, token metrics
+        # and estimate export are lost, CloudWatch Logs re-invokes, and the retry
+        # walks into the same throttle. One degraded record must not become a
+        # silent zero for the batch.
+        throttle = ClientError({"Error": {"Code": "Throttling", "Message": "slow down"}}, "ListRoleTags")
+        _result, _metrics, iam = self.run_handler([_record(TENANT_ROLE) for _ in range(25)], tags=throttle)
+        self.assertEqual(iam.get_paginator.return_value.paginate.call_count, 1)
+        # Still not cached across invocations — the next batch gets a fresh look.
+        self.assertNotIn(TENANT_ROLE, iv._ROLE_PLATFORM_CACHE)
+
+    def test_a_transient_failure_is_forgotten_at_the_next_batch(self):
+        # The other half of the two scopes. Within a batch a failed role is not
+        # re-asked; ACROSS batches it must be, because a throttle pinning a real
+        # tenant to "unknown" for the life of a warm container turns a blip into
+        # hours of spend attributed to nobody, long after IAM recovered.
         iv._ROLE_PLATFORM_CACHE.clear()
         with mock.patch.object(iv, "iam") as iam:
-            _stub_iam(iam, RuntimeError("Throttling"))
+            _stub_iam(iam, ClientError({"Error": {"Code": "Throttling", "Message": "slow down"}}, "ListRoleTags"))
             self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), "unknown")
         self.assertNotIn(TENANT_ROLE, iv._ROLE_PLATFORM_CACHE)
+        self.assertIn(TENANT_ROLE, iv._BATCH_FAILED_ROLES)
+
+        # A new invocation. The handler clears the batch memo; the long-lived cache
+        # is untouched, so the role gets a genuinely fresh look.
+        iv._BATCH_FAILED_ROLES.clear()
         with mock.patch.object(iv, "iam") as iam:
             _stub_iam(iam, _tagged(PlatformId=COST_ID))
             self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), COST_ID)
@@ -255,6 +300,44 @@ class PlatformAttributionTest(AttributionTestCase):
         # Still counted every time, so the published gap reflects invocations
         # rather than cache misses.
         self.assertEqual(iv._UNTAGGED_ROLES[TENANT_ROLE], 3)
+
+
+class RealBotoCallShapeTest(unittest.TestCase):
+    """The one test that is not talking to a MagicMock.
+
+    Every other IAM assertion in this file goes through `mock.patch.object(iv, "iam")`,
+    and a MagicMock accepts any operation name, any kwarg, and returns whatever the
+    test handed it. That proves the code reads what the MOCK returns — it cannot
+    notice a misspelled paginator name, a wrong parameter, or a response key that
+    does not exist. Which is the same category of green the old prefix-strip tests
+    produced: a fixture agreeing with the author instead of with the service.
+
+    botocore's Stubber validates both directions against the real service model, so
+    this pins the call shape. Nothing here reaches the network.
+    """
+
+    def test_the_lookup_matches_the_real_iam_api(self):
+        import boto3
+        from botocore.stub import Stubber
+
+        client = boto3.client("iam", region_name="us-east-1")
+        stubber = Stubber(client)
+        # Rejected at add_response time if ListRoleTags does not take RoleName, or
+        # if the response does not carry Tags/IsTruncated in this shape.
+        stubber.add_response(
+            "list_role_tags",
+            {"Tags": [{"Key": PLATFORM_ID_TAG_KEY, "Value": COST_ID}], "IsTruncated": False},
+            {"RoleName": TENANT_ROLE},
+        )
+        with stubber, mock.patch.object(iv, "iam", client):
+            iv._ROLE_PLATFORM_CACHE.clear()
+            self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), COST_ID)
+        stubber.assert_no_pending_responses()
+
+    def test_the_tag_key_is_the_one_cost_explorer_activates(self):
+        # Case-sensitive in Billing, and the CUR column is derived from it. A
+        # lowercase key activates nothing and the reconciler's column never exists.
+        self.assertEqual(iv.PLATFORM_ID_TAG, "PlatformId")
 
 
 class EstimateCostTest(AttributionTestCase):

@@ -8,6 +8,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
@@ -226,6 +228,101 @@ func TestCostIdentity_RefusesToAttributeWithoutTheDiscriminator(t *testing.T) {
 	}
 	if athena.lastQuery != "" {
 		t.Errorf("no query may be issued without the discriminator, got: %s", athena.lastQuery)
+	}
+}
+
+func TestInflightWindowIsClampedToTheBillingPeriod(t *testing.T) {
+	// The two spend legs are summed and compared against a MONTHLY budget, and the
+	// CUR leg starts at date_trunc('month', current_date). An unclamped 24h lookback
+	// therefore reaches into the previous month for the whole first day of every
+	// month, adding spend from a period the budget already closed. At 120% that
+	// suspends a Platform on the 1st for money it spent in a month it was allowed to.
+	//
+	// Latent until now: while the in-flight leg returned a permanent zero, the window
+	// it covered could not be wrong. Fixing the leg is what makes this reachable.
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "first hour of the month clamps to the month start",
+			now:  time.Date(2026, 3, 1, 0, 30, 0, 0, time.UTC),
+			want: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "late on the first still clamps",
+			now:  time.Date(2026, 3, 1, 23, 59, 0, 0, time.UTC),
+			want: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "exactly 24h in, the lookback reaches the month start and no further",
+			now:  time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "mid-month is a plain 24h lookback",
+			now:  time.Date(2026, 3, 17, 9, 15, 0, 0, time.UTC),
+			want: time.Date(2026, 3, 16, 9, 15, 0, 0, time.UTC),
+		},
+		{
+			name: "January clamps to January, not to December",
+			now:  time.Date(2026, 1, 1, 6, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inflightWindowStart(tc.now); !got.Equal(tc.want) {
+				t.Errorf("inflightWindowStart(%s) = %s, want %s\n"+
+					"    A window starting before the billing period counts spend the CUR leg\n"+
+					"    excludes, against a budget that already closed on it.", tc.now, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestKillSwitchEventCarriesTheBarePlatformName(t *testing.T) {
+	// The third value spelled "platformId", and the one the change deliberately did
+	// NOT move. The kill-switch Step Functions machine composes the tenant role name
+	// as States.Format("<cluster>-{}-tenant", $.detail.platformId), so the cluster
+	// token comes from the pattern and the event must supply the BARE name. Sending
+	// the cluster-qualified identity would produce
+	// `<cluster>-<cluster>-<platform>-tenant`, and DetachRolePolicy against a
+	// nonexistent role routes to RecordFailure with no alarm path — a kill switch
+	// that reports firing and detaches nothing.
+	//
+	// Pinned for the same reason as TestKmsGrantContextIsNotTheCostIdentity: three
+	// values now share one key name, and the only one that must stay bare is the one
+	// whose consumer adds the qualification itself.
+	bp := &governancev1alpha1.BudgetPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "acme-budget", Namespace: "tenants-acme"},
+		Spec: governancev1alpha1.BudgetPolicySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: identityPlatform}, MonthlyUsd: "100.00",
+		},
+	}
+	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{FailedEntryCount: 0}}
+	r := &BudgetReconciler{EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", ClusterName: identityCluster}
+	if err := r.fireKillSwitch(context.Background(), bp, "150.00", 150); err != nil {
+		t.Fatalf("fireKillSwitch: %v", err)
+	}
+	if len(eb.calls) != 1 {
+		t.Fatalf("want one PutEvents call, got %d", len(eb.calls))
+	}
+	var detail struct {
+		PlatformID string `json:"platformId"`
+	}
+	if err := json.Unmarshal([]byte(aws.ToString(eb.calls[0].Entries[0].Detail)), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if detail.PlatformID != identityPlatform {
+		t.Errorf("BudgetBreach detail.platformId = %q, want the bare name %q\n"+
+			"    The SFN pattern already supplies the cluster token; a qualified value here\n"+
+			"    composes <cluster>-<cluster>-<platform>-tenant and detaches nothing.",
+			detail.PlatformID, identityPlatform)
+	}
+	if detail.PlatformID == platformCostID(identityCluster, identityPlatform) {
+		t.Error("the kill-switch event has been given the cost-attribution identity — " +
+			"these are deliberately different values behind one key name")
 	}
 }
 

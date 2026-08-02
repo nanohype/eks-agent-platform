@@ -159,6 +159,23 @@ func curTagColumn(tagKey string) string {
 	return strings.Trim(out, "_")
 }
 
+// inflightWindowStart returns the earliest instant the in-flight CloudWatch leg may
+// count from: 24h back to cover CUR's partition lag, clamped to the start of the
+// billing period the CUR leg measures.
+//
+// Both legs feed one total compared against a monthly budget, so the in-flight
+// window may never extend before the month the CUR query begins at. Kept as its own
+// function because the clamp is the whole point and an inline expression invites
+// somebody to "simplify" it back to a bare subtraction.
+func inflightWindowStart(now time.Time) time.Time {
+	now = now.UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	if lookback := now.Add(-24 * time.Hour); lookback.After(monthStart) {
+		return lookback
+	}
+	return monthStart
+}
+
 // querySpendFromAthena runs the CUR rollup query for the current
 // billing-period MTD and returns the spend (decimal USD as string,
 // preserving precision) for the given PlatformId tag.
@@ -596,8 +613,20 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 		return budgetReading{}, err
 	}
 
-	// In-flight invocation cost (last 24h to cover CUR partition lag).
-	since := time.Now().Add(-24 * time.Hour).UTC()
+	// In-flight invocation cost — the last 24h, to cover CUR partition lag, but
+	// never earlier than the billing period the CUR leg is measuring.
+	//
+	// The two legs are summed and compared against a MONTHLY budget, and the CUR
+	// leg is strictly month-to-date (date_trunc('month', current_date)). An
+	// unclamped 24h lookback reaches into the previous month for the first day of
+	// every month, so a tenant that spent its budget in January starts February
+	// with up to a day of January's spend already counted against February's — and
+	// at killSwitchBreachPercent that suspends a Platform on the 1st for money it
+	// spent before the period began.
+	//
+	// This only became reachable when the in-flight leg started returning a number
+	// at all; while it read a permanent zero the window could not be wrong.
+	since := inflightWindowStart(time.Now().UTC())
 	spendInflight, err := r.queryInflightCost(ctx, costID, since)
 	if err != nil {
 		// CloudWatch outage shouldn't block the entire reconciler; we log

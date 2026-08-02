@@ -49,7 +49,16 @@ locals {
   # every invocation attributed to "unknown", every budget reading low. One value read two ways
   # is the shape this whole component is being corrected for; it should not be reintroduced by
   # the fix.
-  tenant_iam_path = endswith(data.aws_ssm_parameter.tenant_iam_path.value, "/") ? data.aws_ssm_parameter.tenant_iam_path.value : "${data.aws_ssm_parameter.tenant_iam_path.value}/"
+  #
+  # nonsensitive() because the aws_ssm_parameter data source marks every value
+  # sensitive regardless of type, and that mark propagates through jsonencode into
+  # the whole IAM policy document — so `tofu plan` would print
+  # `policy = (sensitive value)` and hide every future change to the cost
+  # publisher's permissions from review. An IAM path is a public-by-construction
+  # string that this repo already writes out in full elsewhere; a plan that cannot
+  # show a permissions diff is a worse outcome than naming it.
+  tenant_iam_path_raw = nonsensitive(data.aws_ssm_parameter.tenant_iam_path.value)
+  tenant_iam_path     = endswith(local.tenant_iam_path_raw, "/") ? local.tenant_iam_path_raw : "${local.tenant_iam_path_raw}/"
 
   # The Athena column AWS produces for the PlatformId cost-allocation tag. Every CUR consumer
   # in this component filters on it, and the operator's BudgetReconciler derives the same name

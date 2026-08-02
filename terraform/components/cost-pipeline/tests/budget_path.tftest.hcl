@@ -140,12 +140,19 @@ run "the_publisher_can_read_the_tag_it_attributes_by" {
   # Read-only and path-scoped. A tag read that reaches every role in the account
   # is a wider grant than the job needs, and this Lambda is subscribed to a log
   # group carrying every Bedrock invocation in the account.
+  #
+  # Asserted as "every resource is under the operator's IAM path", not as "is not
+  # one particular over-broad spelling". A blocklist of bad values passes for every
+  # value it forgot — `Resource = ["*"]` is broader than `:role/*` and would sail
+  # through a check that only rejects the latter.
   assert {
     condition = alltrue([
       for s in jsondecode(aws_iam_role_policy.invocation_cost_publisher.policy).Statement :
-      !contains(s.Action, "iam:ListRoleTags") || alltrue([for r in tolist(s.Resource) : !endswith(r, ":role/*")])
+      !contains(s.Action, "iam:ListRoleTags") || alltrue([
+        for r in tolist(s.Resource) : startswith(r, "arn:aws:iam::123456789012:role${local.tenant_iam_path}")
+      ])
     ])
-    error_message = "the tag-read grant must be scoped to the operator's IAM path, not to every role in the account"
+    error_message = "the tag-read grant must be scoped to the operator's IAM path — every resource in the statement must sit under it, so a wildcard broader than the path (including a bare \"*\") fails here rather than granting a log-firehose Lambda tag-read over every role in the account"
   }
 
   # No environment or cluster token reaches the Lambda. One would be a second place
