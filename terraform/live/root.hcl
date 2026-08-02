@@ -26,6 +26,24 @@ provider "aws" {
     }
   }
 }
+
+# Cost and Usage Reports and Cost Explorer are us-east-1-only APIs. A component that
+# reaches them declares `configuration_aliases = [aws.us_east_1]` and takes this;
+# a component that does not simply ignores it.
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+  default_tags {
+    tags = {
+      Environment  = "${local.environment}"
+      ManagedBy    = "opentofu"
+      Project      = "eks-agent-platform"
+      CostCenter   = "${local.cost_center}"
+      BusinessUnit = "${local.business_unit}"
+      Repository   = "nanohype/eks-agent-platform"
+    }
+  }
+}
 EOF
 }
 

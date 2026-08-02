@@ -18,6 +18,8 @@ import (
 	athenatypes "github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // These are contract tests pinning the exact Athena and CloudWatch response
@@ -111,7 +113,13 @@ func TestQuerySpendFromAthena_ContractHappyPath(t *testing.T) {
 	}
 	// The CUR-rollup query contract: it filters on the PlatformId user-tag column
 	// and sums the unblended cost month-to-date.
-	for _, want := range []string{"resource_tags_user_platformid = 'acme'", "line_item_unblended_cost", "date_trunc('month'"} {
+	//
+	// The column is spelled out here rather than derived, deliberately. This test and
+	// curTagColumn must agree by AGREEING WITH AWS, not with each other — deriving it
+	// on both sides would let a wrong transform pass its own assertion, which is how
+	// the previous spelling (resource_tags_user_platformid, missing the split inside
+	// PlatformId) survived.
+	for _, want := range []string{"resource_tags_user_platform_id = 'acme'", "line_item_unblended_cost", "date_trunc('month'"} {
 		if !strings.Contains(a.lastQuery, want) {
 			t.Errorf("CUR rollup query missing %q:\n%s", want, a.lastQuery)
 		}
@@ -269,5 +277,62 @@ func TestSleepCtx_RespectsCancellation(t *testing.T) {
 	cancel()
 	if err := sleepCtx(ctx, time.Hour); err == nil {
 		t.Fatal("sleepCtx must return the context error when canceled")
+	}
+}
+
+// TestCurTagColumn pins AWS's documented CUR-to-Athena column transform. The cases
+// are AWS's own worked examples from the "Column names" section of the Cost and
+// Usage Reports user guide, plus the tag this operator actually stamps.
+//
+// This is the far end of the budget path that nothing else can reach offline: the
+// real column name is produced by AWS when it loads the Parquet, so the only thing
+// a test here can bind is that the operator applies the same published rule.
+func TestCurTagColumn(t *testing.T) {
+	cases := map[string]string{
+		// The tag the operator stamps. The split inside PlatformId is the whole
+		// point — "an underscore is added in front of uppercase letters" applies
+		// inside the word, not only at its start.
+		"PlatformId": "resource_tags_user_platform_id",
+		// AWS's two published examples, prefixed the way a user tag arrives.
+		"ExampleColumnName":   "resource_tags_user_example_column_name",
+		"Example Column Name": "resource_tags_user_example_column_name",
+		// Non-alphanumerics collapse, and duplicates are removed rather than kept.
+		"cost--center": "resource_tags_user_cost_center",
+		"trailing_":    "resource_tags_user_trailing",
+	}
+	for in, want := range cases {
+		if got := curTagColumn(in); got != want {
+			t.Errorf("curTagColumn(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestCurTagColumnMatchesTheActivatedTag proves the column the query filters on is
+// derived from the same tag key cost-pipeline activates in Cost Explorer. An
+// activated tag the query does not name, or a named column no tag produces, are the
+// same defect: a query that runs, returns zero, and trips no alarm.
+func TestCurTagColumnMatchesTheActivatedTag(t *testing.T) {
+	if platformIDTagKey != "PlatformId" {
+		t.Fatalf("platformIDTagKey = %q — cost-pipeline activates PlatformId; changing one side alone silently zeroes every budget", platformIDTagKey)
+	}
+	if got := curTagColumn(platformIDTagKey); got != "resource_tags_user_platform_id" {
+		t.Errorf("the query would filter on %q, which is not the column AWS produces for %q", got, platformIDTagKey)
+	}
+}
+
+// TestBudgetSpendUnreadableIsCounted proves the failure path is observable. Before
+// this counter the only evidence a tenant had no budget enforcement was a condition
+// on one CR: Reconcile records the error and returns nil, so it never reaches
+// controller_runtime_reconcile_errors_total, and BudgetReconcileLag keys on a field
+// written only on the success path — absent, not stale, for a policy that has never
+// once worked.
+func TestBudgetSpendUnreadableIsCounted(t *testing.T) {
+	budgetSpendUnreadableTotal.Reset()
+	if got := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues("ns", "bp", "acme")); got != 0 {
+		t.Fatalf("counter should start at zero, got %v", got)
+	}
+	budgetSpendUnreadableTotal.WithLabelValues("ns", "bp", "acme").Inc()
+	if got := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues("ns", "bp", "acme")); got != 1 {
+		t.Errorf("a reconcile that could not read spend must increment the counter, got %v", got)
 	}
 }

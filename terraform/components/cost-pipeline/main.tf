@@ -129,14 +129,25 @@ resource "aws_s3_bucket_versioning" "cur" {
   }
 }
 
+# The bucket default is SSE-S3 because the Cost and Usage Reports service cannot
+# deliver into an SSE-KMS bucket. Its delivery role is the service principal
+# billingreports.amazonaws.com holding exactly the two statements AWS publishes —
+# GetBucketAcl/GetBucketPolicy and PutObject — and AWS documents no KMS key-policy
+# statement for it anywhere, stating instead that exports are encrypted with
+# SSE-S3 and that using SSE-KMS means re-encrypting after delivery. A CMK default
+# here does not harden the bucket: it makes every PutObject fail, so the bucket
+# stays empty and every budget decision reads zero.
+#
+# The estimates the cost publisher writes under estimates/ are NOT affected — the
+# Lambda sets ServerSideEncryption=aws:kms and SSEKMSKeyId per object, which
+# overrides the bucket default, so first-party data keeps the CMK and only the
+# AWS-delivered billing detail is SSE-S3.
 resource "aws_s3_bucket_server_side_encryption_configuration" "cur" {
   bucket = aws_s3_bucket.cur.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = var.data_kms_key_arn
+      sse_algorithm = "AES256"
     }
-    bucket_key_enabled = true
   }
 }
 
@@ -255,7 +266,26 @@ resource "aws_s3_bucket_lifecycle_configuration" "cur" {
   }
 }
 
+# Activating the cost-allocation tag is what makes PlatformId a column in CUR at
+# all. Until it is active the column is absent from the Parquet, the crawler never
+# registers it, and the reconciler's WHERE clause matches nothing — the pipeline is
+# valid end to end and reports zero for every tenant.
+#
+# Account-level, us-east-1, and NOT retroactive: spend that landed before activation
+# is unattributable forever, whatever is fixed downstream. That is why it is declared
+# alongside the report definition rather than left as a console step.
+resource "aws_ce_cost_allocation_tag" "platform_id" {
+  provider = aws.us_east_1
+
+  tag_key = "PlatformId"
+  status  = "Active"
+}
+
 resource "aws_cur_report_definition" "this" {
+  # us-east-1 only — the CUR API has no endpoint anywhere else, so this resource
+  # cannot be created through the workload-region provider at all.
+  provider = aws.us_east_1
+
   report_name                = var.cur_report_name
   time_unit                  = "HOURLY"
   format                     = "Parquet"
@@ -429,6 +459,32 @@ resource "aws_iam_policy" "operator_cost" {
         ]
       },
       {
+        Sid    = "CostDataKMS"
+        Effect = "Allow"
+        # Athena runs S3 and KMS access under the CALLER's identity, and the caller
+        # here is the operator role this policy attaches to. Three actions, all
+        # load-bearing on the same key:
+        #   Decrypt         - read the estimates/ objects the cost publisher writes
+        #                     with an explicit SSE-KMS header, and read a result set
+        #                     back on GetQueryResults
+        #   GenerateDataKey - WRITE the result set. The workgroup sets
+        #                     enforce_workgroup_configuration with SSE_KMS results,
+        #                     so this is not optional, and Decrypt alone leaves every
+        #                     query failing at the write step
+        #   DescribeKey     - the SDK's key-resolution path
+        #
+        # Without these the query returns FAILED on every tick, reconcileBudget
+        # returns before the kill-switch block, and a tenant at 120% of budget never
+        # trips it with nothing anywhere going red.
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+        Resource = [var.data_kms_key_arn]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = ["s3.${var.region}.amazonaws.com"]
+          }
+        }
+      },
+      {
         Sid    = "BedrockMetrics"
         Effect = "Allow"
         Action = [
@@ -491,17 +547,6 @@ resource "aws_iam_role_policy" "cur_crawler" {
         Action   = ["s3:GetObject", "s3:ListBucket"]
         Resource = [aws_s3_bucket.cur.arn, "${aws_s3_bucket.cur.arn}/*"]
       },
-      {
-        Sid      = "DecryptCURObjects"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
-        Resource = [var.data_kms_key_arn]
-        Condition = {
-          StringEquals = {
-            "kms:ViaService" = ["s3.${var.region}.amazonaws.com"]
-          }
-        }
-      }
     ]
   })
 }

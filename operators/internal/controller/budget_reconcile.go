@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -84,6 +85,46 @@ func (r *BudgetReconciler) resolveBudgetPlatform(ctx context.Context, bp *govern
 	return getReferencedPlatform(ctx, r.Client, bp.Namespace, bp.Spec.PlatformRef.Name, errPlatformBudgetNotFound)
 }
 
+// platformIDTagKey is the cost-allocation tag the operator stamps on every taggable
+// tenant resource, and the one cost-pipeline activates in Cost Explorer. Case
+// matters: Cost Explorer treats tag keys as case-sensitive.
+const platformIDTagKey = "PlatformId"
+
+// curTagColumn renders a user tag key as the column name it takes once AWS loads a
+// Cost and Usage Report into Athena.
+//
+// AWS applies these transforms, in order, and documents them under "Column names"
+// in the Athena section of the CUR user guide:
+//
+//	an underscore is added in front of uppercase letters
+//	uppercase letters are replaced with lowercase letters
+//	any non-alphanumeric characters are replaced with an underscore
+//	duplicate underscores are removed
+//	any leading and trailing underscores are removed
+//
+// So `resourceTags/user:PlatformId` becomes `resource_tags_user_platform_id` — note
+// the split inside PlatformId, which is the part a hand-written name gets wrong.
+// Deriving it means the tag key is the single source and the column follows it.
+func curTagColumn(tagKey string) string {
+	var b strings.Builder
+	for _, r := range "resourceTags/user:" + tagKey {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			b.WriteByte('_')
+			b.WriteRune(r + ('a' - 'A'))
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	out := b.String()
+	for strings.Contains(out, "__") {
+		out = strings.ReplaceAll(out, "__", "_")
+	}
+	return strings.Trim(out, "_")
+}
+
 // querySpendFromAthena runs the CUR rollup query for the current
 // billing-period MTD and returns the spend (decimal USD as string,
 // preserving precision) for the given PlatformId tag.
@@ -107,21 +148,24 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 		return "", fmt.Errorf("athena CUR table name %q failed validation; refusing to build query", r.AthenaCfg.CURTableName)
 	}
 
-	// Month-to-date sum of unblended cost grouped by the PlatformId user
-	// tag the operator stamps on every taggable AWS resource (tenant IAM
-	// role, KMS grant tag, bucket prefix tag — see ADR 0003). Tag columns
-	// in CUR v1 Athena get the format
-	//   resource_tags_user_<lowercased_tag_name>
-	// so PlatformId becomes resource_tags_user_platformid. Identifier
-	// inputs are validated against athenaIdentifierRE above; the value
-	// flows through escapeSQL even though Kubernetes already constrains
-	// it to RFC-1123 (defensive against future schema relaxations).
+	// Month-to-date sum of unblended cost grouped by the PlatformId user tag the
+	// operator stamps on every taggable AWS resource (tenant IAM role, KMS grant
+	// tag, bucket prefix tag — see ADR 0003). The column name is DERIVED from the
+	// tag key rather than written out, because the two have to agree and only one
+	// of them is ours: AWS renames CUR columns on the way into Athena, and a
+	// hand-copied name that drifts from that transform produces a query which is
+	// valid, runs, and returns nothing.
+	//
+	// Identifier inputs are validated against athenaIdentifierRE above; the value
+	// flows through escapeSQL even though Kubernetes already constrains it to
+	// RFC-1123 (defensive against future schema relaxations).
 	query := fmt.Sprintf(
 		`SELECT COALESCE(SUM(line_item_unblended_cost), 0) AS spend_usd
 		 FROM "%s"."%s"
-		 WHERE resource_tags_user_platformid = '%s'
+		 WHERE %s = '%s'
 		   AND line_item_usage_start_date >= date_trunc('month', current_date)`,
-		r.AthenaCfg.Database, r.AthenaCfg.CURTableName, escapeSQL(platformID),
+		r.AthenaCfg.Database, r.AthenaCfg.CURTableName,
+		curTagColumn(platformIDTagKey), escapeSQL(platformID),
 	)
 	startOut, err := r.Athena.StartQueryExecution(ctx, &athena.StartQueryExecutionInput{
 		QueryString: aws.String(query),
