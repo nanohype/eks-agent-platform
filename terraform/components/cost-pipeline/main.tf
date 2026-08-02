@@ -30,7 +30,7 @@ locals {
   # Account + region. Region is load-bearing even though a CUR's DATA is
   # account-global: these are S3 buckets and a Glue database, which live in a region
   # and share a global namespace, so a second region must not collide on the name.
-  prefix = "org-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-cost"
+  prefix = "${var.environment}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-cost"
 
   tags = merge(var.tags, {
     Component = "cost-pipeline"

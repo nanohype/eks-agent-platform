@@ -66,6 +66,12 @@ locals {
   tags = merge(var.tags, {
     Component = "cost-access"
     Tier      = "platform"
+
+    # Which workload environment this grant belongs to. The pipeline it reaches is
+    # account-scoped and carries Scope = "account"; this side is the per-cluster
+    # counterpart, and an auditor reading an IAM policy in the console should be able
+    # to tell which of the two they are looking at without resolving the ARN.
+    Environment = var.environment
   })
 
   # nonsensitive() throughout: the aws_ssm_parameter data source marks every value

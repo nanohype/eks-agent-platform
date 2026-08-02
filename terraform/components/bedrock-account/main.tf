@@ -8,7 +8,7 @@ locals {
   # keep. `org-` matches the org's account-scoped bucket idiom (landing-zone's
   # org-cost uses `org-<account>-cur-export`); the region is load-bearing because
   # S3's namespace is global while Bedrock logging is per-region.
-  prefix = "org-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-bedrock"
+  prefix = "${var.environment}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-bedrock"
 
   tags = merge(var.tags, {
     Component = "bedrock-account"
