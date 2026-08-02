@@ -144,3 +144,37 @@ run "governance_mode_permits_the_destroy_it_promises_to_permit" {
     error_message = "the access-logs bucket must move on the same lever as the invocations bucket — AWS spreads these gates across resources the dependency graph does not join, so a partially-gated component destroys what it can and then blocks"
   }
 }
+
+# The invocations bucket is versioned and WORM. Object Lock holds every version until
+# its own retain-until date, so nothing bounds it early — but transitions alone move
+# the cost down a tier and never end it, which leaves the account's invocation record
+# growing for the life of the account and a teardown with nothing to reach. The expiry
+# has to outlast the lock, or it is a plan AWS refuses object by object.
+#
+# This matters more here than it did per-environment: there is now exactly one of
+# these buckets and it carries every environment's invocations, so an unbounded record
+# is the account's problem rather than one environment's.
+run "the_invocation_record_is_bounded_once_the_lock_lapses" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for r in aws_s3_bucket_lifecycle_configuration.invocations.rule :
+      r.status == "Enabled"
+      && anytrue([for e in r.expiration : e.days > var.object_lock_retention_days])
+      && length(r.noncurrent_version_expiration) > 0
+    ])
+    error_message = "the invocations bucket needs an expiry that outlasts object_lock_retention_days, plus a noncurrent-version sweep — transitions bound the cost tier, not the object count"
+  }
+
+  assert {
+    condition = anytrue([
+      for r in aws_s3_bucket_lifecycle_configuration.invocations.rule :
+      r.status == "Enabled" && anytrue([
+        for e in r.expiration :
+        e.expired_object_delete_marker == true && e.days == 0 && e.date == null
+      ])
+    ])
+    error_message = "the invocations bucket needs a delete-marker sweep in a rule of its own — on a versioned bucket an expiry writes a marker that is itself a current version, so without this the bucket only grows and a teardown never ends"
+  }
+}
