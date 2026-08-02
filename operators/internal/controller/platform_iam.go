@@ -174,7 +174,10 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 	}
 	return []iamtypes.Tag{
 		// Load-bearing keys — PlatformId drives BudgetPolicy cost attribution.
-		tag("PlatformId", p.Name),
+		// Cluster-qualified by platformCostID, the same expression the reconciler
+		// queries with: the bare Platform name names two different tenants once
+		// two clusters share an account, and this tag is what a CUR row carries.
+		tag(platformIDTagKey, platformCostID(cfg.ClusterName, p.Name)),
 		tag("Tenant", p.Spec.Tenant),
 		tag("Persona", p.Spec.Persona),
 		// Required-tier resource-tagging keys.

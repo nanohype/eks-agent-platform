@@ -115,6 +115,108 @@ run "aws_can_actually_deliver_the_report" {
   }
 }
 
+# The publisher attributes spend by READING the PlatformId tag off the invoking
+# role, not by taking the role's name apart. That makes one IAM permission
+# load-bearing for the entire in-flight cost signal: without iam:ListRoleTags every
+# lookup raises, every invocation attributes to "unknown", and every tenant's
+# in-flight spend is zero — with the Lambda running, the metric publishing, and
+# nothing anywhere going red.
+#
+# The previous arrangement needed no permission because it derived the value
+# locally, and derived it wrong for the whole life of the code. A grant that can be
+# forgotten is the cost of not having a contract to get wrong; asserting it here is
+# what makes that trade safe.
+run "the_publisher_can_read_the_tag_it_attributes_by" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_role_policy.invocation_cost_publisher.policy).Statement :
+      contains(s.Action, "iam:ListRoleTags")
+    ])
+    error_message = "the cost publisher must hold iam:ListRoleTags — it reads the PlatformId tag off the invoking role, and without the grant every invocation is attributed to 'unknown' and every budget reads zero"
+  }
+
+  # Read-only and path-scoped. A tag read that reaches every role in the account
+  # is a wider grant than the job needs, and this Lambda is subscribed to a log
+  # group carrying every Bedrock invocation in the account.
+  #
+  # Asserted as "every resource is under the operator's IAM path", not as "is not
+  # one particular over-broad spelling". A blocklist of bad values passes for every
+  # value it forgot — `Resource = ["*"]` is broader than `:role/*` and would sail
+  # through a check that only rejects the latter.
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.invocation_cost_publisher.policy).Statement :
+      !contains(s.Action, "iam:ListRoleTags") || alltrue([
+        for r in tolist(s.Resource) : startswith(r, "arn:aws:iam::123456789012:role${local.tenant_iam_path}")
+      ])
+    ])
+    error_message = "the tag-read grant must be scoped to the operator's IAM path — every resource in the statement must sit under it, so a wildcard broader than the path (including a bare \"*\") fails here rather than granting a log-firehose Lambda tag-read over every role in the account"
+  }
+
+  # No environment or cluster token reaches the Lambda. One would be a second place
+  # the identity is decided, which is exactly the arrangement that produced a
+  # dimension disagreeing with every reader.
+  assert {
+    condition = length(setintersection(
+      keys(aws_lambda_function.invocation_cost_publisher.environment[0].variables),
+      ["AGENTS_ENVIRONMENT", "AGENTS_CLUSTER_NAME", "CLUSTER_NAME", "ENVIRONMENT"]
+    )) == 0
+    error_message = "the publisher must not be handed an environment or cluster token — it reads the identity from the role's tag, and a second source for the same value is what let the published dimension drift away from what the reconciler queries"
+  }
+}
+
+# The grant's ARN is built by concatenating an SSM-supplied IAM path, and the path is a
+# PREFIX on both sides of a contract: terraform scopes the grant by it, the operator
+# creates roles under it. The operator appends a missing trailing slash before using it
+# (platform_iam.go, platform_session_iam.go); if terraform does not, the same stored value
+# means two different things and the grant matches nothing the operator ever creates.
+#
+# The suite's global mock returns an ARN for every aws_ssm_parameter, which is fine for the
+# resources that only need A value but makes any assertion about THIS one vacuous — it
+# happens not to end in a slash and happens not to end in ":role/*", so both the
+# normalization and the scoping assertions would pass without testing anything. These runs
+# override the data source with the two shapes that actually matter.
+run "the_tag_read_grant_survives_a_path_without_a_trailing_slash" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.tenant_iam_path
+    values = { value = "/eks-agent-platform/tenants" }
+  }
+
+  assert {
+    condition     = local.tenant_iam_path == "/eks-agent-platform/tenants/"
+    error_message = "a path stored without a trailing slash must be normalized before it is used as an ARN prefix — otherwise the grant reads role/eks-agent-platform/tenants* while the operator creates roles under /eks-agent-platform/tenants/, so every tag read is AccessDenied and every invocation attributes to 'unknown'"
+  }
+
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_role_policy.invocation_cost_publisher.policy).Statement :
+      contains(s.Action, "iam:ListRoleTags")
+      && contains(tolist(s.Resource), "arn:aws:iam::123456789012:role/eks-agent-platform/tenants/*")
+    ])
+    error_message = "the rendered grant ARN must be exactly the role path the operator mints under, with the wildcard directly after the trailing slash"
+  }
+}
+
+run "the_tag_read_grant_is_unchanged_by_a_path_that_already_ends_in_a_slash" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.tenant_iam_path
+    values = { value = "/eks-agent-platform/tenants/" }
+  }
+
+  # Normalization must be idempotent — a double slash is a different path to IAM, and
+  # would miss just as completely as a missing one.
+  assert {
+    condition     = local.tenant_iam_path == "/eks-agent-platform/tenants/"
+    error_message = "normalizing an already-normalized path must not append a second slash"
+  }
+}
+
 # The CUR platform-tag column, asserted where terraform composes SQL. The operator derives
 # the same name in Go from the same tag key; both are pinned to AWS's published transform
 # independently, on purpose — a shared derivation would let one wrong transform satisfy both

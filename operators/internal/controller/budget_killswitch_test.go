@@ -203,7 +203,7 @@ func TestReconcileBudget_UnroutedRefiresAndAlerts(t *testing.T) {
 		Status: governancev1alpha1.BudgetPolicyStatus{KillSwitchFiredAt: &firedAt},
 	}
 	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{FailedEntryCount: 0}}
-	r := &BudgetReconciler{Client: cl, EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", RequeueInterval: time.Hour}
+	r := &BudgetReconciler{Client: cl, EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", RequeueInterval: time.Hour, ClusterName: "staging-platform"}
 
 	before := testutil.ToFloat64(killSwitchUnroutedTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name))
 	reading, err := r.reconcileBudget(ctx, bp)
@@ -248,7 +248,7 @@ func TestReconcileBudget_SuspensionObservedSettles(t *testing.T) {
 		Status: governancev1alpha1.BudgetPolicyStatus{KillSwitchFiredAt: &firedAt},
 	}
 	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{FailedEntryCount: 0}}
-	r := &BudgetReconciler{Client: cl, EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", RequeueInterval: time.Hour}
+	r := &BudgetReconciler{Client: cl, EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", RequeueInterval: time.Hour, ClusterName: "staging-platform"}
 
 	reading, err := r.reconcileBudget(ctx, bp)
 	if err != nil {

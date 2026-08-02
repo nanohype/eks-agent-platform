@@ -90,6 +90,40 @@ func (r *BudgetReconciler) resolveBudgetPlatform(ctx context.Context, bp *govern
 // matters: Cost Explorer treats tag keys as case-sensitive.
 const platformIDTagKey = "PlatformId"
 
+// platformCostID is the value behind platformIDTagKey: the identity every cost
+// signal attributes spend to.
+//
+// It is cluster-qualified, and that qualification is load-bearing rather than
+// decorative. A CUR covers a whole AWS account and a CloudWatch namespace is
+// account+region global, while the platform contract explicitly allows two
+// co-located clusters to host a Platform of the same name (AGENTS.md, and
+// tenantRoleName is cluster-keyed for exactly that reason). An attribution key of
+// the bare Platform name therefore names two different tenants in one account:
+// their spend sums, every reader sees the total as its own, and at
+// killSwitchBreachPercent one environment's traffic suspends another's Platform.
+// nanohype/standards/resource-naming.json states the same rule for names —
+// "co-located sibling clusters in one account must not collide, so the cluster
+// discriminator is load-bearing here" — and an attribution key is subject to it
+// for the same reason a name is.
+//
+// One function, two callers on purpose: the tag written onto tenant resources and
+// the predicate the reconciler queries with are the same expression, so they cannot
+// drift into a query that is valid, green and empty. Nothing else may reconstruct
+// this value by taking apart a name — that is what the cost publisher used to do,
+// and it spent the platform's entire in-flight cost signal on a dimension no reader
+// ever queried.
+//
+// NOT to be used for the KMS grant's EncryptionContext, which spells its key
+// "PlatformId" too and is a different thing wearing the same name. That context is
+// an authorization primitive bound into ciphertext (ensureKmsGrant), it is scoped
+// to one cluster's key where the bare name is already unique, and changing it
+// would leave every object encrypted under the old context undecryptable. The two
+// look like an inconsistency and are not; TestKmsGrantContextIsNotTheCostIdentity
+// exists to stop a tidying pass from unifying them.
+func platformCostID(clusterName, platformName string) string {
+	return clusterName + "-" + platformName
+}
+
 // curTagColumn renders a user tag key as the column name it takes once AWS loads a
 // Cost and Usage Report into Athena.
 //
@@ -123,6 +157,23 @@ func curTagColumn(tagKey string) string {
 		out = strings.ReplaceAll(out, "__", "_")
 	}
 	return strings.Trim(out, "_")
+}
+
+// inflightWindowStart returns the earliest instant the in-flight CloudWatch leg may
+// count from: 24h back to cover CUR's partition lag, clamped to the start of the
+// billing period the CUR leg measures.
+//
+// Both legs feed one total compared against a monthly budget, so the in-flight
+// window may never extend before the month the CUR query begins at. Kept as its own
+// function because the clamp is the whole point and an inline expression invites
+// somebody to "simplify" it back to a bare subtraction.
+func inflightWindowStart(now time.Time) time.Time {
+	now = now.UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	if lookback := now.Add(-24 * time.Hour); lookback.After(monthStart) {
+		return lookback
+	}
+	return monthStart
 }
 
 // querySpendFromAthena runs the CUR rollup query for the current
@@ -159,10 +210,24 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 	// Identifier inputs are validated against athenaIdentifierRE above; the value
 	// flows through escapeSQL even though Kubernetes already constrains it to
 	// RFC-1123 (defensive against future schema relaxations).
+	//
+	// line_item_type = 'Usage' makes this a GROSS CONSUMPTION measure, not a
+	// net-billed one. A CUR carries Credit, Refund, Tax, RIFee, SavingsPlanNegation
+	// and discount rows alongside usage, and summing them all answers "what was this
+	// account charged" — a reasonable question, and the wrong one for a kill switch.
+	// A promotional credit would offset real consumption and hold a runaway tenant
+	// under its cap; tax would inflate a tenant's number for something it did not
+	// cause. The switch exists to stop consumption, so it counts consumption.
+	//
+	// There is deliberately NO product predicate. A BudgetPolicy caps monthly spend
+	// per Platform, which includes the tenant's datastores — the reconciliation view
+	// in cost-pipeline filters to Bedrock because it reconciles invocation estimates
+	// against Bedrock billing, which is a different question. Do not align them.
 	query := fmt.Sprintf(
 		`SELECT COALESCE(SUM(line_item_unblended_cost), 0) AS spend_usd
 		 FROM "%s"."%s"
 		 WHERE %s = '%s'
+		   AND line_item_line_item_type = 'Usage'
 		   AND line_item_usage_start_date >= date_trunc('month', current_date)`,
 		r.AthenaCfg.Database, r.AthenaCfg.CURTableName,
 		curTagColumn(platformIDTagKey), escapeSQL(platformID),
@@ -530,8 +595,23 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 		return budgetReading{}, err
 	}
 
+	// Every spend signal is keyed on the cluster-qualified identity, which is the
+	// same expression stamped onto the tenant's resources as the PlatformId tag.
+	//
+	// Refuse rather than query without the discriminator. An empty cluster name does
+	// not fail on its own — it renders "-acme", which is a perfectly valid predicate
+	// that matches no CUR row and no metric series, so every tenant would read zero
+	// spend and every budget would look healthy. main.go will not start without a
+	// cluster name; this is the second half of that guarantee, at the point where a
+	// missing one would actually produce a number.
+	if r.ClusterName == "" {
+		budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name).Inc()
+		return budgetReading{}, fmt.Errorf("budget reconciler has no cluster name; refusing to attribute spend without the discriminator that separates same-named Platforms in one account")
+	}
+	costID := platformCostID(r.ClusterName, platform.Name)
+
 	// CUR-tagged spend (MTD).
-	spendCUR, err := r.querySpendFromAthena(ctx, platform.Name)
+	spendCUR, err := r.querySpendFromAthena(ctx, costID)
 	switch {
 	case errors.Is(err, errAthenaNotConfigured):
 		// No cost-pipeline outputs in SSM. Fall back to a zero CUR and surface only
@@ -547,9 +627,21 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 		return budgetReading{}, err
 	}
 
-	// In-flight invocation cost (last 24h to cover CUR partition lag).
-	since := time.Now().Add(-24 * time.Hour).UTC()
-	spendInflight, err := r.queryInflightCost(ctx, platform.Name, since)
+	// In-flight invocation cost — the last 24h, to cover CUR partition lag, but
+	// never earlier than the billing period the CUR leg is measuring.
+	//
+	// The two legs are summed and compared against a MONTHLY budget, and the CUR
+	// leg is strictly month-to-date (date_trunc('month', current_date)). An
+	// unclamped 24h lookback reaches into the previous month for the first day of
+	// every month, so a tenant that spent its budget in January starts February
+	// with up to a day of January's spend already counted against February's — and
+	// at killSwitchBreachPercent that suspends a Platform on the 1st for money it
+	// spent before the period began.
+	//
+	// This only became reachable when the in-flight leg started returning a number
+	// at all; while it read a permanent zero the window could not be wrong.
+	since := inflightWindowStart(time.Now().UTC())
+	spendInflight, err := r.queryInflightCost(ctx, costID, since)
 	if err != nil {
 		// CloudWatch outage shouldn't block the entire reconciler; we log
 		// and zero out the in-flight portion. The Athena CUR value is still

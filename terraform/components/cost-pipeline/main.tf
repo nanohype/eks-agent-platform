@@ -12,6 +12,14 @@ data "aws_ssm_parameter" "operator_role_name" {
   name = "/eks-agent-platform/${var.cluster_name}/agent-iam/operator_role_name"
 }
 
+# The IAM path every role the operator mints lives under — tenant roles and
+# attribution session roles alike. Read from the same agent-iam contract rather
+# than restated here, so the cost publisher's tag-read grant is scoped by the
+# component that owns the path.
+data "aws_ssm_parameter" "tenant_iam_path" {
+  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/tenant_iam_path"
+}
+
 locals {
   prefix = "${var.cluster_name}-cost"
   tags = merge(var.tags, {
@@ -31,6 +39,26 @@ locals {
   # Where AWS delivers the CUR Parquet. The report definition and the lifecycle rule that ages
   # it out have to agree, so they read one value.
   cur_prefix = "cur"
+
+  # The IAM path prefix for the cost publisher's tag-read grant, normalized the same way the
+  # operator normalizes it before creating a role (platform_iam.go and platform_session_iam.go
+  # both append a missing trailing slash). The path is used as a PREFIX on both sides, so
+  # without the same normalization here a value of "/eks-agent-platform/tenants" yields the
+  # grant `role/eks-agent-platform/tenants*` while the operator creates roles under
+  # `/eks-agent-platform/tenants/` — a grant that matches nothing, every lookup AccessDenied,
+  # every invocation attributed to "unknown", every budget reading low. One value read two ways
+  # is the shape this whole component is being corrected for; it should not be reintroduced by
+  # the fix.
+  #
+  # nonsensitive() because the aws_ssm_parameter data source marks every value
+  # sensitive regardless of type, and that mark propagates through jsonencode into
+  # the whole IAM policy document — so `tofu plan` would print
+  # `policy = (sensitive value)` and hide every future change to the cost
+  # publisher's permissions from review. An IAM path is a public-by-construction
+  # string that this repo already writes out in full elsewhere; a plan that cannot
+  # show a permissions diff is a worse outcome than naming it.
+  tenant_iam_path_raw = nonsensitive(data.aws_ssm_parameter.tenant_iam_path.value)
+  tenant_iam_path     = endswith(local.tenant_iam_path_raw, "/") ? local.tenant_iam_path_raw : "${local.tenant_iam_path_raw}/"
 
   # The Athena column AWS produces for the PlatformId cost-allocation tag. Every CUR consumer
   # in this component filters on it, and the operator's BudgetReconciler derives the same name
@@ -799,6 +827,22 @@ resource "aws_iam_role_policy" "invocation_cost_publisher" {
         }
       },
       {
+        Sid    = "ReadPlatformIdTag"
+        Effect = "Allow"
+        # The publisher reads the PlatformId tag off the role that made each
+        # invocation, rather than reconstructing it from the role's NAME. That is
+        # the whole correctness argument for the attribution path — the writer
+        # (the operator) and this reader cannot disagree about a value only one
+        # of them computes — so this grant is load-bearing, not incidental.
+        # Without it every lookup raises, every invocation attributes to
+        # "unknown", and every tenant's in-flight spend reads zero.
+        #
+        # Scoped to the operator's IAM path, which is where every role it mints
+        # lives. ListRoleTags is read-only and returns tags for one named role.
+        Action   = ["iam:ListRoleTags"]
+        Resource = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role${local.tenant_iam_path}*"]
+      },
+      {
         Sid      = "WriteEstimates"
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
@@ -837,11 +881,11 @@ resource "aws_lambda_function" "invocation_cost_publisher" {
 
   environment {
     variables = {
-      # The role-name → PlatformId derivation strips this prefix so the metric
-      # dimension is the bare Platform name (e.g. "acme"), matching CUR's
-      # PlatformId tag column and the Budget reconciler's lookup. Absent
-      # this, the dimension stayed "<env>-acme" and in-flight cost read zero.
-      AGENTS_ENVIRONMENT  = var.environment
+      # No environment or cluster token is passed, on purpose. The publisher does
+      # not derive the PlatformId dimension from anything it is configured with —
+      # it reads the tag the operator stamped on the invoking role. A token here
+      # would be a second place the identity is decided, which is precisely the
+      # arrangement that made the dimension disagree with every reader.
       ESTIMATE_BUCKET     = aws_s3_bucket.cur.id
       ESTIMATE_PREFIX     = local.estimate_prefix
       ESTIMATE_KMS_KEY_ID = var.data_kms_key_arn

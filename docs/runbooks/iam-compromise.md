@@ -79,11 +79,28 @@ while read -r arn platform_id component; do
   fi
 done < /tmp/operator-roles.txt
 
-# Cross-reference against legitimate Platform CRs in the cluster
-kubectl get platforms -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort > /tmp/legit-platforms.txt
+# Cross-reference against legitimate Platform CRs in the cluster.
+#
+# The PlatformId tag is CLUSTER-QUALIFIED — `<cluster>-<platform>`, the same value
+# the budget reconciler stamps and filters CUR by — while a Platform CR's name is
+# bare. Compare like with like: qualify the CR names with this cluster before the
+# set difference, or every legitimate role in the account reads as an orphan and
+# this runbook tells you to delete the estate.
+#
+# The qualification is load-bearing here for the same reason it is in the cost
+# path: one account can host several clusters, so an unqualified comparison also
+# cannot tell a sibling cluster's live roles from this cluster's orphans.
+CLUSTER=$(kubectl get deploy -n agents -l app.kubernetes.io/name=operator \
+  -o jsonpath='{.items[0].spec.template.spec.containers[0].env[?(@.name=="AGENTS_CLUSTER_NAME")].value}')
+kubectl get platforms -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+  | sed "s|^|${CLUSTER}-|" | sort > /tmp/legit-platforms.txt
 
 # Anything whose PlatformId is not in the cluster is orphan — investigate + delete.
 # Scheduler-invoke and session roles share PlatformId with their parent Platform.
+#
+# Sanity-check before acting: if EVERY role comes back as an orphan, the two sides
+# are not in the same namespace of names. Re-read the qualification above rather
+# than deleting.
 awk '{print $2}' /tmp/suspect-operator-roles.txt | sort -u \
   | comm -23 - /tmp/legit-platforms.txt
 ```

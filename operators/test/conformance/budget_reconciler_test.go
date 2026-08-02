@@ -27,6 +27,13 @@ func newBudgetReconciler() *controller.BudgetReconciler {
 		Scheme:          scheme,
 		Concurrency:     1,
 		RequeueInterval: time.Hour,
+		// A cluster name is not optional even on the degrade path. It qualifies the
+		// cost-attribution identity, and empty renders "-<platform>" — a valid
+		// predicate matching nothing — so the reconciler refuses rather than
+		// producing a confident zero. main.go will not start without one, and these
+		// tests model a running operator with no cost pipeline, not a misconfigured
+		// one.
+		ClusterName: "development-platform",
 		// Athena/CloudWatch/EventBridge intentionally nil — the reconciler's
 		// degrade-to-zero path is what we're verifying.
 	}

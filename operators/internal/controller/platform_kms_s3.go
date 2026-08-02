@@ -39,6 +39,14 @@ type PlatformAWSConfig struct {
 // The EncryptionContext is the load-bearing isolation primitive — tenant
 // role A's grant doesn't let it decrypt tenant B's data because B's
 // data is encrypted under EncryptionContext={PlatformId:B}.
+//
+// The value here is the BARE Platform name, deliberately, and it is not the same
+// thing as the PlatformId cost-allocation tag even though both spell the key
+// "PlatformId". That tag is cluster-qualified (platformCostID) because it is read
+// out of an account-wide CUR; this context is scoped to one cluster's data key,
+// where the bare name is already unique, and it is bound into the ciphertext of
+// every object already written. Qualifying it would not be a rename — it would
+// make existing tenant data undecryptable.
 func (r *PlatformReconciler) ensureKmsGrant(ctx context.Context, p *platformv1alpha1.Platform, roleARN string, cfg PlatformAWSConfig) error {
 	if r.KMS == nil || cfg.DataKMSKeyARN == "" || roleARN == "" {
 		return nil

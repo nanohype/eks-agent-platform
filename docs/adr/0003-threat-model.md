@@ -69,9 +69,11 @@ The attacker can:
 
 The kill-switch Step Functions state machine in `terraform/components/kill-switch/main.tf` constructs the IAM role name to detach the Bedrock-invoke policy from using `States.Format` against a build-time pattern. **The operator's PlatformReconciler MUST mint tenant roles matching this pattern**, or the kill-switch silently fails on breach (the `iam:DetachRolePolicy` call against a nonexistent role routes to `RecordFailure` with no alarm path).
 
-Default pattern: `<env>-<platformId>-tenant` (set via `kill-switch.tenant_role_name_pattern`, with `<env>` replaced at Terraform plan time and `{}` replaced at SFN runtime with `$.detail.platformId`).
+Default pattern: `<cluster>-{}-tenant` (set via `kill-switch.tenant_role_name_pattern`, with `<cluster>` replaced at Terraform plan time from `cluster_name` and `{}` replaced at SFN runtime with `$.detail.platformId`).
 
-Concrete example: for `environment=dev` and `Platform.metadata.name=marketing-team`, the kill-switch detaches the baseline policy from role `dev-marketing-team-tenant`. The operator therefore mints that role as `<env>-<Platform.name>-tenant` under IAM path `/eks-agent-platform/tenants/`.
+Concrete example: for `cluster_name=development-platform` and `Platform.metadata.name=marketing-team`, the kill-switch detaches the baseline policy from role `development-platform-marketing-team-tenant`. The operator therefore mints that role as `<cluster>-<Platform.name>-tenant` under IAM path `/eks-agent-platform/tenants/`.
+
+The discriminator is the full cluster name, not the environment. `cluster_name` is `<environment>-<clusterBase>`, so an environment token alone still collides between co-located sibling clusters — and two clusters in one account hosting a Platform of the same name is a supported shape, not an accident.
 
 If the pattern changes, both sides must move together — the variable's description block in `kill-switch/variables.tf` is the source of truth, and this ADR section is the cross-component reference.
 

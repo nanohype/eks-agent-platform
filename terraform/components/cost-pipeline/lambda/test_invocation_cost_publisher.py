@@ -1,10 +1,29 @@
 """
 Unit tests for the invocation cost publisher.
 
-Covers the two paths the pricing correctness rests on: cross-region
-inference-profile prefix stripping (so profile IDs resolve to the base model
-price) and the unpriced path (an unknown model is surfaced as an
-UnpricedInvocations count, never priced against a borrowed rate).
+Two things are covered here, and the second is the reason this file is worth
+reading.
+
+Pricing correctness: cross-region inference-profile prefix stripping (so profile
+IDs resolve to the base model price) and the unpriced path (an unknown model is
+surfaced as an UnpricedInvocations count, never priced against a borrowed rate).
+
+Attribution correctness: that the PlatformId this Lambda publishes is the one the
+operator wrote, and not a value this Lambda decided. The previous version of these
+tests is why that mattered. It fed role ARNs of the shape ``dev-acme-tenant`` and
+asserted the handler recovered ``acme`` — and it passed, for the whole life of the
+code, while the operator was minting ``staging-platform-acme-tenant`` and the
+handler was publishing ``platform-acme`` to a metric dimension no reader ever
+queried. The fixture agreed with the docstring instead of with the producer, so
+the tests confirmed a belief rather than a behaviour, and the platform's entire
+in-flight cost signal was a silent zero.
+
+Every role ARN below is therefore the shape the operator actually mints
+(``<cluster>-<platform>-tenant`` and ``<cluster>-<platform>-session``, from
+operators/internal/controller/platform_iam.go and platform_session_iam.go), and
+the assertions are on the value IAM returned rather than on any string this file
+could derive. ROLE_SHAPE_IS_IRRELEVANT makes that explicit by attributing a role
+whose name follows no contract at all.
 
 Run: cd terraform/components/cost-pipeline/lambda && python -m unittest
 """
@@ -21,11 +40,25 @@ from unittest import mock
 # boto3.client() at import time needs a region; set one before importing the
 # module under test. No AWS calls are made — the clients are mocked per-test.
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-# The env prefix the handler strips off the tenant role name to recover the
-# platform id (role shape: ${env}-${platform}-tenant).
-os.environ.setdefault("AGENTS_ENVIRONMENT", "dev")
+
+from botocore.exceptions import ClientError  # noqa: E402
 
 import invocation_cost_publisher as iv  # noqa: E402
+
+# The role names the operator really mints, and the cost identity it stamps on
+# them. cluster_name is `<environment>-<clusterBase>` (terraform/live/*/env.hcl),
+# so the cluster token is two words — which is exactly what the old prefix-strip
+# got wrong.
+CLUSTER = "staging-platform"
+PLATFORM = "acme"
+COST_ID = f"{CLUSTER}-{PLATFORM}"  # operators: platformCostID(cluster, name)
+TENANT_ROLE = f"{CLUSTER}-{PLATFORM}-tenant"
+SESSION_ROLE = f"{CLUSTER}-{PLATFORM}-session"
+PLATFORM_ID_TAG_KEY = "PlatformId"
+
+
+def _arn(role_name: str) -> str:
+    return f"arn:aws:sts::123456789012:assumed-role/{role_name}/session-id"
 
 
 def _envelope(records: list[dict]) -> dict:
@@ -36,6 +69,74 @@ def _envelope(records: list[dict]) -> dict:
     }
     packed = gzip.compress(json.dumps(payload).encode("utf-8"))
     return {"awslogs": {"data": base64.b64encode(packed).decode("utf-8")}}
+
+
+def _pages(*pages: list[tuple[str, str]]) -> list[dict]:
+    """IAM ListRoleTags pages, in the shape the paginator yields."""
+    return [{"Tags": [{"Key": k, "Value": v} for k, v in page]} for page in pages]
+
+
+def _tagged(**tags: str) -> list[dict]:
+    """A single-page IAM ListRoleTags response."""
+    return _pages(list(tags.items()))
+
+
+def _stub_iam(iam, pages_or_exc):
+    """Wire a mocked IAM client to answer list_role_tags through its paginator.
+
+    Each call gets a FRESH iterator: a paginator returns a generator, and a stub
+    that hands out one exhausted iterator would make the second lookup in a test
+    silently see zero tags — which is the failure this module exists to not have.
+    Returns the paginate mock so call counts can be asserted.
+    """
+    paginator = iam.get_paginator.return_value
+    if isinstance(pages_or_exc, Exception):
+        paginator.paginate.side_effect = pages_or_exc
+    else:
+        paginator.paginate.side_effect = lambda **_kw: iter(pages_or_exc)
+    return paginator.paginate
+
+
+class AttributionTestCase(unittest.TestCase):
+    """Base for tests that resolve a PlatformId, with the lookup cache isolated.
+
+    The cache lives for the life of an execution environment, so leaking it
+    between tests would let one test's stub answer another test's lookup — and a
+    test that passes because a previous test warmed a cache is exactly the kind
+    of green this file exists to stop producing.
+    """
+
+    def setUp(self) -> None:
+        iv._ROLE_PLATFORM_CACHE.clear()
+        iv._UNTAGGED_ROLES.clear()
+        iv._BATCH_FAILED_ROLES.clear()
+
+    def run_handler(self, records: list[dict], tags: dict | Exception | None = None):
+        """Run the handler with IAM stubbed, returning (result, metrics, iam_mock)."""
+        if tags is None:
+            tags = _tagged(PlatformId=COST_ID)
+        with (
+            mock.patch.object(iv, "cloudwatch") as cw,
+            mock.patch.object(iv, "s3"),
+            mock.patch.object(iv, "iam") as iam,
+        ):
+            _stub_iam(iam, tags)
+            result = iv.handler(_envelope(records), None)
+        metrics = [m for call in cw.put_metric_data.call_args_list for m in call.kwargs["MetricData"]]
+        return result, metrics, iam
+
+
+def _record(role_name: str = TENANT_ROLE, model: str = "us.anthropic.claude-sonnet-4-6") -> dict:
+    return {
+        "modelId": model,
+        "input": {"inputTokenCount": 1_000_000},
+        "output": {"outputTokenCount": 0},
+        "identity": {"arn": _arn(role_name)},
+    }
+
+
+def _dims(metric: dict) -> dict[str, str]:
+    return {d["Name"]: d["Value"] for d in metric["Dimensions"]}
 
 
 class BareModelTest(unittest.TestCase):
@@ -53,52 +154,227 @@ class BareModelTest(unittest.TestCase):
             self.assertEqual(iv._bare_model(bare), bare)
 
 
-class EstimateCostTest(unittest.TestCase):
+class PlatformAttributionTest(AttributionTestCase):
+    """The dimension published is the tag the operator wrote. Nothing else."""
+
+    def test_publishes_the_tag_verbatim_for_a_tenant_role(self):
+        # The assertion that would have caught the original defect. Under the old
+        # prefix-strip this dimension was "platform-acme" — the environment token
+        # removed from a role the operator names with the CLUSTER — while the
+        # reconciler queried "acme". Equal-to-the-tag is the only relation that
+        # cannot drift, because only one side computes the value.
+        _result, metrics, _iam = self.run_handler([_record(TENANT_ROLE)])
+        cost = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
+        self.assertEqual(_dims(cost)["PlatformId"], COST_ID)
+
+    def test_attributes_the_session_role_family(self):
+        # Attribution session roles end in `-session`. The old derivation only
+        # recognised `-tenant` and returned the literal "unknown" for these, so
+        # every attributed invocation — the whole point of that role family —
+        # reached no Platform's budget.
+        _result, metrics, _iam = self.run_handler([_record(SESSION_ROLE)])
+        cost = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
+        self.assertEqual(_dims(cost)["PlatformId"], COST_ID)
+
+    def test_role_name_shape_is_irrelevant(self):
+        # No contract about role naming survives in this Lambda. A role called
+        # anything at all attributes correctly as long as it carries the tag —
+        # which is the property that makes a rename on the operator's side unable
+        # to silently change what gets published.
+        _result, metrics, _iam = self.run_handler([_record("something-nobody-agreed-on")])
+        cost = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
+        self.assertEqual(_dims(cost)["PlatformId"], COST_ID)
+
+    def test_role_without_the_tag_is_unknown_and_published(self):
+        # Spend that reaches no budget has to be visible as its own signal, not
+        # absorbed as a quiet shortfall in somebody else's number.
+        result, metrics, _iam = self.run_handler(
+            [_record(TENANT_ROLE)], tags=_tagged(Tenant="acme-team")
+        )
+        cost = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
+        self.assertEqual(_dims(cost)["PlatformId"], "unknown")
+        self.assertEqual(result["unattributed"], 1)
+        gap = next(m for m in metrics if m["MetricName"] == iv.UNATTRIBUTED_METRIC)
+        self.assertEqual(_dims(gap)["RoleName"], TENANT_ROLE)
+
+    def test_identity_that_is_not_an_assumed_role_is_unknown(self):
+        _result, metrics, iam = self.run_handler(
+            [
+                {
+                    "modelId": "us.anthropic.claude-sonnet-4-6",
+                    "input": {"inputTokenCount": 1_000_000},
+                    "output": {"outputTokenCount": 0},
+                    "identity": {"arn": "arn:aws:iam::123456789012:user/someone"},
+                }
+            ]
+        )
+        cost = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
+        self.assertEqual(_dims(cost)["PlatformId"], "unknown")
+        iam.get_paginator.assert_not_called()
+
+    def test_reads_every_page_of_tags(self):
+        # ListRoleTags is paginated, and not for the reason it looks like: a role
+        # caps at 50 tags and MaxItems defaults to 100, so a full page is never the
+        # trigger. AWS documents that IAM "might return fewer results, even when
+        # there are more results available" with IsTruncated set, and recommends
+        # checking after every call — so the service, not the tag count, decides
+        # where the split falls. A single-page read puts PlatformId behind a page
+        # boundary the caller cannot predict, and the miss is indistinguishable
+        # from an untagged role: the invocation attributes to "unknown" and the
+        # tenant's spend reads low, with nothing red.
+        with mock.patch.object(iv, "iam") as iam:
+            _stub_iam(iam, _pages(
+                [("Team", "acme-team"), ("Environment", "staging")],
+                [("PlatformId", COST_ID)],
+            ))
+            self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), COST_ID)
+
+    def test_lookup_is_memoized_per_role(self):
+        # A log batch is overwhelmingly the same few roles and IAM's endpoint is
+        # global and throttled, so one lookup per record would be the bottleneck.
+        _result, _metrics, iam = self.run_handler([_record(TENANT_ROLE) for _ in range(5)])
+        self.assertEqual(iam.get_paginator.return_value.paginate.call_count, 1)
+
+    def test_access_denied_is_a_settled_answer_and_is_cached(self):
+        # The log group is account-wide — Bedrock invocation logging is one
+        # configuration per account+region, so every principal's invocations land in
+        # it, not just tenants'. The grant is scoped to the operator's IAM path, so
+        # AccessDenied on everything else is the DESIGN, not an incident, and it is
+        # the common case rather than the exception. Not caching it would mean one
+        # IAM call per log RECORD for every non-tenant Bedrock caller in the account,
+        # against a global throttled endpoint, in the hot path of a firehose.
+        for code in ("AccessDenied", "NoSuchEntity"):
+            with self.subTest(code=code):
+                iv._ROLE_PLATFORM_CACHE.clear()
+                err = ClientError({"Error": {"Code": code, "Message": "x"}}, "ListRoleTags")
+                with mock.patch.object(iv, "iam") as iam:
+                    paginate = _stub_iam(iam, err)
+                    for _ in range(4):
+                        self.assertEqual(iv._platform_id_for_role("some-other-role"), "unknown")
+                    self.assertEqual(paginate.call_count, 1)
+                self.assertEqual(iv._ROLE_PLATFORM_CACHE["some-other-role"], "unknown")
+
+    def test_a_transient_failure_is_asked_once_per_batch_not_once_per_record(self):
+        # The amplification this prevents is not one extra request. botocore's
+        # default retry mode is legacy — up to 5 attempts with rand()*2^(n-1)
+        # backoff — so a sustained throttle costs seconds of sleeping PER lookup,
+        # against a 30s function timeout. A handful of such records exhausts it,
+        # and every _emit_* call happens after the record loop, so a timeout
+        # mid-loop publishes NOTHING: the whole batch's cost metric, token metrics
+        # and estimate export are lost, CloudWatch Logs re-invokes, and the retry
+        # walks into the same throttle. One degraded record must not become a
+        # silent zero for the batch.
+        throttle = ClientError({"Error": {"Code": "Throttling", "Message": "slow down"}}, "ListRoleTags")
+        _result, _metrics, iam = self.run_handler([_record(TENANT_ROLE) for _ in range(25)], tags=throttle)
+        self.assertEqual(iam.get_paginator.return_value.paginate.call_count, 1)
+        # Still not cached across invocations — the next batch gets a fresh look.
+        self.assertNotIn(TENANT_ROLE, iv._ROLE_PLATFORM_CACHE)
+
+    def test_a_transient_failure_is_forgotten_at_the_next_batch(self):
+        # The other half of the two scopes. Within a batch a failed role is not
+        # re-asked; ACROSS batches it must be, because a throttle pinning a real
+        # tenant to "unknown" for the life of a warm container turns a blip into
+        # hours of spend attributed to nobody, long after IAM recovered.
+        iv._ROLE_PLATFORM_CACHE.clear()
+        with mock.patch.object(iv, "iam") as iam:
+            _stub_iam(iam, ClientError({"Error": {"Code": "Throttling", "Message": "slow down"}}, "ListRoleTags"))
+            self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), "unknown")
+        self.assertNotIn(TENANT_ROLE, iv._ROLE_PLATFORM_CACHE)
+        self.assertIn(TENANT_ROLE, iv._BATCH_FAILED_ROLES)
+
+        # A new invocation. The handler clears the batch memo; the long-lived cache
+        # is untouched, so the role gets a genuinely fresh look.
+        iv._BATCH_FAILED_ROLES.clear()
+        with mock.patch.object(iv, "iam") as iam:
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
+            self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), COST_ID)
+
+    def test_definitive_absence_is_cached(self):
+        # A role that exists and has no PlatformId will not grow one mid-batch,
+        # so it is answered once rather than re-queried per record.
+        with mock.patch.object(iv, "iam") as iam:
+            _stub_iam(iam, _tagged(Tenant="acme-team"))
+            for _ in range(3):
+                self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), "unknown")
+            self.assertEqual(iam.get_paginator.return_value.paginate.call_count, 1)
+        # Still counted every time, so the published gap reflects invocations
+        # rather than cache misses.
+        self.assertEqual(iv._UNTAGGED_ROLES[TENANT_ROLE], 3)
+
+
+class RealBotoCallShapeTest(unittest.TestCase):
+    """The one test that is not talking to a MagicMock.
+
+    Every other IAM assertion in this file goes through `mock.patch.object(iv, "iam")`,
+    and a MagicMock accepts any operation name, any kwarg, and returns whatever the
+    test handed it. That proves the code reads what the MOCK returns — it cannot
+    notice a misspelled paginator name, a wrong parameter, or a response key that
+    does not exist. Which is the same category of green the old prefix-strip tests
+    produced: a fixture agreeing with the author instead of with the service.
+
+    botocore's Stubber validates both directions against the real service model, so
+    this pins the call shape. Nothing here reaches the network.
+    """
+
+    def test_the_lookup_matches_the_real_iam_api(self):
+        import boto3
+        from botocore.stub import Stubber
+
+        client = boto3.client("iam", region_name="us-east-1")
+        stubber = Stubber(client)
+        # Rejected at add_response time if ListRoleTags does not take RoleName, or
+        # if the response does not carry Tags/IsTruncated in this shape.
+        stubber.add_response(
+            "list_role_tags",
+            {"Tags": [{"Key": PLATFORM_ID_TAG_KEY, "Value": COST_ID}], "IsTruncated": False},
+            {"RoleName": TENANT_ROLE},
+        )
+        with stubber, mock.patch.object(iv, "iam", client):
+            iv._ROLE_PLATFORM_CACHE.clear()
+            self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), COST_ID)
+        stubber.assert_no_pending_responses()
+
+    def test_the_tag_key_is_the_one_cost_explorer_activates(self):
+        # Case-sensitive in Billing, and the CUR column is derived from it. A
+        # lowercase key activates nothing and the reconciler's column never exists.
+        self.assertEqual(iv.PLATFORM_ID_TAG, "PlatformId")
+
+
+class EstimateCostTest(AttributionTestCase):
     def test_prices_a_current_model_via_inference_profile(self):
-        record = {
-            "modelId": "us.anthropic.claude-sonnet-4-6",
-            "input": {"inputTokenCount": 1_000_000},
-            "output": {"outputTokenCount": 1_000_000},
-            "identity": {"arn": "arn:aws:sts::1:assumed-role/dev-acme-tenant/sess"},
-        }
-        cost, platform, model, _in, _out, priced = iv._estimate_cost(record)
+        with mock.patch.object(iv, "iam") as iam:
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
+            record = {
+                "modelId": "us.anthropic.claude-sonnet-4-6",
+                "input": {"inputTokenCount": 1_000_000},
+                "output": {"outputTokenCount": 1_000_000},
+                "identity": {"arn": _arn(TENANT_ROLE)},
+            }
+            cost, platform, model, _in, _out, priced = iv._estimate_cost(record)
         self.assertTrue(priced)
         # 3.0 + 15.0 per million in+out
         self.assertAlmostEqual(cost, 18.0, places=4)
         self.assertEqual(model, "anthropic.claude-sonnet-4-6")
+        self.assertEqual(platform, COST_ID)
 
     def test_unknown_model_is_unpriced_not_borrowed(self):
-        record = {
-            "modelId": "us.anthropic.claude-imaginary-9-9",
-            "input": {"inputTokenCount": 5_000_000},
-            "output": {"outputTokenCount": 5_000_000},
-            "identity": {"arn": "arn:aws:sts::1:assumed-role/dev-acme-tenant/sess"},
-        }
-        cost, _platform, _model, _in, _out, priced = iv._estimate_cost(record)
+        with mock.patch.object(iv, "iam") as iam:
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
+            record = {
+                "modelId": "us.anthropic.claude-imaginary-9-9",
+                "input": {"inputTokenCount": 5_000_000},
+                "output": {"outputTokenCount": 5_000_000},
+                "identity": {"arn": _arn(TENANT_ROLE)},
+            }
+            cost, _platform, _model, _in, _out, priced = iv._estimate_cost(record)
         self.assertFalse(priced)
         self.assertEqual(cost, 0.0)
 
 
-class HandlerTest(unittest.TestCase):
-    def _run(self, records: list[dict]):
-        with mock.patch.object(iv, "cloudwatch") as cw, mock.patch.object(iv, "s3"):
-            result = iv.handler(_envelope(records), None)
-        # Flatten every metric emitted across all put_metric_data calls.
-        metrics = [
-            m for call in cw.put_metric_data.call_args_list for m in call.kwargs["MetricData"]
-        ]
-        return result, metrics
-
+class HandlerTest(AttributionTestCase):
     def test_unpriced_model_emits_unpriced_metric_only(self):
-        result, metrics = self._run(
-            [
-                {
-                    "modelId": "us.anthropic.claude-imaginary-9-9",
-                    "input": {"inputTokenCount": 100},
-                    "output": {"outputTokenCount": 50},
-                    "identity": {"arn": "arn:aws:sts::1:assumed-role/dev-acme-tenant/sess"},
-                }
-            ]
+        result, metrics, _iam = self.run_handler(
+            [_record(TENANT_ROLE, model="us.anthropic.claude-imaginary-9-9")]
         )
         self.assertEqual(result["unpriced"], 1)
         self.assertEqual(result["platforms"], 0)
@@ -106,28 +382,36 @@ class HandlerTest(unittest.TestCase):
         self.assertIn(iv.UNPRICED_METRIC, names)
         self.assertNotIn(iv.METRIC_NAME, names)
         unpriced = next(m for m in metrics if m["MetricName"] == iv.UNPRICED_METRIC)
-        dims = {d["Name"]: d["Value"] for d in unpriced["Dimensions"]}
-        self.assertEqual(dims["PlatformId"], "acme")
+        dims = _dims(unpriced)
+        self.assertEqual(dims["PlatformId"], COST_ID)
         self.assertEqual(dims["ModelId"], "anthropic.claude-imaginary-9-9")
 
     def test_priced_model_emits_cost_metric(self):
-        result, metrics = self._run(
-            [
-                {
-                    "modelId": "us.anthropic.claude-sonnet-4-6",
-                    "input": {"inputTokenCount": 1_000_000},
-                    "output": {"outputTokenCount": 0},
-                    "identity": {"arn": "arn:aws:sts::1:assumed-role/dev-acme-tenant/sess"},
-                }
-            ]
-        )
+        result, metrics, _iam = self.run_handler([_record(TENANT_ROLE)])
         self.assertEqual(result["platforms"], 1)
         self.assertEqual(result["unpriced"], 0)
         cost_metric = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
         self.assertAlmostEqual(cost_metric["Value"], 3.0, places=4)
 
+    def test_estimate_records_carry_the_same_identity_as_the_metric(self):
+        # The reconciliation view joins these estimate rows to CUR on platform_id.
+        # When the metric dimension and the estimate column disagree the view
+        # renders every row as 'no_cur_row', which reads on a dashboard exactly
+        # like "no disagreement found".
+        with (
+            mock.patch.object(iv, "cloudwatch"),
+            mock.patch.object(iv, "s3") as s3,
+            mock.patch.object(iv, "iam") as iam,
+            mock.patch.object(iv, "ESTIMATE_BUCKET", "estimates-bucket"),
+        ):
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
+            iv.handler(_envelope([_record(TENANT_ROLE)]), None)
+        body = s3.put_object.call_args.kwargs["Body"].decode("utf-8")
+        rows = [json.loads(line) for line in body.splitlines()]
+        self.assertEqual({r["platform_id"] for r in rows}, {COST_ID})
 
-class ImportedModelTest(unittest.TestCase):
+
+class ImportedModelTest(AttributionTestCase):
     """Custom Model Import (open-weight) models: unpriced-but-observable by
     default, priced at the configured per-token governance estimate when set."""
 
@@ -138,7 +422,7 @@ class ImportedModelTest(unittest.TestCase):
             "modelId": self.ARN,
             "input": {"inputTokenCount": in_tok},
             "output": {"outputTokenCount": out_tok},
-            "identity": {"arn": "arn:aws:sts::1:assumed-role/dev-acme-tenant/sess"},
+            "identity": {"arn": _arn(TENANT_ROLE)},
         }
 
     def test_detection_and_key(self):
@@ -150,17 +434,25 @@ class ImportedModelTest(unittest.TestCase):
         # Default estimate 0 → imported invocation is unpriced (surfaced as an
         # UnpricedInvocations count), never a borrowed rate. Model key is the
         # compact imported id, not the raw ARN.
-        with mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 0.0):
+        with (
+            mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 0.0),
+            mock.patch.object(iv, "iam") as iam,
+        ):
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             cost, platform, model, _in, _out, priced = iv._estimate_cost(self._record())
         self.assertFalse(priced)
         self.assertEqual(cost, 0.0)
         self.assertEqual(model, "imported/abc123")
-        self.assertEqual(platform, "acme")
+        self.assertEqual(platform, COST_ID)
 
     def test_priced_with_estimate(self):
         # A configured per-token estimate prices input+output tokens so imported
         # spend reaches the kill-switch cost signal.
-        with mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 4.0):
+        with (
+            mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 4.0),
+            mock.patch.object(iv, "iam") as iam,
+        ):
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             cost, _platform, model, _in, _out, priced = iv._estimate_cost(self._record(1_000_000, 1_000_000))
         self.assertTrue(priced)
         self.assertAlmostEqual(cost, 8.0, places=4)  # (1M + 1M)/1M * 4.0
@@ -171,7 +463,9 @@ class ImportedModelTest(unittest.TestCase):
             mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 4.0),
             mock.patch.object(iv, "cloudwatch") as cw,
             mock.patch.object(iv, "s3"),
+            mock.patch.object(iv, "iam") as iam,
         ):
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             result = iv.handler(_envelope([self._record(1_000_000, 0)]), None)
         metrics = [m for call in cw.put_metric_data.call_args_list for m in call.kwargs["MetricData"]]
         self.assertEqual(result["platforms"], 1)
@@ -179,8 +473,7 @@ class ImportedModelTest(unittest.TestCase):
         cost_metric = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
         self.assertAlmostEqual(cost_metric["Value"], 4.0, places=4)  # 1M/1M * 4.0
         tok = next(m for m in metrics if m["MetricName"] == iv.TOKENS_IN_METRIC)
-        dims = {d["Name"]: d["Value"] for d in tok["Dimensions"]}
-        self.assertEqual(dims["ModelId"], "imported/abc123")
+        self.assertEqual(_dims(tok)["ModelId"], "imported/abc123")
 
 
 if __name__ == "__main__":

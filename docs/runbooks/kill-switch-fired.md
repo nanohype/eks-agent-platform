@@ -53,7 +53,7 @@ kubectl -n tenants-<platform> describe pod <pod-name>
 kubectl -n tenants-<platform> logs <pod-name> --previous
 ```
 
-Cause: tenant code bug (out of scope — hand back to tenant). Most useful here: confirm the tenant identity is wired — `kubectl get platform <name> -o jsonpath='{.status.podIdentity}'`, cross-checked against `aws eks list-pod-identity-associations --cluster-name <cluster>`; the ServiceAccount carries no role-arn annotation under Pod Identity, so grepping it for one always comes back empty — and that the role has the baseline policy attached (`aws iam list-attached-role-policies --role-name <env>-<platform>-tenant`).
+Cause: tenant code bug (out of scope — hand back to tenant). Most useful here: confirm the tenant identity is wired — `kubectl get platform <name> -o jsonpath='{.status.podIdentity}'`, cross-checked against `aws eks list-pod-identity-associations --cluster-name <cluster>`; the ServiceAccount carries no role-arn annotation under Pod Identity, so grepping it for one always comes back empty — and that the role has the baseline policy attached (`aws iam list-attached-role-policies --role-name <cluster>-<platform>-tenant`).
 
 ## Failure mode: kill-switch fired but the platform never suspended
 

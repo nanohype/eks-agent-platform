@@ -163,6 +163,26 @@ func main() {
 		networkEngine = controller.NetworkEngineCilium
 	}
 
+	// The cluster name qualifies every identity the operator mints or queries —
+	// tenant and session role names, and the PlatformId cost-attribution tag the
+	// budget reconciler both stamps and filters on. Empty, none of those fail:
+	// they render one hyphen shorter and keep working, so a Platform's roles and
+	// its CUR rows silently drop the discriminator that keeps two clusters in one
+	// account apart. Refuse rather than mint them.
+	//
+	// Gated on the AWS path, because that is where the discriminator does work.
+	// Under --disable-aws there is no IAM client, so no role and no tag is ever
+	// created, and the chart ships clusterName empty by default for exactly that
+	// shape — the local kind install sets --disable-aws and nothing else. Refusing
+	// there would turn every documented local install into a CrashLoopBackOff
+	// without protecting anything. The budget reconciler holds the same line
+	// unconditionally at the point a missing name would produce a number.
+	if !disableAWS && clusterName == "" {
+		setupLog.Error(nil, "--cluster-name (or AGENTS_CLUSTER_NAME) is required and was empty; refusing to start",
+			"why", "it qualifies tenant role names and the PlatformId cost-attribution tag, and an empty value degrades silently rather than failing")
+		os.Exit(1)
+	}
+
 	// AWS client + SSM config bootstrap. If disable-aws is set (unit/dev
 	// path) we skip both; the reconcilers see r.IAM == nil and short-circuit
 	// the AWS-side steps.
@@ -315,10 +335,15 @@ func main() {
 		os.Exit(1)
 	}
 	budgetReconciler := &controller.BudgetReconciler{
-		Client:                   mgr.GetClient(),
-		Scheme:                   mgr.GetScheme(),
-		Concurrency:              budgetWorkers,
-		RequeueInterval:          budgetRequeueInterval,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Concurrency:     budgetWorkers,
+		RequeueInterval: budgetRequeueInterval,
+		// Identity, not an AWS client — set on every path, including --disable-aws.
+		// It is guaranteed non-empty by the guard above. Setting it alongside the
+		// clients would leave it empty whenever they are absent, which is the one
+		// arrangement where an identity silently loses its discriminator.
+		ClusterName:              clusterName,
 		KillSwitchGraceIntervals: killSwitchGraceIntervals,
 		KillSwitchMaxRefires:     killSwitchMaxRefires,
 	}
