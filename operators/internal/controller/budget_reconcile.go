@@ -210,10 +210,24 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 	// Identifier inputs are validated against athenaIdentifierRE above; the value
 	// flows through escapeSQL even though Kubernetes already constrains it to
 	// RFC-1123 (defensive against future schema relaxations).
+	//
+	// line_item_type = 'Usage' makes this a GROSS CONSUMPTION measure, not a
+	// net-billed one. A CUR carries Credit, Refund, Tax, RIFee, SavingsPlanNegation
+	// and discount rows alongside usage, and summing them all answers "what was this
+	// account charged" — a reasonable question, and the wrong one for a kill switch.
+	// A promotional credit would offset real consumption and hold a runaway tenant
+	// under its cap; tax would inflate a tenant's number for something it did not
+	// cause. The switch exists to stop consumption, so it counts consumption.
+	//
+	// There is deliberately NO product predicate. A BudgetPolicy caps monthly spend
+	// per Platform, which includes the tenant's datastores — the reconciliation view
+	// in cost-pipeline filters to Bedrock because it reconciles invocation estimates
+	// against Bedrock billing, which is a different question. Do not align them.
 	query := fmt.Sprintf(
 		`SELECT COALESCE(SUM(line_item_unblended_cost), 0) AS spend_usd
 		 FROM "%s"."%s"
 		 WHERE %s = '%s'
+		   AND line_item_line_item_type = 'Usage'
 		   AND line_item_usage_start_date >= date_trunc('month', current_date)`,
 		r.AthenaCfg.Database, r.AthenaCfg.CURTableName,
 		curTagColumn(platformIDTagKey), escapeSQL(platformID),

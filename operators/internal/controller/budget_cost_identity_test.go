@@ -326,6 +326,33 @@ func TestKillSwitchEventCarriesTheBarePlatformName(t *testing.T) {
 	}
 }
 
+func TestBudgetMeasuresGrossConsumption(t *testing.T) {
+	// A budget cap answers "how much did this tenant consume", not "what was the
+	// account charged". A CUR carries Credit, Refund, Tax, RIFee and
+	// SavingsPlanNegation rows next to usage; summing all of them lets a
+	// promotional credit offset real burn and hold a runaway tenant under its cap,
+	// which is the one thing a kill switch must not do.
+	query, _ := reconcileForIdentity(t)
+
+	if !strings.Contains(query, "line_item_line_item_type = 'Usage'") {
+		t.Errorf("the CUR rollup must restrict to usage rows\n    query: %s", query)
+	}
+
+	// And NOT a product predicate. A BudgetPolicy caps monthly spend per Platform,
+	// which includes the tenant's datastores. cost-pipeline's reconciliation view
+	// filters to Bedrock because it answers a different question — reconciling
+	// invocation estimates against Bedrock billing — and copying that filter here
+	// would silently stop budgets seeing Aurora, S3, MSK and the rest.
+	for _, forbidden := range []string{"line_item_product_code", "product_product_name"} {
+		if strings.Contains(query, forbidden) {
+			t.Errorf("the CUR rollup must NOT filter by product (%s)\n"+
+				"    A BudgetPolicy caps a Platform's whole spend, not just its model spend;\n"+
+				"    a product predicate here makes every tenant's datastore cost invisible to\n"+
+				"    its own cap.\n    query: %s", forbidden, query)
+		}
+	}
+}
+
 func TestCostIdentity_CloudWatchSeriesIsUnchangedOtherwise(t *testing.T) {
 	// The namespace and metric name are a contract with the publisher and with
 	// ADR 0005; only the dimension VALUE moved. Pinned so a future edit to the
