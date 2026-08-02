@@ -1,14 +1,13 @@
 # examples/
 
-| Example                           | What it shows                                                                                                         |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| [`blank-tenant`](./blank-tenant/) | The minimal Platform — one agent, one route, daily smoke-test eval. The "did it work?" check after install.           |
-| [`agent-fleet`](./agent-fleet/)   | Multi-agent Platform: two model routes, two agents on their own images, KEDA SQS autoscaling.          |
-| [`bedrock-rag`](./bedrock-rag/)   | Retrieval-augmented tenant + a typechecked `@eks-agent/sdk` client: cached corpus prefix, fallback router, streaming. |
+| Example                           | What it shows                                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| [`blank-tenant`](./blank-tenant/) | The minimal Platform — one agent, one route, daily smoke-test eval. The "did it work?" check after install. |
+| [`agent-fleet`](./agent-fleet/)   | Multi-agent Platform: two model routes, two agents on their own images, KEDA SQS autoscaling.               |
 
-`blank-tenant` is the canonical "minimum viable tenant" — copy it, rename, edit the persona / models / agent system-prompts to your use case. `agent-fleet` and `bedrock-rag` are complete Platform CR sets that each layer on one subsystem (SQS-driven autoscaling with tools; SDK-side retrieval and prompt caching), so you can lift the piece you need into your own tenant.
+`blank-tenant` is the canonical "minimum viable tenant" — copy it, rename, edit the persona / models / agent system-prompts to your use case. `agent-fleet` layers on one subsystem (SQS-driven autoscaling with tools), so you can lift the piece you need into your own tenant.
 
-Each example is a workspace package; `pnpm install` at the repo root sets them up. Every model id is an org default from `nanohype/standards/llm-policy.json`.
+Both are CR sets, not applications, and that is the whole surface a tenant needs. An application reaches its models as ordinary HTTP against the route names its `ModelGateway` publishes, so there is no client library to import. Every model id is an org default from `nanohype/standards/llm-policy.json`.
 
 ## Running them
 
@@ -17,8 +16,8 @@ kubectl apply -f <example>/platform.yaml                    # apply the CR set
 kubectl apply --dry-run=server -f <example>/platform.yaml   # validate against the CRDs, no write
 ```
 
-`bedrock-rag` also carries a real TypeScript client — typecheck it against the SDK:
+Read the base URL and wire format back off the gateway rather than assuming them — each format is served under its own endpoint prefix, so the endpoint alone is not a usable base:
 
 ```bash
-pnpm --filter @eks-agent-example/bedrock-rag typecheck
+kubectl get modelgateway <name> -n eks-agent-platform -o jsonpath='{.status.routes}'
 ```

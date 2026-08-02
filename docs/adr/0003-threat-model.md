@@ -141,7 +141,7 @@ Six threat categories, evaluated per architecture component.
 | Threat                                           | STRIDE        | Mitigation                                                                                                                                                   |
 | ------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Compromised operator image pushed to GHCR        | **T**ampering | All operator images signed with cosign (keyless OIDC) + SBOM attestation. Kyverno verify-images policy in `eks-gitops` rejects unsigned images cluster-wide. |
-| Compromised npm package in `@eks-agent/sdk` deps | **T**         | Renovate vulnerability alerts always-on, never auto-merge. OSV alerts enabled. Trivy fs scan in CI fails on HIGH/CRITICAL.                                   |
+| Compromised npm package in a workspace package's deps | **T**    | Renovate vulnerability alerts always-on, never auto-merge. OSV alerts enabled. Trivy fs scan in CI fails on HIGH/CRITICAL.                                   |
 | Compromised Helm chart pulled by ArgoCD          | **T**         | OCI charts published with signed metadata. AppProject `sourceRepos` allowlist is closed-set; only the named OCI registries are reachable.                    |
 | Compromised Envoy AI Gateway upstream            | **T**         | Pinned chartVersion in ApplicationSet matrix; Renovate proposes bumps but human reviews majors. Cluster-wide image-verification policy applies.              |
 

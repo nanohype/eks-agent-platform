@@ -3,7 +3,6 @@
   "include": [],
   "references": [
     { "path": "./packages/core" },
-    { "path": "./packages/sdk" },
     { "path": "./packages/pricing" },
     { "path": "./packages/client" },
     { "path": "./packages/eval-runner" }

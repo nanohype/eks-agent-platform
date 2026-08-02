@@ -4,7 +4,7 @@ This repo uses [changesets](https://github.com/changesets/changesets) to manage 
 
 ## When to add a changeset
 
-Add a changeset for any PR that touches a published package (`packages/core`, `packages/sdk`, `packages/pricing`, `packages/client`). The `[email protected]` GitHub Action on the release workflow will refuse to publish if a changed published package has no changeset entry covering it.
+Add a changeset for any PR that touches a published package (`packages/core`, `packages/pricing`, `packages/client`). The `[email protected]` GitHub Action on the release workflow will refuse to publish if a changed published package has no changeset entry covering it.
 
 Skip the changeset for PRs that only touch:
 
@@ -29,4 +29,4 @@ The four `@eks-agent/*` packages are **linked** in `config.json` — any minor b
 
 Commit types like `feat:` and `fix:` do **not** auto-generate changesets — that's deliberate. Conventional-commits drives the commit-message gate (commitlint), changesets drives the release-bump gate. Both are required because they answer different questions: commitlint says "is this commit's intent legible?"; changesets says "what version should we ship?".
 
-`harden:` commits typically touch infra/security and don't need a changeset, but if a `harden:` commit happens to touch a published package (e.g., adding a security-related option to `@eks-agent/sdk`), include a changeset.
+`harden:` commits typically touch infra/security and don't need a changeset, but if a `harden:` commit happens to touch a published package (e.g., adding a security-related option to `@eks-agent/client`), include a changeset.

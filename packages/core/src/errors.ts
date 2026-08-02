@@ -1,7 +1,7 @@
 /**
- * Unified error taxonomy. Every ProviderAdapter classifies errors into this
- * set so the runtime can reason about retry semantics independent of the
- * underlying SDK.
+ * Unified error taxonomy. Anything that calls a model classifies failures into
+ * this set, so retry semantics can be reasoned about without knowing which
+ * route answered, which wire format it spoke, or which model backed it.
  */
 
 export type ErrorClass =

@@ -8,11 +8,11 @@ the tenant gateway, one `score` step grades the run, and the workflow patches
 `EvalSuite.status` with the result. Argo Rollouts gates a deploy on
 `status.lastScore` through the `eval-suite-gate` AnalysisTemplate.
 
-It is built on the platform SDK stack — `@eks-agent/core` for the typed error
-taxonomy (`AgentError` / `ErrorClass`), `@eks-agent/pricing` for unpriced-aware
-cost accounting, and the `@eks-agent/sdk` message + stop-reason contract — so
-the eval path classifies errors, prices calls, and recognizes guardrail
-interventions exactly the way a direct model call does.
+It is built on the platform packages — `@eks-agent/core` for the typed error
+taxonomy (`AgentError` / `ErrorClass`) and the message + stop-reason vocabulary,
+and `@eks-agent/pricing` for unpriced-aware cost accounting — so the eval path
+classifies errors, prices calls, and recognizes guardrail interventions exactly
+the way an application's own call through the gateway does.
 
 ## Case types
 
