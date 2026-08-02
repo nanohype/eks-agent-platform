@@ -40,7 +40,7 @@ const tenantSpecField = "spec.tenant"
 // be in any namespace.
 //
 // The reconciler does not provision any resources — it's a roll-up. The
-// per-Platform IRSA / KMS / S3 / kill-switch state lives on the Platform
+// per-Platform IAM / KMS / S3 / kill-switch state lives on the Platform
 // reconciler.
 type TenantReconciler struct {
 	client.Client

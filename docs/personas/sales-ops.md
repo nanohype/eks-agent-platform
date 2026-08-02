@@ -16,4 +16,4 @@ Default agent is `objection-handler` on Claude 3.5 Sonnet. Add `deal-researcher`
 
 ## What you won't touch
 
-The IRSA role, the Bedrock policies, the cross-region failover wiring, the WAF rules. Platform team owns those.
+The tenant IAM role, the Bedrock policies, the cross-region failover wiring, the WAF rules. Platform team owns those.

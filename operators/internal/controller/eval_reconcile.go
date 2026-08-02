@@ -235,7 +235,7 @@ func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1a
 		return "", err
 	}
 	// Don't emit until both Platform AND AgentFleet are Ready — otherwise
-	// the Argo job would target a tenant namespace whose IRSA or fleet
+	// the Argo job would target a tenant namespace whose identity or fleet
 	// pods don't exist yet.
 	if platform.Status.Phase != phaseReady || fleet.Status.Phase != phaseReady {
 		return phasePending, nil

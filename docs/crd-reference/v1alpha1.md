@@ -120,7 +120,8 @@ AgentSandboxSpec declares one ephemeral, hardened pod that runs a single
 agent role-session — fab's `sdk` role-loop dispatched per session. The
 reconciler builds the pod on the dedicated, tainted sandbox node pool,
 locked down by a default-deny NetworkPolicy, under the Platform's tenant
-IRSA ServiceAccount.
+ServiceAccount — which carries the tenant's AWS identity through its EKS
+Pod Identity association.
 
 
 
@@ -511,7 +512,7 @@ _Appears in:_
 | `min` _integer_ | Min replicas. Use a pointer so 0 (kill-switch state) is distinguishable<br />from "field absent" — with int32 + omitempty, the zero value gets<br />dropped and re-defaulted, making min=0 unrepresentable. | 1 | Minimum: 0 <br />Optional: \{\} <br /> |
 | `max` _integer_ | Max replicas. | 10 | Minimum: 1 <br />Optional: \{\} <br /> |
 | `queueDepthTrigger` _integer_ | QueueDepthTrigger: scale up when SQS depth exceeds this value. | 10 | Minimum: 1 <br />Optional: \{\} <br /> |
-| `queueUrl` _string_ | QueueUrl is the SQS queue the fleet's work originates from. When<br />set the operator emits a KEDA aws-sqs-queue trigger; otherwise a<br />CPU-utilization placeholder. The tenant IRSA role must have<br />sqs:GetQueueAttributes on this queue (granted via the agent-iam<br />baseline policy + an in-policy resource ARN derived from the URL). |  | Pattern: `^https://sqs\.[a-z0-9-]+\.amazonaws\.com/[0-9]\{12\}/[A-Za-z0-9_-]+(\.fifo)?$` <br />Optional: \{\} <br /> |
+| `queueUrl` _string_ | QueueUrl is the SQS queue the fleet's work originates from. When<br />set the operator emits a KEDA aws-sqs-queue trigger; otherwise a<br />CPU-utilization placeholder. The tenant role must have<br />sqs:GetQueueAttributes on this queue (granted via the agent-iam<br />baseline policy + an in-policy resource ARN derived from the URL). |  | Pattern: `^https://sqs\.[a-z0-9-]+\.amazonaws\.com/[0-9]\{12\}/[A-Za-z0-9_-]+(\.fifo)?$` <br />Optional: \{\} <br /> |
 
 
 
@@ -828,7 +829,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `operators` _string array_ | Operators is the set of human identities (e.g. email addresses) a<br />session in this Platform may act as. Each value becomes both an allowed<br />STS SourceIdentity on the session role's trust policy and a resourceNames<br />entry on the impersonate ClusterRole, so the SAME string binds the AWS<br />and Kubernetes audit records. Use a canonical form (a lowercased email);<br />it must byte-match the operator's own RBAC subject name. |  | MinItems: 1 <br /> |
-| `sessionRoleMaxDurationSeconds` _integer_ | SessionRoleMaxDurationSeconds caps the assumed session lifetime. Because<br />the caller is the tenant IRSA role, AWS STS role chaining hard-caps a<br />chained session at 3600s regardless of this value; larger values only<br />matter if the caller ever changes. Defaults to 3600. | 3600 | Maximum: 43200 <br />Minimum: 900 <br />Optional: \{\} <br /> |
+| `sessionRoleMaxDurationSeconds` _integer_ | SessionRoleMaxDurationSeconds caps the assumed session lifetime. Because<br />the caller is the tenant role, AWS STS role chaining hard-caps a<br />chained session at 3600s regardless of this value; larger values only<br />matter if the caller ever changes. Defaults to 3600. | 3600 | Maximum: 43200 <br />Minimum: 900 <br />Optional: \{\} <br /> |
 
 
 #### BudgetRef
@@ -1047,7 +1048,7 @@ _Appears in:_
 
 
 
-IdentitySpec wires the per-Platform IRSA role. The controller reconciles a
+IdentitySpec wires the per-Platform tenant role. The controller reconciles a
 `bedrock-model-scoping` inline policy onto the tenant role (and the
 attribution session role, when spec.attribution is set) that denies the
 Bedrock model-invoke actions (InvokeModel, InvokeModelWithResponseStream,
@@ -1154,10 +1155,10 @@ _Appears in:_
 | `persona` _string_ | Persona drives default values for AgentFleet, ModelGateway, and<br />dashboards. One of: sales-ops, support, finance, ops, founder, eng,<br />marketing, legal, generic. | generic | Enum: [sales-ops support finance ops founder eng marketing legal generic] <br /> |
 | `tenant` _string_ | Tenant is the owning Tenant CR (one Tenant can own multiple Platforms). |  |  |
 | `budget` _[BudgetRef](#budgetref)_ | Budget references a BudgetPolicy CR in the same namespace. |  |  |
-| `identity` _[IdentitySpec](#identityspec)_ | Identity controls how the IRSA role is named + which Bedrock models are<br />reachable. |  |  |
+| `identity` _[IdentitySpec](#identityspec)_ | Identity controls how the tenant role is named + which Bedrock models are<br />reachable. |  |  |
 | `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance flags drive stricter defaults across the Platform. |  | Optional: \{\} <br /> |
 | `isolation` _string_ | Isolation is the workload-isolation tier:<br />  - namespace (default): namespace RBAC + default-deny NetworkPolicy +<br />    ResourceQuota + PSS-restricted, tenant workloads on the host API server.<br />  - vcluster: the same host-side containment PLUS a per-Platform virtual<br />    cluster, so tenant code that talks to the Kubernetes API talks to its own<br />    API server, not the host's (API-server-level isolation — NOT kernel/node<br />    isolation; see docs/adr/0009-vcluster-isolation-tier.md and SECURITY.md).<br />Immutable: switching tiers on a live Platform is a migration (it would strand<br />the virtual cluster and its synced host objects), so the tier is fixed at<br />create time. Re-declare the Platform to change it. Enforced at admission by<br />the CEL transition rule below — an invalid tier flip fails the apply rather<br />than silently half-reconciling. | namespace | Enum: [namespace vcluster] <br />Optional: \{\} <br /> |
-| `attribution` _[AttributionSpec](#attributionspec)_ | Attribution opts the Platform into per-session human attribution. When<br />set, the operator provisions a session role — assumable by the tenant<br />IRSA role with the operator carried as STS SourceIdentity, scoped to the<br />tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a<br />ClusterRole letting the tenant ServiceAccount impersonate the named<br />operators at the apiserver. fab's role-session entrypoint consumes both,<br />so an agent's AWS + Kubernetes actions attribute to a named human.<br />nil = unattributed (the default). |  | Optional: \{\} <br /> |
+| `attribution` _[AttributionSpec](#attributionspec)_ | Attribution opts the Platform into per-session human attribution. When<br />set, the operator provisions a session role — assumable by the tenant<br />role with the operator carried as STS SourceIdentity, scoped to the<br />tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a<br />ClusterRole letting the tenant ServiceAccount impersonate the named<br />operators at the apiserver. fab's role-session entrypoint consumes both,<br />so an agent's AWS + Kubernetes actions attribute to a named human.<br />nil = unattributed (the default). |  | Optional: \{\} <br /> |
 | `datastores` _[DatastoreSpec](#datastorespec) array_ | Datastores declares the tenant's stateful substrate — the databases,<br />buckets, queues, caches, and streams it needs. Each entry is a declaration,<br />not a hand-written component: the tenant-substrate tofu module provisions<br />the heavy resource from this same list and the operator generates the<br />scoped IAM policy that reaches it, so adding a tenant never means authoring<br />a landing-zone component. Empty for a Platform with no stateful needs. |  | Optional: \{\} <br /> |
 
 
@@ -1179,7 +1180,7 @@ _Appears in:_
 | `sessionRoleArn` _string_ | SessionRoleArn is the per-Platform attribution session role, created when<br />spec.attribution is set. Empty when attribution is off. |  | Optional: \{\} <br /> |
 | `namespace` _string_ | Namespace is the tenant namespace the controller provisioned. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the last spec.generation the controller reconciled. |  | Optional: \{\} <br /> |
-| `suspendedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | SuspendedAt is the timestamp at which the kill-switch fired. When<br />non-nil the operator stops reattaching the baseline IAM policy and<br />the AgentFleetReconciler scales fleets to zero. Resets to nil only<br />when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'<br />marker on the tenant IRSA role. |  | Optional: \{\} <br /> |
+| `suspendedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | SuspendedAt is the timestamp at which the kill-switch fired. When<br />non-nil the operator stops reattaching the baseline IAM policy and<br />the AgentFleetReconciler scales fleets to zero. Resets to nil only<br />when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'<br />marker on the tenant role. |  | Optional: \{\} <br /> |
 | `suspendedReason` _string_ | SuspendedReason carries the kill-switch's reason (e.g.<br />'budget-exceeded'). Same lifecycle as SuspendedAt. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions follows the standard kubernetes pattern. |  | Optional: \{\} <br /> |
 | `datastores` _[DatastoreStatus](#datastorestatus) array_ | Datastores reports per-datastore observed state, separate from the<br />top-level Phase: a Platform is Ready once its namespace, quota, and<br />identity are live, while each datastore reports its own readiness here so a<br />still-creating Aurora cluster does not gate the tenant's Ready (T6). |  | Optional: \{\} <br /> |

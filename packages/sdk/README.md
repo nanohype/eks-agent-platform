@@ -22,7 +22,7 @@ import { CorrelationId } from '@eks-agent/core';
 
 const claude: ProviderAdapter = new AnthropicBedrockAdapter({
   region: process.env.AWS_REGION!,
-  // credentials default to fromNodeProviderChain (= IRSA inside the pod)
+  // credentials default to fromNodeProviderChain (= the pod's Pod Identity credentials)
 });
 
 const result = await claude.messages({
@@ -37,7 +37,7 @@ console.log(result.text, result.costUsd);
 
 Every call:
 
-- Authenticates via the pod's IRSA role (no API keys)
+- Authenticates as the pod's bound tenant role (no API keys)
 - Estimates cost via `@eks-agent/pricing`
 - Returns a unified `MessagesResponse` with `stopReason`, `usage`, `costUsd`, `latencyMs`
 - Throws `AgentError` (from `@eks-agent/core`) with `classifyError()` mapped to the unified `ErrorClass` enum

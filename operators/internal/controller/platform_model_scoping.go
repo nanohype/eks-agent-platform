@@ -61,7 +61,7 @@ type modelFamilyExpansion struct {
 // modelFamilyExpansions is the authoritative family → ARN-prefix table. Keys
 // mirror the ModelFamily vocabulary shared with @eks-agent/core (schemas.ts)
 // and the CRD enum on IdentitySpec.AllowedModelFamilies. The ARN shapes match
-// how landing-zone's *-platform IRSA components write them: foundation-model
+// how landing-zone's agent-iam component writes them: foundation-model
 // ARNs region-wildcarded with no account (cross-region inference profiles fan
 // out to foundation models in sibling regions), inference-profile ARNs
 // region+account scoped.

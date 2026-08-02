@@ -4,12 +4,12 @@ You're an AI client (or the author of one) about to declare a tenant on an EKS c
 
 ## What this repo gives you
 
-A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, IRSA, KMS grants, network policies, and runtime resources. Ten CRDs (version `v1alpha1`) split across three capability groups under the `nanohype.dev` domain — `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite, SLOPolicy):
+A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, tenant IAM identity, KMS grants, network policies, and runtime resources. Ten CRDs (version `v1alpha1`) split across three capability groups under the `nanohype.dev` domain — `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite, SLOPolicy):
 
 | CRD            | What it owns                                                                                                                                                                               |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Tenant`       | Cluster-scoped aggregate of a team's Platforms. Rolls up readiness, spend, and suspension state                                                                                            |
-| `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IRSA role + KMS grant + S3 bucket policy                                          |
+| `Platform`     | Tenant Namespace, ResourceQuota, LimitRange, default-deny NetworkPolicy, ArgoCD AppProject, per-Platform IAM role + Pod Identity association + KMS grant + S3 bucket policy                                          |
 | `ModelGateway` | Envoy AI Gateway routes, Bedrock model ID resolution, Guardrails attachment, per-route rate limits                                                                                        |
 | `AgentFleet`   | Deployment per agent running the tenant's own image, KEDA ScaledObject, per-fleet NetworkPolicy, all under the tenant ServiceAccount bound to the tenant IAM role via EKS Pod Identity      |
 | `SandboxPool`  | Pull-based pool of always-on Managed Agents sandbox workers — a worker Deployment, default-deny NetworkPolicy, and a KEDA-autoscaled metrics bridge keyed on work-queue depth              |
@@ -42,7 +42,7 @@ spec:
   budget:
     name: my-app # must reference an existing BudgetPolicy CR in the same namespace
   identity:
-    allowedModelFamilies: [anthropic] # Bedrock families the operator-reconciled IRSA role grants invoke on
+    allowedModelFamilies: [anthropic] # Bedrock families the operator-reconciled tenant role grants invoke on
     extraPolicyArns: [] # managed IAM policy ARNs to attach on top of the baseline
   compliance:
     soc2: true
@@ -100,7 +100,7 @@ The association the operator created is reported on `Platform.status.podIdentity
 
 When a `BudgetPolicy` hits 120% of `monthlyUsd` and `killSwitchEnabled: true`, an EventBridge rule → Step Functions state machine:
 
-1. Detaches the Bedrock-invoke baseline policy from the tenant's IRSA role
+1. Detaches the Bedrock-invoke baseline policy from the tenant's IAM role
 2. Tags the role with `platform.nanohype.dev/suspended=true`
 3. The `PlatformReconciler` observes the tag and stops re-attaching the baseline on subsequent reconciles
 4. Status moves to `Suspended` with a `Suspended` condition
@@ -122,4 +122,4 @@ Recovery is **human-only** — an operator clears the suspension tag manually af
 - [`examples/`](examples/) — end-to-end CR sets you can copy
 - [`README.md`](README.md) — install, run, contribute
 - [Platform Reference](https://github.com/nanohype/nanohype/blob/main/docs/platform-reference.md) — the stack-wide view
-- [`landing-zone/AGENTS.md`](../landing-zone/AGENTS.md) — provisions the `<app>-platform` substrate the chart's IRSA role lives in
+- [`landing-zone/AGENTS.md`](../landing-zone/AGENTS.md) — its `agent-iam` component provisions the operator's own role, the tenant permissions boundary, and the IAM path every tenant role is minted under

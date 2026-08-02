@@ -14,7 +14,7 @@ import (
 
 // S3 is the slice of the aws-sdk-go-v2 S3 client used to mutate the
 // artifacts bucket policy. No GetObject/PutObject — the operator never
-// reads or writes tenant data; tenants do that under their own IRSA.
+// reads or writes tenant data; tenants do that under their own role.
 type S3 interface {
 	GetBucketPolicy(ctx context.Context, params *s3.GetBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.GetBucketPolicyOutput, error)
 	PutBucketPolicy(ctx context.Context, params *s3.PutBucketPolicyInput, optFns ...func(*s3.Options)) (*s3.PutBucketPolicyOutput, error)

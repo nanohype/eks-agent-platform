@@ -2,7 +2,7 @@
 
 Opinionated scaffold for a single tenant Platform. Renders:
 
-- `Platform` — tenancy boundary + IRSA + isolation mode
+- `Platform` — tenancy boundary + tenant IAM identity + isolation mode
 - `BudgetPolicy` — monthly USD cap + kill-switch
 - `ModelGateway` — one default route, persona-tuned model family
 - `AgentFleet` — at least one agent, with KEDA scaling defaults

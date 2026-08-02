@@ -17,7 +17,8 @@ import (
 // agent role-session — fab's `sdk` role-loop dispatched per session. The
 // reconciler builds the pod on the dedicated, tainted sandbox node pool,
 // locked down by a default-deny NetworkPolicy, under the Platform's tenant
-// IRSA ServiceAccount.
+// ServiceAccount — which carries the tenant's AWS identity through its EKS
+// Pod Identity association.
 type AgentSandboxSpec struct {
 	// PlatformRef is the owning Platform. The session pod runs in that
 	// Platform's tenant namespace and the sandbox gates on Platform
