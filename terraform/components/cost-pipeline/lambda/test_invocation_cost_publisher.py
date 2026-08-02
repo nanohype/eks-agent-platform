@@ -68,9 +68,30 @@ def _envelope(records: list[dict]) -> dict:
     return {"awslogs": {"data": base64.b64encode(packed).decode("utf-8")}}
 
 
-def _tagged(**tags: str) -> dict:
-    """An IAM list_role_tags response."""
-    return {"Tags": [{"Key": k, "Value": v} for k, v in tags.items()]}
+def _pages(*pages: list[tuple[str, str]]) -> list[dict]:
+    """IAM ListRoleTags pages, in the shape the paginator yields."""
+    return [{"Tags": [{"Key": k, "Value": v} for k, v in page]} for page in pages]
+
+
+def _tagged(**tags: str) -> list[dict]:
+    """A single-page IAM ListRoleTags response."""
+    return _pages(list(tags.items()))
+
+
+def _stub_iam(iam, pages_or_exc):
+    """Wire a mocked IAM client to answer list_role_tags through its paginator.
+
+    Each call gets a FRESH iterator: a paginator returns a generator, and a stub
+    that hands out one exhausted iterator would make the second lookup in a test
+    silently see zero tags — which is the failure this module exists to not have.
+    Returns the paginate mock so call counts can be asserted.
+    """
+    paginator = iam.get_paginator.return_value
+    if isinstance(pages_or_exc, Exception):
+        paginator.paginate.side_effect = pages_or_exc
+    else:
+        paginator.paginate.side_effect = lambda **_kw: iter(pages_or_exc)
+    return paginator.paginate
 
 
 class AttributionTestCase(unittest.TestCase):
@@ -95,10 +116,7 @@ class AttributionTestCase(unittest.TestCase):
             mock.patch.object(iv, "s3"),
             mock.patch.object(iv, "iam") as iam,
         ):
-            if isinstance(tags, Exception):
-                iam.list_role_tags.side_effect = tags
-            else:
-                iam.list_role_tags.return_value = tags
+            _stub_iam(iam, tags)
             result = iv.handler(_envelope(records), None)
         metrics = [m for call in cw.put_metric_data.call_args_list for m in call.kwargs["MetricData"]]
         return result, metrics, iam
@@ -188,13 +206,30 @@ class PlatformAttributionTest(AttributionTestCase):
         )
         cost = next(m for m in metrics if m["MetricName"] == iv.METRIC_NAME)
         self.assertEqual(_dims(cost)["PlatformId"], "unknown")
-        iam.list_role_tags.assert_not_called()
+        iam.get_paginator.assert_not_called()
+
+    def test_reads_every_page_of_tags(self):
+        # ListRoleTags is paginated, and not for the reason it looks like: a role
+        # caps at 50 tags and MaxItems defaults to 100, so a full page is never the
+        # trigger. AWS documents that IAM "might return fewer results, even when
+        # there are more results available" with IsTruncated set, and recommends
+        # checking after every call — so the service, not the tag count, decides
+        # where the split falls. A single-page read puts PlatformId behind a page
+        # boundary the caller cannot predict, and the miss is indistinguishable
+        # from an untagged role: the invocation attributes to "unknown" and the
+        # tenant's spend reads low, with nothing red.
+        with mock.patch.object(iv, "iam") as iam:
+            _stub_iam(iam, _pages(
+                [("Team", "acme-team"), ("Environment", "staging")],
+                [("PlatformId", COST_ID)],
+            ))
+            self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), COST_ID)
 
     def test_lookup_is_memoized_per_role(self):
         # A log batch is overwhelmingly the same few roles and IAM's endpoint is
         # global and throttled, so one lookup per record would be the bottleneck.
         _result, _metrics, iam = self.run_handler([_record(TENANT_ROLE) for _ in range(5)])
-        self.assertEqual(iam.list_role_tags.call_count, 1)
+        self.assertEqual(iam.get_paginator.return_value.paginate.call_count, 1)
 
     def test_iam_failure_is_not_cached(self):
         # A throttle must not pin a role to "unknown" for the rest of the warm
@@ -202,21 +237,21 @@ class PlatformAttributionTest(AttributionTestCase):
         # attributed to nobody, long after IAM recovered.
         iv._ROLE_PLATFORM_CACHE.clear()
         with mock.patch.object(iv, "iam") as iam:
-            iam.list_role_tags.side_effect = RuntimeError("Throttling")
+            _stub_iam(iam, RuntimeError("Throttling"))
             self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), "unknown")
         self.assertNotIn(TENANT_ROLE, iv._ROLE_PLATFORM_CACHE)
         with mock.patch.object(iv, "iam") as iam:
-            iam.list_role_tags.return_value = _tagged(PlatformId=COST_ID)
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), COST_ID)
 
     def test_definitive_absence_is_cached(self):
         # A role that exists and has no PlatformId will not grow one mid-batch,
         # so it is answered once rather than re-queried per record.
         with mock.patch.object(iv, "iam") as iam:
-            iam.list_role_tags.return_value = _tagged(Tenant="acme-team")
+            _stub_iam(iam, _tagged(Tenant="acme-team"))
             for _ in range(3):
                 self.assertEqual(iv._platform_id_for_role(TENANT_ROLE), "unknown")
-            self.assertEqual(iam.list_role_tags.call_count, 1)
+            self.assertEqual(iam.get_paginator.return_value.paginate.call_count, 1)
         # Still counted every time, so the published gap reflects invocations
         # rather than cache misses.
         self.assertEqual(iv._UNTAGGED_ROLES[TENANT_ROLE], 3)
@@ -225,7 +260,7 @@ class PlatformAttributionTest(AttributionTestCase):
 class EstimateCostTest(AttributionTestCase):
     def test_prices_a_current_model_via_inference_profile(self):
         with mock.patch.object(iv, "iam") as iam:
-            iam.list_role_tags.return_value = _tagged(PlatformId=COST_ID)
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             record = {
                 "modelId": "us.anthropic.claude-sonnet-4-6",
                 "input": {"inputTokenCount": 1_000_000},
@@ -241,7 +276,7 @@ class EstimateCostTest(AttributionTestCase):
 
     def test_unknown_model_is_unpriced_not_borrowed(self):
         with mock.patch.object(iv, "iam") as iam:
-            iam.list_role_tags.return_value = _tagged(PlatformId=COST_ID)
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             record = {
                 "modelId": "us.anthropic.claude-imaginary-9-9",
                 "input": {"inputTokenCount": 5_000_000},
@@ -286,7 +321,7 @@ class HandlerTest(AttributionTestCase):
             mock.patch.object(iv, "iam") as iam,
             mock.patch.object(iv, "ESTIMATE_BUCKET", "estimates-bucket"),
         ):
-            iam.list_role_tags.return_value = _tagged(PlatformId=COST_ID)
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             iv.handler(_envelope([_record(TENANT_ROLE)]), None)
         body = s3.put_object.call_args.kwargs["Body"].decode("utf-8")
         rows = [json.loads(line) for line in body.splitlines()]
@@ -320,7 +355,7 @@ class ImportedModelTest(AttributionTestCase):
             mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 0.0),
             mock.patch.object(iv, "iam") as iam,
         ):
-            iam.list_role_tags.return_value = _tagged(PlatformId=COST_ID)
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             cost, platform, model, _in, _out, priced = iv._estimate_cost(self._record())
         self.assertFalse(priced)
         self.assertEqual(cost, 0.0)
@@ -334,7 +369,7 @@ class ImportedModelTest(AttributionTestCase):
             mock.patch.object(iv, "IMPORTED_ESTIMATE_USD_PER_M", 4.0),
             mock.patch.object(iv, "iam") as iam,
         ):
-            iam.list_role_tags.return_value = _tagged(PlatformId=COST_ID)
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             cost, _platform, model, _in, _out, priced = iv._estimate_cost(self._record(1_000_000, 1_000_000))
         self.assertTrue(priced)
         self.assertAlmostEqual(cost, 8.0, places=4)  # (1M + 1M)/1M * 4.0
@@ -347,7 +382,7 @@ class ImportedModelTest(AttributionTestCase):
             mock.patch.object(iv, "s3"),
             mock.patch.object(iv, "iam") as iam,
         ):
-            iam.list_role_tags.return_value = _tagged(PlatformId=COST_ID)
+            _stub_iam(iam, _tagged(PlatformId=COST_ID))
             result = iv.handler(_envelope([self._record(1_000_000, 0)]), None)
         metrics = [m for call in cw.put_metric_data.call_args_list for m in call.kwargs["MetricData"]]
         self.assertEqual(result["platforms"], 1)

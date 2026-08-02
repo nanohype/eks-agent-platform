@@ -160,7 +160,19 @@ def _platform_id_for_role(role_name: str) -> str:
         return cached
 
     try:
-        tags = iam.list_role_tags(RoleName=role_name)["Tags"]
+        # Paginated, and NOT because a role can carry more tags than a page holds —
+        # IAM caps roles at 50 tags and defaults MaxItems to 100. AWS documents that
+        # "IAM might return fewer results, even when there are more results
+        # available", with IsTruncated set, and recommends checking it after every
+        # call. So a single-page read is not merely tight, it is wrong whenever the
+        # service decides to split — and the failure is this Lambda's whole defect
+        # class again: PlatformId on page two reads as absent, the invocation
+        # attributes to "unknown", and the number is quietly low.
+        tags = [
+            t
+            for page in iam.get_paginator("list_role_tags").paginate(RoleName=role_name)
+            for t in page["Tags"]
+        ]
     except Exception:
         # Transient (throttle, timeout) or terminal (role deleted between the
         # invocation and this read). Either way this batch cannot attribute the
