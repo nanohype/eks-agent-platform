@@ -34,6 +34,26 @@ const (
 	otlpHTTPPort = 4318
 )
 
+// Where Envoy Gateway's control plane runs, and the xDS port its data plane
+// dials — `envoy-gateway.envoy-gateway-system.svc.cluster.local:18000`, from
+// the bootstrap Envoy Gateway writes into every proxy it renders.
+//
+// The gateway's Envoy runs in the *tenant's* namespace (the provider is
+// configured GatewayNamespace, which is what lets the proxy carry the tenant
+// ServiceAccount and reach Bedrock as the tenant). So it sits inside the
+// tenant's default-deny egress and cannot reach its own control plane without
+// being allowed out explicitly.
+//
+// A proxy that cannot reach xDS never receives a listener, never passes its
+// startup probe, and the Gateway never reports Programmed — while the
+// ModelGateway CR that asked for it still reports Ready, because the operator
+// reconciled every resource it owns successfully. Nothing upstream of the
+// data plane looks unhealthy.
+const (
+	envoyGatewayNamespace = "envoy-gateway-system"
+	envoyGatewayXDSPort   = 18000
+)
+
 // ciliumNetworkPolicyGVK is the cilium.io/v2 CiliumNetworkPolicy kind. The
 // operator manipulates it as unstructured to avoid pulling the cilium Go types
 // into its dependency graph — the same approach ensureAppProject uses for the
@@ -123,6 +143,16 @@ func gatewayEgressCiliumRules() []interface{} {
 			"toEntities": []interface{}{"all"},
 			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
 				map[string]interface{}{"port": "443", "protocol": "TCP"},
+			}}},
+		},
+		map[string]interface{}{ // xDS, to Envoy Gateway's control plane
+			// Not covered by the 443 rule above: xDS is plaintext gRPC on
+			// 18000, to a namespace the tenant otherwise has no route to.
+			"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": map[string]interface{}{
+				"k8s:io.kubernetes.pod.namespace": envoyGatewayNamespace,
+			}}},
+			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
+				map[string]interface{}{"port": strconv.Itoa(envoyGatewayXDSPort), "protocol": "TCP"},
 			}}},
 		},
 		map[string]interface{}{ // the OTel collector gateway

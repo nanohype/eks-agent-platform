@@ -175,3 +175,46 @@ func TestTenantEgressReachesTheCollector(t *testing.T) {
 			"every tenant's traces and metrics would be dropped by default-deny", collectorNamespace)
 	}
 }
+
+// TestGatewayEgressPolicy_AllowsXDS is the portable-engine twin of
+// TestGatewayEgressCiliumRules_AllowsXDS. Same failure, same silence: the
+// gateway's Envoy runs inside the tenant's default-deny egress and dials Envoy
+// Gateway's control plane on plaintext gRPC 18000, which the outbound-TLS rule
+// does not cover.
+func TestGatewayEgressPolicy_AllowsXDS(t *testing.T) {
+	ctx := context.Background()
+	p := attributedPlatform("acme", "reliability", nil, nil)
+
+	scheme := runtime.NewScheme()
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register networking/v1: %v", err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &PlatformReconciler{Client: cl, NetworkEngine: "kubernetes"}
+	if err := r.ensureGatewayEgressPolicy(ctx, p); err != nil {
+		t.Fatalf("ensureGatewayEgressPolicy: %v", err)
+	}
+
+	np := &networkingv1.NetworkPolicy{}
+	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: "gateway-egress"}
+	if err := cl.Get(ctx, key, np); err != nil {
+		t.Fatalf("gateway-egress NetworkPolicy not created: %v", err)
+	}
+
+	for _, rule := range np.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.NamespaceSelector == nil ||
+				peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != envoyGatewayNamespace {
+				continue
+			}
+			for _, port := range rule.Ports {
+				if port.Port.IntVal == int32(envoyGatewayXDSPort) {
+					return
+				}
+			}
+		}
+	}
+	t.Fatalf("gateway egress opens no path to xDS (TCP %d in %q) — the proxy would never "+
+		"program, while the ModelGateway CR still reported Ready",
+		envoyGatewayXDSPort, envoyGatewayNamespace)
+}
