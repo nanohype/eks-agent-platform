@@ -4,7 +4,7 @@
 
 ## Symptom
 
-A Platform's `status.phase == Suspended`. The tenant IRSA role has been detached from the baseline policy by the kill-switch state machine. Tenant pods can't invoke Bedrock; AgentFleets have scaled to zero.
+A Platform's `status.phase == Suspended`. The tenant IAM role has been detached from the baseline policy by the kill-switch state machine. Tenant pods can't invoke Bedrock; AgentFleets have scaled to zero.
 
 ## Diagnose
 

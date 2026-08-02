@@ -23,7 +23,7 @@ for p in $(aws iam list-attached-role-policies --role-name "$ROLE_NAME" --query 
 done
 ```
 
-The operator's reconcile loop stops mutating AWS state. Existing tenant pods continue to function (they use their own tenant IRSA, not the operator role).
+The operator's reconcile loop stops mutating AWS state. Existing tenant pods continue to function (they hold their own tenant role through Pod Identity, not the operator role).
 
 ## Audit (next 30 minutes)
 

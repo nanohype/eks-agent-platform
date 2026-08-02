@@ -65,7 +65,7 @@ config:
   # clusters. Required — set per cluster at install time.
   clusterName: ""
   region: us-west-2
-  # Org-dimension tag values stamped on the tenant IRSA roles the operator
+  # Org-dimension tag values stamped on the tenant IAM roles the operator
   # creates (resource-tagging standard, required tier). Empty falls back to the
   # operator's defaults (platform-engineering / engineering / internal / soc2);
   # override per-env via values-<env>.yaml (e.g. dataClassification: confidential

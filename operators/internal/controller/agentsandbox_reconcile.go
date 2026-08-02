@@ -121,8 +121,16 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client
 
 // ensureAgentSandboxNetworkPolicy installs the default-deny NetworkPolicy
 // for the session pod: ingress denied entirely; egress only to kube-dns and
-// outbound HTTPS (Bedrock inference + the AWS STS endpoint for IRSA), with
-// the cloud instance-metadata endpoint excluded.
+// outbound HTTPS, with the cloud instance-metadata endpoint excluded.
+//
+// It deliberately does not open the EKS Pod Identity credential endpoint
+// (169.254.170.23:80), which is where the session pod's AWS credentials come
+// from. The Platform's own tenant-egress policy selects every pod in the
+// namespace and allows it there — on cilium, as a CiliumNetworkPolicy against
+// the reserved host entity, which is the only form that can match it. Network
+// policies are additive, so the session pod gets that rule without this one
+// restating it, and the credential path stays owned by one policy rather than
+// two that can disagree.
 func (r *AgentSandboxReconciler) ensureAgentSandboxNetworkPolicy(ctx context.Context, box *agentsv1alpha1.AgentSandbox, p *platformv1alpha1.Platform) error {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: agentSandboxResourceName(box), Namespace: PlatformNamespace(p)},

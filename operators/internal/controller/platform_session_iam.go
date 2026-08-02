@@ -21,8 +21,9 @@ import (
 
 // defaultSessionRoleMaxDuration is the assumed-session lifetime when a
 // Platform's spec.attribution.sessionRoleMaxDurationSeconds is unset. Matches
-// the STS role-chaining ceiling: the caller is the pod's own IRSA-assumed
-// tenant role, so AWS caps the chained session at 3600s regardless.
+// the STS role-chaining ceiling: the caller is already an assumed role — the
+// tenant role the pod holds through its EKS Pod Identity association — so AWS
+// caps the chained session at 3600s regardless.
 const defaultSessionRoleMaxDuration int32 = 3600
 
 // sessionRoleName returns the attribution session role minted for a Platform:
@@ -45,7 +46,7 @@ func sessionRoleName(clusterName string, p *platformv1alpha1.Platform) string {
 }
 
 // sessionRoleTrustPolicy builds the trust policy for the attribution session
-// role: only the tenant IRSA role may assume it, and only while setting an STS
+// role: only the tenant role may assume it, and only while setting an STS
 // SourceIdentity drawn from the Platform's operator list. sts:SetSourceIdentity
 // is granted alongside sts:AssumeRole so the caller can stamp the human, and
 // the sts:SourceIdentity condition pins the allowed values so the caller can't
@@ -96,7 +97,7 @@ func sessionRoleMaxDuration(p *platformv1alpha1.Platform) int32 {
 
 // ensureSessionRole provisions (or reconciles) the attribution session role for
 // a Platform with spec.attribution set, and returns its ARN. The role is
-// assumable only by the tenant IRSA role, only while carrying one of the
+// assumable only by the tenant role, only while carrying one of the
 // Platform's operators as STS SourceIdentity, and is limited to the tenant
 // baseline policy (Bedrock invoke) clamped by the same bedrock-model-scoping
 // policy as the tenant role — never broad sts:AssumeRole.

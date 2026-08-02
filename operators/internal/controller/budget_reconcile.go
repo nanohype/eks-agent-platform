@@ -418,7 +418,7 @@ func shouldAlertAt(thresholds []int32, lastPct, currentPct int32) int32 {
 // EventBridge bus. The terraform-managed bus has a rule that targets the
 // suspension Step Functions state machine, which:
 //   - flips Platform.status.phase to Suspended,
-//   - revokes IRSA permissions,
+//   - revokes the tenant role's permissions,
 //   - scales AgentFleets to zero.
 //
 // We carry both the spend snapshot and the budget threshold in the

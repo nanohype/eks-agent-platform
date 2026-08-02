@@ -3,7 +3,7 @@
 `eks-agent-platform` is the **product**. It builds two things:
 
 - **The operator** — a Helm chart at `charts/operator/` (CRDs + Deployment + RBAC), published to `ghcr.io/nanohype/eks-agent-platform/operator`.
-- **The terraform** — per-tenant AWS state under `terraform/components/` (agent IRSA, Bedrock access, egress, kill-switch, eval-runtime, cost pipeline, batch runtime, model artifacts, accelerator pools).
+- **The terraform** — per-tenant AWS state under `terraform/components/` (agent IAM, Bedrock access, egress, kill-switch, eval-runtime, cost pipeline, batch runtime, model artifacts, accelerator pools).
 
 It is not a deploy catalog. Nothing in this repo applies itself to a cluster.
 

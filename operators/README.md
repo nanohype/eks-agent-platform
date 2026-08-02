@@ -7,7 +7,7 @@ The platform's Kubernetes operator. Single Go binary, six reconcilers, per-recon
 | Reconciler | CR             | k8s-side state                                                                                                                                   | AWS-side state                                                                                                                    |
 | ---------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | `tenant`   | `Tenant`       | Aggregates Platform readiness/spend/suspension into `Tenant.status` for the per-tenant dashboard rollup                                          | —                                                                                                                                 |
-| `platform` | `Platform`     | Tenant `Namespace` (with PSS label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`                            | IRSA role with trust policy bound to the tenant ServiceAccount, KMS grant on `cmk-data`, S3 bucket policy on the artifacts bucket |
+| `platform` | `Platform`     | Tenant `Namespace` (with PSS label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`                            | Tenant IAM role, bound to the tenant ServiceAccount by a Pod Identity association, KMS grant on `cmk-data`, S3 bucket policy on the artifacts bucket |
 | `gateway`  | `ModelGateway` | Envoy AI Gateway `AIGatewayRoute` rule per `ModelRoute`, with Bedrock backend + Guardrail attachment                                             | —                                                                                                                                 |
 | `runtime`  | `AgentFleet`   | `Deployment` per agent running the tenant's own image, KEDA `ScaledObject` (SQS or CPU triggers), `NetworkPolicy`, all under the tenant `ServiceAccount`         | —                                                                                                                                 |
 | `budget`   | `BudgetPolicy` | Status writeback: spend, percent-of-budget, conditions, alert thresholds crossed                                                                 | Athena `StartQueryExecution` against the CUR table, `CloudWatch:GetMetricData` for in-flight, `EventBridge:PutEvents` on breach   |
@@ -55,7 +55,7 @@ operators/
 
 ## Design notes
 
-See [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the bounded-context table, the operator-vs-OpenTofu split (operator owns fast-moving per-tenant AWS state via IRSA + AWS SDK; OpenTofu owns slow-moving platform-wide infra), and the data-flow walkthrough.
+See [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the bounded-context table, the operator-vs-OpenTofu split (operator owns fast-moving per-tenant AWS state via the AWS SDK; OpenTofu owns slow-moving platform-wide infra), and the data-flow walkthrough.
 
 See [`../docs/crd-reference/`](../docs/crd-reference/) for the field-level CRD reference.
 

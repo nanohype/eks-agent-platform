@@ -5,7 +5,7 @@ Provisions the platform-wide Bedrock substrate:
 - **Invocation logging** — S3 bucket (Object Lock, KMS-encrypted with `cmk-logs`, lifecycled to IA/Glacier) + CloudWatch Log Group + Bedrock `ModelInvocationLoggingConfiguration` pointed at both sinks. Bedrock writes the raw request + response + token usage for every invocation across the account. Object Lock defaults to **GOVERNANCE** — logs are immutable by default, but an admin (`s3:BypassGovernanceRetention`) can clear the lock so the environment tears down cleanly. Set `object_lock_mode = "COMPLIANCE"` for a tenant that needs hard immutability; COMPLIANCE-locked objects (and the bucket) then can't be deleted by anyone until retention expires.
 - **Baseline Guardrail** — denied-topic filters at HIGH input + output, plus PII redaction (email, phone, credit-card → anonymize; SSN → block). Tenants override or extend per route via `ModelGateway.spec.routes[].guardrailRef` (operator-reconciled); this baseline is the account-wide default.
 
-Per-tenant Bedrock access policies are **not** managed here — the operator creates them at reconcile time, bound to each tenant's IRSA role, with model-ARN scoping.
+Per-tenant Bedrock access policies are **not** managed here — the operator creates them at reconcile time, bound to each tenant's IAM role, with model-ARN scoping.
 
 ## Inputs
 
