@@ -31,6 +31,18 @@ locals {
   # Where AWS delivers the CUR Parquet. The report definition and the lifecycle rule that ages
   # it out have to agree, so they read one value.
   cur_prefix = "cur"
+
+  # The Athena column AWS produces for the PlatformId cost-allocation tag. Every CUR consumer
+  # in this component filters on it, and the operator's BudgetReconciler derives the same name
+  # from the same tag key in Go (curTagColumn).
+  #
+  # Spelled out here rather than shared with the operator, because the two sides must agree by
+  # both agreeing with AWS — one shared derivation would let a single wrong transform satisfy
+  # both. AWS's rule, from "Column names" in the CUR user guide: an underscore is added in
+  # front of uppercase letters, uppercase becomes lowercase, non-alphanumerics become
+  # underscores, duplicates are removed. So `resourceTags/user:PlatformId` becomes the below —
+  # note the split inside PlatformId, which is the part a hand-written name gets wrong.
+  cur_platform_tag_column = "resource_tags_user_platform_id"
 }
 
 ################################################################################
@@ -264,21 +276,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "cur" {
       expired_object_delete_marker = true
     }
   }
-}
-
-# Activating the cost-allocation tag is what makes PlatformId a column in CUR at
-# all. Until it is active the column is absent from the Parquet, the crawler never
-# registers it, and the reconciler's WHERE clause matches nothing — the pipeline is
-# valid end to end and reports zero for every tenant.
-#
-# Account-level, us-east-1, and NOT retroactive: spend that landed before activation
-# is unattributable forever, whatever is fixed downstream. That is why it is declared
-# alongside the report definition rather than left as a console step.
-resource "aws_ce_cost_allocation_tag" "platform_id" {
-  provider = aws.us_east_1
-
-  tag_key = "PlatformId"
-  status  = "Active"
 }
 
 resource "aws_cur_report_definition" "this" {
@@ -721,15 +718,15 @@ resource "aws_athena_named_query" "spend_reconciliation" {
       GROUP BY platform_id, usage_date
     ) e
     LEFT JOIN (
-      SELECT resource_tags_user_platformid                      AS platform_id,
+      SELECT ${local.cur_platform_tag_column}      AS platform_id,
              date_format(line_item_usage_start_date, '%Y-%m-%d') AS day,
              SUM(line_item_unblended_cost)                       AS cur_truth_usd
       FROM ${local.cur_table_name}
       WHERE (line_item_product_code = 'AmazonBedrock'
              OR product_product_name LIKE '%(Amazon Bedrock Edition)%')
         AND line_item_line_item_type = 'Usage'
-        AND resource_tags_user_platformid <> ''
-      GROUP BY resource_tags_user_platformid,
+        AND ${local.cur_platform_tag_column} <> ''
+      GROUP BY ${local.cur_platform_tag_column},
                date_format(line_item_usage_start_date, '%Y-%m-%d')
     ) c ON e.platform_id = c.platform_id AND e.usage_date = c.day
   SQL
@@ -842,7 +839,7 @@ resource "aws_lambda_function" "invocation_cost_publisher" {
     variables = {
       # The role-name → PlatformId derivation strips this prefix so the metric
       # dimension is the bare Platform name (e.g. "acme"), matching CUR's
-      # resource_tags_user_platformid and the Budget reconciler's lookup. Absent
+      # PlatformId tag column and the Budget reconciler's lookup. Absent
       # this, the dimension stayed "<env>-acme" and in-flight cost read zero.
       AGENTS_ENVIRONMENT  = var.environment
       ESTIMATE_BUCKET     = aws_s3_bucket.cur.id

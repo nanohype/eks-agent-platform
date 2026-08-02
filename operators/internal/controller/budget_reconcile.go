@@ -534,8 +534,14 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 	spendCUR, err := r.querySpendFromAthena(ctx, platform.Name)
 	switch {
 	case errors.Is(err, errAthenaNotConfigured):
-		// Dev/test path: no cost-pipeline outputs in SSM. Fall back to a
-		// zero CUR and surface only the in-flight CloudWatch number.
+		// No cost-pipeline outputs in SSM. Fall back to a zero CUR and surface only
+		// the in-flight CloudWatch number — but COUNT it, because this is not only
+		// the dev/test path. It is also what a cost-pipeline that failed to apply
+		// looks like from here, and that was the actual state: the CUR report
+		// definition could not be created, so the component never published its
+		// outputs, so this branch ran on every tick for every tenant. Returning a
+		// zero without a signal is how a budget with no CUR leg reads as healthy.
+		budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name).Inc()
 		spendCUR = "0"
 	case err != nil:
 		return budgetReading{}, err
