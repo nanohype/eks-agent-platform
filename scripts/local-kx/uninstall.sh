@@ -30,9 +30,8 @@ echo "deleting namespaces..."
 kubectl delete namespace eks-agent-platform --ignore-not-found
 kubectl delete namespace tenants-blank --ignore-not-found
 
-echo "deleting bedrock-mode AWS creds Secret..."
-kubectl delete secret agentgateway-aws --namespace agentgateway --ignore-not-found
-
 green "── uninstall complete ──"
-echo "kx's upstream slices (ai-platform, autoscaling, argo-platform) left in place."
+echo "kx's upstream slices (ai-platform, autoscaling, argo-platform, security)"
+echo "are left in place, along with any Bedrock credentials they installed —"
+echo "both belong to the workspace rather than to this install."
 echo "to remove those: cd ../kx && task stack:<slice>:disable"
