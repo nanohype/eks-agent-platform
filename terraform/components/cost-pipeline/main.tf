@@ -1,40 +1,61 @@
+################################################################################
+# The account's cost pipeline — ONE of it, not one per environment.
+#
+# `aws_cur_report_definition` has no filter. A Cost and Usage Report always covers
+# the entire account, so three per-environment reports are not three views of
+# anything: they are three complete, identical copies of the same billing data, in
+# three buckets, crawled by three crawlers, into three Glue databases, queried
+# through three Athena workgroups. Every copy is correct and every copy is the whole
+# account, which is why nothing ever went red — the duplication is a bill and a
+# maintenance surface rather than a broken query.
+#
+# The same is true one layer down. The Bedrock invocation log group is an
+# account+region singleton (bedrock-account owns it), and a log group accepts five
+# subscription filters — so three per-environment cost publishers WOULD all attach
+# cleanly, and each would process every record into the account-global
+# `agents/Bedrock` namespace that the budget reconciler reads with Stat=Sum. Three
+# times the real number, three green applies. An apply that failed would have been
+# kinder than one that succeeded.
+#
+# So this component is applied once, from live/org/, and everything per-cluster
+# lives in cost-access: the operator's IAM grant, and the republished handles under
+# the cluster prefix the operator actually sweeps.
+################################################################################
+
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
-
-# The operator role lives in landing-zone's canonical agent-iam component. Read
-# its ARN and name from the SSM contract that component publishes, rather than
-# carrying a duplicate agent-iam in this tree.
-data "aws_ssm_parameter" "operator_role_arn" {
-  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/operator_role_arn"
-}
-
-data "aws_ssm_parameter" "operator_role_name" {
-  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/operator_role_name"
-}
-
-# The IAM path every role the operator mints lives under — tenant roles and
-# attribution session roles alike. Read from the same agent-iam contract rather
-# than restated here, so the cost publisher's tag-read grant is scoped by the
-# component that owns the path.
-data "aws_ssm_parameter" "tenant_iam_path" {
-  name = "/eks-agent-platform/${var.cluster_name}/agent-iam/tenant_iam_path"
-}
+data "aws_region" "current" {}
 
 locals {
-  prefix = "${var.cluster_name}-cost"
+  # Account + region. Region is load-bearing even though a CUR's DATA is
+  # account-global: these are S3 buckets and a Glue database, which live in a region
+  # and share a global namespace, so a second region must not collide on the name.
+  prefix = "org-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-cost"
+
   tags = merge(var.tags, {
     Component = "cost-pipeline"
     Tier      = "platform"
+    Scope     = "account"
+
+    # Stamped on this component's own resources to make the key OBSERVABLE, which is
+    # what starts AWS's clock toward being able to activate it. The pipeline's own
+    # storage genuinely belongs to the account rather than to any tenant, so `org` is
+    # the honest value and not a placeholder.
+    #
+    # Without this nothing in a fresh account ever carries the key, AWS never lists
+    # it, and the activation below can never happen — the tenants that would carry it
+    # do not exist until the platform does.
+    PlatformId = "org"
   })
 
-  # Teardown posture: development always permits a full destroy; elsewhere it is opt-in.
-  # Same two-act contract as landing-zone's agent-iam — force_destroy has no effect until an
-  # apply lands it in state, so permitting a teardown and performing one are separate acts.
+  # Teardown posture. There is no environment token to branch on here — this
+  # component is applied once for the account, so `development` is not a thing it
+  # can be. The lever is the explicit one only.
   #
-  # All three buckets need it. access-logs takes writes from the first PUT; cur and athena are
-  # versioned, so their lifecycle rules write delete markers that are themselves current
-  # versions and an expiry alone never empties them.
-  bucket_force_destroy = var.environment == "development" || var.force_destroy_buckets
+  # All three buckets need it. access-logs takes writes from the first PUT; cur and
+  # athena are versioned, so their lifecycle rules write delete markers that are
+  # themselves current versions and an expiry alone never empties them.
+  bucket_force_destroy = var.force_destroy_buckets
 
   # Where AWS delivers the CUR Parquet. The report definition and the lifecycle rule that ages
   # it out have to agree, so they read one value.
@@ -50,15 +71,26 @@ locals {
   # is the shape this whole component is being corrected for; it should not be reintroduced by
   # the fix.
   #
+  # It arrives as a variable rather than from agent-iam's SSM contract, and that is a
+  # downgrade forced by the scope change: agent-iam publishes the path per CLUSTER,
+  # and this component is applied once for the account, so there is no single cluster
+  # subtree it could read. The value is an account-wide constant in landing-zone
+  # (agent-iam's local.tenant_role_path), which is why one variable can stand for all
+  # of them.
+  #
+  # It is not left as an unchecked mirror. This component publishes the path it used,
+  # and every cluster's cost-access reads BOTH that and its own agent-iam parameter
+  # and refuses to create the operator grant if they disagree — so the constant is
+  # verified once per cluster, at the layer that can see both values, instead of
+  # being asserted by a comment here.
+  tenant_iam_path = endswith(var.tenant_iam_path, "/") ? var.tenant_iam_path : "${var.tenant_iam_path}/"
+
   # nonsensitive() because the aws_ssm_parameter data source marks every value
-  # sensitive regardless of type, and that mark propagates through jsonencode into
-  # the whole IAM policy document — so `tofu plan` would print
-  # `policy = (sensitive value)` and hide every future change to the cost
-  # publisher's permissions from review. An IAM path is a public-by-construction
-  # string that this repo already writes out in full elsewhere; a plan that cannot
-  # show a permissions diff is a worse outcome than naming it.
-  tenant_iam_path_raw = nonsensitive(data.aws_ssm_parameter.tenant_iam_path.value)
-  tenant_iam_path     = endswith(local.tenant_iam_path_raw, "/") ? local.tenant_iam_path_raw : "${local.tenant_iam_path_raw}/"
+  # sensitive regardless of type, and that mark would propagate into the Lambda
+  # permission's source_arn and the subscription filter — printing them as
+  # (sensitive value) in every plan and hiding which log group the account's cost
+  # publisher is about to attach itself to.
+  bedrock_invocation_log_group = nonsensitive(data.aws_ssm_parameter.bedrock_invocation_log_group.value)
 
   # The Athena column AWS produces for the PlatformId cost-allocation tag. Every CUR consumer
   # in this component filters on it, and the operator's BudgetReconciler derives the same name
@@ -234,20 +266,16 @@ resource "aws_s3_bucket_policy" "cur" {
             "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:cur:us-east-1:${data.aws_caller_identity.current.account_id}:definition/*"
           }
         }
-      },
-      {
-        Sid       = "OperatorRead"
-        Effect    = "Allow"
-        Principal = { AWS = data.aws_ssm_parameter.operator_role_arn.value }
-        Action = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          aws_s3_bucket.cur.arn,
-          "${aws_s3_bucket.cur.arn}/*"
-        ]
       }
+      # No OperatorRead statement. It named ONE cluster's operator role, which a
+      # bucket serving every cluster cannot do — a bucket policy is a single
+      # document, so N clusters would mean N writers rewriting one object and the
+      # last apply deciding who still has access.
+      #
+      # The operators get their read through their own IAM policies instead, minted
+      # per cluster by cost-access. Within one account an identity policy is
+      # sufficient on its own; a resource policy adds nothing here except a
+      # contended object.
     ]
   })
 }
@@ -427,106 +455,22 @@ resource "aws_athena_workgroup" "cost" {
 }
 
 resource "aws_glue_catalog_database" "cost" {
-  name = replace("${local.prefix}-cost", "-", "_")
+  name = replace(local.prefix, "-", "_")
   tags = local.tags
 }
 
 ################################################################################
-# Operator policy attachment — read CUR + run Athena queries
+# The operator's grant is NOT here.
+#
+# It attaches to one cluster's operator role, discovered from that cluster's
+# agent-iam SSM contract — a per-cluster act, and this component is applied once for
+# the account. N clusters need N policies and N attachments, so they live in
+# cost-access, which is applied per cluster and reads this component's published
+# handles.
+#
+# What stays here is what there is one of: the report, the buckets, the catalog, the
+# workgroup and the publisher.
 ################################################################################
-
-resource "aws_iam_policy" "operator_cost" {
-  name = "${local.prefix}-operator-cost"
-  path = "/eks-agent-platform/"
-  tags = local.tags
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AthenaQuery"
-        Effect = "Allow"
-        Action = [
-          "athena:StartQueryExecution",
-          "athena:GetQueryExecution",
-          "athena:GetQueryResults",
-          "athena:StopQueryExecution",
-          "athena:GetWorkGroup"
-        ]
-        Resource = aws_athena_workgroup.cost.arn
-      },
-      {
-        Sid    = "GlueRead"
-        Effect = "Allow"
-        Action = [
-          "glue:GetDatabase",
-          "glue:GetTable",
-          "glue:GetTables",
-          "glue:GetPartitions"
-        ]
-        Resource = [
-          "arn:${data.aws_partition.current.partition}:glue:${var.region}:${data.aws_caller_identity.current.account_id}:catalog",
-          aws_glue_catalog_database.cost.arn,
-          "arn:${data.aws_partition.current.partition}:glue:${var.region}:${data.aws_caller_identity.current.account_id}:table/${aws_glue_catalog_database.cost.name}/*"
-        ]
-      },
-      {
-        Sid    = "AthenaResults"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          aws_s3_bucket.athena_results.arn,
-          "${aws_s3_bucket.athena_results.arn}/*"
-        ]
-      },
-      {
-        Sid    = "CostDataKMS"
-        Effect = "Allow"
-        # Athena runs S3 and KMS access under the CALLER's identity, and the caller
-        # here is the operator role this policy attaches to. Three actions, all
-        # load-bearing on the same key:
-        #   Decrypt         - read the estimates/ objects the cost publisher writes
-        #                     with an explicit SSE-KMS header, and read a result set
-        #                     back on GetQueryResults
-        #   GenerateDataKey - WRITE the result set. The workgroup sets
-        #                     enforce_workgroup_configuration with SSE_KMS results,
-        #                     so this is not optional, and Decrypt alone leaves every
-        #                     query failing at the write step
-        #   DescribeKey     - the SDK's key-resolution path
-        #
-        # Without these the query returns FAILED on every tick, reconcileBudget
-        # returns before the kill-switch block, and a tenant at 120% of budget never
-        # trips it with nothing anywhere going red.
-        Action   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
-        Resource = [var.data_kms_key_arn]
-        Condition = {
-          StringEquals = {
-            "kms:ViaService" = ["s3.${var.region}.amazonaws.com"]
-          }
-        }
-      },
-      {
-        Sid    = "BedrockMetrics"
-        Effect = "Allow"
-        Action = [
-          "cloudwatch:GetMetricStatistics",
-          "cloudwatch:GetMetricData",
-          "cloudwatch:ListMetrics"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "operator_cost" {
-  role       = data.aws_ssm_parameter.operator_role_name.value
-  policy_arn = aws_iam_policy.operator_cost.arn
-}
 
 ################################################################################
 # Glue Crawler — catalogs the CUR Parquet files into the Glue database so
@@ -904,17 +848,25 @@ resource "aws_lambda_function" "invocation_cost_publisher" {
   depends_on = [aws_cloudwatch_log_group.invocation_cost_publisher]
 }
 
+# The Bedrock invocation log group is an account+region singleton owned by
+# bedrock-account. Read from its published contract rather than taken as an input
+# from a terragrunt `dependency`: a dependency across roots resolves at PARSE time,
+# so this root could not even `init` before the account's logging existed.
+data "aws_ssm_parameter" "bedrock_invocation_log_group" {
+  name = "/eks-agent-platform/org/bedrock-account/invocation_log_group"
+}
+
 resource "aws_lambda_permission" "invocation_cost_publisher_logs" {
   statement_id  = "AllowCloudWatchLogsInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.invocation_cost_publisher.function_name
   principal     = "logs.${var.region}.amazonaws.com"
-  source_arn    = "arn:${data.aws_partition.current.partition}:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:${var.bedrock_invocation_log_group}:*"
+  source_arn    = "arn:${data.aws_partition.current.partition}:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.bedrock_invocation_log_group}:*"
 }
 
 resource "aws_cloudwatch_log_subscription_filter" "invocations" {
   name            = "${local.prefix}-invcost"
-  log_group_name  = var.bedrock_invocation_log_group
+  log_group_name  = local.bedrock_invocation_log_group
   filter_pattern  = "" # match everything; the Lambda decides what counts
   destination_arn = aws_lambda_function.invocation_cost_publisher.arn
   distribution    = "ByLogStream"
@@ -923,47 +875,187 @@ resource "aws_cloudwatch_log_subscription_filter" "invocations" {
 }
 
 ################################################################################
-# SSM outputs
+# Account contract
+#
+# Published under /eks-agent-platform/org/, which no cluster subtree can collide
+# with: a cluster name is `<environment>-<clusterBase>` and `org` is a reserved
+# environment token with no base.
+#
+# The operator cannot read these. Its whole configuration is one recursive
+# GetParametersByPath sweep of its OWN cluster prefix, so cost-access republishes
+# each handle under /eks-agent-platform/<cluster>/cost-pipeline/ — the keys the
+# operator already knows, now backed by one pipeline instead of three.
 ################################################################################
 
 resource "aws_ssm_parameter" "cur_bucket" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/cur_bucket"
+  name  = "/eks-agent-platform/org/cost-pipeline/cur_bucket"
   type  = "String"
   value = aws_s3_bucket.cur.id
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "athena_workgroup" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_workgroup"
+  name  = "/eks-agent-platform/org/cost-pipeline/athena_workgroup"
   type  = "String"
   value = aws_athena_workgroup.cost.name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "athena_database" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_database"
+  name  = "/eks-agent-platform/org/cost-pipeline/athena_database"
   type  = "String"
   value = aws_glue_catalog_database.cost.name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "cur_table_name" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/cur_table_name"
+  name  = "/eks-agent-platform/org/cost-pipeline/cur_table_name"
   type  = "String"
   value = local.cur_table_name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "estimate_table_name" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/estimate_table_name"
+  name  = "/eks-agent-platform/org/cost-pipeline/estimate_table_name"
   type  = "String"
   value = local.estimate_table_name
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "reconciliation_view" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/reconciliation_view"
+  name  = "/eks-agent-platform/org/cost-pipeline/reconciliation_view"
   type  = "String"
   value = local.reconciliation_view
+  tags  = local.tags
+}
+
+################################################################################
+# PlatformId cost-allocation tag — account-global, not retroactive, and the reason
+# the CUR leg of every budget can read zero while every query succeeds.
+#
+# Activating this key is what makes `resource_tags_user_platform_id` a column in the
+# report at all. Until it is active the column is absent from the Parquet, so the
+# reconciler's predicate matches nothing and every tenant reads zero spend with a
+# query that ran and returned. Nothing goes red.
+#
+# ─── why this is count-gated and not a precondition ───
+#
+# AWS only offers a user-defined key for activation once it has OBSERVED a resource
+# carrying it, then takes up to 24h to list it and up to 24h more to activate it. So
+# activation cannot happen in the same apply that first stamps the key — and on a
+# fresh account nothing has stamped it, because the tenants that would carry it do
+# not exist until the platform this component is part of does.
+#
+# A blocking precondition therefore deadlocks: the component can never apply, so the
+# pipeline never exists, so no tenant ever gets tagged. Gating the RESOURCE on the
+# observation instead makes it a two-act contract that completes itself — act one
+# creates the pipeline and stamps the key on its own buckets, act two activates it
+# on whichever later apply finds AWS has caught up. No operator input, no knob, and
+# no apply that fails for a reason the operator cannot act on.
+#
+# The check block below is the loud half: while the count is zero, every plan says
+# so, rather than the absence being a silence you have to already know to look for.
+################################################################################
+
+data "aws_ce_tags" "observed" {
+  provider = aws.us_east_1
+
+  # plantimestamp(), not timestamp(). timestamp() is an APPLY-time value, so the
+  # provider cannot read this data source during plan, `tags` comes back "known after
+  # apply", and a count derived from it is rejected outright — the component becomes
+  # permanently unplannable with a message telling the operator to run with -exclude.
+  # Verified against the live account rather than reasoned about: with timestamp() the
+  # plan errors on Invalid count argument; with plantimestamp() it resolves.
+  time_period {
+    start = formatdate("YYYY-MM-DD", timeadd(plantimestamp(), "-720h"))
+    end   = formatdate("YYYY-MM-DD", plantimestamp())
+  }
+}
+
+locals {
+  platform_id_tag_observed = contains(data.aws_ce_tags.observed.tags, "PlatformId")
+}
+
+resource "aws_ce_cost_allocation_tag" "platform_id" {
+  provider = aws.us_east_1
+  count    = local.platform_id_tag_observed ? 1 : 0
+
+  tag_key = "PlatformId"
+  status  = "Active"
+}
+
+check "platform_id_tag_is_active" {
+  assert {
+    condition     = local.platform_id_tag_observed
+    error_message = <<-EOT
+      Cost Explorer has not yet observed a resource tagged PlatformId in this account, so the
+      key cannot be activated and the CUR carries no resource_tags_user_platform_id column.
+
+      Until it does, every BudgetPolicy's CUR leg reads zero. The operator surfaces that —
+      the Athena query fails on the missing column, agents_budget_spend_unreadable_total
+      increments and BudgetReconciled goes False — so this is loud at both ends rather than
+      a silent zero.
+
+      Nothing to do but wait. This apply stamps PlatformId on the pipeline's own buckets,
+      which starts AWS's clock: up to 24h to list the key and up to 24h more to activate it.
+      The next apply after that creates the activation on its own. Activation is NOT
+      retroactive, so spend that lands inside that window is unattributable permanently —
+      which is why the clock is started here, at install, rather than when the first tenant
+      arrives.
+    EOT
+  }
+}
+
+# Handles cost-access needs to mint each cluster's operator grant. ARNs are published
+# rather than left to be reconstructed from names: a consumer composing
+# `arn:aws:athena:<region>:<account>:workgroup/<name>` has to get three more things
+# right than it has to know, and a grant scoped to a mis-composed ARN denies silently.
+resource "aws_ssm_parameter" "athena_workgroup_arn" {
+  name  = "/eks-agent-platform/org/cost-pipeline/athena_workgroup_arn"
+  type  = "String"
+  value = aws_athena_workgroup.cost.arn
+  tags  = local.tags
+}
+
+resource "aws_ssm_parameter" "athena_database_arn" {
+  name  = "/eks-agent-platform/org/cost-pipeline/athena_database_arn"
+  type  = "String"
+  value = aws_glue_catalog_database.cost.arn
+  tags  = local.tags
+}
+
+# The operator reads cost-pipeline/athena_results_bucket from its own cluster prefix
+# and nothing ever published it, so the field was permanently empty. Harmless while
+# the workgroup supplies the output location, but a seam claiming more than it
+# delivers — and the grant below genuinely needs the bucket.
+resource "aws_ssm_parameter" "athena_results_bucket" {
+  name  = "/eks-agent-platform/org/cost-pipeline/athena_results_bucket"
+  type  = "String"
+  value = aws_s3_bucket.athena_results.id
+  tags  = local.tags
+}
+
+resource "aws_ssm_parameter" "athena_results_bucket_arn" {
+  name  = "/eks-agent-platform/org/cost-pipeline/athena_results_bucket_arn"
+  type  = "String"
+  value = aws_s3_bucket.athena_results.arn
+  tags  = local.tags
+}
+
+resource "aws_ssm_parameter" "cur_bucket_arn" {
+  name  = "/eks-agent-platform/org/cost-pipeline/cur_bucket_arn"
+  type  = "String"
+  value = aws_s3_bucket.cur.arn
+  tags  = local.tags
+}
+
+# The IAM path this component scoped the publisher's tag-read grant to. Published so
+# every cluster's cost-access can compare it against that cluster's agent-iam
+# contract and refuse the operator grant if they have drifted — the account cannot
+# read a per-cluster parameter, but each cluster can read both.
+resource "aws_ssm_parameter" "tenant_iam_path" {
+  name  = "/eks-agent-platform/org/cost-pipeline/tenant_iam_path"
+  type  = "String"
+  value = local.tenant_iam_path
   tags  = local.tags
 }

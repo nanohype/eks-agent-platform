@@ -16,6 +16,11 @@ mock_provider "aws" {
       user_id    = "AIDTEST"
     }
   }
+  mock_data "aws_region" {
+    defaults = {
+      region = "us-west-2"
+    }
+  }
   mock_data "aws_partition" {
     defaults = {
       partition          = "aws"
@@ -47,51 +52,30 @@ mock_provider "aws" {
 
 mock_provider "aws" {
   alias = "us_east_1"
+
+  # The activation resource is count-gated on whether Cost Explorer has observed the
+  # key, so without a mock the count is unknown at plan and the whole suite errors
+  # before any assertion runs. Default to observed; the run that cares about the
+  # other state overrides it.
+  mock_data "aws_ce_tags" {
+    defaults = {
+      tags = ["PlatformId", "CostCenter", "BusinessUnit"]
+    }
+  }
 }
 
 variables {
-  environment                  = "staging"
-  region                       = "us-west-2"
-  cluster_name                 = "staging-platform"
-  cur_report_name              = "eks-agent-platform-test"
-  data_kms_key_arn             = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
-  logs_kms_key_arn             = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
-  bedrock_invocation_log_group = "mock-bedrock-invocations"
-  tags                         = {}
+  region           = "us-west-2"
+  cur_report_name  = "eks-agent-platform-test"
+  data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  logs_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
+  tags             = {}
 }
 
 # The operator executes the Athena query, and Athena reaches S3 and KMS under the
 # CALLER's identity. Reading the SSE-KMS estimates and writing the SSE-KMS result set
 # are both on this key, and the workgroup enforces encrypted results — so Decrypt
 # alone leaves every query failing at the write step.
-run "the_operator_can_decrypt_and_write_what_it_queries" {
-  command = plan
-
-  assert {
-    condition = anytrue([
-      for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
-      contains(s.Action, "kms:Decrypt")
-      && contains(s.Action, "kms:GenerateDataKey")
-      && contains(tolist(s.Resource), var.data_kms_key_arn)
-    ])
-    error_message = "the operator role must hold kms:Decrypt AND kms:GenerateDataKey on the cost data key — without both, StartQueryExecution returns FAILED on every tick, reconcileBudget returns before the kill-switch block, and a tenant at 120% of budget never trips it with nothing going red"
-  }
-
-  # The grant is capped to S3, so it cannot be used to decrypt anything else the key
-  # protects. A grant that works and reaches further than it needs is the next finding.
-  assert {
-    condition = alltrue([
-      for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
-      !contains(s.Action, "kms:Decrypt") || try(s.Condition.StringEquals["kms:ViaService"], null) != null
-    ])
-    error_message = "the KMS grant must be conditioned on kms:ViaService so it only works through S3"
-  }
-}
-
-# AWS's Cost and Usage Reports service delivers with the two S3 statements it
-# publishes and nothing else — it holds no KMS grant, and AWS documents none. An
-# SSE-KMS default on this bucket does not harden it, it makes every delivery fail, so
-# the bucket stays empty and every budget reads zero.
 run "aws_can_actually_deliver_the_report" {
   command = plan
 
@@ -173,17 +157,14 @@ run "the_publisher_can_read_the_tag_it_attributes_by" {
 # (platform_iam.go, platform_session_iam.go); if terraform does not, the same stored value
 # means two different things and the grant matches nothing the operator ever creates.
 #
-# The suite's global mock returns an ARN for every aws_ssm_parameter, which is fine for the
-# resources that only need A value but makes any assertion about THIS one vacuous — it
-# happens not to end in a slash and happens not to end in ":role/*", so both the
-# normalization and the scoping assertions would pass without testing anything. These runs
-# override the data source with the two shapes that actually matter.
+# The path is an input now — agent-iam publishes it per CLUSTER and this component is
+# applied once for the account, so there is no single subtree to read. These runs drive
+# the two shapes that matter through that input.
 run "the_tag_read_grant_survives_a_path_without_a_trailing_slash" {
   command = plan
 
-  override_data {
-    target = data.aws_ssm_parameter.tenant_iam_path
-    values = { value = "/eks-agent-platform/tenants" }
+  variables {
+    tenant_iam_path = "/eks-agent-platform/tenants"
   }
 
   assert {
@@ -204,9 +185,8 @@ run "the_tag_read_grant_survives_a_path_without_a_trailing_slash" {
 run "the_tag_read_grant_is_unchanged_by_a_path_that_already_ends_in_a_slash" {
   command = plan
 
-  override_data {
-    target = data.aws_ssm_parameter.tenant_iam_path
-    values = { value = "/eks-agent-platform/tenants/" }
+  variables {
+    tenant_iam_path = "/eks-agent-platform/tenants/"
   }
 
   # Normalization must be idempotent — a double slash is a different path to IAM, and
@@ -274,6 +254,75 @@ run "the_workgroup_enforces_the_key_the_operator_holds" {
         ])
       ])
     ])
-    error_message = "the workgroup must enforce SSE_KMS results on the same key the operator policy grants — enforcing a key the caller cannot use fails every query at the write step"
+    error_message = "the workgroup must enforce SSE_KMS results on data_kms_key_arn. The other half of this pair — that each cluster's operator actually holds Decrypt AND GenerateDataKey on that key — is asserted in cost-access, which is where the grant is minted; enforcing a key the caller cannot use fails every query at the write step"
+  }
+}
+
+# The cost-allocation tag activates itself on a later apply, and that is a design
+# rather than an omission.
+#
+# AWS only offers a user-defined key for activation once it has OBSERVED a resource
+# carrying it, then takes up to 24h to list it. So activation cannot happen in the
+# apply that first stamps the key — and on a fresh account nothing has stamped it,
+# because the tenants that would carry it do not exist until this pipeline does. A
+# blocking precondition would deadlock that permanently.
+#
+# Gating the RESOURCE on the observation makes it a two-act contract that completes
+# itself: act one builds the pipeline and stamps the key on its own buckets, act two
+# activates it once AWS has caught up. Both states are asserted, because "it applies
+# on a fresh account" and "it eventually activates" are different claims and only
+# testing one of them is how this deadlocked in an earlier draft.
+run "a_fresh_account_still_plans_before_the_key_is_observable" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["CostCenter", "BusinessUnit"] }
+  }
+
+  # The check block MUST fire here. It is the loud half of the contract: while the
+  # key is unobservable every plan says so, rather than the pipeline quietly building
+  # itself without the column its consumers filter on. Asserting the warning is
+  # expected also pins that it can fire at all — a check whose condition is always
+  # true is indistinguishable from no check.
+  expect_failures = [check.platform_id_tag_is_active]
+
+  assert {
+    condition     = length(aws_ce_cost_allocation_tag.platform_id) == 0
+    error_message = "with the key not yet observed the activation must not be attempted — a fresh account has nothing tagged PlatformId, so a component that insists on activating it can never apply, and the pipeline that would create the first tagged resource never gets built"
+  }
+
+  # And the pipeline still stamps the key, which is what starts AWS's clock. Without
+  # this the two-act contract has no act one and the account waits forever.
+  assert {
+    condition     = aws_s3_bucket.cur.tags["PlatformId"] == "org"
+    error_message = "the pipeline must tag its own storage with PlatformId even before the key is activatable — that observation is what makes AWS list the key at all"
+  }
+}
+
+run "the_activation_appears_once_the_key_is_observed" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["PlatformId", "CostCenter"] }
+  }
+
+  assert {
+    condition     = length(aws_ce_cost_allocation_tag.platform_id) == 1
+    error_message = "once Cost Explorer lists the key the activation must be created — otherwise resource_tags_user_platform_id is never a CUR column and every tenant's CUR spend reads zero through a query that succeeds"
+  }
+
+  assert {
+    condition     = aws_ce_cost_allocation_tag.platform_id[0].status == "Active"
+    error_message = "the tag must be activated, not merely declared"
+  }
+
+  # Case matters: Cost Explorer treats tag keys as case-sensitive and the CUR column
+  # is derived from the key, so a lowercase spelling activates a different tag and
+  # leaves the reconciler's column absent.
+  assert {
+    condition     = aws_ce_cost_allocation_tag.platform_id[0].tag_key == "PlatformId"
+    error_message = "the activated key must be PlatformId exactly — the operator derives resource_tags_user_platform_id from this spelling"
   }
 }
