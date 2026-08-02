@@ -68,7 +68,7 @@ func TestReconcileBudget_InflightFailureIsLogged(t *testing.T) {
 	// Athena unset (dev path → CUR spend 0); CloudWatch errors so the in-flight
 	// branch fires.
 	cwErr := errors.New("cloudwatch throttled")
-	r := &BudgetReconciler{Client: cl, CloudWatch: &fakeCloudWatch{err: cwErr}, RequeueInterval: time.Hour}
+	r := &BudgetReconciler{Client: cl, CloudWatch: &fakeCloudWatch{err: cwErr}, RequeueInterval: time.Hour, ClusterName: "staging-platform"}
 
 	var captured []recordedError
 	ctx := log.IntoContext(context.Background(), logr.New(recordingSink{errs: &captured}))

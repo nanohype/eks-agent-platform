@@ -327,10 +327,15 @@ func main() {
 		os.Exit(1)
 	}
 	budgetReconciler := &controller.BudgetReconciler{
-		Client:                   mgr.GetClient(),
-		Scheme:                   mgr.GetScheme(),
-		Concurrency:              budgetWorkers,
-		RequeueInterval:          budgetRequeueInterval,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Concurrency:     budgetWorkers,
+		RequeueInterval: budgetRequeueInterval,
+		// Identity, not an AWS client — set on every path, including --disable-aws.
+		// It is guaranteed non-empty by the guard above. Setting it alongside the
+		// clients would leave it empty whenever they are absent, which is the one
+		// arrangement where an identity silently loses its discriminator.
+		ClusterName:              clusterName,
 		KillSwitchGraceIntervals: killSwitchGraceIntervals,
 		KillSwitchMaxRefires:     killSwitchMaxRefires,
 	}
@@ -338,7 +343,6 @@ func main() {
 		budgetReconciler.Athena = awsClients.Athena
 		budgetReconciler.CloudWatch = awsClients.CloudWatch
 		budgetReconciler.EventBridge = awsClients.EventBridge
-		budgetReconciler.ClusterName = opConfig.ClusterName
 		budgetReconciler.AthenaCfg = controller.AthenaConfig{
 			Workgroup:     opConfig.AthenaWorkgroup,
 			Database:      opConfig.AthenaDatabase,

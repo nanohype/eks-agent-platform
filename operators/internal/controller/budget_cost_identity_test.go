@@ -19,6 +19,7 @@ import (
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -188,6 +189,43 @@ func TestCostIdentity_IsNotTheBarePlatformName(t *testing.T) {
 	if !strings.HasPrefix(platformCostID(identityCluster, identityPlatform), identityCluster+"-") {
 		t.Error("the identity must be cluster-qualified — that qualification is the only thing " +
 			"keeping co-located sibling clusters apart in an account-scoped cost signal")
+	}
+}
+
+func TestCostIdentity_RefusesToAttributeWithoutTheDiscriminator(t *testing.T) {
+	// The wiring guard in main.go is one half; this is the other. An empty cluster
+	// name does not fail — it renders "-acme", a valid predicate matching no CUR row
+	// and no metric series — so without this the reconciler would compute a
+	// confident zero for every tenant and every budget would read healthy.
+	ctx := context.Background()
+	platform := &platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: identityPlatform, Namespace: "tenants-acme"},
+		Status:     platformv1alpha1.PlatformStatus{Phase: phaseReady},
+	}
+	cl := fake.NewClientBuilder().WithScheme(killSwitchTestScheme(t)).WithObjects(platform).Build()
+	bp := &governancev1alpha1.BudgetPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "acme-budget", Namespace: "tenants-acme"},
+		Spec: governancev1alpha1.BudgetPolicySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: identityPlatform}, MonthlyUsd: "100.00",
+		},
+	}
+	athena := succeededAthena(curRollupResultSet("12.500000"))
+	r := &BudgetReconciler{
+		Client: cl, Athena: athena, CloudWatch: &recordingCloudWatch{},
+		RequeueInterval: time.Hour,
+		AthenaCfg:       AthenaConfig{Workgroup: "cost_wg", Database: "cost_db", CURTableName: "cur_t"},
+		// ClusterName deliberately unset.
+	}
+
+	before := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name))
+	if _, err := r.reconcileBudget(ctx, bp); err == nil {
+		t.Fatal("a reconciler with no cluster name must refuse rather than query with '-acme'")
+	}
+	if after := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name)); after != before+1 {
+		t.Errorf("the refusal must be counted: %v -> %v", before, after)
+	}
+	if athena.lastQuery != "" {
+		t.Errorf("no query may be issued without the discriminator, got: %s", athena.lastQuery)
 	}
 }
 

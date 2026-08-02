@@ -349,7 +349,7 @@ func TestBudgetSpendUnreadable_CountedWhenTheCurLegIsAbsent(t *testing.T) {
 	}
 
 	// No Athena client and no AthenaCfg — errAthenaNotConfigured.
-	r := &BudgetReconciler{Client: cl, RequeueInterval: time.Hour}
+	r := &BudgetReconciler{Client: cl, RequeueInterval: time.Hour, ClusterName: "staging-platform"}
 
 	before := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name))
 	if _, err := r.reconcileBudget(ctx, bp); err != nil {

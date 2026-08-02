@@ -566,6 +566,17 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 
 	// Every spend signal is keyed on the cluster-qualified identity, which is the
 	// same expression stamped onto the tenant's resources as the PlatformId tag.
+	//
+	// Refuse rather than query without the discriminator. An empty cluster name does
+	// not fail on its own — it renders "-acme", which is a perfectly valid predicate
+	// that matches no CUR row and no metric series, so every tenant would read zero
+	// spend and every budget would look healthy. main.go will not start without a
+	// cluster name; this is the second half of that guarantee, at the point where a
+	// missing one would actually produce a number.
+	if r.ClusterName == "" {
+		budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name).Inc()
+		return budgetReading{}, fmt.Errorf("budget reconciler has no cluster name; refusing to attribute spend without the discriminator that separates same-named Platforms in one account")
+	}
 	costID := platformCostID(r.ClusterName, platform.Name)
 
 	// CUR-tagged spend (MTD).
