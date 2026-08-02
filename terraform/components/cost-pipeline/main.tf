@@ -18,6 +18,19 @@ locals {
     Component = "cost-pipeline"
     Tier      = "platform"
   })
+
+  # Teardown posture: development always permits a full destroy; elsewhere it is opt-in.
+  # Same two-act contract as landing-zone's agent-iam — force_destroy has no effect until an
+  # apply lands it in state, so permitting a teardown and performing one are separate acts.
+  #
+  # All three buckets need it. access-logs takes writes from the first PUT; cur and athena are
+  # versioned, so their lifecycle rules write delete markers that are themselves current
+  # versions and an expiry alone never empties them.
+  bucket_force_destroy = var.environment == "development" || var.force_destroy_buckets
+
+  # Where AWS delivers the CUR Parquet. The report definition and the lifecycle rule that ages
+  # it out have to agree, so they read one value.
+  cur_prefix = "cur"
 }
 
 ################################################################################
@@ -27,7 +40,11 @@ locals {
 
 resource "aws_s3_bucket" "access_logs" {
   bucket = "${local.prefix}-access-logs-${data.aws_caller_identity.current.account_id}"
-  tags   = local.tags
+
+  # Takes writes from the first PUT the CUR and Athena buckets make.
+  force_destroy = local.bucket_force_destroy
+
+  tags = local.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "access_logs" {
@@ -92,7 +109,11 @@ resource "aws_s3_bucket_policy" "access_logs" {
 
 resource "aws_s3_bucket" "cur" {
   bucket = "${local.prefix}-cur-${data.aws_caller_identity.current.account_id}"
-  tags   = local.tags
+
+  # Versioned, so an expiry alone cannot empty it — delete markers are current versions.
+  force_destroy = local.bucket_force_destroy
+
+  tags = local.tags
 }
 
 resource "aws_s3_bucket_logging" "cur" {
@@ -200,6 +221,36 @@ resource "aws_s3_bucket_lifecycle_configuration" "cur" {
       noncurrent_days = 1
     }
   }
+
+  # The CUR Parquet AWS delivers under cur/ is the bulk of this bucket and the input to every
+  # budget decision. It is kept for a full billing history — AWS re-delivers the current month
+  # but never a closed one — and then aged out, so the bucket has a bounded size and a teardown
+  # has an end. Without a rule here it has neither.
+  rule {
+    id     = "expire-cur-parquet"
+    status = "Enabled"
+    filter {
+      prefix = "${local.cur_prefix}/"
+    }
+    expiration {
+      days = var.cur_retention_days
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
+  rule {
+    id     = "drop-expired-delete-markers"
+    status = "Enabled"
+    filter {}
+
+    # Same bookkeeping problem as athena-results: on a versioned bucket an expiry writes a
+    # delete marker rather than removing the object, and the marker is a current version.
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
 }
 
 resource "aws_cur_report_definition" "this" {
@@ -210,7 +261,7 @@ resource "aws_cur_report_definition" "this" {
   additional_schema_elements = ["RESOURCES", "SPLIT_COST_ALLOCATION_DATA"]
   s3_bucket                  = aws_s3_bucket.cur.id
   # AWS validation requires this NOT end with `/` or `.` — `^.+[^/|.]$`.
-  s3_prefix              = "cur"
+  s3_prefix              = local.cur_prefix
   s3_region              = var.region
   additional_artifacts   = ["ATHENA"]
   refresh_closed_reports = true
@@ -225,7 +276,11 @@ resource "aws_cur_report_definition" "this" {
 
 resource "aws_s3_bucket" "athena_results" {
   bucket = "${local.prefix}-athena-${data.aws_caller_identity.current.account_id}"
-  tags   = local.tags
+
+  # Versioned, and every reconciler tick writes a result object here.
+  force_destroy = local.bucket_force_destroy
+
+  tags = local.tags
 }
 
 resource "aws_s3_bucket_logging" "athena_results" {
@@ -270,6 +325,27 @@ resource "aws_s3_bucket_lifecycle_configuration" "athena_results" {
 
     expiration {
       days = var.athena_results_retention_days
+    }
+
+    # The bucket is versioned, so the expiry above does not delete anything — it writes a
+    # delete marker, which is itself the object's new current version. Without these two the
+    # bucket only ever grows, and both the storage bill and a teardown outlive the retention
+    # the rule appears to set.
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
+  rule {
+    id     = "drop-expired-delete-markers"
+    status = "Enabled"
+    filter {}
+
+    # A delete marker with no versions left under it is pure bookkeeping that still counts as
+    # an object. S3 rejects days/date in the same expiration block as this flag, so it is its
+    # own rule.
+    expiration {
+      expired_object_delete_marker = true
     }
   }
 }

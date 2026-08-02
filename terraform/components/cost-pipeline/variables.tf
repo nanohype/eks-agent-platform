@@ -61,6 +61,24 @@ variable "invocation_cost_publisher_log_retention_days" {
   default     = 30
 }
 
+variable "cur_retention_days" {
+  description = <<-EOT
+    How long the CUR Parquet AWS delivers under `cur/` is kept. This is the billing history
+    every budget decision reads back over, and AWS re-delivers the current month but never a
+    closed one, so shortening it discards a record that cannot be recovered.
+
+    It also bounds the bucket. Without an expiry here the CUR prefix grows for the life of the
+    account, which is both an unbounded storage bill and a teardown with no end.
+  EOT
+  type        = number
+  default     = 730
+
+  validation {
+    condition     = var.cur_retention_days >= 90 && var.cur_retention_days <= 3650
+    error_message = "cur_retention_days must be between 90 (a quarter of billing history) and 3650 (10 years)."
+  }
+}
+
 variable "access_logs_retention_days" {
   description = "Retention for S3 server-access logs in the access-logs bucket"
   type        = number
@@ -100,4 +118,29 @@ variable "tags" {
   description = "Common tags"
   type        = map(string)
   default     = {}
+}
+
+variable "force_destroy_buckets" {
+  description = <<-EOT
+    Allow this component's S3 buckets to be destroyed while they still hold objects, in any
+    environment. Development already allows it unconditionally; this is the opt-in for
+    everywhere else.
+
+    It exists because a cluster here is an agent-managed, often short-lived thing — eks-fleet
+    vends spokes with a ttlDays and a hub reaper that deletes them on expiry — so a teardown is
+    an ordinary lifecycle event rather than an emergency. Without this, a reverse teardown
+    wedges on BucketNotEmpty and leaves the cluster, VPC and NAT gateways standing and billing,
+    which is the outcome the teardown existed to prevent.
+
+    Deliberately two acts, not one flag: force_destroy has no effect until a successful apply
+    lands it in state, so an operator (or an agent) must apply with this set and only then
+    destroy. There is no single command that reaches a populated production bucket.
+
+    What it exposes: the CUR delivery — this environment's billing history, which AWS
+    re-delivers for the current month but not for closed ones — plus Athena query results and
+    the access logs over both. The cost data is the input to every budget decision, so a
+    teardown here loses the record of what was spent, not just the substrate that spent it.
+  EOT
+  type        = bool
+  default     = false
 }
