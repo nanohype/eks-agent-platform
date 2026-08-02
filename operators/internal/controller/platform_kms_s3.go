@@ -32,7 +32,7 @@ type PlatformAWSConfig struct {
 }
 
 // ensureKmsGrant creates a KMS grant on cmk-data scoped to the tenant
-// IRSA role, with EncryptionContext = {PlatformId: <name>}. Idempotent:
+// role, with EncryptionContext = {PlatformId: <name>}. Idempotent:
 // ListGrants first; CreateGrant only when no grant for this role+context
 // already exists.
 //

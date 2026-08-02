@@ -9,7 +9,7 @@ The system organizes around nine bounded contexts. Each gets a CRD, a reconciler
 | Context           | CRD            | Reconciler | OpenTofu component             | Helm chart       | What it owns                                                                                                                                                                                                                            |
 | ----------------- | -------------- | ---------- | ------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Tenancy**       | `Tenant`       | `tenant`   | —                              | `tenant`         | Cluster-scoped aggregate of a team's `Platform`s; rolls up readiness, spend, and suspension into a single dashboard surface                                                                                                             |
-| **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IRSA role + KMS grant + S3 bucket policy                                         |
+| **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IAM role + Pod Identity association + KMS grant + S3 bucket policy                                         |
 | **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | Envoy AI Gateway `AIGatewayRoute` rule per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attached as request headers, per-route rate limits                                                                             |
 | **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`            | —                | `Deployment` per agent running the tenant's own image, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, all under the tenant `ServiceAccount` bound to the tenant IAM role via EKS Pod Identity                       |
 | **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                       |
@@ -32,7 +32,7 @@ A single Go binary registers nine reconcilers (`tenant`, `platform`, `gateway`, 
 
 ### Operator owns fast-moving AWS state; OpenTofu owns slow-moving infra
 
-Per-tenant IRSA roles, KMS grants, and Bedrock model-access policies are reconciled by the operator via the AWS SDK (the operator pod runs with an IRSA role that grants it `iam:*` on a constrained path, `kms:CreateGrant` on the data CMK, etc.). Putting per-tenant resources in OpenTofu means a `Platform` CR apply triggers a Terragrunt deploy — minutes of latency, brittle, doesn't fit a reconcile loop. Karpenter, ACK, and the EKS Pod Identity Agent all use this pattern.
+Per-tenant IAM roles, their Pod Identity associations, KMS grants, and Bedrock model-access policies are reconciled by the operator via the AWS SDK (the operator pod itself runs with an IRSA role that grants it `iam:*` on a constrained path, `kms:CreateGrant` on the data CMK, etc.). Putting per-tenant resources in OpenTofu means a `Platform` CR apply triggers a Terragrunt deploy — minutes of latency, brittle, doesn't fit a reconcile loop. Karpenter, ACK, and the EKS Pod Identity Agent all use this pattern.
 
 OpenTofu owns: invocation logging buckets, base IAM, EventBridge bus, cost pipeline, Bedrock Guardrails templates, VPC endpoints, WAF — the slow-moving substrate.
 
@@ -74,7 +74,7 @@ A breach of the auditor role surfaces audit history (an acceptable disclosure fo
 
 A `BudgetPolicy` breach at ≥120% triggers an EventBridge rule → Step Functions state machine that:
 
-1. Detaches the Bedrock-invoke baseline policy from the tenant's IRSA role.
+1. Detaches the Bedrock-invoke baseline policy from the tenant's IAM role.
 2. Tags the role with `platform.nanohype.dev/suspended=true` so the `PlatformReconciler` won't re-attach the baseline on its next tick.
 
 The operator detects the tag on its next reconcile (≤60s in production), sets `Platform.status.phase = Suspended`, and the `AgentFleetReconciler` tears down the fleet's agent `Deployment`s and KEDA `ScaledObject` — pods scale to zero and stop serving traffic. Recovery is exclusively human: ops removes the IAM tag (typically via an SSO elevation flow with MFA + approver), and the next reconcile reattaches the baseline and scales the fleet back up. No CR mutation, no API path back.

@@ -97,7 +97,7 @@ type ScalingSpec struct {
 
 	// QueueUrl is the SQS queue the fleet's work originates from. When
 	// set the operator emits a KEDA aws-sqs-queue trigger; otherwise a
-	// CPU-utilization placeholder. The tenant IRSA role must have
+	// CPU-utilization placeholder. The tenant role must have
 	// sqs:GetQueueAttributes on this queue (granted via the agent-iam
 	// baseline policy + an in-policy resource ARN derived from the URL).
 	// +optional

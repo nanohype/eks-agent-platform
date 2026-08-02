@@ -40,12 +40,11 @@ func scalingFleet(queueURL string) *agentsv1alpha1.AgentFleet {
 	}
 }
 
-// TestScaledObjectTargetsKagentDeployment is the regression for the bug where
-// the ScaledObject targeted "fleet-<name>" — a Deployment nothing creates.
-// The operator names each agent's Deployment "<fleet>-<agent>",
-// and the operator names each Agent <fleet>-<agent>; the ScaledObject's
-// scaleTargetRef must resolve to that exact name. The assertion cross-checks
-// the ScaledObject target against the Deployment the reconcile path actually
+// TestScaledObjectTargetsAgentDeployment is the regression for the bug where
+// the ScaledObject targeted "fleet-<name>" — a Deployment nothing creates. The
+// operator names each agent's Deployment "<fleet>-<agent>", and the
+// ScaledObject's scaleTargetRef must resolve to that exact name. The assertion
+// cross-checks the target against the Deployment the reconcile path actually
 // created, so it can never again point at a phantom Deployment.
 func TestScaledObjectTargetsAgentDeployment(t *testing.T) {
 	ctx := context.Background()

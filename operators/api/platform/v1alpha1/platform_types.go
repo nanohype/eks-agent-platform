@@ -31,7 +31,7 @@ type PlatformSpec struct {
 	// Budget references a BudgetPolicy CR in the same namespace.
 	Budget BudgetRef `json:"budget"`
 
-	// Identity controls how the IRSA role is named + which Bedrock models are
+	// Identity controls how the tenant role is named + which Bedrock models are
 	// reachable.
 	Identity IdentitySpec `json:"identity"`
 
@@ -60,7 +60,7 @@ type PlatformSpec struct {
 
 	// Attribution opts the Platform into per-session human attribution. When
 	// set, the operator provisions a session role — assumable by the tenant
-	// IRSA role with the operator carried as STS SourceIdentity, scoped to the
+	// role with the operator carried as STS SourceIdentity, scoped to the
 	// tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a
 	// ClusterRole letting the tenant ServiceAccount impersonate the named
 	// operators at the apiserver. fab's role-session entrypoint consumes both,
@@ -94,7 +94,7 @@ type AttributionSpec struct {
 	Operators []string `json:"operators"`
 
 	// SessionRoleMaxDurationSeconds caps the assumed session lifetime. Because
-	// the caller is the tenant IRSA role, AWS STS role chaining hard-caps a
+	// the caller is the tenant role, AWS STS role chaining hard-caps a
 	// chained session at 3600s regardless of this value; larger values only
 	// matter if the caller ever changes. Defaults to 3600.
 	// +kubebuilder:validation:Minimum=900
@@ -135,7 +135,7 @@ const (
 	CapabilityEventBridgeScheduler Capability = "eventBridgeScheduler"
 )
 
-// IdentitySpec wires the per-Platform IRSA role. The controller reconciles a
+// IdentitySpec wires the per-Platform tenant role. The controller reconciles a
 // `bedrock-model-scoping` inline policy onto the tenant role (and the
 // attribution session role, when spec.attribution is set) that denies the
 // Bedrock model-invoke actions (InvokeModel, InvokeModelWithResponseStream,
@@ -244,7 +244,7 @@ type PlatformStatus struct {
 	// non-nil the operator stops reattaching the baseline IAM policy and
 	// the AgentFleetReconciler scales fleets to zero. Resets to nil only
 	// when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'
-	// marker on the tenant IRSA role.
+	// marker on the tenant role.
 	// +optional
 	SuspendedAt *metav1.Time `json:"suspendedAt,omitempty"`
 

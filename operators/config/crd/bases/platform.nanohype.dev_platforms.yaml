@@ -67,7 +67,7 @@ spec:
                 description: |-
                   Attribution opts the Platform into per-session human attribution. When
                   set, the operator provisions a session role — assumable by the tenant
-                  IRSA role with the operator carried as STS SourceIdentity, scoped to the
+                  role with the operator carried as STS SourceIdentity, scoped to the
                   tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a
                   ClusterRole letting the tenant ServiceAccount impersonate the named
                   operators at the apiserver. fab's role-session entrypoint consumes both,
@@ -90,7 +90,7 @@ spec:
                     default: 3600
                     description: |-
                       SessionRoleMaxDurationSeconds caps the assumed session lifetime. Because
-                      the caller is the tenant IRSA role, AWS STS role chaining hard-caps a
+                      the caller is the tenant role, AWS STS role chaining hard-caps a
                       chained session at 3600s regardless of this value; larger values only
                       matter if the caller ever changes. Defaults to 3600.
                     format: int32
@@ -460,7 +460,7 @@ spec:
                 type: string
               identity:
                 description: |-
-                  Identity controls how the IRSA role is named + which Bedrock models are
+                  Identity controls how the tenant role is named + which Bedrock models are
                   reachable.
                 properties:
                   allowedModelFamilies:
@@ -792,7 +792,7 @@ spec:
                   non-nil the operator stops reattaching the baseline IAM policy and
                   the AgentFleetReconciler scales fleets to zero. Resets to nil only
                   when ops clears the iam:TagRole 'platform.nanohype.dev/suspended'
-                  marker on the tenant IRSA role.
+                  marker on the tenant role.
                 format: date-time
                 type: string
               suspendedReason:

@@ -21,7 +21,7 @@ Wait for `Platform.status.phase == Ready` (about 60 seconds). Then:
 - **`AgentFleet`** — add or modify agents. Each agent has a `systemPrompt` you'll iterate on, and a `modelRoute` you can swap to escalate quality (Claude Haiku → Sonnet) or save cost (Sonnet → Haiku).
 - **`EvalSuite`** — your `cases` list. Add a case every time the team catches a bad memo; the daily run gates whether new prompts ship.
 
-Everything else is platform team's job: `ModelGateway`, `Platform`, the IRSA wiring, the budgets pipeline. The operator manages the per-tenant IAM role directly from `Platform.spec.identity` — finance never touches it.
+Everything else is platform team's job: `ModelGateway`, `Platform`, the tenant identity wiring, the budgets pipeline. The operator manages the per-tenant IAM role directly from `Platform.spec.identity` — finance never touches it.
 
 ## What the platform handles for you
 

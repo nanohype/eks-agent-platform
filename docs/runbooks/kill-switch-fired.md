@@ -44,7 +44,7 @@ kubectl -n tenants-<platform> get scaledobject -l agents.nanohype.dev/fleet=<fle
 aws sqs get-queue-attributes --queue-url <queue-url> --attribute-names ApproximateNumberOfMessages
 ```
 
-Cause: KEDA TriggerAuthentication broken (IRSA), SQS queue policy missing tenant role, KEDA scaling cooldown holding pods at 0.
+Cause: KEDA TriggerAuthentication broken (the tenant's Pod Identity binding), SQS queue policy missing tenant role, KEDA scaling cooldown holding pods at 0.
 
 ### Mode C: tenant pod itself crashed
 
@@ -53,13 +53,13 @@ kubectl -n tenants-<platform> describe pod <pod-name>
 kubectl -n tenants-<platform> logs <pod-name> --previous
 ```
 
-Cause: tenant code bug (out of scope — hand back to tenant). Most useful here: confirm IRSA is wired (`kubectl get sa tenant-runtime -o yaml | grep role-arn`) and the role has the baseline policy attached (`aws iam list-attached-role-policies --role-name <env>-<platform>-tenant`).
+Cause: tenant code bug (out of scope — hand back to tenant). Most useful here: confirm the tenant identity is wired — `kubectl get platform <name> -o jsonpath='{.status.podIdentity}'`, cross-checked against `aws eks list-pod-identity-associations --cluster-name <cluster>`; the ServiceAccount carries no role-arn annotation under Pod Identity, so grepping it for one always comes back empty — and that the role has the baseline policy attached (`aws iam list-attached-role-policies --role-name <env>-<platform>-tenant`).
 
 ## Failure mode: kill-switch fired but the platform never suspended
 
 **Trigger**: the `KillSwitchUnrouted` alert (severity critical, persona finance). A budget breach published a kill-switch event, but the tenant is _still spending_ — the suspension never landed. This is the dangerous case: the spend ceiling is not being enforced.
 
-The path is: budget reconciler `PutEvents` → EventBridge rule (`<cluster>-killswitch-breach`) → Step Functions (`<cluster>-killswitch`) detaches the tenant's Bedrock baseline policy and tags the IRSA role `platform.nanohype.dev/suspended=true` → the PlatformReconciler observes the tag and flips the Platform to `Suspended`. A break anywhere in that chain leaves `BudgetPolicy.status.killSwitchFiredAt` set while the Platform stays `Ready`. The reconciler detects this after a grace window (default 3 budget ticks), sets `KillSwitchUnrouted=True` on the BudgetPolicy, emits `agents_killswitch_unrouted_total`, and re-publishes the breach on a bounded exponential backoff — so a transient EventBridge/SFN blip self-heals, but a real misconfiguration pages.
+The path is: budget reconciler `PutEvents` → EventBridge rule (`<cluster>-killswitch-breach`) → Step Functions (`<cluster>-killswitch`) detaches the tenant's Bedrock baseline policy and tags the tenant role `platform.nanohype.dev/suspended=true` → the PlatformReconciler observes the tag and flips the Platform to `Suspended`. A break anywhere in that chain leaves `BudgetPolicy.status.killSwitchFiredAt` set while the Platform stays `Ready`. The reconciler detects this after a grace window (default 3 budget ticks), sets `KillSwitchUnrouted=True` on the BudgetPolicy, emits `agents_killswitch_unrouted_total`, and re-publishes the breach on a bounded exponential backoff — so a transient EventBridge/SFN blip self-heals, but a real misconfiguration pages.
 
 Diagnose in order — each step narrows where the chain broke:
 

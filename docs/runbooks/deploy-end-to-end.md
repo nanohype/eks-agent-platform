@@ -22,7 +22,7 @@ task stack:ai-platform:enable    # Envoy AI Gateway + the operator
 `ai-platform:enable` now installs the operator too (built from the sibling
 `eks-agent-platform` checkout + kind-loaded; override the path with
 `KX_EKS_AGENT_PLATFORM_DIR`). It runs `--disable-aws`, so the AWS reconcile
-(IRSA/KMS) is skipped — the k8s tenant boundary still reconciles fully.
+(tenant IAM / Pod Identity / KMS) is skipped — the k8s tenant boundary still reconciles fully.
 
 ```bash
 kubectl apply -f ../eks-agent-platform/examples/blank-tenant/platform.yaml
@@ -80,9 +80,9 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
 5. `agent-iam` — the operator IRSA role (path-scoped, boundary-gated), the tenant
    permissions boundary + baseline policies, and the SSM params the operator
    reads (`/eks-agent-platform/<cluster>/agent-iam/*`).
-6. Per tenant, `<app>-platform` (e.g. `competitive-intelligence-platform`) for
-   Aurora / per-tenant IRSA / Secrets. OIDC is wired from the `cluster`
-   dependency automatically.
+6. `tenant-substrate` — the datastores every tenant declared in its Platform's
+   `spec.datastores`, provisioned from that declaration by one generic
+   component. There is no per-app component to add for a new tenant.
 
 Confirm addons converge: `kubectl --context <cluster> get applications -n argocd`
 (cert-manager, external-secrets, cilium, envoy-ai-gateway, argo-workflows,
@@ -187,7 +187,7 @@ token; add the AWS provider so the connection-test assume-role runs). Then drive
 create-tenant in the UI → it renders `charts/tenant` (Tenant + Platform +
 BudgetPolicy + agent-plane CRs) → commits to `tenants/<cluster>/<tenant>.yaml` →
 the `portal-tenants` ApplicationSet applies it → the operator provisions the
-namespace + real per-Platform IRSA + KMS → the watcher lists the Tenant back into
+namespace + real per-Platform IAM + Pod Identity + KMS → the watcher lists the Tenant back into
 the portal inventory. The app workloads land separately via the `apps-tenants`
 ApplicationSet, with per-env values from `tofu output`.
 

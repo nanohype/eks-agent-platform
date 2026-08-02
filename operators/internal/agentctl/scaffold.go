@@ -196,7 +196,7 @@ func routesFor(p PersonaDefaults) []agentsv1alpha1.ModelRouteSpec {
 }
 
 // allowedFamiliesFor is the set of Bedrock families the scaffolded tenant's
-// IRSA role must grant invoke on: every family its default ModelGateway routes
+// role must grant invoke on: every family its default ModelGateway routes
 // reference. Primary first, then the secondary family when it differs — so a
 // persona whose secondary route is amazon-nova can actually call it instead of
 // shipping a Platform that denies its own gateway's second route.

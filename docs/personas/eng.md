@@ -37,7 +37,7 @@ spec:
 
 ## What the platform handles
 
-- Bedrock invocation via IRSA, no keys
+- Bedrock invocation under the tenant's own role, no keys
 - Per-pod cost attribution (visible on Ops dashboard, joinable on `agents.platform`)
 - Cross-region inference profile failover when set on the `ModelRoute`
 

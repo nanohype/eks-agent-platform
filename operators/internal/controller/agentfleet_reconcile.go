@@ -400,10 +400,12 @@ func fleetScalingTriggers(fleet *agentsv1alpha1.AgentFleet, queueURL string) []a
 				"queueURL":    queueURL,
 				"queueLength": fmt.Sprintf("%d", depth),
 				"awsRegion":   region,
-				// 'pod' identityOwner makes KEDA use the workload's own IRSA
-				// token (the tenant SA we provisioned via
-				// ensureTenantServiceAccount) rather than KEDA's own operator
-				// role — keeps per-tenant IAM clean.
+				// 'pod' identityOwner makes KEDA use the workload's own
+				// credentials — the tenant SA provisioned by
+				// ensureTenantServiceAccount, which EKS Pod Identity binds to
+				// the tenant role — rather than KEDA's own operator role. See
+				// docs/adr/0006-keda-pod-identity.md; the SQS read the trigger
+				// needs is in the agent-iam baseline policy.
 				"identityOwner": "pod",
 			},
 			"authenticationRef": map[string]any{
@@ -480,11 +482,12 @@ func (r *AgentFleetReconciler) ensureAgentScaledObject(ctx context.Context, tc c
 	return nil
 }
 
-// ensureKEDATriggerAuth provisions the KEDA TriggerAuthentication CR
-// the aws-sqs-queue trigger references for IRSA. podIdentity.provider
-// = aws means KEDA uses the workload's existing IRSA token (the
-// tenant SA we annotated with the role ARN) instead of KEDA's own
-// operator IAM identity.
+// ensureKEDATriggerAuth provisions the KEDA TriggerAuthentication CR the
+// aws-sqs-queue trigger references. podIdentity.provider = aws means KEDA
+// resolves AWS credentials as the workload does — through the tenant
+// ServiceAccount's EKS Pod Identity association — instead of using KEDA's own
+// operator IAM identity. Nothing is annotated onto the ServiceAccount; the
+// association is an EKS API object the operator reconciles.
 func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) error {
 	ta := &unstructured.Unstructured{}
 	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: kedaGV.Group, Version: kedaGV.Version, Kind: "TriggerAuthentication"})

@@ -1,17 +1,17 @@
 import {
+  AccessDeniedException,
   BedrockRuntimeClient,
+  InternalServerException,
   InvokeModelCommand,
   InvokeModelWithResponseStreamCommand,
-  ThrottlingException,
-  ModelTimeoutException,
   ModelErrorException,
-  ResourceNotFoundException,
-  ValidationException,
-  AccessDeniedException,
-  InternalServerException,
-  ServiceUnavailableException,
-  ServiceQuotaExceededException,
   ModelStreamErrorException,
+  ModelTimeoutException,
+  ResourceNotFoundException,
+  ServiceQuotaExceededException,
+  ServiceUnavailableException,
+  ThrottlingException,
+  ValidationException,
 } from '@aws-sdk/client-bedrock-runtime';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import {
@@ -46,7 +46,7 @@ export interface StreamAccumulator {
 
 export interface BedrockAdapterOptions {
   region: string;
-  /** Override the default credential chain (defaults to fromNodeProviderChain — IRSA in-cluster). */
+  /** Override the default credential chain (defaults to fromNodeProviderChain — Pod Identity in-cluster). */
   credentials?: BedrockRuntimeClient['config']['credentials'];
   /**
    * Platform name (matches Platform CR .metadata.name). Threaded into every

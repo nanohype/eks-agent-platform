@@ -36,7 +36,7 @@ Salesforce / HubSpot → SQS queue → AgentFleet
                                  Salesforce write-back Lambda
 ```
 
-The fleet's `scaling.queueUrl` points at your SQS queue. The operator's IRSA role grants `sqs:GetQueueAttributes` so KEDA can scale by queue depth. Writing the briefs back is your existing Lambda — out of scope for this platform.
+The fleet's `scaling.queueUrl` points at your SQS queue. The tenant's own role grants `sqs:GetQueueAttributes`, and KEDA reads the queue as the tenant rather than as itself, so scaling by queue depth needs no cluster-wide SQS access. Writing the briefs back is your existing Lambda — out of scope for this platform.
 
 ## Common workflows
 

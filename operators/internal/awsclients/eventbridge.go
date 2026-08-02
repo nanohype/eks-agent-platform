@@ -16,7 +16,7 @@ import (
 // reconciler uses to publish kill-switch events to the bus created by
 // terraform/components/kill-switch. The bus has a single rule that
 // targets the Step Functions state machine which suspends offending
-// Platforms (revokes IRSA, scales fleets to zero).
+// Platforms (revokes the tenant role's permissions, scales fleets to zero).
 type EventBridge interface {
 	PutEvents(ctx context.Context, params *eventbridge.PutEventsInput, optFns ...func(*eventbridge.Options)) (*eventbridge.PutEventsOutput, error)
 }
