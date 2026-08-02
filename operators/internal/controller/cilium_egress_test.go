@@ -20,6 +20,10 @@ import (
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
 
+// protoTCP is the protocol string these policies carry. A constant because it
+// is spelled the same in every rule and every assertion.
+const protoTCP = "TCP"
+
 func ciliumTestClient(t *testing.T) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -60,7 +64,7 @@ func TestTenantEgressCiliumRules_AllowsPodIdentityCreds(t *testing.T) {
 			continue
 		}
 		port := rule["toPorts"].([]interface{})[0].(map[string]interface{})["ports"].([]interface{})[0].(map[string]interface{})
-		if port["port"] == "80" && port["protocol"] == "TCP" {
+		if port["port"] == "80" && port["protocol"] == protoTCP {
 			found = true
 		}
 	}
@@ -158,7 +162,7 @@ func TestTenantEgressCiliumRules_ReachesTheModelGateway(t *testing.T) {
 			t.Error("the gateway rule must stay same-namespace: a namespace selector points it at the wrong place")
 		}
 		port := rule["toPorts"].([]interface{})[0].(map[string]interface{})["ports"].([]interface{})[0].(map[string]interface{})
-		if port["port"] != "8080" || port["protocol"] != "TCP" {
+		if port["port"] != "8080" || port["protocol"] != protoTCP {
 			t.Errorf("gateway egress port: got %v/%v want 8080/TCP", port["port"], port["protocol"])
 		}
 		return
@@ -266,7 +270,7 @@ func TestGatewayEgressCiliumRules_AllowsXDS(t *testing.T) {
 			continue
 		}
 		port := rule["toPorts"].([]interface{})[0].(map[string]interface{})["ports"].([]interface{})[0].(map[string]interface{})
-		if port["port"] == strconv.Itoa(envoyGatewayXDSPort) && port["protocol"] == "TCP" {
+		if port["port"] == strconv.Itoa(envoyGatewayXDSPort) && port["protocol"] == protoTCP {
 			return
 		}
 	}
