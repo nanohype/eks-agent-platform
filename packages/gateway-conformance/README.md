@@ -34,8 +34,15 @@ because the obvious version passes on a hop that is actually broken:
   hop that forwards the breakpoint but breaks prefix stability writes a fresh
   entry every call — all cost, no saving — and a write-only assertion calls
   that healthy.
-- **`streaming`** requires many deltas, not more than one. A proxy that buffers
-  the whole response and replays it still emits a couple.
+- **`streaming`** asserts the *spread* between the first and last delta, not
+  the delta count and not time-to-first-delta. Count measures how the model
+  chunks its output, which is not the gateway's doing — a 23-token reply
+  legitimately arrives in three deltas, and a count threshold fails a healthy
+  hop for it. Time-to-first-delta measures the model's time to first token,
+  roughly a second here, which swamps everything on a short completion. Spread
+  is the property that actually differs: a hop that buffers and replays
+  delivers every delta in one burst, so its spread collapses toward zero
+  however long the generation ran.
 
 ## Running it
 

@@ -15,6 +15,8 @@ interface Scripted {
   messages?: unknown[];
   betaMessages?: unknown[];
   streamDeltas?: number;
+  /** Milliseconds between scripted deltas. 0 models a buffering replay. */
+  streamGapMs?: number;
   toolRunnerFinal?: unknown;
   onToolRun?: () => void;
 }
@@ -37,7 +39,9 @@ function fakeClient(script: Scripted): Anthropic {
             handlers.push(fn);
           },
           finalMessage: async () => {
+            const gap = script.streamGapMs ?? 0;
             for (let i = 0; i < (script.streamDeltas ?? 0); i++) {
+              if (gap > 0) await new Promise((r) => setTimeout(r, gap));
               for (const h of handlers) h();
             }
             return { stop_reason: 'end_turn', content: [] };
@@ -232,19 +236,29 @@ describe('structured-output', () => {
 });
 
 describe('streaming', () => {
-  it('passes when a long completion arrives in many deltas', async () => {
-    expect(
-      (await probe('streaming').run(fakeClient({ streamDeltas: 20 }), 'primary')).outcome,
-    ).toBe('pass');
+  it('passes on few deltas when they are spread across the generation', async () => {
+    // Six deltas 60ms apart spans ~300ms. Few chunks, genuinely incremental —
+    // exactly the healthy case a count threshold wrongly failed, because how
+    // the model chunks its output is not the gateway's doing.
+    const r = await probe('streaming').run(
+      fakeClient({ streamDeltas: 6, streamGapMs: 60 }),
+      'primary',
+    );
+    expect(r.outcome).toBe('pass');
   });
 
-  it('fails on a handful of deltas, which is a buffering proxy replaying', async () => {
-    // The reason the threshold is not >1: a hop that buffers the whole
-    // response and replays it still emits a couple of deltas, so the obvious
-    // assertion passes on a broken hop.
-    const r = await probe('streaming').run(fakeClient({ streamDeltas: 2 }), 'primary');
+  it('fails when every delta arrives in one burst, however many there are', async () => {
+    // A hop that buffers the whole response and replays it emits plenty of
+    // deltas — all at once. Count cannot tell that apart from streaming.
+    const r = await probe('streaming').run(fakeClient({ streamDeltas: 50 }), 'primary');
     expect(r.outcome).toBe('fail');
-    expect(r.detail).toMatch(/buffering rather than streaming/);
+    expect(r.detail).toMatch(/buffering the response and replaying it/);
+  });
+
+  it('fails on a single delta', async () => {
+    expect((await probe('streaming').run(fakeClient({ streamDeltas: 1 }), 'primary')).outcome).toBe(
+      'fail',
+    );
   });
 });
 

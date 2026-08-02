@@ -250,25 +250,42 @@ export const PROBES: Probe[] = [
     question: 'does SSE arrive incrementally rather than as one buffered block',
     async run(client, route) {
       let deltas = 0;
+      let firstAt: number | null = null;
+      let lastAt = 0;
+      const started = Date.now();
       const stream = client.messages.stream({
         model: route,
-        max_tokens: 128,
-        messages: [{ role: 'user', content: 'Count from 1 to 20, one number per line.' }],
+        max_tokens: 600,
+        messages: [{ role: 'user', content: 'Write 40 short numbered lines about the ocean.' }],
       });
       stream.on('text', () => {
         deltas += 1;
+        lastAt = Date.now();
+        firstAt ??= lastAt;
       });
       const final = await stream.finalMessage();
-      // A proxy that buffers the whole response and replays it still emits a
-      // couple of deltas, so a >1 threshold passes on a broken hop. A 20-line
-      // completion streams far more than this when it is genuinely incremental.
-      const INCREMENTAL_AT_LEAST = 8;
+
+      // The assertion is the SPREAD between the first and last delta, not the
+      // delta count and not time-to-first-delta.
+      //
+      // Count measures how the model chunks its output, which is not the
+      // gateway's doing — a short answer legitimately arrives in three deltas,
+      // so a count threshold fails a healthy hop. Time-to-first-delta measures
+      // the model's time to first token, which is ~1s here and swamps
+      // everything on a short completion.
+      //
+      // Spread is the property that actually differs: a hop that buffers the
+      // whole response and replays it delivers every delta in one burst, so
+      // its spread collapses toward zero no matter how long the generation
+      // ran or how many chunks it was cut into.
+      const spread = firstAt === null ? 0 : lastAt - firstAt;
+      const SPREAD_AT_LEAST_MS = 250;
+      const incremental = deltas > 1 && spread >= SPREAD_AT_LEAST_MS;
       return {
-        outcome: deltas >= INCREMENTAL_AT_LEAST ? 'pass' : 'fail',
-        detail:
-          deltas >= INCREMENTAL_AT_LEAST
-            ? `${deltas} text deltas, stop=${final.stop_reason}`
-            : `only ${deltas} delta(s) for a 20-line completion — the hop is buffering rather than streaming`,
+        outcome: incremental ? 'pass' : 'fail',
+        detail: incremental
+          ? `${deltas} deltas spread over ${spread}ms (first at ${(firstAt ?? 0) - started}ms of ${Date.now() - started}ms), stop=${final.stop_reason}`
+          : `${deltas} delta(s) arrived within ${spread}ms of each other — the hop is buffering the response and replaying it, not streaming`,
       };
     },
   },
