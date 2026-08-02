@@ -6,6 +6,15 @@ locals {
     Component = "bedrock"
     Tier      = "platform"
   })
+
+  # Teardown posture: development always permits a full destroy; elsewhere it is opt-in.
+  # Same two-act contract as landing-zone's agent-iam — force_destroy has no effect until an
+  # apply lands it in state, so permitting a teardown and performing one are separate acts.
+  #
+  # The invocations bucket is deliberately outside this. Its force_destroy tracks
+  # object_lock_mode, because a WORM retention is a compliance statement about the model
+  # invocation record and a teardown flag must not be able to talk over it.
+  bucket_force_destroy = var.environment == "development" || var.force_destroy_buckets
 }
 
 ################################################################################
@@ -15,7 +24,12 @@ locals {
 
 resource "aws_s3_bucket" "access_logs" {
   bucket = "${local.prefix}-access-logs-${data.aws_caller_identity.current.account_id}"
-  tags   = local.tags
+
+  # Server-access logs land from the first PUT the invocations bucket takes, so this is
+  # non-empty long before anyone tries to tear the environment down.
+  force_destroy = local.bucket_force_destroy
+
+  tags = local.tags
 }
 
 resource "aws_s3_bucket_public_access_block" "access_logs" {
