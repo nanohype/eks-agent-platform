@@ -115,24 +115,44 @@ run "aws_can_actually_deliver_the_report" {
   }
 }
 
-# Cost and Usage Reports and Cost Explorer have no endpoint outside us-east-1. Created
-# through the workload-region provider these resources cannot be created at all, which
-# is the first hop of the path and the reason none of the rest was ever exercised.
-run "the_us_east_1_only_apis_use_the_us_east_1_provider" {
+# The CUR platform-tag column, asserted where terraform composes SQL. The operator derives
+# the same name in Go from the same tag key; both are pinned to AWS's published transform
+# independently, on purpose — a shared derivation would let one wrong transform satisfy both
+# sides and the query would still return nothing.
+#
+# Everything that reads CUR has to filter on the same column. The reconciliation view and the
+# saved reconciliation query are the finance-facing consumers, and they were on a different
+# spelling from the reconciler, so one of the two was always reading zero.
+run "every_cur_consumer_filters_on_the_column_aws_produces" {
   command = plan
 
   assert {
-    condition     = aws_cur_report_definition.this.s3_bucket == aws_s3_bucket.cur.id
-    error_message = "the report definition must deliver into this component's own CUR bucket"
+    condition     = local.cur_platform_tag_column == "resource_tags_user_platform_id"
+    error_message = "AWS inserts an underscore before each uppercase letter, so resourceTags/user:PlatformId becomes resource_tags_user_platform_id — the split inside PlatformId is the part a hand-written name gets wrong, and a wrong column makes the query valid, green and empty"
   }
 
-  # Activation is what puts PlatformId in the Parquet at all. It is not retroactive,
-  # so spend that lands before it is unattributable forever.
+  # The reconciliation view is created by this saved query, so its SQL is the finance-facing
+  # consumer. It read a different column from the reconciler, so one of the two was always
+  # returning nothing.
   assert {
-    condition     = aws_ce_cost_allocation_tag.platform_id.tag_key == "PlatformId" && aws_ce_cost_allocation_tag.platform_id.status == "Active"
-    error_message = "the PlatformId cost-allocation tag must be activated — until it is, the column the reconciler filters on is absent from CUR and every tenant reads zero spend"
+    condition     = strcontains(aws_athena_named_query.spend_reconciliation.query, local.cur_platform_tag_column)
+    error_message = "the reconciliation view must filter on the same column the reconciler does"
+  }
+
+  assert {
+    condition     = !strcontains(aws_athena_named_query.spend_reconciliation.query, "resource_tags_user_platformid")
+    error_message = "the reconciliation view still carries the pre-fix column spelling — a view that reads zero while the reconciler reads correctly is worse than both being wrong, because the two disagree silently"
   }
 }
+
+# NOTE on the us-east-1 providers. `aws_cur_report_definition` and
+# `aws_ce_cost_allocation_tag` reach APIs with no endpoint outside us-east-1, and both are
+# created through `aws.us_east_1`. That binding is NOT assertable here — the `provider` meta
+# argument is not a resource attribute, so a run block cannot see it, and an assertion phrased
+# around it would pass with the argument deleted. What actually binds it is
+# `configuration_aliases = [aws.us_east_1]` in versions.tf: a caller that does not pass the
+# alias fails at init, before any assertion runs. Said out loud because the obvious-looking
+# assertion is the vacuous one.
 
 # The workgroup enforces encrypted results on the same key the operator is granted
 # above. Asserted as a relation so the pair cannot drift apart: an enforced key the

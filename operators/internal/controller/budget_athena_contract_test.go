@@ -19,7 +19,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 
+	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // These are contract tests pinning the exact Athena and CloudWatch response
@@ -320,19 +325,40 @@ func TestCurTagColumnMatchesTheActivatedTag(t *testing.T) {
 	}
 }
 
-// TestBudgetSpendUnreadableIsCounted proves the failure path is observable. Before
-// this counter the only evidence a tenant had no budget enforcement was a condition
-// on one CR: Reconcile records the error and returns nil, so it never reaches
-// controller_runtime_reconcile_errors_total, and BudgetReconcileLag keys on a field
-// written only on the success path — absent, not stale, for a policy that has never
-// once worked.
-func TestBudgetSpendUnreadableIsCounted(t *testing.T) {
-	budgetSpendUnreadableTotal.Reset()
-	if got := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues("ns", "bp", "acme")); got != 0 {
-		t.Fatalf("counter should start at zero, got %v", got)
+// TestBudgetSpendUnreadable_CountedWhenTheCurLegIsAbsent drives the real reconcile
+// body with no Athena configured, which is what a cost-pipeline that failed to apply
+// looks like from the operator: no SSM outputs, so AthenaCfg is empty, so the CUR leg
+// falls back to zero.
+//
+// It asserts through reconcileBudget rather than incrementing the counter directly.
+// A test that calls Inc() itself proves the metric is registered and nothing about
+// whether the production path ever reaches it — deleting the increment would leave
+// such a test green, which is the shape this whole change is about.
+func TestBudgetSpendUnreadable_CountedWhenTheCurLegIsAbsent(t *testing.T) {
+	ctx := context.Background()
+	platform := &platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: "nocur-acme", Namespace: "tenants-acme"},
+		Status:     platformv1alpha1.PlatformStatus{Phase: phaseReady},
 	}
-	budgetSpendUnreadableTotal.WithLabelValues("ns", "bp", "acme").Inc()
-	if got := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues("ns", "bp", "acme")); got != 1 {
-		t.Errorf("a reconcile that could not read spend must increment the counter, got %v", got)
+	cl := fake.NewClientBuilder().WithScheme(killSwitchTestScheme(t)).WithObjects(platform).Build()
+	bp := &governancev1alpha1.BudgetPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "nocur-budget", Namespace: "tenants-acme"},
+		Spec: governancev1alpha1.BudgetPolicySpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: "nocur-acme"}, MonthlyUsd: "100.00",
+		},
+	}
+
+	// No Athena client and no AthenaCfg — errAthenaNotConfigured.
+	r := &BudgetReconciler{Client: cl, RequeueInterval: time.Hour}
+
+	before := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name))
+	if _, err := r.reconcileBudget(ctx, bp); err != nil {
+		t.Fatalf("reconcileBudget: %v", err)
+	}
+	after := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name))
+	if after != before+1 {
+		t.Errorf("a reconcile whose CUR leg is absent must be counted: %v -> %v\n"+
+			"    Without it a budget with no cost pipeline at all reads as healthy — the query "+
+			"never runs, so nothing errors, and the tenant has no enforcement.", before, after)
 	}
 }

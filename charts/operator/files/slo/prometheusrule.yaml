@@ -244,8 +244,14 @@ spec:
         # unactivated cost-allocation tag breaks every tick from the first.
         - alert: BudgetSpendUnreadable
           expr: |
-            increase(agents_budget_spend_unreadable_total[15m]) > 0
-          for: 15m
+            increase(agents_budget_spend_unreadable_total[3h]) > 0
+          # The budget reconciler ticks hourly (--budget-requeue-interval, default 1h),
+          # so the window has to span several ticks and `for` has to be well inside it.
+          # A window equal to `for`, or shorter than the tick, cannot hold: the counter
+          # moves once an hour, the increase decays to zero between ticks, and the `for`
+          # restarts every time — an alert that is structurally incapable of firing,
+          # which is the failure it was added to end.
+          for: 30m
           labels:
             severity: critical
             component: budget

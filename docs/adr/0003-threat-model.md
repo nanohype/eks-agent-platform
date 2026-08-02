@@ -33,7 +33,12 @@ The operator pod assumes the IRSA role provisioned by `landing-zone/components/a
 **Operator does not have:**
 
 - `iam:*` outside `/eks-agent-platform/tenants/`
-- `kms:Decrypt`, `kms:Encrypt`, or any key-content access
+- `kms:Decrypt` or `kms:GenerateDataKey` on any key other than the cost-pipeline data key,
+  and on that one only through S3 (`kms:ViaService = s3.<region>.amazonaws.com`) — it reads the
+  CUR estimates it wrote and the Athena result sets it produces, and can reach nothing else the
+  key protects
+- `kms:Encrypt`, or key-content access to any tenant CMK — tenant datastores are encrypted with
+  per-tenant keys the operator holds only `CreateGrant` on
 - `bedrock:InvokeModel*` (it never invokes models on behalf of tenants)
 - Any `s3:*` outside the two named buckets
 - Any cross-account permissions
@@ -51,7 +56,11 @@ The attacker can:
 
 **What full operator compromise does NOT get you:**
 
-- Direct access to tenant data (no `kms:Decrypt`, no `s3:GetObject` on tenant prefixes — that requires the _tenant role_, which the operator can mint but every minting is logged)
+- Direct access to tenant data. Tenant datastores are encrypted with per-tenant CMKs the
+  operator cannot decrypt with, and its `s3:GetObject` names only the cost-pipeline buckets;
+  reading a tenant prefix requires the _tenant role_, which the operator can mint but every
+  minting is logged. The cost-data KMS grant does not widen this: it is capped to S3, and the
+  only S3 objects the operator can fetch are its own
 - Cross-account access (no cross-account trust on the role)
 - Account takeover (no admin paths)
 - Bedrock invocation directly (no `InvokeModel` permission; would have to mint a role + assume it, both CloudTrail-logged)
@@ -146,9 +155,13 @@ Six threat categories, evaluated per architecture component.
 The mitigations above are not aspirational. Today, the platform ships:
 
 - [x] Operator IRSA scoped to `/eks-agent-platform/tenants/` path
-- [x] No `kms:Decrypt` on operator role
+- [x] Operator KMS limited to the cost-pipeline data key, via S3 only — no tenant-CMK access
 - [x] No `bedrock:InvokeModel*` on operator role
-- [x] cmk-data and cmk-logs separated (auditor role only sees logs)
+- [ ] cmk-data and cmk-logs separated (auditor role only sees logs) — **not shipped**. The
+      `secrets` component mints one key and publishes one ARN, which both `data_kms_key_arn` and
+      `logs_kms_key_arn` resolve to, so the separation this row claims does not exist in the
+      tree. What does hold the tenant-isolation property is the per-tenant CMK each datastore
+      gets, which is a stronger control and a different one
 - [x] Tenant baseline policy with `bedrock:InvokeModel` constrained by tag equality
 - [x] Bedrock invocation logging to Object-Lock'd S3 bucket
 - [x] EventBridge archive 365-day retention on kill-switch bus
