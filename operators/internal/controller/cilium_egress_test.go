@@ -8,6 +8,7 @@ package controller
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,6 +19,10 @@ import (
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 )
+
+// protoTCP is the protocol string these policies carry. A constant because it
+// is spelled the same in every rule and every assertion.
+const protoTCP = "TCP"
 
 func ciliumTestClient(t *testing.T) client.Client {
 	t.Helper()
@@ -59,7 +64,7 @@ func TestTenantEgressCiliumRules_AllowsPodIdentityCreds(t *testing.T) {
 			continue
 		}
 		port := rule["toPorts"].([]interface{})[0].(map[string]interface{})["ports"].([]interface{})[0].(map[string]interface{})
-		if port["port"] == "80" && port["protocol"] == "TCP" {
+		if port["port"] == "80" && port["protocol"] == protoTCP {
 			found = true
 		}
 	}
@@ -157,7 +162,7 @@ func TestTenantEgressCiliumRules_ReachesTheModelGateway(t *testing.T) {
 			t.Error("the gateway rule must stay same-namespace: a namespace selector points it at the wrong place")
 		}
 		port := rule["toPorts"].([]interface{})[0].(map[string]interface{})["ports"].([]interface{})[0].(map[string]interface{})
-		if port["port"] != "8080" || port["protocol"] != "TCP" {
+		if port["port"] != "8080" || port["protocol"] != protoTCP {
 			t.Errorf("gateway egress port: got %v/%v want 8080/TCP", port["port"], port["protocol"])
 		}
 		return
@@ -240,4 +245,36 @@ func TestEnsureGatewayCiliumEgress_GatedByEngine(t *testing.T) {
 	if sel["k8s:app.kubernetes.io/name"] != "envoy" {
 		t.Errorf("gateway-egress must select only the Envoy proxy pods, got %v", sel)
 	}
+}
+
+// TestGatewayEgressCiliumRules_AllowsXDS is the regression guard for the
+// failure this rule exists to prevent. The gateway's Envoy runs in the tenant
+// namespace, inside the tenant's default-deny egress, and dials Envoy Gateway's
+// control plane on plaintext gRPC 18000 — a port the outbound-TLS rule does not
+// cover and a namespace the tenant otherwise cannot reach.
+//
+// Without it nothing reports a fault: the operator reconciles every resource it
+// owns, the ModelGateway CR goes Ready and publishes an endpoint, and the proxy
+// behind that endpoint never receives a listener. The assertion is on the rule
+// rather than on a healthy cluster because that is the only place the failure
+// is visible before traffic.
+func TestGatewayEgressCiliumRules_AllowsXDS(t *testing.T) {
+	for _, raw := range gatewayEgressCiliumRules() {
+		rule := raw.(map[string]interface{})
+		eps, ok := rule["toEndpoints"].([]interface{})
+		if !ok || len(eps) == 0 {
+			continue
+		}
+		labels := eps[0].(map[string]interface{})["matchLabels"].(map[string]interface{})
+		if labels["k8s:io.kubernetes.pod.namespace"] != envoyGatewayNamespace {
+			continue
+		}
+		port := rule["toPorts"].([]interface{})[0].(map[string]interface{})["ports"].([]interface{})[0].(map[string]interface{})
+		if port["port"] == strconv.Itoa(envoyGatewayXDSPort) && port["protocol"] == protoTCP {
+			return
+		}
+	}
+	t.Fatalf("gateway cilium egress must allow TCP %d to namespace %q — without it the "+
+		"data plane never reaches xDS and the Gateway never programs, while the "+
+		"ModelGateway CR still reports Ready", envoyGatewayXDSPort, envoyGatewayNamespace)
 }

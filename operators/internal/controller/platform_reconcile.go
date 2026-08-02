@@ -310,6 +310,7 @@ func (r *PlatformReconciler) ensureGatewayEgressPolicy(ctx context.Context, p *p
 	tlsPort := intstr.FromInt(443)
 	otlpGRPC := intstr.FromInt(otlpGRPCPort)
 	otlpHTTP := intstr.FromInt(otlpHTTPPort)
+	xdsPort := intstr.FromInt(envoyGatewayXDSPort)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = labelsForPlatform(p)
 		np.Spec = networkingv1.NetworkPolicySpec{
@@ -325,6 +326,19 @@ func (r *PlatformReconciler) ensureGatewayEgressPolicy(ctx context.Context, p *p
 					// rather than a Bedrock address because on PrivateLink the
 					// endpoint resolves to an in-VPC IP that varies per cluster.
 					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &tlsPort}},
+				},
+				{
+					// xDS, to Envoy Gateway's control plane. Not covered by
+					// the 443 rule above: xDS is plaintext gRPC on 18000, to a
+					// namespace the tenant otherwise has no route to. Without
+					// it the proxy never receives a listener and the Gateway
+					// never reports Programmed — see the constant's comment.
+					To: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": envoyGatewayNamespace},
+						},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &xdsPort}},
 				},
 				{
 					// The gateway's own telemetry. It records the routing
