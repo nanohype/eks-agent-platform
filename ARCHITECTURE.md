@@ -57,9 +57,13 @@ The operator chart (`charts/operator`) ships more than the controller and CRDs. 
 
 Keeping these in the chart means the operator's eval gating and its own SLO arrive with the operator instead of being a separate install step.
 
-### Bedrock-only model plane in v1
+### The gateway is the model plane
 
-`@eks-agent/sdk` ships a `BedrockAdapter` base with a family registry (`packages/sdk/src/factory.ts`); two family adapters are registered — Anthropic and Amazon Nova — each with uniform call shape, family-accurate pricing, family-accurate error taxonomy. Adding a Bedrock family is a `BedrockAdapter` subclass plus a registry insert; adding a non-Bedrock provider later is a new `ProviderAdapter` implementation, not an architecture change.
+There is no in-process provider adapter. Every model call leaves a tenant as ordinary HTTP to that Platform's `ModelGateway`, and the gateway holds the AWS identity, applies the route's guardrail and rate limit, and records the request. An application that reached a model any other way would have none of the three, which is why the boundary is a network hop rather than a library: `gatewayEgressCiliumRules` gives outbound TLS to the gateway's Envoy pods alone, so every other pod in the namespace is left without a route to a model. The gateway is enforced, not merely offered.
+
+What an application holds is a route *name* and a base URL. The `ModelGateway` CR maps each route to a Bedrock model — a foundation model, an inference profile, or an open-weight model imported through Custom Model Import — so repointing a route at a different model is a CR edit and the application is untouched. `spec.routes[].api` fixes the wire format across such a change, and the resolved format and its base URL are published on `status.routes[]` for clients to read rather than assume.
+
+Model families therefore are not a code concern. Adding one is a route on a CR; the only thing the repo tracks per family is pricing (`@eks-agent/pricing`), which the cost path needs whatever the wire format was.
 
 ### Two CMKs per cluster, isolated by grant
 

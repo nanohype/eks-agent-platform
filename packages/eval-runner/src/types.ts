@@ -1,11 +1,11 @@
-import type { MessagesResponse } from '@eks-agent/sdk';
+import type { StopReason } from '@eks-agent/core';
 
 /**
- * Stop reasons the runner understands, reused verbatim from the SDK's
- * ProviderAdapter contract so the eval path and the direct-invocation path
- * classify a guardrail intervention identically.
+ * Re-exported so a consumer of the runner's result types gets the stop-reason
+ * union from the same import, rather than having to know it originates a
+ * package over.
  */
-export type StopReason = MessagesResponse['stopReason'];
+export type { StopReason };
 
 /**
  * A single evaluation case, mirroring the `EvalCase` CRD type. The assertion

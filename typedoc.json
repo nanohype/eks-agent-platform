@@ -1,13 +1,7 @@
 {
   "$schema": "https://typedoc.org/schema.json",
   "entryPointStrategy": "packages",
-  "entryPoints": [
-    "packages/core",
-    "packages/sdk",
-    "packages/pricing",
-    "packages/client",
-    "packages/eval-runner"
-  ],
+  "entryPoints": ["packages/core", "packages/pricing", "packages/client", "packages/eval-runner"],
   "out": "docs/api",
   "readme": "none",
   "githubPages": false,

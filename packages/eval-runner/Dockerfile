@@ -19,9 +19,9 @@ COPY . .
 
 RUN pnpm install --frozen-lockfile
 
-# Build eval-runner's dependency graph (core → pricing → sdk) so the pricing
-# data file lands in its dist, then bundle the CLI from source into one ESM
-# file. The @eks-agent/sdk import is types-only and erases at build.
+# Build eval-runner's dependency graph (core → pricing) so the pricing data
+# file lands in its dist, then bundle the CLI from source into one ESM file.
+# The @eks-agent/core imports are types-only and erase at build.
 RUN pnpm --filter "...@eks-agent/eval-runner" build \
     && pnpm --filter @eks-agent/eval-runner bundle
 

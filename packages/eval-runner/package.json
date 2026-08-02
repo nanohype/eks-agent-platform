@@ -32,7 +32,6 @@
   "dependencies": {
     "@eks-agent/core": "workspace:*",
     "@eks-agent/pricing": "workspace:*",
-    "@eks-agent/sdk": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -1,6 +1,5 @@
-import { AgentError, type ErrorClass } from '@eks-agent/core';
+import { AgentError, type ErrorClass, type Message } from '@eks-agent/core';
 import { priceModel } from '@eks-agent/pricing';
-import type { Message } from '@eks-agent/sdk';
 
 import type { InvocationResult, ModelBackend, StopReason } from './types.js';
 
