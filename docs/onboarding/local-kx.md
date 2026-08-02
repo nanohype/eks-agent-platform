@@ -51,7 +51,7 @@ kubectl get platforms -A
 kubectl get -n tenants-blank ns,quota,limitrange,networkpolicy
 # tenant ns + ResourceQuota + LimitRange + default-deny NetworkPolicy
 
-kubectl get -n agentgateway routes.agentgateway.dev -l 'agents.nanohype.dev/platform=blank'
+kubectl get -n tenants-blank aigatewayroutes.aigateway.envoyproxy.io -l 'agents.nanohype.dev/platform=blank'
 # blank-primary route present
 
 kubectl get -n tenants-blank deploy scaledobjects.keda.sh
@@ -84,7 +84,7 @@ What it adds on top of the k8s-only flow:
 
 ```bash
 kubectl run -n tenants-blank curl --rm -it --image=curlimages/curl --restart=Never -- \
-  curl -sX POST http://agentgateway.agentgateway.svc.cluster.local:8080/v1/messages \
+  curl -sX POST http://blank-gateway.tenants-blank.svc.cluster.local:8080/anthropic/v1/messages \
        -H 'content-type: application/json' \
        -d '{"route":"blank-primary","messages":[{"role":"user","content":"ping"}],"max_tokens":16}'
 ```

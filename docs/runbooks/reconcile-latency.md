@@ -22,7 +22,7 @@ Each controller has typical bottlenecks:
 | Controller     | Likely cause                                                                                                       |
 | -------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `platform`     | IAM throttling (CreateRole / AttachRolePolicy), KMS CreateGrant rate                                               |
-| `modelgateway` | agentgateway CRD create/update latency                                                                             |
+| `modelgateway` | Envoy AI Gateway resource create/update latency                                                                             |
 | `agentfleet`   | image pull for the tenant's agent Deployment, then KEDA reconciling its ScaledObject                                |
 | `budget`       | Athena query slow (CUR not crawled lately, Glue partition pruning poor)                                            |
 | `eval`         | Argo Workflows CRD latency                                                                                         |
@@ -32,7 +32,7 @@ Each controller has typical bottlenecks:
 
 1. If a specific AWS API is throttling (look at the operator logs for `Throttling` / `RequestLimitExceeded`), bump that service's account quota or add a backoff. Athena queries can be rerouted to a higher-capacity workgroup.
 2. If workqueue depth is climbing without bound, scale the operator deployment: `kubectl -n eks-agent-platform scale deploy operator --replicas=3` and let leader election re-distribute.
-3. If a downstream CRD's controller is slow (agentgateway pods saturated, Argo Workflows controller behind), pause new tenant onboarding until the downstream catches up.
+3. If a downstream CRD's controller is slow (Envoy Gateway behind, Argo Workflows controller behind), pause new tenant onboarding until the downstream catches up.
 
 ## Recover
 

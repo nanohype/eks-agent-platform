@@ -44,7 +44,7 @@ Alternative: CI step.
 - **PR review** — second opinion on every PR; human reviewer focuses on design, agent on style/safety.
 - **Design doc sparring** — paste the doc, ask "what would a sharp staff engineer push back on?".
 - **Migration safety** — for risky migrations (NOT NULL on a 50M-row table, etc.), get the agent's read on lock contention + rollback path.
-- **Spike research** — "compare LiteLLM vs agentgateway for our shape" — get the table, not the recommendation.
+- **Spike research** — "compare LiteLLM vs Envoy AI Gateway for our shape" — get the table, not the recommendation.
 
 ## Cost expectations
 

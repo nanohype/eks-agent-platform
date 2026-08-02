@@ -42,7 +42,7 @@ The fleet's `scaling.queueUrl` points at your SQS queue. The operator's IRSA rol
 
 - **Prospect a list** — drop CSV in the SQS queue, fleet writes per-row briefs to `s3://<eval-reports>/<tenant>/runs/...`.
 - **Enrich a contact** — same pattern, lighter prompt, Nova Lite for unit cost.
-- **Tune the prompts** — edit `AgentFleet.spec.agents[].systemPrompt`, re-apply, fleet rolls over with the standard agentgateway rolling-update.
+- **Tune the prompts** — edit `AgentFleet.spec.agents[].systemPrompt`, re-apply, fleet rolls over with the standard Deployment rolling update.
 - **Catch drift** — the daily 06:00 UTC `EvalSuite` regression-tests two cases (prospector-personas-present, enricher-json-shape). If pass-rate drops below 0.85 the Argo Rollouts AnalysisTemplate gates the next canary.
 
 ## Cost expectations

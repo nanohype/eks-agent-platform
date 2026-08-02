@@ -12,7 +12,7 @@ Smoke-test the gateway from inside the cluster:
 
 ```bash
 kubectl run -n tenants-blank curl --rm -it --image=curlimages/curl --restart=Never -- \
-  curl -sX POST http://agentgateway.agentgateway.svc.cluster.local:8080/v1/messages \
+  curl -sX POST http://blank-gateway.tenants-blank.svc.cluster.local:8080/anthropic/v1/messages \
   -H 'content-type: application/json' \
   -d '{"route":"primary","messages":[{"role":"user","content":"ping"}],"max_tokens":16}'
 ```
