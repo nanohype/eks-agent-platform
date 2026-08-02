@@ -1,12 +1,14 @@
 # Runbook — Bedrock region degraded or quota exhausted
 
-**Trigger**: agentgateway logs report sustained `ThrottlingException` or `ServiceUnavailable` from one Bedrock region; tenant pings reporting elevated latency.
+**Trigger**: the tenant gateway reports sustained `ThrottlingException` or `ServiceUnavailable` from one Bedrock region; tenant pings reporting elevated latency.
 
 ## Diagnose
 
 ```bash
 # Sustained throttling on a specific region?
-kubectl -n agentgateway logs -l app.kubernetes.io/name=agentgateway --tail=500 \
+kubectl -n tenants-<platform> logs \
+  -l "$(kubectl -n tenants-<platform> get svc <platform>-gateway \
+        -o jsonpath='{range .spec.selector.*}{@}{"\n"}{end}' | paste -sd, -)" --tail=500 \
   | grep -E "ThrottlingException|ServiceUnavailable|TooManyRequests" \
   | awk '{print $NF}' | sort | uniq -c
 

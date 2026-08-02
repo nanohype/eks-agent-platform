@@ -41,7 +41,7 @@
 
     <text x="92"  y="745" font-size="11" fill="#92400e" font-weight="600">8 OpenTofu/Terragrunt components  ·  outputs to SSM /eks-agent-platform/&lt;env&gt;/</text>
     <text x="92"  y="765" font-size="11" fill="#92400e">Reads:  operator (right) reconciles IAM / KMS / S3 / Athena state</text>
-    <text x="92"  y="785" font-size="11" fill="#92400e">Reads:  agentgateway (right) invokes Bedrock at runtime</text>
+    <text x="92"  y="785" font-size="11" fill="#92400e">Reads:  the gateway (right) invokes Bedrock at runtime</text>
     <text x="92"  y="805" font-size="11" fill="#92400e">Writes: kill-switch tags tenant IAM on breach  →  operator detects (red loop)</text>
   </g>
 

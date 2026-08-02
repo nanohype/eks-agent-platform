@@ -25,8 +25,8 @@ flowchart TD
       Pods["Agent pods<br/>(KEDA-scaled)"]
     end
 
-    subgraph agtgw["namespace: agentgateway"]
-      Route["agentgateway.dev Route<br/>backend: bedrock"]
+    subgraph agtgw["namespace: tenants-&lt;platform&gt;"]
+      Route["AIGatewayRoute<br/>aigateway.envoyproxy.io"]
     end
 
     subgraph evalrun["namespace: eval-runner"]
@@ -71,7 +71,7 @@ flowchart LR
 sequenceDiagram
   participant Pod as Tenant agent pod
   participant SA as Pod Identity creds
-  participant AGW as agentgateway
+  participant AGW as gateway
   participant BR as AWS Bedrock
   participant CW as CloudWatch Logs
   participant Lambda as invocation-cost-publisher
@@ -93,7 +93,7 @@ sequenceDiagram
 | -------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `tenant`       | Tenant + Platform + BudgetPolicy events (via Watches) | Tenant.status aggregate                                                                                         | 5m fallback                                                      |
 | `platform`     | Platform                                              | tenant ns, quotas, NetworkPolicy, AppProject, IAM role, KMS grant, S3 bucket policy statements                  | 60s when IAM wired (drift detection for kill-switch tag)         |
-| `gateway`      | ModelGateway                                          | agentgateway Route per ModelRoute                                                                               | 30s when Pending (waiting on agentgateway CRDs / Platform Ready) |
+| `gateway`      | ModelGateway                                          | Envoy AI Gateway route set per ModelRoute                                                                               | 30s when Pending (waiting on Envoy AI Gateway CRDs / Platform Ready) |
 | `runtime`      | AgentFleet                                            | tenant SA, fleet NetworkPolicy, a Deployment per agent (tenant image), KEDA ScaledObject + TriggerAuthentication | 30s when Pending                                                 |
 | `sandbox`      | SandboxPool                                           | worker Deployment, default-deny NetworkPolicy, metrics bridge + KEDA ScaledObject (when `apiKeySecret` set)     | 30s when Pending                                                 |
 | `agentsandbox` | AgentSandbox                                          | hardened single-use session Pod + default-deny NetworkPolicy in the tenant namespace; TTL garbage-collection    | 15s while Pending/Running                                        |

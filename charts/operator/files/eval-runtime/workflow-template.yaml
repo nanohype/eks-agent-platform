@@ -142,7 +142,7 @@ spec:
             valueFrom: { path: /tmp/cases.json }
 
     # ─────────────── 2. run-cases ───────────────
-    # For each case: POST to the agentgateway HTTP endpoint with the input
+    # For each case: POST to the gateway's HTTP endpoint with the input
     # prompt, capture the response + latency. Emits results.json with one
     # record per case.
     - name: run-cases

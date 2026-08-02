@@ -83,7 +83,7 @@ describe('ModelGatewayResource', () => {
       },
       status: {
         phase: 'Ready',
-        endpoint: 'agentgateway.acme.svc',
+        endpoint: 'acme-gateway.tenants-acme.svc',
         observedGeneration: 2,
         conditions: [
           {

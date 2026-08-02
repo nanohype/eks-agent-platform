@@ -286,7 +286,7 @@ func vclusterControlPlaneSelector() map[string]string {
 // is the whole point of the tier — only the trusted syncer gets through.
 //
 // The rule is additive to the namespace-wide tenant egress under cilium (per-
-// endpoint allow-lists union), so the vcluster pod keeps DNS/agentgateway/OTel
+// endpoint allow-lists union), so the vcluster pod keeps DNS/gateway/OTel
 // and gains the apiserver. Runs on the host client.
 func (r *PlatformReconciler) ensureVClusterControlPlaneEgress(ctx context.Context, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)

@@ -4,7 +4,7 @@ The evaluation runner behind `EvalSuite`. It is shipped as the
 `ghcr.io/nanohype/eks-agent-platform/eval-runner` image that the Argo
 `eval-runner` WorkflowTemplate (`charts/operator/files/eval-runtime/`) invokes:
 one `evaluate` step drives every case through the tenant's agents via
-agentgateway, one `score` step grades the run, and the workflow patches
+the tenant gateway, one `score` step grades the run, and the workflow patches
 `EvalSuite.status` with the result. Argo Rollouts gates a deploy on
 `status.lastScore` through the `eval-suite-gate` AnalysisTemplate.
 
@@ -59,7 +59,7 @@ rendered as a decimal string to match the CRD's string-modeled
 `status.lastScore`; the suite passes when `meanScore >= spec.passThreshold`. An
 empty suite scores 0 and fails.
 
-**Unpriced models fail closed.** When agentgateway returns a model id with no
+**Unpriced models fail closed.** When the gateway returns a model id with no
 entry in `@eks-agent/pricing`, the cost is an unmetered 0 (`unpriced: true`),
 never a real $0 — a `maxCostUsd` assertion on such a case **fails** rather than
 passing on a cost we can't stand behind. Unpriced cases are counted and flagged

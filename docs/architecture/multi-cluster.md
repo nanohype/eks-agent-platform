@@ -98,7 +98,7 @@ The terraform components are designed for the one-account-many-clusters case. If
 
 ## In-flight request handling on failover
 
-Bedrock invocations are stateless from the platform's perspective: the agentgateway pod that's calling Bedrock just times out if the cluster goes away. Tenants' retry logic handles this (they're invoking through their own SDK; nothing platform-side is in flight). Argo Workflows in-flight runs are _not_ portable across clusters — they fail on the primary, the eval-runtime on the standby starts fresh. Accept this; don't try to migrate Workflow state mid-execution.
+Bedrock invocations are stateless from the platform's perspective: the gateway pod that's calling Bedrock just times out if the cluster goes away. Tenants' retry logic handles this (they're invoking through their own SDK; nothing platform-side is in flight). Argo Workflows in-flight runs are _not_ portable across clusters — they fail on the primary, the eval-runtime on the standby starts fresh. Accept this; don't try to migrate Workflow state mid-execution.
 
 ## Cross-cluster persona dashboards
 

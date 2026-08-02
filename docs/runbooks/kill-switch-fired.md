@@ -20,16 +20,16 @@ Three independent failure modes â€” diagnose in parallel:
 
 ```bash
 # Check gateway pod logs for InvokeModel errors
-kubectl -n agentgateway logs -l app.kubernetes.io/name=agentgateway --tail=100 | grep -i "bedrock\|invoke"
+kubectl -n tenants-<platform> get modelgateway -o jsonpath='{.items[*].status.routes}' | jq .
 
 # Test the route directly from inside the tenant ns
 kubectl -n tenants-<platform> run curl --rm -it --image=curlimages/curl --restart=Never -- \
-  curl -sX POST http://agentgateway.agentgateway.svc.cluster.local:8080/v1/messages \
+  curl -sX POST http://<platform>-gateway.tenants-<platform>.svc.cluster.local:8080/anthropic/v1/messages \
        -H 'content-type: application/json' \
        -d '{"route":"<route-name>","messages":[{"role":"user","content":"ping"}]}'
 ```
 
-Cause: Bedrock model quota hit, cross-region inference profile mis-configured, agentgateway pod OOM.
+Cause: Bedrock model quota hit, cross-region inference profile mis-configured, gateway data plane unhealthy.
 
 ### Mode B: fleet agents not pulling work
 
@@ -100,4 +100,4 @@ The reconciler will observe the tag and settle the latch (`KillSwitchUnrouted` â
 
 ## Postmortem
 
-Required if MTTR > 15 minutes. The root cause analysis usually points back at a regression in one of: agentgateway chart values, agent-iam baseline policy, KEDA pod-identity wiring. Add a dashboard check that would have caught it pre-customer-impact.
+Required if MTTR > 15 minutes. The root cause analysis usually points back at a regression in one of: gateway chart values, agent-iam baseline policy, KEDA pod-identity wiring. Add a dashboard check that would have caught it pre-customer-impact.

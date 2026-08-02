@@ -30,7 +30,7 @@ sequenceDiagram
   participant Score as score task
   participant WB as writeback task
   participant K8s as kube-apiserver
-  participant AGW as agentgateway
+  participant AGW as gateway
   participant S3
 
   Cron->>WF: spawn Workflow (06:00 UTC daily)

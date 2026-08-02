@@ -8,7 +8,7 @@
 #
 # For real-Bedrock mode the operator stays --disable-aws (no OIDC on
 # kind); ./scripts/local-kx/aws-creds-secret.sh mounts a Secret onto
-# the agentgateway pod so it can call Bedrock with static creds.
+# the gateway pod so it can call Bedrock with static creds.
 
 replicaCount: 1
 

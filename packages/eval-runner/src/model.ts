@@ -5,8 +5,8 @@ import type { Message } from '@eks-agent/sdk';
 import type { InvocationResult, ModelBackend, StopReason } from './types.js';
 
 /**
- * The JSON shape the runner expects back from agentgateway's
- * `POST /v1/agents/<platform>-<fleet>/messages` endpoint. agentgateway proxies
+ * The JSON shape the runner expects back from the tenant gateway's
+ * Anthropic-format endpoint. The gateway proxies
  * to Bedrock and echoes token usage + the resolved model id, which is what lets
  * the runner price each call. Every field is optional so a thin gateway that
  * only returns text still yields a usable (unpriced) result rather than
@@ -28,7 +28,7 @@ export interface GatewayResponse {
 }
 
 export interface GatewayBackendOptions {
-  /** Base URL of agentgateway, e.g. http://agentgateway.agentgateway.svc.cluster.local:8080 */
+  /** Base URL published on the route's status, e.g. http://<platform>-gateway.tenants-<platform>.svc.cluster.local:8080/anthropic */
   gateway: string;
   /** Platform name — the first half of the agent route id. */
   platform: string;
@@ -65,7 +65,7 @@ export function classifyStatus(status: number): ErrorClass {
 }
 
 /**
- * Drive a case through agentgateway. Reuses the SDK's cost accounting
+ * Drive a case through the tenant gateway. Reuses the SDK's cost accounting
  * ({@link priceModel}, unpriced-aware) and error taxonomy ({@link AgentError})
  * rather than reimplementing them. The caller (runCases) owns the deadline and
  * threads its AbortSignal in; a gateway non-2xx becomes a classified

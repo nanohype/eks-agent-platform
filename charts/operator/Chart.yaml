@@ -20,7 +20,7 @@ maintainers:
     email: rackctl@gmail.com
 keywords:
   - bedrock
-  - agentgateway
+  - gateway
   - agents
   - dra
   - operator
