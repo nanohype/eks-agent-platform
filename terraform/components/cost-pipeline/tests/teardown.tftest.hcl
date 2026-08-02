@@ -64,13 +64,13 @@ mock_provider "aws" {
 mock_provider "aws" {
   alias = "us_east_1"
 
-  # The activation resource is count-gated on whether Cost Explorer has observed the
-  # key, so without a mock the count is unknown at plan and the whole suite errors
-  # before any assertion runs. Default to observed; the run that cares about the
-  # other state overrides it.
+  # The component carries a check block asserting both cost-allocation keys are active,
+  # and a firing check fails the run. This suite is about teardown posture, so it
+  # defaults to a correctly configured account rather than tripping on an unrelated
+  # concern.
   mock_data "aws_ce_tags" {
     defaults = {
-      tags = ["PlatformId", "CostCenter", "BusinessUnit"]
+      tags = ["PlatformId", "iamPrincipal/PlatformId", "CostCenter", "BusinessUnit"]
     }
   }
 }

@@ -938,23 +938,40 @@ resource "aws_ssm_parameter" "reconciliation_view" {
 # reconciler's predicate matches nothing and every tenant reads zero spend with a
 # query that ran and returned. Nothing goes red.
 #
-# ─── why this is count-gated and not a precondition ───
+# ─── why terraform asserts this rather than owning it ───
 #
-# AWS only offers a user-defined key for activation once it has OBSERVED a resource
+# AWS offers a user-defined key for activation only once it has OBSERVED a resource
 # carrying it, then takes up to 24h to list it and up to 24h more to activate it. So
-# activation cannot happen in the same apply that first stamps the key — and on a
-# fresh account nothing has stamped it, because the tenants that would carry it do
-# not exist until the platform this component is part of does.
+# the activation cannot happen in the same apply that first stamps the key. That much
+# is a sequencing problem, and a count gate would be the obvious answer.
 #
-# A blocking precondition therefore deadlocks: the component can never apply, so the
-# pipeline never exists, so no tenant ever gets tagged. Gating the RESOURCE on the
-# observation instead makes it a two-act contract that completes itself — act one
-# creates the pipeline and stamps the key on its own buckets, act two activates it
-# on whichever later apply finds AWS has caught up. No operator input, no knob, and
-# no apply that fails for a reason the operator cannot act on.
+# It is not, because terraform cannot see any of the three things it would need:
 #
-# The check block below is the loud half: while the count is zero, every plan says
-# so, rather than the absence being a silence you have to already know to look for.
+#   The gate has no signal. `aws_ce_tags` — the only Cost Explorer data source that
+#   exists — reads cost DATA dimensions, and a user-defined key appears there only
+#   once it is ALREADY an active cost allocation tag. Verified against the live
+#   account: it returns 3 keys, every one of them Active, with zero overlap against
+#   the 1048 Inactive ones. So "wait until the key is observed, then activate it"
+#   waits for the thing it is trying to cause.
+#
+#   Nothing can see an inactive key. `ListCostAllocationTags` is the API that lists
+#   what is available to activate, and the provider ships no data source for it.
+#
+#   And the resource cannot report its own failure. `aws_ce_cost_allocation_tag`
+#   creates with `_, err := conn.UpdateCostAllocationTagsStatus(ctx, input)`, and
+#   that API returns HTTP 200 with a per-key `TagKeysNotFoundException` inside an
+#   `Errors` array which the `_` discards. Activating a key AWS has never seen
+#   reports `1 added` and does nothing at all.
+#
+# A resource that cannot be gated, cannot be verified, and reports success when it
+# no-ops is not ownership; it is the failure class this pipeline exists to remove,
+# declared in HCL. So the activation is a one-time human act, and what lives here is
+# the assertion that it happened.
+#
+# The same data source that makes a useless gate makes an exact verifier: because it
+# returns only activated keys, presence IS activation. This component still stamps
+# PlatformId on its own buckets, which is what puts the key into AWS's inventory so a
+# human has something to activate.
 ################################################################################
 
 data "aws_ce_tags" "observed" {
@@ -973,37 +990,57 @@ data "aws_ce_tags" "observed" {
 }
 
 locals {
-  platform_id_tag_observed = contains(data.aws_ce_tags.observed.tags, "PlatformId")
+  # Both keys, because they attribute different halves of the bill and neither covers
+  # the other.
+  #
+  #   PlatformId              a RESOURCE tag, carried by the tenant's datastores. It
+  #                           reaches the CUR's resource_tags map and is how buckets,
+  #                           databases and queues attribute.
+  #
+  #   iamPrincipal/PlatformId an IAM PRINCIPAL tag, carried by the tenant's role. A
+  #                           model invocation is not a taggable resource, so no
+  #                           resource tag is ever populated on one — AWS attributes
+  #                           Bedrock spend by the calling identity instead, and this
+  #                           is the only column that can see it.
+  #
+  # Activating one and not the other produces a budget that is confidently wrong in a
+  # specific direction rather than obviously broken.
+  required_cost_allocation_tags = ["PlatformId", "iamPrincipal/PlatformId"]
+
+  inactive_cost_allocation_tags = [
+    for k in local.required_cost_allocation_tags :
+    k if !contains(data.aws_ce_tags.observed.tags, k)
+  ]
 }
 
-resource "aws_ce_cost_allocation_tag" "platform_id" {
-  provider = aws.us_east_1
-  count    = local.platform_id_tag_observed ? 1 : 0
-
-  tag_key = "PlatformId"
-  status  = "Active"
-}
-
-check "platform_id_tag_is_active" {
+check "the_cost_allocation_tags_are_active" {
   assert {
-    condition     = local.platform_id_tag_observed
+    condition = length(local.inactive_cost_allocation_tags) == 0
     error_message = <<-EOT
-      Cost Explorer has not yet observed a resource tagged PlatformId in this account, so the
-      key cannot be activated and the CUR carries no resource_tags_user_platform_id column.
+      These cost-allocation tag keys are not active in Cost Explorer, so the CUR carries no
+      column for them and every BudgetPolicy's billed leg reads zero through a query that
+      succeeds: ${join(", ", local.inactive_cost_allocation_tags)}
 
-      Until it does, every BudgetPolicy's CUR leg reads zero. The operator surfaces that —
-      the Athena query fails on the missing column, agents_budget_spend_unreadable_total
-      increments and BudgetReconciled goes False — so this is loud at both ends rather than
-      a silent zero.
+      Activation is a one-time act and terraform cannot do it. The provider's resource calls
+      UpdateCostAllocationTagsStatus and discards the per-key error the API returns in a 200,
+      so declaring it here would report success while doing nothing.
 
-      Nothing to do but wait. This apply stamps PlatformId on the pipeline's own buckets,
-      which starts AWS's clock: up to 24h to list the key and up to 24h more to activate it.
-      The next apply after that creates the activation on its own. Activation is NOT
-      retroactive, so spend that lands inside that window is unattributable permanently —
-      which is why the clock is started here, at install, rather than when the first tenant
-      arrives.
+        aws ce update-cost-allocation-tags-status --region us-east-1 \
+          --cost-allocation-tags-status ${join(" ", [
+    for k in local.required_cost_allocation_tags : "TagKey=${k},Status=Active"
+])}
+
+      A key is only listed for activation once AWS has observed a resource carrying it —
+      up to 24h — and takes up to 24h more to activate. This component stamps PlatformId on
+      its own buckets so the key enters that inventory at install rather than when the first
+      tenant arrives. For iamPrincipal/PlatformId the trigger is a call, not a resource: the
+      key appears once a role carrying the tag has invoked Bedrock at least once.
+
+      Activation is NOT retroactive. Spend inside that window is unattributable permanently,
+      which is why this is loud on every plan rather than a silence you have to know to look
+      for.
     EOT
-  }
+}
 }
 
 # Handles cost-access needs to mint each cluster's operator grant. ARNs are published

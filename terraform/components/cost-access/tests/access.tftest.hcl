@@ -152,3 +152,83 @@ run "a_trailing_slash_difference_is_not_drift" {
     error_message = "a missing trailing slash must normalize rather than register as drift — both sides use the value as a prefix, so they mean the same thing"
   }
 }
+
+# A policy attached to nothing is a policy that grants nothing.
+#
+# Deleting the attachment outright used to leave this suite passing: every run asserted
+# the policy's CONTENTS and none asserted that anything carried it. The operator would
+# hold no cost access at all, the reconciler would fail every Athena call on
+# AccessDenied, and the plan would look identical.
+run "the_policy_is_attached_to_the_role_that_needs_it" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.operator_role_name
+    values = { value = "SENTINEL-operator-role" }
+  }
+
+  assert {
+    condition     = nonsensitive(aws_iam_role_policy_attachment.operator_cost.role) == "SENTINEL-operator-role"
+    error_message = "the cost policy must attach to the operator role agent-iam published — an unattached policy grants nothing, and every assertion about its contents holds just as well"
+  }
+
+  assert {
+    condition     = aws_iam_role_policy_attachment.operator_cost.policy_arn == aws_iam_policy.operator_cost.arn
+    error_message = "the attachment must carry THIS component's policy, not some other ARN"
+  }
+}
+
+# Every handle carries its own value, and the suite can tell them apart.
+#
+# The mock provider gives every aws_ssm_parameter read the same default, so a suite that
+# asserts only on parameter NAMES passes identically when the values behind them are
+# transposed — cur_bucket republished from the workgroup handle, database from the table
+# name. The operator sweeps the right keys and decodes the wrong values, and every query
+# it builds is syntactically fine and points at nothing.
+#
+# So each source gets a distinct sentinel and each assertion names the one it expects.
+run "each_account_handle_republishes_its_own_value" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.cur_bucket
+    values = { value = "SENTINEL-cur-bucket" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.athena_workgroup
+    values = { value = "SENTINEL-workgroup" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.athena_database
+    values = { value = "SENTINEL-database" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.athena_results_bucket
+    values = { value = "SENTINEL-results-bucket" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.cur_table_name
+    values = { value = "SENTINEL-cur-table" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.estimate_table_name
+    values = { value = "SENTINEL-estimate-table" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.reconciliation_view
+    values = { value = "SENTINEL-reconciliation-view" }
+  }
+
+  assert {
+    condition = alltrue([
+      nonsensitive(aws_ssm_parameter.cur_bucket.value) == "SENTINEL-cur-bucket",
+      nonsensitive(aws_ssm_parameter.athena_workgroup.value) == "SENTINEL-workgroup",
+      nonsensitive(aws_ssm_parameter.athena_database.value) == "SENTINEL-database",
+      nonsensitive(aws_ssm_parameter.athena_results_bucket.value) == "SENTINEL-results-bucket",
+      nonsensitive(aws_ssm_parameter.cur_table_name.value) == "SENTINEL-cur-table",
+      nonsensitive(aws_ssm_parameter.estimate_table_name.value) == "SENTINEL-estimate-table",
+      nonsensitive(aws_ssm_parameter.reconciliation_view.value) == "SENTINEL-reconciliation-view",
+    ])
+    error_message = "every republished handle must carry the value of the account handle it names — a transposition publishes under the right key, sweeps cleanly, and hands the operator a query that points at the wrong object"
+  }
+}

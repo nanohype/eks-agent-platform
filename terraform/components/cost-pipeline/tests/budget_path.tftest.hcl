@@ -53,13 +53,17 @@ mock_provider "aws" {
 mock_provider "aws" {
   alias = "us_east_1"
 
-  # The activation resource is count-gated on whether Cost Explorer has observed the
-  # key, so without a mock the count is unknown at plan and the whole suite errors
-  # before any assertion runs. Default to observed; the run that cares about the
-  # other state overrides it.
+  # A check block fails the run that triggers it, so the default here is a correctly
+  # configured account — BOTH cost-allocation keys active. Runs that care about an
+  # unactivated state override it and declare the failure they expect.
+  #
+  # Both keys, not just PlatformId: the resource tag attributes datastores and the
+  # principal tag attributes model invocations, and a default carrying only the first
+  # would make every unrelated run in this file fail for a reason none of them are
+  # about.
   mock_data "aws_ce_tags" {
     defaults = {
-      tags = ["PlatformId", "CostCenter", "BusinessUnit"]
+      tags = ["PlatformId", "iamPrincipal/PlatformId", "CostCenter", "BusinessUnit"]
     }
   }
 }
@@ -291,21 +295,18 @@ run "the_workgroup_enforces_the_key_the_operator_holds" {
   }
 }
 
-# The cost-allocation tag activates itself on a later apply, and that is a design
-# rather than an omission.
+# The cost-allocation tags are ASSERTED, not owned, and the assertion has to be able
+# to fire in both directions.
 #
-# AWS only offers a user-defined key for activation once it has OBSERVED a resource
-# carrying it, then takes up to 24h to list it. So activation cannot happen in the
-# apply that first stamps the key — and on a fresh account nothing has stamped it,
-# because the tenants that would carry it do not exist until this pipeline does. A
-# blocking precondition would deadlock that permanently.
+# Terraform cannot own this. `aws_ce_tags` reads cost DATA dimensions, so a user-defined
+# key shows up there only once it is already active — a gate on it waits for the thing
+# it is trying to cause. Nothing can see an inactive key. And the provider's activation
+# resource discards the per-key error the API returns inside a 200, so declaring it
+# reports success while doing nothing.
 #
-# Gating the RESOURCE on the observation makes it a two-act contract that completes
-# itself: act one builds the pipeline and stamps the key on its own buckets, act two
-# activates it once AWS has caught up. Both states are asserted, because "it applies
-# on a fresh account" and "it eventually activates" are different claims and only
-# testing one of them is how this deadlocked in an earlier draft.
-run "a_fresh_account_still_plans_before_the_key_is_observable" {
+# What is left is a verifier, and the same property that makes the data source useless
+# as a gate makes it exact as one: presence IS activation.
+run "an_unactivated_key_is_reported_loudly" {
   command = plan
 
   override_data {
@@ -313,27 +314,16 @@ run "a_fresh_account_still_plans_before_the_key_is_observable" {
     values = { tags = ["CostCenter", "BusinessUnit"] }
   }
 
-  # The check block MUST fire here. It is the loud half of the contract: while the
-  # key is unobservable every plan says so, rather than the pipeline quietly building
-  # itself without the column its consumers filter on. Asserting the warning is
-  # expected also pins that it can fire at all — a check whose condition is always
-  # true is indistinguishable from no check.
-  expect_failures = [check.platform_id_tag_is_active]
-
-  assert {
-    condition     = length(aws_ce_cost_allocation_tag.platform_id) == 0
-    error_message = "with the key not yet observed the activation must not be attempted — a fresh account has nothing tagged PlatformId, so a component that insists on activating it can never apply, and the pipeline that would create the first tagged resource never gets built"
-  }
-
-  # And the pipeline still stamps the key, which is what starts AWS's clock. Without
-  # this the two-act contract has no act one and the account waits forever.
-  assert {
-    condition     = aws_s3_bucket.cur.tags["PlatformId"] == "org"
-    error_message = "the pipeline must tag its own storage with PlatformId even before the key is activatable — that observation is what makes AWS list the key at all"
-  }
+  # The check MUST fire. A check whose condition is always true is indistinguishable
+  # from no check, so the expectation is what pins that this one can fail at all.
+  expect_failures = [check.the_cost_allocation_tags_are_active]
 }
 
-run "the_activation_appears_once_the_key_is_observed" {
+# Half-activated is the interesting state, because it is the one that looks fine.
+# PlatformId alone attributes every datastore and no model invocation, so the budget
+# is confidently wrong in a specific direction rather than obviously broken — and the
+# missing half is the dominant cost.
+run "activating_only_the_resource_tag_is_still_a_failure" {
   command = plan
 
   override_data {
@@ -341,21 +331,51 @@ run "the_activation_appears_once_the_key_is_observed" {
     values = { tags = ["PlatformId", "CostCenter"] }
   }
 
-  assert {
-    condition     = length(aws_ce_cost_allocation_tag.platform_id) == 1
-    error_message = "once Cost Explorer lists the key the activation must be created — otherwise resource_tags_user_platform_id is never a CUR column and every tenant's CUR spend reads zero through a query that succeeds"
+  expect_failures = [check.the_cost_allocation_tags_are_active]
+}
+
+run "activating_only_the_principal_tag_is_still_a_failure" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["iamPrincipal/PlatformId"] }
+  }
+
+  expect_failures = [check.the_cost_allocation_tags_are_active]
+}
+
+# And it must go quiet when both are active, or it is a warning operators learn to
+# scroll past — which is the same as not having it.
+run "both_keys_active_is_silent" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["PlatformId", "iamPrincipal/PlatformId", "CostCenter"] }
   }
 
   assert {
-    condition     = aws_ce_cost_allocation_tag.platform_id[0].status == "Active"
-    error_message = "the tag must be activated, not merely declared"
+    condition     = length(local.inactive_cost_allocation_tags) == 0
+    error_message = "with both keys active the check must not fire — a gate that cries wolf on a correctly configured account gets ignored on the run that matters"
+  }
+}
+
+# The pipeline stamps its own storage regardless, because that observation is what puts
+# the key into AWS's inventory in the first place. Without it there is nothing for a
+# human to activate, and the account waits forever for a key that will never be listed.
+run "the_pipeline_seeds_the_key_it_asks_to_have_activated" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = [] }
   }
 
-  # Case matters: Cost Explorer treats tag keys as case-sensitive and the CUR column
-  # is derived from the key, so a lowercase spelling activates a different tag and
-  # leaves the reconciler's column absent.
+  expect_failures = [check.the_cost_allocation_tags_are_active]
+
   assert {
-    condition     = aws_ce_cost_allocation_tag.platform_id[0].tag_key == "PlatformId"
-    error_message = "the activated key must be PlatformId exactly — the operator derives resource_tags_user_platform_id from this spelling"
+    condition     = aws_s3_bucket.cur.tags["PlatformId"] == "org"
+    error_message = "the pipeline must tag its own storage with PlatformId even while the key is unactivatable — that observation is what makes AWS list the key at all"
   }
 }
