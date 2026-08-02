@@ -64,6 +64,21 @@ describe('anthropicBaseURL', () => {
   it('does not double the separator on a trailing slash', () => {
     expect(anthropicBaseURL('http://gw.svc:8080/')).toBe('http://gw.svc:8080/anthropic');
   });
+
+  it('trims a run of trailing slashes in linear time', () => {
+    // The scan replaces /\\/+$/, which backtracks polynomially on exactly this
+    // input. The endpoint comes from an operator-published status field or an
+    // environment variable, so it is not a value this code chooses.
+    const started = Date.now();
+    expect(anthropicBaseURL(`http://gw.svc:8080${'/'.repeat(50_000)}`)).toBe(
+      'http://gw.svc:8080/anthropic',
+    );
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('handles an endpoint that is nothing but slashes', () => {
+    expect(anthropicBaseURL('///')).toBe('/anthropic');
+  });
 });
 
 describe('describeError', () => {

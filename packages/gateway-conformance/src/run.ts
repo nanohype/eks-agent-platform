@@ -31,7 +31,12 @@ const DEFAULT_TIMEOUT_MS = 90_000;
  * the app's helper could not catch that helper being wrong.
  */
 export function anthropicBaseURL(endpoint: string): string {
-  return `${endpoint.replace(/\/+$/, '')}/anthropic`;
+  // Trimmed by scanning rather than with /\/+$/. That pattern backtracks
+  // polynomially on a string of many slashes, and this value arrives from
+  // outside — an operator-published status field or an environment variable.
+  let end = endpoint.length;
+  while (end > 0 && endpoint[end - 1] === '/') end -= 1;
+  return `${endpoint.slice(0, end)}/anthropic`;
 }
 
 /**
