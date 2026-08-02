@@ -53,7 +53,7 @@ kubectl -n tenants-<platform> describe pod <pod-name>
 kubectl -n tenants-<platform> logs <pod-name> --previous
 ```
 
-Cause: tenant code bug (out of scope — hand back to tenant). Most useful here: confirm IRSA is wired (`kubectl get sa tenant-runtime -o yaml | grep role-arn`) and the role has the baseline policy attached (`aws iam list-attached-role-policies --role-name <env>-<platform>-tenant`).
+Cause: tenant code bug (out of scope — hand back to tenant). Most useful here: confirm IRSA is wired (`kubectl get sa tenant-runtime -o yaml | grep role-arn`) and the role has the baseline policy attached (`aws iam list-attached-role-policies --role-name <cluster>-<platform>-tenant`).
 
 ## Failure mode: kill-switch fired but the platform never suspended
 

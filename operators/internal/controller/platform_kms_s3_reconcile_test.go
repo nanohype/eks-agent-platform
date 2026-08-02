@@ -174,6 +174,39 @@ func TestEnsureKmsGrant_CreatesTenantScopedGrant(t *testing.T) {
 	}
 }
 
+func TestKmsGrantContextIsNotTheCostIdentity(t *testing.T) {
+	// Two different values share the key name "PlatformId", and they must stay
+	// different. The cost-allocation TAG is cluster-qualified (platformCostID)
+	// because it is read out of a CUR, which covers an entire account and so
+	// cannot tell two same-named Platforms apart. This ENCRYPTION CONTEXT is
+	// scoped to one cluster's data key, where the bare name is already unique —
+	// and unlike a tag it is bound into the ciphertext of everything already
+	// written, so changing it does not rename an identity, it strands data.
+	//
+	// The pair looks like an inconsistency, which is why this test exists: a
+	// tidying pass that makes them agree is a data-loss change, and it should
+	// fail here with the reason rather than land quietly and surface as
+	// AccessDenied on a decrypt months later.
+	k := &fakeKMS{}
+	r := &PlatformReconciler{KMS: k}
+	cfg := PlatformAWSConfig{DataKMSKeyARN: "arn:aws:kms:us-west-2:123456789012:key/abc"}
+	p := newPlatform("acme", "acme")
+
+	if err := r.ensureKmsGrant(context.Background(), p, "arn:aws:iam::123456789012:role/tenant-acme", cfg); err != nil {
+		t.Fatalf("ensureKmsGrant: %v", err)
+	}
+	ctxValue := k.created[0].Constraints.EncryptionContextEquals["PlatformId"]
+	if ctxValue != p.Name {
+		t.Errorf("the KMS EncryptionContext must stay the BARE Platform name, got %q\n"+
+			"    It is bound into the ciphertext of every object already encrypted under it.\n"+
+			"    Qualifying it to match the cost tag makes that data undecryptable.", ctxValue)
+	}
+	if ctxValue == platformCostID("some-cluster", p.Name) {
+		t.Error("the KMS EncryptionContext has been unified with the cost-attribution identity — " +
+			"these are deliberately different values behind one key name")
+	}
+}
+
 func TestEnsureKmsGrant_IdempotentWhenGrantExists(t *testing.T) {
 	k := &fakeKMS{grants: []kmstypes.GrantListEntry{{Name: aws.String("tenant-acme"), GrantId: aws.String("g1")}}}
 	r := &PlatformReconciler{KMS: k}

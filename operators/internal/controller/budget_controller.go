@@ -54,6 +54,13 @@ type BudgetReconciler struct {
 	CloudWatch  awsclients.CloudWatch
 	EventBridge awsclients.EventBridge
 
+	// ClusterName is the full EKS cluster name this operator serves. It
+	// qualifies the cost-attribution identity (see platformCostID) — a CUR
+	// covers a whole account and a CloudWatch namespace is account+region
+	// global, so without it two clusters hosting a Platform of the same name
+	// read each other's spend as their own.
+	ClusterName string
+
 	// SSM-resolved configuration.
 	AthenaCfg              AthenaConfig
 	KillSwitchEventBusName string

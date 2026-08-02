@@ -16,7 +16,7 @@ kubectl get platforms -A -o json | jq '.items[] | select(.status.phase=="Suspend
 kubectl get budgetpolicies -A -o json | jq '.items[] | select(.spec.platformRef.name=="<platform-name>")'
 
 # What's on the tenant IAM role tags?
-ROLE_NAME=<env>-<platform-name>-tenant
+ROLE_NAME=<cluster>-<platform-name>-tenant
 aws iam list-role-tags --role-name "$ROLE_NAME"
 
 # Recent kill-switch SFN executions.

@@ -163,6 +163,18 @@ func main() {
 		networkEngine = controller.NetworkEngineCilium
 	}
 
+	// The cluster name qualifies every identity the operator mints or queries —
+	// tenant and session role names, and the PlatformId cost-attribution tag the
+	// budget reconciler both stamps and filters on. Empty, none of those fail:
+	// they render one hyphen shorter and keep working, so a Platform's roles and
+	// its CUR rows silently drop the discriminator that keeps two clusters in one
+	// account apart. Refuse rather than mint them.
+	if clusterName == "" {
+		setupLog.Error(nil, "--cluster-name (or AGENTS_CLUSTER_NAME) is required and was empty; refusing to start",
+			"why", "it qualifies tenant role names and the PlatformId cost-attribution tag, and an empty value degrades silently rather than failing")
+		os.Exit(1)
+	}
+
 	// AWS client + SSM config bootstrap. If disable-aws is set (unit/dev
 	// path) we skip both; the reconcilers see r.IAM == nil and short-circuit
 	// the AWS-side steps.
@@ -326,6 +338,7 @@ func main() {
 		budgetReconciler.Athena = awsClients.Athena
 		budgetReconciler.CloudWatch = awsClients.CloudWatch
 		budgetReconciler.EventBridge = awsClients.EventBridge
+		budgetReconciler.ClusterName = opConfig.ClusterName
 		budgetReconciler.AthenaCfg = controller.AthenaConfig{
 			Workgroup:     opConfig.AthenaWorkgroup,
 			Database:      opConfig.AthenaDatabase,

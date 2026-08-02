@@ -205,7 +205,7 @@ ApplicationSet, with per-env values from `tofu output`.
 <cloudgov> platform audit --kubeconfig ~/.kube/config   # 0 findings (k8s + AWS identity)
 ```
 
-Spot-check: tenant IAM role exists at `…:role/eks-agent-platform/tenants/<env>-<platform>-tenant`
+Spot-check: tenant IAM role exists at `…:role/eks-agent-platform/tenants/<cluster>-<platform>-tenant`
 with the permissions boundary attached and a trust policy scoped to exactly
 `system:serviceaccount:tenants-<platform>:tenant-runtime`; tenant `/readyz` green.
 

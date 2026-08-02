@@ -115,6 +115,51 @@ run "aws_can_actually_deliver_the_report" {
   }
 }
 
+# The publisher attributes spend by READING the PlatformId tag off the invoking
+# role, not by taking the role's name apart. That makes one IAM permission
+# load-bearing for the entire in-flight cost signal: without iam:ListRoleTags every
+# lookup raises, every invocation attributes to "unknown", and every tenant's
+# in-flight spend is zero — with the Lambda running, the metric publishing, and
+# nothing anywhere going red.
+#
+# The previous arrangement needed no permission because it derived the value
+# locally, and derived it wrong for the whole life of the code. A grant that can be
+# forgotten is the cost of not having a contract to get wrong; asserting it here is
+# what makes that trade safe.
+run "the_publisher_can_read_the_tag_it_attributes_by" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_role_policy.invocation_cost_publisher.policy).Statement :
+      contains(s.Action, "iam:ListRoleTags")
+    ])
+    error_message = "the cost publisher must hold iam:ListRoleTags — it reads the PlatformId tag off the invoking role, and without the grant every invocation is attributed to 'unknown' and every budget reads zero"
+  }
+
+  # Read-only and path-scoped. A tag read that reaches every role in the account
+  # is a wider grant than the job needs, and this Lambda is subscribed to a log
+  # group carrying every Bedrock invocation in the account.
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.invocation_cost_publisher.policy).Statement :
+      !contains(s.Action, "iam:ListRoleTags") || alltrue([for r in tolist(s.Resource) : !endswith(r, ":role/*")])
+    ])
+    error_message = "the tag-read grant must be scoped to the operator's IAM path, not to every role in the account"
+  }
+
+  # No environment or cluster token reaches the Lambda. One would be a second place
+  # the identity is decided, which is exactly the arrangement that produced a
+  # dimension disagreeing with every reader.
+  assert {
+    condition = length(setintersection(
+      keys(aws_lambda_function.invocation_cost_publisher.environment[0].variables),
+      ["AGENTS_ENVIRONMENT", "AGENTS_CLUSTER_NAME", "CLUSTER_NAME", "ENVIRONMENT"]
+    )) == 0
+    error_message = "the publisher must not be handed an environment or cluster token — it reads the identity from the role's tag, and a second source for the same value is what let the published dimension drift away from what the reconciler queries"
+  }
+}
+
 # The CUR platform-tag column, asserted where terraform composes SQL. The operator derives
 # the same name in Go from the same tag key; both are pinned to AWS's published transform
 # independently, on purpose — a shared derivation would let one wrong transform satisfy both

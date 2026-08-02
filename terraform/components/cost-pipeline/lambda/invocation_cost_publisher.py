@@ -9,10 +9,17 @@ log group as JSON records (one per invocation). We:
   2. parse each invocation record,
   3. compute estimated USD cost from input/output token counts plus the
      per-model pricing table (``pricing_data.PRICING``),
-  4. emit a PutMetricData call to CloudWatch under
+  4. resolve the spending tenant by reading the ``PlatformId`` tag off the IAM
+     role in ``identity.arn`` — a lookup, not a derivation, see
+     ``_extract_platform`` — falling back to "unknown",
+  5. emit a PutMetricData call to CloudWatch under
      ``namespace=agents/Bedrock`` / ``MetricName=EstimatedInvocationCostUsd``,
-     dimensioned by PlatformId (extracted from the invocation's tags or
-     headers, falling back to "unknown").
+     dimensioned by PlatformId.
+
+The identity in step 4 is minted by the operator and is cluster-qualified, because
+a CloudWatch namespace is account+region global and a CUR covers a whole account,
+while two co-located clusters may each host a Platform of the same name. Nothing
+here composes or decomposes that value; the tag is read and passed through.
 
 An invocation on a model that isn't in the pricing table is **not** priced
 against a borrowed rate — that would silently undercount spend on a new or
@@ -59,11 +66,20 @@ logger.setLevel(logging.INFO)
 
 cloudwatch = boto3.client("cloudwatch")
 s3 = boto3.client("s3")
+iam = boto3.client("iam")
 NAMESPACE = "agents/Bedrock"
 METRIC_NAME = "EstimatedInvocationCostUsd"
 TOKENS_IN_METRIC = "TokensIn"
 TOKENS_OUT_METRIC = "TokensOut"
 UNPRICED_METRIC = "UnpricedInvocations"
+UNATTRIBUTED_METRIC = "UnattributedInvocations"
+
+# The tag the operator stamps on every role it mints, carrying the
+# cluster-qualified cost identity (operators/internal/controller/budget_reconcile.go,
+# platformCostID). This Lambda READS that tag rather than reconstructing the value
+# from the role name — see _extract_platform for why that distinction is the whole
+# point. Case matters: Cost Explorer treats tag keys as case-sensitive.
+PLATFORM_ID_TAG = "PlatformId"
 
 # Estimate export → S3 (Hive-partitioned NDJSON under usage_date=<d>/) feeds
 # the Athena `invocation_cost_estimates` table, which the
@@ -122,24 +138,93 @@ def _imported_key(model_id: str) -> str:
     return "imported/" + model_id.rsplit("imported-model/", 1)[-1]
 
 
-def _extract_platform(identity_arn: str) -> str:
-    """Recover the PlatformId from an assumed-role ARN's role name.
+# PlatformId lookups, memoized for the life of the execution environment. A log
+# batch is overwhelmingly the same few roles, and IAM's endpoint is global and
+# throttled, so an uncached lookup per record would be the bottleneck. Only
+# definitive answers are cached: a transient IAM failure must not pin a role to
+# "unknown" for the rest of the container's life.
+_ROLE_PLATFORM_CACHE: dict[str, str] = {}
+_ROLE_CACHE_MAX = 512
 
-    The tenant role naming contract (see ADR 0004) embeds the platform name in
-    the ``${env}-${platform}-tenant`` role, so the role name is the source of
-    truth. Returns "unknown" when the ARN doesn't match the tenant shape.
+# Roles seen in this batch that yielded no PlatformId, so the gap is published
+# rather than absorbed into the "unknown" bucket silently. Reset per invocation.
+_UNTAGGED_ROLES: dict[str, int] = defaultdict(int)
+
+
+def _platform_id_for_role(role_name: str) -> str:
+    """The PlatformId tag on an IAM role, or "unknown"."""
+    cached = _ROLE_PLATFORM_CACHE.get(role_name)
+    if cached is not None:
+        if cached == "unknown":
+            _UNTAGGED_ROLES[role_name] += 1
+        return cached
+
+    try:
+        tags = iam.list_role_tags(RoleName=role_name)["Tags"]
+    except Exception:
+        # Transient (throttle, timeout) or terminal (role deleted between the
+        # invocation and this read). Either way this batch cannot attribute the
+        # spend, and it is NOT cached — a retry gets a fresh look.
+        logger.warning("could not read tags for role %s; attributing to 'unknown'", role_name, exc_info=True)
+        _UNTAGGED_ROLES[role_name] += 1
+        return "unknown"
+
+    platform_id = next((t["Value"] for t in tags if t["Key"] == PLATFORM_ID_TAG), "")
+    if not platform_id:
+        # A definitive absence: the role exists and carries no PlatformId. Worth
+        # caching, and worth publishing — it means something is invoking Bedrock
+        # under a role the operator did not mint, or minted before the tag existed.
+        logger.warning("role %s carries no %s tag; attributing to 'unknown'", role_name, PLATFORM_ID_TAG)
+        platform_id = "unknown"
+        _UNTAGGED_ROLES[role_name] += 1
+
+    if len(_ROLE_PLATFORM_CACHE) < _ROLE_CACHE_MAX:
+        _ROLE_PLATFORM_CACHE[role_name] = platform_id
+    return platform_id
+
+
+def _role_name(identity_arn: str) -> str:
+    """The role name out of an assumed-role ARN, or "" when it isn't one.
+
+    ``arn:aws:sts::<account>:assumed-role/<role-name>/<session-name>``
     """
     if ":assumed-role/" not in identity_arn:
+        return ""
+    return identity_arn.split(":assumed-role/", 1)[1].split("/", 1)[0]
+
+
+def _extract_platform(identity_arn: str) -> str:
+    """Read the PlatformId the operator stamped on the invoking role.
+
+    This is a LOOKUP, deliberately, and not a derivation. The value is minted by
+    the operator (``platformCostID``) and written as a tag on every role it
+    creates, so reading the tag is the only way to get it that cannot disagree
+    with the writer.
+
+    The previous version reconstructed it by taking apart the role name, and it
+    was wrong for the entire life of the code: it stripped an environment token
+    (``staging``) off a role the operator names with the CLUSTER (
+    ``staging-platform-acme-tenant``), yielding ``platform-acme`` where every
+    reader queried ``staging-platform-acme``. The metric was published to a
+    dimension nobody read and the in-flight cost signal was a permanent zero,
+    with nothing red anywhere. It also returned "unknown" for the whole
+    ``-session`` role family, because that suffix is not ``-tenant``.
+
+    Both failures share one cause — a name assembled in Go, in another repo
+    layer, taken apart here by string surgery, with no check that could observe
+    the disagreement. Reading the tag deletes the contract instead of restating
+    it: role families need no enumeration, the cluster prefix needs no parsing,
+    and a rename on the writer's side cannot silently change what this returns.
+
+    Returns "unknown" when the identity is not an assumed role, when the role
+    carries no PlatformId tag, or when IAM cannot be reached. "unknown" is a
+    real, published dimension — spend attributable to nobody is visible rather
+    than dropped — and ``_UNTAGGED_ROLES`` records which roles caused it.
+    """
+    role = _role_name(identity_arn)
+    if not role:
         return "unknown"
-    role_part = identity_arn.split(":assumed-role/", 1)[1].split("/", 1)[0]
-    suffix = "-tenant"
-    if not role_part.endswith(suffix):
-        return "unknown"
-    stripped = role_part[: -len(suffix)]
-    env_prefix = os.environ.get("AGENTS_ENVIRONMENT", "")
-    if env_prefix and stripped.startswith(env_prefix + "-"):
-        return stripped[len(env_prefix) + 1 :]
-    return stripped
+    return _platform_id_for_role(role)
 
 
 def _estimate_cost(record: dict[str, Any]) -> tuple[float, str, str, int, int, bool]:
@@ -153,7 +238,7 @@ def _estimate_cost(record: dict[str, Any]) -> tuple[float, str, str, int, int, b
         "input": {"inputTokenCount": 142, ...},
         "output": {"outputTokenCount": 87, ...},
         "requestId": "...",
-        "identity": {"arn": "arn:aws:sts:::assumed-role/<env>-<platform>-tenant/..."}
+        "identity": {"arn": "arn:aws:sts:::assumed-role/<cluster>-<platform>-tenant/..."}
       }
 
     ``priced`` is False when the model id has no pricing-table entry; the cost
@@ -270,6 +355,32 @@ def _emit_unpriced(counts: dict[tuple[str, str], int]) -> None:
         cloudwatch.put_metric_data(Namespace=NAMESPACE, MetricData=chunk)
 
 
+def _emit_unattributed(counts: dict[str, int]) -> None:
+    # One UnattributedInvocations count per role whose PlatformId could not be
+    # read. That spend is still published, under PlatformId="unknown", but it
+    # reaches no Platform's budget — so it has to be visible as its own signal
+    # rather than as a quiet shortfall in somebody's number. RoleName is the
+    # dimension because it is the only thing that says WHICH identity to go fix,
+    # and it is bounded by the number of roles minted in the account.
+    #
+    # Alarm on this: a non-zero value means either something is invoking Bedrock
+    # under a role the operator did not mint, or IAM could not be read, and both
+    # make every budget in the account read low.
+    data: list[dict[str, Any]] = [
+        {
+            "MetricName": UNATTRIBUTED_METRIC,
+            "Dimensions": [{"Name": "RoleName", "Value": role}],
+            "Unit": "Count",
+            "Value": float(count),
+        }
+        for role, count in counts.items()
+    ]
+    while data:
+        chunk = data[:20]
+        data = data[20:]
+        cloudwatch.put_metric_data(Namespace=NAMESPACE, MetricData=chunk)
+
+
 def _write_estimates(aggregates: dict[tuple[str, str], dict[str, float]], usage_date: str) -> None:
     """
     Write one NDJSON object per log batch to the Hive-partitioned estimate
@@ -317,6 +428,11 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     if payload.get("messageType") != "DATA_MESSAGE":
         return {"status": "skipped", "reason": payload.get("messageType")}
 
+    # Attribution gaps are counted per batch, not per container — a role that
+    # went untagged once should not keep re-reporting on every later invocation
+    # the warm container serves.
+    _UNTAGGED_ROLES.clear()
+
     per_platform: dict[str, float] = defaultdict(float)
     aggregates: dict[tuple[str, str], dict[str, float]] = {}
     unpriced: dict[tuple[str, str], int] = defaultdict(int)
@@ -350,12 +466,15 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         _write_estimates(aggregates, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     if unpriced:
         _emit_unpriced(dict(unpriced))
+    if _UNTAGGED_ROLES:
+        _emit_unattributed(dict(_UNTAGGED_ROLES))
 
     logger.info(
-        "processed log batch parsed=%d skipped=%d unpriced=%d platforms=%d",
+        "processed log batch parsed=%d skipped=%d unpriced=%d unattributed=%d platforms=%d",
         parsed,
         skipped,
         sum(unpriced.values()),
+        sum(_UNTAGGED_ROLES.values()),
         len(per_platform),
     )
     return {
@@ -363,5 +482,6 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         "parsed": parsed,
         "skipped": skipped,
         "unpriced": sum(unpriced.values()),
+        "unattributed": sum(_UNTAGGED_ROLES.values()),
         "platforms": len(per_platform),
     }

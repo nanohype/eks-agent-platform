@@ -90,6 +90,40 @@ func (r *BudgetReconciler) resolveBudgetPlatform(ctx context.Context, bp *govern
 // matters: Cost Explorer treats tag keys as case-sensitive.
 const platformIDTagKey = "PlatformId"
 
+// platformCostID is the value behind platformIDTagKey: the identity every cost
+// signal attributes spend to.
+//
+// It is cluster-qualified, and that qualification is load-bearing rather than
+// decorative. A CUR covers a whole AWS account and a CloudWatch namespace is
+// account+region global, while the platform contract explicitly allows two
+// co-located clusters to host a Platform of the same name (AGENTS.md, and
+// tenantRoleName is cluster-keyed for exactly that reason). An attribution key of
+// the bare Platform name therefore names two different tenants in one account:
+// their spend sums, every reader sees the total as its own, and at
+// killSwitchBreachPercent one environment's traffic suspends another's Platform.
+// nanohype/standards/resource-naming.json states the same rule for names —
+// "co-located sibling clusters in one account must not collide, so the cluster
+// discriminator is load-bearing here" — and an attribution key is subject to it
+// for the same reason a name is.
+//
+// One function, two callers on purpose: the tag written onto tenant resources and
+// the predicate the reconciler queries with are the same expression, so they cannot
+// drift into a query that is valid, green and empty. Nothing else may reconstruct
+// this value by taking apart a name — that is what the cost publisher used to do,
+// and it spent the platform's entire in-flight cost signal on a dimension no reader
+// ever queried.
+//
+// NOT to be used for the KMS grant's EncryptionContext, which spells its key
+// "PlatformId" too and is a different thing wearing the same name. That context is
+// an authorization primitive bound into ciphertext (ensureKmsGrant), it is scoped
+// to one cluster's key where the bare name is already unique, and changing it
+// would leave every object encrypted under the old context undecryptable. The two
+// look like an inconsistency and are not; TestKmsGrantContextIsNotTheCostIdentity
+// exists to stop a tidying pass from unifying them.
+func platformCostID(clusterName, platformName string) string {
+	return clusterName + "-" + platformName
+}
+
 // curTagColumn renders a user tag key as the column name it takes once AWS loads a
 // Cost and Usage Report into Athena.
 //
@@ -530,8 +564,12 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 		return budgetReading{}, err
 	}
 
+	// Every spend signal is keyed on the cluster-qualified identity, which is the
+	// same expression stamped onto the tenant's resources as the PlatformId tag.
+	costID := platformCostID(r.ClusterName, platform.Name)
+
 	// CUR-tagged spend (MTD).
-	spendCUR, err := r.querySpendFromAthena(ctx, platform.Name)
+	spendCUR, err := r.querySpendFromAthena(ctx, costID)
 	switch {
 	case errors.Is(err, errAthenaNotConfigured):
 		// No cost-pipeline outputs in SSM. Fall back to a zero CUR and surface only
@@ -549,7 +587,7 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 
 	// In-flight invocation cost (last 24h to cover CUR partition lag).
 	since := time.Now().Add(-24 * time.Hour).UTC()
-	spendInflight, err := r.queryInflightCost(ctx, platform.Name, since)
+	spendInflight, err := r.queryInflightCost(ctx, costID, since)
 	if err != nil {
 		// CloudWatch outage shouldn't block the entire reconciler; we log
 		// and zero out the in-flight portion. The Athena CUR value is still

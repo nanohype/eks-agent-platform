@@ -67,7 +67,12 @@ func TestTenantRoleTags(t *testing.T) {
 	}
 
 	// Empty org-dim config: the required keys must still be present (defaults).
-	got := tagMap(tenantRoleTags(p, IAMConfig{Environment: "production"}))
+	// ClusterName is NOT left empty — it qualifies the PlatformId cost identity,
+	// and an empty one renders "-acme", which is why main.go refuses to start
+	// without it. TestCostIdentity_* owns the identity's correctness; this test
+	// owns the tag SET, so it supplies a realistic cluster and asserts the value
+	// through the same constructor the reconciler queries with.
+	got := tagMap(tenantRoleTags(p, IAMConfig{Environment: "production", ClusterName: "production-platform"}))
 
 	// The required-tier resource-tagging keys cloudgov gates on, plus the
 	// load-bearing PlatformId / Tenant / Persona the rest of the system reads.
@@ -80,8 +85,8 @@ func TestTenantRoleTags(t *testing.T) {
 			t.Errorf("tenantRoleTags missing/empty key %q (have %v)", k, got)
 		}
 	}
-	if got["PlatformId"] != ctrlTestPlatform {
-		t.Errorf("PlatformId: got %q want acme", got["PlatformId"])
+	if want := platformCostID("production-platform", ctrlTestPlatform); got["PlatformId"] != want {
+		t.Errorf("PlatformId: got %q want %q", got["PlatformId"], want)
 	}
 	if got["ManagedBy"] != "eks-agent-platform" {
 		t.Errorf("ManagedBy: got %q want eks-agent-platform", got["ManagedBy"])
