@@ -94,6 +94,27 @@ var sloHoldUnobservedTotal = prometheus.NewCounterVec(
 	[]string{"namespace", "slopolicy", "platform"},
 )
 
+// budgetSpendUnreadableTotal counts reconciles where the spend query failed, so the
+// budget was not evaluated at all.
+//
+// It exists because the failure is otherwise invisible. Reconcile records the error
+// on the CR and returns nil, so it never reaches
+// controller_runtime_reconcile_errors_total and the four ReconcileErrorBudget*Burn
+// alerts cannot see it. BudgetReconcileLag cannot cover it either: lastReconciled is
+// written only on the success path, so a BudgetPolicy that has never once succeeded
+// has no series at all and the lag expression yields an empty vector.
+//
+// A tenant whose query fails on every tick from day one is a tenant with no budget
+// enforcement, and before this the only evidence was a condition on one CR. Zero is
+// the healthy value.
+var budgetSpendUnreadableTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "agents_budget_spend_unreadable_total",
+		Help: "Reconciles where the tenant's spend could not be read, so the budget was not evaluated and the kill switch could not fire.",
+	},
+	[]string{"namespace", "budgetpolicy", "platform"},
+)
+
 // forgetSLOPolicySeries drops every series an SLOPolicy owns. Called when the CR
 // is gone so a deleted objective does not leave a stale burn rate on a dashboard
 // forever — the same cleanup fleetReadyAgents and evalSuiteScore do on delete.
@@ -108,5 +129,6 @@ func init() {
 	ctrlmetrics.Registry.MustRegister(
 		killSwitchUnroutedTotal, fleetReadyAgents, evalSuiteScore,
 		sloBurnRate, sloHoldActive, sloHoldUnobservedTotal,
+		budgetSpendUnreadableTotal,
 	)
 }

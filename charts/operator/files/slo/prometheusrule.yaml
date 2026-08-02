@@ -232,6 +232,29 @@ spec:
             description: "Last reconcile {{ $value | humanizeDuration }} ago. Athena or CloudWatch may be erroring; check operator logs for the budget reconciler."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
 
+        # The budget could not be read at all, so it was never evaluated and the
+        # kill switch never got a chance to fire.
+        #
+        # BudgetReconcileLag above cannot cover this. It keys on lastReconciled,
+        # which the reconciler writes only on the success path — a BudgetPolicy
+        # whose spend query has failed since the day it was created has no such
+        # series, and `time() - <absent>` is an empty vector, not a large number.
+        # The policy that has NEVER worked is exactly the one that alert is blind
+        # to, and it is the more likely failure: a missing IAM grant or an
+        # unactivated cost-allocation tag breaks every tick from the first.
+        - alert: BudgetSpendUnreadable
+          expr: |
+            increase(agents_budget_spend_unreadable_total[15m]) > 0
+          for: 15m
+          labels:
+            severity: critical
+            component: budget
+            persona: finance
+          annotations:
+            summary: "BudgetPolicy {{ $labels.budgetpolicy }} spend is unreadable — no budget enforcement"
+            description: "The spend query has failed on every reconcile for 15m, so {{ $labels.platform }} has no budget enforcement and the kill switch cannot fire regardless of spend. Usual causes: the operator role missing kms:Decrypt/kms:GenerateDataKey on the cost data key, the PlatformId cost-allocation tag not activated, or the CUR table absent because the crawler has not run."
+            runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
+
         # Kill-switch fired but the platform never suspended. The budget
         # reconciler publishes a breach event that an EventBridge rule routes
         # to a Step Functions machine which detaches the tenant's Bedrock

@@ -53,6 +53,13 @@ mock_provider "aws" {
   }
 }
 
+# The component reaches the us-east-1-only CUR and Cost Explorer APIs through this
+# alias; nothing in this suite exercises it, but a declared configuration_alias must
+# be satisfied for the plan to build at all.
+mock_provider "aws" {
+  alias = "us_east_1"
+}
+
 variables {
   environment                  = "staging"
   region                       = "us-west-2"

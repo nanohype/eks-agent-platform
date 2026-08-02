@@ -90,6 +90,12 @@ func (r *BudgetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// inside reconcileBudget itself (spendCUR falls back to 0); only
 		// genuine errors reach here.
 		logger.Error(err, "budget reconcile failed; will retry on next tick")
+		// The budget was not evaluated, so the kill switch did not get a chance to
+		// fire. Count it: the error is deliberately not returned (a permanently
+		// misconfigured pipeline would otherwise hot-loop the workqueue), which also
+		// means it never reaches controller_runtime_reconcile_errors_total, and the
+		// lag alert cannot fire for a policy that has never once succeeded.
+		budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, bp.Spec.PlatformRef.Name).Inc()
 		if statusErr := r.applyBudgetStatusError(ctx, &bp, "ReconcileFailed", err); statusErr != nil {
 			logger.Error(statusErr, "failed to record reconcile-error condition")
 		}
