@@ -40,6 +40,17 @@ locals {
   # it out have to agree, so they read one value.
   cur_prefix = "cur"
 
+  # The IAM path prefix for the cost publisher's tag-read grant, normalized the same way the
+  # operator normalizes it before creating a role (platform_iam.go and platform_session_iam.go
+  # both append a missing trailing slash). The path is used as a PREFIX on both sides, so
+  # without the same normalization here a value of "/eks-agent-platform/tenants" yields the
+  # grant `role/eks-agent-platform/tenants*` while the operator creates roles under
+  # `/eks-agent-platform/tenants/` — a grant that matches nothing, every lookup AccessDenied,
+  # every invocation attributed to "unknown", every budget reading low. One value read two ways
+  # is the shape this whole component is being corrected for; it should not be reintroduced by
+  # the fix.
+  tenant_iam_path = endswith(data.aws_ssm_parameter.tenant_iam_path.value, "/") ? data.aws_ssm_parameter.tenant_iam_path.value : "${data.aws_ssm_parameter.tenant_iam_path.value}/"
+
   # The Athena column AWS produces for the PlatformId cost-allocation tag. Every CUR consumer
   # in this component filters on it, and the operator's BudgetReconciler derives the same name
   # from the same tag key in Go (curTagColumn).
@@ -820,7 +831,7 @@ resource "aws_iam_role_policy" "invocation_cost_publisher" {
         # Scoped to the operator's IAM path, which is where every role it mints
         # lives. ListRoleTags is read-only and returns tags for one named role.
         Action   = ["iam:ListRoleTags"]
-        Resource = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role${data.aws_ssm_parameter.tenant_iam_path.value}*"]
+        Resource = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role${local.tenant_iam_path}*"]
       },
       {
         Sid      = "WriteEstimates"

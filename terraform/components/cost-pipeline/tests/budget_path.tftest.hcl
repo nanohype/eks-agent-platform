@@ -160,6 +160,56 @@ run "the_publisher_can_read_the_tag_it_attributes_by" {
   }
 }
 
+# The grant's ARN is built by concatenating an SSM-supplied IAM path, and the path is a
+# PREFIX on both sides of a contract: terraform scopes the grant by it, the operator
+# creates roles under it. The operator appends a missing trailing slash before using it
+# (platform_iam.go, platform_session_iam.go); if terraform does not, the same stored value
+# means two different things and the grant matches nothing the operator ever creates.
+#
+# The suite's global mock returns an ARN for every aws_ssm_parameter, which is fine for the
+# resources that only need A value but makes any assertion about THIS one vacuous — it
+# happens not to end in a slash and happens not to end in ":role/*", so both the
+# normalization and the scoping assertions would pass without testing anything. These runs
+# override the data source with the two shapes that actually matter.
+run "the_tag_read_grant_survives_a_path_without_a_trailing_slash" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.tenant_iam_path
+    values = { value = "/eks-agent-platform/tenants" }
+  }
+
+  assert {
+    condition     = local.tenant_iam_path == "/eks-agent-platform/tenants/"
+    error_message = "a path stored without a trailing slash must be normalized before it is used as an ARN prefix — otherwise the grant reads role/eks-agent-platform/tenants* while the operator creates roles under /eks-agent-platform/tenants/, so every tag read is AccessDenied and every invocation attributes to 'unknown'"
+  }
+
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_role_policy.invocation_cost_publisher.policy).Statement :
+      contains(s.Action, "iam:ListRoleTags")
+      && contains(tolist(s.Resource), "arn:aws:iam::123456789012:role/eks-agent-platform/tenants/*")
+    ])
+    error_message = "the rendered grant ARN must be exactly the role path the operator mints under, with the wildcard directly after the trailing slash"
+  }
+}
+
+run "the_tag_read_grant_is_unchanged_by_a_path_that_already_ends_in_a_slash" {
+  command = plan
+
+  override_data {
+    target = data.aws_ssm_parameter.tenant_iam_path
+    values = { value = "/eks-agent-platform/tenants/" }
+  }
+
+  # Normalization must be idempotent — a double slash is a different path to IAM, and
+  # would miss just as completely as a missing one.
+  assert {
+    condition     = local.tenant_iam_path == "/eks-agent-platform/tenants/"
+    error_message = "normalizing an already-normalized path must not append a second slash"
+  }
+}
+
 # The CUR platform-tag column, asserted where terraform composes SQL. The operator derives
 # the same name in Go from the same tag key; both are pinned to AWS's published transform
 # independently, on purpose — a shared derivation would let one wrong transform satisfy both
