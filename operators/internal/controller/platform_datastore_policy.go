@@ -71,6 +71,32 @@ func sidToken(s string) string {
 	return b.String()
 }
 
+// queueARNs returns the exact SQS ARNs a queue datastore can have, rather than a
+// prefix. A prefix does not terminate: SQS queue names carry no delimiter, so
+// `<env>-<platform>-<datastore>*` also matches every queue belonging to a Platform
+// whose name begins with `<platform>-<datastore>`, and hyphenated Platform names are
+// the house style. With sqs:ReceiveMessage and sqs:DeleteMessage in the action set
+// and no queue policy anywhere to clamp it, that is one tenant draining another's
+// queue. Every other datastore kind terminates on a delimiter — s3 `bucket/*`,
+// dynamodb `table/index/*`, msk `cluster/<base>/*` — and this one now terminates by
+// not wildcarding at all.
+//
+// There are at most two, mirroring tenant-substrate's queue.tf: the queue itself,
+// and a dead-letter queue only when the datastore declares a redrive budget. FIFO is
+// a single immutable bool, so `.fifo` is not an alternative spelling of the same
+// queue — it is the only spelling that queue has.
+func queueARNs(d platformv1alpha1.DatastoreSpec, base, part, region, account string) []string {
+	suffix := ""
+	if d.Queue != nil && d.Queue.FIFO != nil && *d.Queue.FIFO {
+		suffix = ".fifo"
+	}
+	arns := []string{fmt.Sprintf("arn:%s:sqs:%s:%s:%s%s", part, region, account, base, suffix)}
+	if d.Queue != nil && d.Queue.MaxReceiveCount > 0 {
+		arns = append(arns, fmt.Sprintf("arn:%s:sqs:%s:%s:%s-dlq%s", part, region, account, base, suffix))
+	}
+	return arns
+}
+
 // datastorePolicyStatements builds the scoped statements for a Platform's
 // declared datastores. tenant is the platform token composed into every name
 // (spec.datastores resources are named <env>-<platform>-<datastore> by the
@@ -118,11 +144,9 @@ func datastorePolicyStatements(p *platformv1alpha1.Platform, env string, scope a
 				Action: datastoreDynamoActions, Resource: []string{table, table + "/index/*"},
 			})
 		case platformv1alpha1.DatastoreQueue:
-			// <base>, <base>.fifo, <base>-dlq, <base>-dlq.fifo all share the prefix.
-			queue := fmt.Sprintf("arn:%s:sqs:%s:%s:%s*", part, region, account, base)
 			stmts = append(stmts, policyStatement{
 				Sid: "sqs" + tok, Effect: "Allow",
-				Action: datastoreSQSActions, Resource: []string{queue},
+				Action: datastoreSQSActions, Resource: queueARNs(d, base, part, region, account),
 			})
 		case platformv1alpha1.DatastoreStream:
 			stmts = append(stmts, policyStatement{

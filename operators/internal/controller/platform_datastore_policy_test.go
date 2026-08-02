@@ -86,8 +86,12 @@ func TestDatastorePolicy_ScopesEachKind(t *testing.T) {
 		t.Errorf("dynamodb statement missing or misscoped: %+v", s)
 	}
 
-	// SQS: prefix wildcard covers the queue, its .fifo, and its DLQ.
-	if s := findStmt(stmts, "sqsq"); s == nil || !hasResource(s, "arn:aws:sqs:us-west-2:123456789012:development-myplat-q*") {
+	// SQS: the exact queue, enumerated. This datastore declares no redrive budget,
+	// so it has one queue and no DLQ — and the grant must say so, because a prefix
+	// that covered "the DLQ it might have" also covers a sibling Platform's queues.
+	if s := findStmt(stmts, "sqsq"); s == nil ||
+		!hasResource(s, "arn:aws:sqs:us-west-2:123456789012:development-myplat-q") ||
+		len(s.Resource) != 1 {
 		t.Errorf("sqs statement missing or misscoped: %+v", s)
 	}
 
@@ -332,32 +336,110 @@ func TestDatastorePolicy_UnresolvedRelationalSecretGrantsNothing(t *testing.T) {
 }
 
 // TestDatastorePolicy_NoResourceCrossesTenants is the regression guard for the
-// defect this scoping replaced: a Secrets Manager grant on
-// arn:aws:secretsmanager:<region>:<account>:secret:rds!cluster-*, which every
-// Aurora cluster in the account matches. The previous test asserted that exact
-// wildcard was PRESENT, so the gate ratified the bug rather than catching it.
+// class, not for one instance of it: a Resource whose wildcard does not terminate,
+// so it also matches a sibling Platform's resources.
 //
-// Checking for a bare "*" is not enough — the defect was a qualified pattern, not
-// a bare one. Every Secrets Manager resource must be a literal ARN.
+// It was written for a Secrets Manager grant on
+// arn:aws:secretsmanager:<region>:<account>:secret:rds!cluster-*, which every Aurora
+// cluster in the account matches — and it only ever looked at Secrets Manager, so it
+// could not see the same defect on SQS, where `<env>-<platform>-<datastore>*` matched
+// every queue of a Platform named `<platform>-<datastore>`.
+//
+// So it asserts over every resource of every statement. A "*" is only safe when the
+// character before it is a delimiter that cannot appear inside the name it follows —
+// "/" or "." — because that is what stops the pattern spilling into the next name.
+// AWS resource names admit "-", so "-*" terminates nothing.
+//
+// The Platform pair is deliberate: `orders` with datastore `events` composes the same
+// token as `orders-events` with datastore `q`, which is the collision itself and the
+// house naming style.
 func TestDatastorePolicy_NoResourceCrossesTenants(t *testing.T) {
-	p := platformWithDatastores("myplat",
+	fifo := true
+	victim := platformWithDatastores("orders",
 		platformv1alpha1.DatastoreSpec{Name: "db", Kind: platformv1alpha1.DatastoreRelational},
 		platformv1alpha1.DatastoreSpec{Name: "obj", Kind: platformv1alpha1.DatastoreObjectStore},
+		platformv1alpha1.DatastoreSpec{Name: "kv", Kind: platformv1alpha1.DatastoreKeyValue},
+		platformv1alpha1.DatastoreSpec{Name: "stream", Kind: platformv1alpha1.DatastoreStream},
+		platformv1alpha1.DatastoreSpec{
+			Name: "events", Kind: platformv1alpha1.DatastoreQueue,
+			Queue: &platformv1alpha1.QueueConfig{MaxReceiveCount: 3},
+		},
+		platformv1alpha1.DatastoreSpec{
+			Name: "fifoq", Kind: platformv1alpha1.DatastoreQueue,
+			Queue: &platformv1alpha1.QueueConfig{FIFO: &fifo},
+		},
 	)
 
-	stmts := datastorePolicyStatements(p, "development", testScope(),
+	stmts := datastorePolicyStatements(victim, "development", testScope(),
 		map[string]string{"db": testDBSecretARN})
 
 	for _, s := range stmts {
 		for _, r := range s.Resource {
-			if !strings.Contains(r, ":secretsmanager:") {
-				continue
+			for i, c := range r {
+				if c != '*' {
+					continue
+				}
+				if i == 0 {
+					t.Errorf("statement %s grants on a bare wildcard: %s", s.Sid, r)
+					continue
+				}
+				if prev := r[i-1]; prev != '/' && prev != '.' {
+					t.Errorf("statement %s has a wildcard that does not terminate — %q precedes it, "+
+						"so the pattern also matches a sibling Platform whose name extends this one: %s",
+						s.Sid, string(prev), r)
+				}
 			}
-			if strings.Contains(r, "*") {
-				t.Errorf("statement %s grants Secrets Manager on a pattern, which spans tenants: %s", s.Sid, r)
-			}
-			if !strings.Contains(r, testDBSecretARN) {
+			if strings.Contains(r, ":secretsmanager:") && !strings.Contains(r, testDBSecretARN) {
 				t.Errorf("statement %s names a secret this tenant does not own: %s", s.Sid, r)
+			}
+		}
+	}
+}
+
+// TestQueueGrantDoesNotReachASiblingPlatform is the collision stated as an outcome
+// rather than as a shape: Platform `orders` with datastore `events` composes the same
+// token as Platform `orders-events`, and the assertion is that neither one's grant
+// reaches the other's queues. That is the property a reader of the grant is entitled
+// to assume, and the wildcard silently gave it away.
+//
+// Residual, stated because the test does not cover it and a green run should not
+// imply it does: the composed name `<env>-<platform>-<datastore>` is not injective,
+// because "-" is both the separator and a legal character on both sides. Platform
+// `orders` with datastore `events-x` and Platform `orders-events` with datastore `x`
+// compose the same queue name, and no IAM scoping can separate two resources that
+// ARE the same resource. That is a naming-authority question for the CRD and
+// tenant-substrate, not something the policy generator can fix.
+func TestQueueGrantDoesNotReachASiblingPlatform(t *testing.T) {
+	orders := platformWithDatastores("orders",
+		platformv1alpha1.DatastoreSpec{
+			Name: "events", Kind: platformv1alpha1.DatastoreQueue,
+			Queue: &platformv1alpha1.QueueConfig{MaxReceiveCount: 3},
+		},
+	)
+	ordersEvents := platformWithDatastores("orders-events",
+		platformv1alpha1.DatastoreSpec{
+			Name: "q", Kind: platformv1alpha1.DatastoreQueue,
+			Queue: &platformv1alpha1.QueueConfig{MaxReceiveCount: 3},
+		},
+	)
+
+	granted := map[string]bool{}
+	for _, s := range datastorePolicyStatements(orders, "development", testScope(), nil) {
+		for _, r := range s.Resource {
+			granted[r] = true
+		}
+	}
+
+	for _, s := range datastorePolicyStatements(ordersEvents, "development", testScope(), nil) {
+		for _, r := range s.Resource {
+			if granted[r] {
+				t.Errorf("Platform orders is granted %s, which belongs to Platform orders-events", r)
+			}
+			// Not merely a different string — orders must not MATCH it either.
+			for g := range granted {
+				if strings.HasSuffix(g, "*") && strings.HasPrefix(r, strings.TrimSuffix(g, "*")) {
+					t.Errorf("Platform orders is granted pattern %s, which matches Platform orders-events resource %s", g, r)
+				}
 			}
 		}
 	}

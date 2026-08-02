@@ -92,17 +92,17 @@ func schedulerScheduleARN(env string, p *platformv1alpha1.Platform, scope arnSco
 	return fmt.Sprintf("arn:%s:scheduler:%s:%s:schedule/default/%s-%s-*", scope.partition(), scope.region(), scope.account(), env, p.Name)
 }
 
-// tenantQueueResources returns the SQS ARN prefixes for the tenant's declared
-// queue datastores (matching the tenant-substrate module's <env>-<platform>-
-// <datastore> naming; the trailing * covers .fifo and the DLQ). The
-// scheduler-invoke role's SendMessage is scoped to exactly these — Scheduler can
-// only deliver into the tenant's own queues.
+// tenantQueueResources returns the exact SQS ARNs of the tenant's declared queue
+// datastores, matching the tenant-substrate module's <env>-<platform>-<datastore>
+// naming. The scheduler-invoke role's SendMessage is scoped to these, so Scheduler
+// can only deliver into the tenant's own queues — which is a property of the
+// enumeration, not of a prefix. See queueARNs for why a prefix does not deliver it.
 func tenantQueueResources(p *platformv1alpha1.Platform, env string, scope arnScope) []string {
 	var res []string
 	for _, d := range p.Spec.Datastores {
 		if d.Kind == platformv1alpha1.DatastoreQueue {
 			base := fmt.Sprintf("%s-%s-%s", env, p.Name, d.Name)
-			res = append(res, fmt.Sprintf("arn:%s:sqs:%s:%s:%s*", scope.partition(), scope.region(), scope.account(), base))
+			res = append(res, queueARNs(d, base, scope.partition(), scope.region(), scope.account())...)
 		}
 	}
 	return res

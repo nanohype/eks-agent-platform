@@ -149,17 +149,44 @@ func TestSchedulerInvokeRoleName_HashTruncatesOverLimit(t *testing.T) {
 	}
 }
 
-// TestTenantQueueResources proves only queue datastores contribute an SQS ARN
-// prefix (the scheduler-invoke role's send target), and other kinds are skipped.
+// TestTenantQueueResources proves only queue datastores contribute an SQS ARN to the
+// scheduler-invoke role's send target, other kinds are skipped, and each queue is
+// enumerated rather than prefixed — a redrive budget adds its DLQ, FIFO changes the
+// name rather than adding one, and a plain queue contributes exactly itself.
 func TestTenantQueueResources(t *testing.T) {
+	fifo := true
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
 	p.Spec.Datastores = []platformv1alpha1.DatastoreSpec{
 		{Name: "nudges", Kind: platformv1alpha1.DatastoreQueue},
+		{
+			Name: "retries", Kind: platformv1alpha1.DatastoreQueue,
+			Queue: &platformv1alpha1.QueueConfig{MaxReceiveCount: 5},
+		},
+		{
+			Name: "ordered", Kind: platformv1alpha1.DatastoreQueue,
+			Queue: &platformv1alpha1.QueueConfig{FIFO: &fifo},
+		},
 		{Name: "db", Kind: platformv1alpha1.DatastoreRelational},
 	}
+	want := []string{
+		"arn:aws:sqs:us-west-2:123456789012:development-myplat-nudges",
+		"arn:aws:sqs:us-west-2:123456789012:development-myplat-retries",
+		"arn:aws:sqs:us-west-2:123456789012:development-myplat-retries-dlq",
+		"arn:aws:sqs:us-west-2:123456789012:development-myplat-ordered.fifo",
+	}
 	res := tenantQueueResources(p, "development", testScope())
-	if len(res) != 1 || res[0] != "arn:aws:sqs:us-west-2:123456789012:development-myplat-nudges*" {
-		t.Errorf("queue resources: got %v", res)
+	if len(res) != len(want) {
+		t.Fatalf("queue resources: got %v, want %v", res, want)
+	}
+	for i := range want {
+		if res[i] != want[i] {
+			t.Errorf("queue resource %d: got %s, want %s", i, res[i], want[i])
+		}
+	}
+	for _, r := range res {
+		if strings.Contains(r, "*") {
+			t.Errorf("the scheduler-invoke grant must enumerate, not prefix: %s", r)
+		}
 	}
 }
 
