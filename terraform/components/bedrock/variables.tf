@@ -1,6 +1,11 @@
 variable "environment" {
-  description = "Environment name. Selects the unconditional teardown posture in development."
+  description = "Environment name. The teardown posture is unconditional in development."
   type        = string
+
+  validation {
+    condition     = contains(["development", "staging", "production"], var.environment)
+    error_message = "environment must be development, staging or production — the teardown posture branches on the exact token, so a near-miss like \"dev\" applies green with every bucket un-destroyable and the wedge back."
+  }
 }
 
 variable "cluster_name" {

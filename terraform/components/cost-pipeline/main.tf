@@ -223,9 +223,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "cur" {
   }
 
   # The CUR Parquet AWS delivers under cur/ is the bulk of this bucket and the input to every
-  # budget decision. It is kept for a full billing history — AWS re-delivers the current month
-  # but never a closed one — and then aged out, so the bucket has a bounded size and a teardown
-  # has an end. Without a rule here it has neither.
+  # budget decision, so it is kept for a full billing history and then aged out — the bucket has
+  # a bounded size and a teardown has an end. Retention is measured from each object's last
+  # delivery: report_versioning is OVERWRITE_REPORT and refresh_closed_reports is on, so AWS
+  # rewrites a month's objects while it is still inside its refresh window and the clock
+  # restarts. Past that window the objects are final and this rule is what bounds them.
   rule {
     id     = "expire-cur-parquet"
     status = "Enabled"
@@ -512,7 +514,7 @@ resource "aws_glue_crawler" "cur" {
   tags          = local.tags
 
   s3_target {
-    path = "s3://${aws_s3_bucket.cur.id}/cur/${var.cur_report_name}/"
+    path = "s3://${aws_s3_bucket.cur.id}/${local.cur_prefix}/${var.cur_report_name}/"
   }
 
   schema_change_policy {

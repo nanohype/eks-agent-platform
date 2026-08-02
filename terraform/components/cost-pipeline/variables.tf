@@ -1,6 +1,11 @@
 variable "environment" {
   description = "Environment name"
   type        = string
+
+  validation {
+    condition     = contains(["development", "staging", "production"], var.environment)
+    error_message = "environment must be development, staging or production — the teardown posture branches on the exact token, so a near-miss like \"dev\" applies green with every bucket un-destroyable and the wedge back."
+  }
 }
 
 variable "region" {
@@ -67,6 +72,11 @@ variable "cur_retention_days" {
     every budget decision reads back over, and AWS re-delivers the current month but never a
     closed one, so shortening it discards a record that cannot be recovered.
 
+    Measured from each object's last delivery rather than from the billing month:
+    report_versioning is OVERWRITE_REPORT and refresh_closed_reports is on, so AWS rewrites a
+    month's objects while it remains inside its refresh window and the clock restarts. Past
+    that window the objects are final, and this is what bounds them.
+
     It also bounds the bucket. Without an expiry here the CUR prefix grows for the life of the
     account, which is both an unbounded storage bill and a teardown with no end.
   EOT
@@ -76,6 +86,11 @@ variable "cur_retention_days" {
   validation {
     condition     = var.cur_retention_days >= 90 && var.cur_retention_days <= 3650
     error_message = "cur_retention_days must be between 90 (a quarter of billing history) and 3650 (10 years)."
+  }
+
+  validation {
+    condition     = var.cur_retention_days >= var.estimate_retention_days
+    error_message = "cur_retention_days must be >= estimate_retention_days — the reconciliation view joins the in-flight estimates against the CUR line items, so a CUR window shorter than the estimate window silently reconciles estimates against nothing."
   }
 }
 
@@ -136,10 +151,10 @@ variable "force_destroy_buckets" {
     lands it in state, so an operator (or an agent) must apply with this set and only then
     destroy. There is no single command that reaches a populated production bucket.
 
-    What it exposes: the CUR delivery — this environment's billing history, which AWS
-    re-delivers for the current month but not for closed ones — plus Athena query results and
-    the access logs over both. The cost data is the input to every budget decision, so a
-    teardown here loses the record of what was spent, not just the substrate that spent it.
+    What it exposes: the CUR delivery — this environment's billing history, which AWS only
+    re-delivers while a month is inside its refresh window — plus Athena query results and the
+    access logs over both. The cost data is the input to every budget decision, so a teardown
+    here loses the record of what was spent, not just the substrate that spent it.
   EOT
   type        = bool
   default     = false
