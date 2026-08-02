@@ -11,7 +11,7 @@ Per-tenant Bedrock access policies are **not** managed here — the operator cre
 
 | Variable                     | Description                                                                             |
 | ---------------------------- | --------------------------------------------------------------------------------------- |
-| `environment`                | dev / staging / production                                                              |
+| `environment`                | development / staging / production — the teardown posture is unconditional in development |
 | `region`                     | AWS region                                                                              |
 | `cluster_name`               | EKS cluster name (used in ARNs + SSM paths)                                             |
 | `logs_kms_key_arn`           | `cmk-logs` from landing-zone                                                            |
@@ -19,6 +19,7 @@ Per-tenant Bedrock access policies are **not** managed here — the operator cre
 | `object_lock_mode`           | GOVERNANCE (default; admin can bypass to delete) or COMPLIANCE (immutable until expiry) |
 | `object_lock_retention_days` | Object-lock retention (default 365)                                                     |
 | `enable_guardrails_baseline` | Toggle the baseline Guardrail                                                           |
+| `force_destroy_buckets`      | Permit a teardown outside development. Two acts: apply with it set, then destroy — `force_destroy` has no effect until an apply lands it in state. Covers the access-logs bucket only; the invocations bucket follows `object_lock_mode` |
 | `tags`                       | Common tags                                                                             |
 
 ## Outputs

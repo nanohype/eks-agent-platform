@@ -105,3 +105,33 @@ run "governance_mode_leaves_invocations_destroyable" {
     error_message = "under GOVERNANCE the retention is clearable by a principal carrying s3:BypassGovernanceRetention, so the bucket stays destroyable"
   }
 }
+
+# The invocations bucket is versioned and WORM. Object Lock holds every version until its own
+# retain-until date, so nothing bounds it early — but transitions alone move the cost down a
+# tier and never end it, which leaves the record growing for the life of the account and a
+# teardown with nothing to reach. The expiry has to outlast the lock, or it is a plan that AWS
+# refuses object by object.
+run "the_invocation_record_is_bounded_once_the_lock_lapses" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for r in aws_s3_bucket_lifecycle_configuration.invocations.rule :
+      r.status == "Enabled"
+      && anytrue([for e in r.expiration : e.days > var.object_lock_retention_days])
+      && length(r.noncurrent_version_expiration) > 0
+    ])
+    error_message = "the invocations bucket needs an expiry that outlasts object_lock_retention_days, plus a noncurrent-version sweep — transitions bound the cost tier, not the object count"
+  }
+
+  assert {
+    condition = anytrue([
+      for r in aws_s3_bucket_lifecycle_configuration.invocations.rule :
+      r.status == "Enabled" && anytrue([
+        for e in r.expiration :
+        e.expired_object_delete_marker == true && e.days == 0 && e.date == null
+      ])
+    ])
+    error_message = "the invocations bucket needs a delete-marker sweep in a rule of its own"
+  }
+}

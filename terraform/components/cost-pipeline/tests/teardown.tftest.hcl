@@ -71,7 +71,7 @@ run "protected_environment_keeps_every_bucket" {
 
   assert {
     condition     = aws_s3_bucket.cur.force_destroy == false
-    error_message = "the CUR bucket holds this environment's billing history — AWS never re-delivers a closed month, so it must not be force-destroyable without the lever"
+    error_message = "the CUR bucket holds this environment's billing history, and AWS only re-delivers a month while it is inside its refresh window — so it must not be force-destroyable without the lever"
   }
   assert {
     condition     = aws_s3_bucket.athena_results.force_destroy == false
@@ -123,48 +123,90 @@ run "development_is_unconditionally_tearable_down" {
 
 # Versioned buckets need three things to actually empty, not one. A rule set that only expires
 # current versions reads as a retention policy and delivers unbounded growth.
+#
+# Each assertion binds the RULE THAT DOES THE WORK, not the presence of a shape somewhere in
+# the list. Asserting "some rule has a noncurrent_version_expiration" passes on a decoy rule
+# scoped to a prefix nothing is written under; asserting "some rule filters on cur/" passes on
+# a Disabled rule, or one with no expiration at all — which is the exact defect this suite was
+# written to prevent.
 run "versioned_buckets_can_actually_empty" {
   command = plan
 
-  assert {
-    condition = alltrue([
-      for r in aws_s3_bucket_lifecycle_configuration.athena_results.rule :
-      r.status == "Enabled"
-    ])
-    error_message = "every athena-results lifecycle rule must be Enabled"
-  }
-
-  assert {
-    condition = anytrue([
-      for r in aws_s3_bucket_lifecycle_configuration.athena_results.rule :
-      length(r.noncurrent_version_expiration) > 0
-    ])
-    error_message = "athena-results is versioned: without a noncurrent_version_expiration the objects an expiry 'removes' stay as noncurrent versions forever"
-  }
-
-  assert {
-    condition = anytrue([
-      for r in aws_s3_bucket_lifecycle_configuration.athena_results.rule :
-      anytrue([for e in r.expiration : e.expired_object_delete_marker == true])
-    ])
-    error_message = "athena-results needs an expired-object-delete-marker sweep — a marker with nothing under it still counts as an object"
-  }
-
   # The CUR Parquet under cur/ is the bulk of that bucket and the input to every budget
-  # decision. A rule scoped only to estimates/ leaves it with no expiry at all.
+  # decision. The rule that names it must be enabled AND expire something AND clear the
+  # noncurrent versions its expiry creates — all three on the same rule.
   assert {
     condition = anytrue([
       for r in aws_s3_bucket_lifecycle_configuration.cur.rule :
       anytrue([for f in r.filter : f.prefix == "cur/"])
+      && r.status == "Enabled"
+      && anytrue([for e in r.expiration : e.days > 0])
+      && length(r.noncurrent_version_expiration) > 0
     ])
-    error_message = "the CUR Parquet under cur/ must have its own expiry — an estimates/-scoped rule leaves the primary data unbounded, so the bucket is permanently non-empty"
+    error_message = "the cur/ rule must be enabled, expire objects, and clear the noncurrent versions that expiry creates — a filter alone leaves the primary data unbounded and the bucket permanently non-empty"
   }
 
   assert {
     condition = anytrue([
       for r in aws_s3_bucket_lifecycle_configuration.cur.rule :
-      anytrue([for e in r.expiration : e.expired_object_delete_marker == true])
+      anytrue([for f in r.filter : f.prefix == "estimates/"])
+      && r.status == "Enabled"
+      && anytrue([for e in r.expiration : e.days > 0])
+      && length(r.noncurrent_version_expiration) > 0
     ])
-    error_message = "the CUR bucket needs an expired-object-delete-marker sweep for the same reason as athena-results"
+    error_message = "the estimates/ rule must be enabled, expire objects, and clear noncurrent versions"
+  }
+
+  assert {
+    condition = anytrue([
+      for r in aws_s3_bucket_lifecycle_configuration.athena_results.rule :
+      r.status == "Enabled"
+      && anytrue([for e in r.expiration : e.days > 0])
+      && length(r.noncurrent_version_expiration) > 0
+    ])
+    error_message = "athena-results is versioned: the rule that expires results must also clear the noncurrent versions that expiry creates, or the objects an expiry 'removes' stay forever"
+  }
+
+  # The delete-marker sweep must be its own rule. S3 rejects days/date in the same expiration
+  # block as the flag, and a mocked plan does not catch that — so the shape is asserted here.
+  assert {
+    condition = alltrue([
+      for cfg in [aws_s3_bucket_lifecycle_configuration.cur, aws_s3_bucket_lifecycle_configuration.athena_results] :
+      anytrue([
+        for r in cfg.rule :
+        r.status == "Enabled" && anytrue([
+          for e in r.expiration :
+          e.expired_object_delete_marker == true && e.days == 0 && e.date == null
+        ])
+      ])
+    ])
+    error_message = "each versioned bucket needs a delete-marker sweep in a rule of its own — a marker with nothing under it still counts as an object, and S3 rejects days/date in the same expiration block as the flag"
+  }
+
+  # Every rule must be live. A Disabled rule is inert and reads as a retention policy.
+  assert {
+    condition = alltrue(concat(
+      [for r in aws_s3_bucket_lifecycle_configuration.cur.rule : r.status == "Enabled"],
+      [for r in aws_s3_bucket_lifecycle_configuration.athena_results.rule : r.status == "Enabled"],
+      [for r in aws_s3_bucket_lifecycle_configuration.access_logs.rule : r.status == "Enabled"],
+    ))
+    error_message = "a Disabled lifecycle rule applies nothing while reading as a retention policy"
+  }
+}
+
+# The pair, not the literal. AWS delivers the CUR Parquet under the report definition's
+# s3_prefix; the Glue crawler is what registers it as the Athena table the budget reconciler
+# queries. Nothing in the tree made those two agree — the crawler carried its own copy of the
+# prefix, so changing where AWS delivers left the crawler reading an empty path, the stale
+# table registered (schema_change_policy delete_behavior is LOG), and every BudgetPolicy
+# reading zero spend forever, with a green plan and a green apply.
+#
+# Asserted as a relation between two resources so it cannot be satisfied by a copied constant.
+run "the_crawler_reads_where_the_report_is_delivered" {
+  command = plan
+
+  assert {
+    condition     = one(aws_glue_crawler.cur.s3_target).path == "s3://${aws_s3_bucket.cur.id}/${aws_cur_report_definition.this.s3_prefix}/${var.cur_report_name}/"
+    error_message = "the Glue crawler must crawl exactly where the CUR report definition delivers — a crawler pointed anywhere else registers nothing, leaves the stale table in place, and the budget reconciler reads zero spend with nothing going red"
   }
 }

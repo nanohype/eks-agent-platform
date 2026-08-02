@@ -39,6 +39,8 @@ Spend visibility for `BudgetPolicy` reconciliation.
 | `cur_report_name`                       | unique per account (default `eks-agent-platform`) |
 | `cur_crawler_schedule`                  | cron expression for the CUR Crawler               |
 | `athena_results_retention_days`         | per-env: dev 30, staging 90, prod 365+            |
+| `cur_retention_days`                    | how long the CUR Parquet under `cur/` is kept (default 730). Must be >= `estimate_retention_days` — the reconciliation view joins one against the other |
+| `force_destroy_buckets`                 | permit a teardown outside development. Two acts: apply with it set, then destroy — `force_destroy` has no effect until an apply lands it in state |
 
 The operator role ARN and name are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<cluster>/agent-iam/operator_role_{arn,name}`), not passed as inputs.
 

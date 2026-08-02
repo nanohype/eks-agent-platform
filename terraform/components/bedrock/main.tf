@@ -154,6 +154,31 @@ resource "aws_s3_bucket_lifecycle_configuration" "invocations" {
       days          = 365
       storage_class = "GLACIER"
     }
+
+    # Object Lock holds every version until its own retain-until date, so nothing here can
+    # delete a locked object early — this is what bounds the bucket once the lock lapses.
+    # Without it the invocation record grows for the life of the account: transitions move
+    # the cost down a tier and never end it, and a teardown has nothing to reach.
+    expiration {
+      days = var.object_lock_retention_days + 1
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
+  rule {
+    id     = "drop-expired-delete-markers"
+    status = "Enabled"
+    filter {}
+
+    # A delete marker with no versions left under it is bookkeeping that still counts as an
+    # object. S3 rejects days/date in the same expiration block as this flag, so it is its
+    # own rule.
+    expiration {
+      expired_object_delete_marker = true
+    }
   }
 }
 
