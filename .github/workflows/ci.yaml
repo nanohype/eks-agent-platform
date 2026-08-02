@@ -86,23 +86,41 @@ jobs:
       - name: teardown posture
         run: |
           missing=""
+          vacuous=""
           ran=0
           for d in terraform/components/*/; do
             name=$(basename "$d")
             grep -qR '^resource "aws_s3_bucket"' "$d" --include='*.tf' || continue
-            if [ ! -d "$d/tests" ]; then
+            # Presence of a tests/ DIRECTORY is not presence of a test. `tofu test`
+            # against an empty one prints "Success! 0 passed, 0 failed." and exits 0,
+            # so a component could land with a bucket, an empty suite, and a green
+            # gate. Require a suite file to exist at all.
+            if ! ls "$d"tests/*.tftest.hcl >/dev/null 2>&1; then
               missing="${missing}${missing:+ }$name"
               continue
             fi
             echo "::group::$name"
-            (cd "$d" && tofu test)
+            out=$(cd "$d" && tofu test -no-color 2>&1) || { echo "$out"; echo "::endgroup::"; echo "::error::$name: tofu test failed"; exit 1; }
+            echo "$out"
             echo "::endgroup::"
+            # And a suite that exists is not a suite that asserted. A file full of
+            # comments, or one whose run blocks were commented out, reports the same
+            # exit code as a passing one — so read the count rather than the status.
+            if ! echo "$out" | grep -qE '[1-9][0-9]* passed'; then
+              vacuous="${vacuous}${vacuous:+ }$name"
+            fi
             ran=$((ran + 1))
           done
           if [ -n "$missing" ]; then
             echo "::error::these components create S3 buckets and carry no teardown suite: $missing"
             echo "  A bucket with no force_destroy wedges the reverse sweep on BucketNotEmpty and"
             echo "  leaves the cluster, VPC and NAT gateways billing. Add tests/teardown.tftest.hcl."
+            exit 1
+          fi
+          if [ -n "$vacuous" ]; then
+            echo "::error::these components have a tests/ directory that asserted nothing: $vacuous"
+            echo "  Zero passing runs and a zero exit code are indistinguishable from a suite that"
+            echo "  ran and held. Whatever is in tests/ has to actually execute a run block."
             exit 1
           fi
           if [ "$ran" -eq 0 ]; then
