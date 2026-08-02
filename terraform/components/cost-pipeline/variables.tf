@@ -34,8 +34,14 @@ variable "tenant_iam_path" {
   default     = "/eks-agent-platform/tenants/"
 
   validation {
-    condition     = startswith(var.tenant_iam_path, "/")
-    error_message = "tenant_iam_path must be an absolute IAM path beginning with /."
+    # Absolute AND a real subtree. "/" is absolute, and it is the account root: the
+    # publisher's grant renders as `:role/*`, which is iam:ListRoleTags over every role
+    # in the account. That is broader than the `Resource = ["*"]` form the suite already
+    # rejects, and it arrives through a value that looks like a path rather than a
+    # wildcard — so the wildcard check never sees it and this is the only place it can
+    # be stopped.
+    condition     = startswith(var.tenant_iam_path, "/") && length(trimspace(var.tenant_iam_path)) > 1 && !strcontains(var.tenant_iam_path, "//")
+    error_message = "tenant_iam_path must be an absolute IAM path naming a subtree, with no empty segments — \"/\" is the account root, and scoping the publisher's tag-read grant there grants iam:ListRoleTags on every role in the account."
   }
 }
 

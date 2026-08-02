@@ -197,6 +197,39 @@ run "the_tag_read_grant_is_unchanged_by_a_path_that_already_ends_in_a_slash" {
   }
 }
 
+# The account root is not a path. `/` satisfies "absolute", normalizes to `/`, and
+# renders the grant as `:role/*` — iam:ListRoleTags over every role in the account, on
+# a Lambda subscribed to a log group carrying every Bedrock invocation.
+#
+# This is broader than the `Resource = ["*"]` form asserted against above, and it gets
+# there through a value shaped like a path rather than like a wildcard, so the
+# over-broad check cannot see it: `startswith(r, ":role/")` is trivially true. The
+# variable's own validation is the only place it can be stopped, which is why the
+# assertion lives on the variable.
+#
+# expect_failures names the variable, and tenant_iam_path carries exactly one
+# validation, so this cannot pass on some unrelated failure the way a resource with
+# several preconditions can.
+run "the_account_root_is_not_an_acceptable_tenant_path" {
+  command = plan
+
+  variables {
+    tenant_iam_path = "/"
+  }
+
+  expect_failures = [var.tenant_iam_path]
+}
+
+run "a_path_with_an_empty_segment_is_refused" {
+  command = plan
+
+  variables {
+    tenant_iam_path = "/eks-agent-platform//tenants/"
+  }
+
+  expect_failures = [var.tenant_iam_path]
+}
+
 # The CUR platform-tag column, asserted where terraform composes SQL. The operator derives
 # the same name in Go from the same tag key; both are pinned to AWS's published transform
 # independently, on purpose — a shared derivation would let one wrong transform satisfy both

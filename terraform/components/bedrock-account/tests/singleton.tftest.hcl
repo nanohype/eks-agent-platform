@@ -70,23 +70,71 @@ run "nothing_is_named_for_an_environment_or_a_cluster" {
 # The singleton points at what this component owns. Asserted as a relation rather
 # than against a literal: a literal would keep passing if the buckets were renamed
 # and the configuration left aimed at the old ones.
+#
+# Two things make a relation like this weaker than it looks, and both are guarded here:
+#
+#   `alltrue([])` is TRUE. Every one of these blocks is optional to the provider, so a
+#   loop over an absent one asserts nothing — deleting `s3_config`, or the whole
+#   `logging_config`, leaves Bedrock delivering nowhere and the run green. The block
+#   existing is half the claim, so length() carries that half.
+#
+#   Two buckets of the same type have the same computed `id` under a mock provider.
+#   Comparing against `.id` therefore cannot tell the invocation record apart from its
+#   own access log, and aiming the configuration at the wrong one passes. The resource
+#   references `.bucket` — the configured name — so these compare distinct values.
 run "the_one_configuration_points_at_the_buckets_this_component_owns" {
   command = plan
 
   assert {
-    condition = alltrue([
+    condition = length(aws_bedrock_model_invocation_logging_configuration.this.logging_config) > 0 && alltrue([
       for c in aws_bedrock_model_invocation_logging_configuration.this.logging_config :
-      alltrue([for s in c.s3_config : s.bucket_name == aws_s3_bucket.invocations.id])
+      length(c.s3_config) > 0 && alltrue([
+        for s in c.s3_config : s.bucket_name == aws_s3_bucket.invocations.bucket
+      ])
     ])
-    error_message = "the invocation logging configuration must deliver to this component's own bucket — there is one configuration per account, so pointing it anywhere else silently takes over or abandons the account's audit trail"
+    error_message = "the invocation logging configuration must carry an s3_config delivering to this component's own bucket — there is one configuration per account, so pointing it anywhere else silently takes over or abandons the account's audit trail, and omitting the block entirely delivers nowhere"
   }
 
   assert {
-    condition = alltrue([
+    condition = length(aws_bedrock_model_invocation_logging_configuration.this.logging_config) > 0 && alltrue([
       for c in aws_bedrock_model_invocation_logging_configuration.this.logging_config :
-      alltrue([for l in c.cloudwatch_config : l.log_group_name == aws_cloudwatch_log_group.invocations.name])
+      length(c.cloudwatch_config) > 0 && alltrue([
+        for l in c.cloudwatch_config : l.log_group_name == aws_cloudwatch_log_group.invocations.name
+      ])
     ])
-    error_message = "the CloudWatch half of the configuration must name this component's log group — the cost publisher subscribes to it through the SSM contract, and a mismatch leaves the subscription attached to a group nothing writes to"
+    error_message = "the configuration must carry a cloudwatch_config naming this component's log group — the cost publisher subscribes to it through the SSM contract, so a mismatch or an absent block leaves the subscription attached to a group nothing writes to"
+  }
+
+  # All four modalities. Each flag defaults to false, so dropping one narrows the
+  # account's audit trail to a subset of its own traffic while every apply stays
+  # green — and the budget reads the resulting metric as though it were the whole.
+  assert {
+    condition = length(aws_bedrock_model_invocation_logging_configuration.this.logging_config) > 0 && alltrue([
+      for c in aws_bedrock_model_invocation_logging_configuration.this.logging_config :
+      c.text_data_delivery_enabled
+      && c.image_data_delivery_enabled
+      && c.embedding_data_delivery_enabled
+      && c.video_data_delivery_enabled
+    ])
+    error_message = "every data-delivery modality must be enabled — these default to false, so a dropped flag silently removes a class of invocation from the account's only audit trail and from everything derived from it"
+  }
+}
+
+# The access-log pairing, asserted on the configured names for the same reason as
+# above: under mocks both buckets' computed ids are the same value, so a bucket
+# logging to ITSELF satisfies an `.id` comparison. Self-logging a versioned WORM
+# bucket is a recursion AWS accepts and bills for.
+run "the_invocation_record_logs_to_the_access_log_bucket" {
+  command = plan
+
+  assert {
+    condition     = aws_s3_bucket_logging.invocations.target_bucket == aws_s3_bucket.access_logs.bucket
+    error_message = "server-access logs from the invocations bucket must land in the access-logs bucket — pointing this at the invocations bucket itself makes the audit trail log its own reads back into itself"
+  }
+
+  assert {
+    condition     = aws_s3_bucket_logging.invocations.target_bucket != aws_s3_bucket.invocations.bucket
+    error_message = "the invocations bucket must not be its own access-log destination"
   }
 }
 
@@ -121,6 +169,17 @@ run "compliance_mode_blocks_the_destroy_it_promises_to_block" {
   assert {
     condition     = aws_s3_bucket.invocations.force_destroy == false
     error_message = "under COMPLIANCE nothing can shorten the retention, including root, so force_destroy would be a promise the bucket cannot keep — it must be false"
+  }
+
+  # The access-logs bucket carries no Object Lock, so it COULD be emptied under
+  # COMPLIANCE — and it deliberately is not. The two buckets are one audit artifact:
+  # emptying the record of who read the invocation log while the invocation log itself
+  # is legally immutable produces a WORM bucket nobody can account for. Both sides of
+  # this are asserted because the mode governed only one of them before, and an
+  # untested branch of a two-branch rule is the branch that drifts.
+  assert {
+    condition     = aws_s3_bucket.access_logs.force_destroy == false
+    error_message = "under COMPLIANCE the access-logs bucket must be protected alongside the invocation record — they are one audit artifact, and emptying the access history of an immutable log leaves a record nobody can account for"
   }
 }
 
@@ -176,5 +235,30 @@ run "the_invocation_record_is_bounded_once_the_lock_lapses" {
       ])
     ])
     error_message = "the invocations bucket needs a delete-marker sweep in a rule of its own — on a versioned bucket an expiry writes a marker that is itself a current version, so without this the bucket only grows and a teardown never ends"
+  }
+}
+
+# The access-logs bucket is bounded by its lifecycle rule and nothing else: it takes
+# no Object Lock and its whole retention story is this expiry. An enabled rule that
+# expires nothing reads as a retention policy in the plan and delivers unbounded
+# growth — and because this is now the one access-logs bucket for the account rather
+# than one per environment, it takes every environment's traffic.
+#
+# `anytrue` is the safe direction here where `alltrue` is not: an absent expiration
+# block collapses to `anytrue([])`, which is false, so deleting it goes red.
+run "the_access_log_is_bounded_by_something" {
+  command = plan
+
+  assert {
+    condition = anytrue([
+      for r in aws_s3_bucket_lifecycle_configuration.access_logs.rule :
+      r.status == "Enabled" && anytrue([for e in r.expiration : e.days > 0])
+    ])
+    error_message = "the access-logs bucket needs an enabled rule that actually expires objects — a rule with no expiration is a retention policy in name only, and this bucket is the account's, so it accumulates every environment's access records forever"
+  }
+
+  assert {
+    condition     = aws_s3_bucket_lifecycle_configuration.access_logs.bucket == aws_s3_bucket.access_logs.id
+    error_message = "the lifecycle configuration must apply to the access-logs bucket"
   }
 }

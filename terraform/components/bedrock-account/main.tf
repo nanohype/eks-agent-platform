@@ -19,8 +19,16 @@ locals {
   # The invocation record is the account's audit of every model call, and this
   # component is applied once rather than per environment, so there is no
   # environment that could make it disposable. The teardown lever the
-  # per-environment components carry deliberately does not exist here — see the
-  # object_lock_mode contract for what does govern deletion.
+  # per-environment components carry deliberately does not exist here.
+  #
+  # What governs deletion is the Object Lock mode, and it is worth being plain about
+  # what that means at the default rather than implying more protection than there
+  # is: under GOVERNANCE this resolves to `true`, so one `destroy` of this root
+  # empties the entire account's invocation history — every environment's, not one
+  # environment's. That is the cost of the resource being a singleton, and it is why
+  # the mode is a retention decision rather than a teardown convenience. Under
+  # COMPLIANCE no principal including root can shorten retention, so the destroy is
+  # blocked outright instead of merely discouraged.
   bucket_force_destroy = var.object_lock_mode != "COMPLIANCE"
 }
 
@@ -145,17 +153,21 @@ resource "aws_s3_bucket" "invocations" {
   # Object Lock is enabled at create time (immutable afterward) so the bucket
   # can enforce WORM retention on invocation logs. force_destroy is permitted
   # under GOVERNANCE — where an admin holding s3:BypassGovernanceRetention can
-  # clear the lock — so environments tear down cleanly. Under COMPLIANCE the
+  # clear the lock — so the account can be torn down. Under COMPLIANCE the
   # objects (and therefore the bucket) cannot be deleted by anyone until
   # retention expires, so destroy is intentionally left blocked.
   object_lock_enabled = true
-  force_destroy       = var.object_lock_mode != "COMPLIANCE"
+  force_destroy       = local.bucket_force_destroy
   tags                = local.tags
 }
 
 resource "aws_s3_bucket_logging" "invocations" {
-  bucket        = aws_s3_bucket.invocations.id
-  target_bucket = aws_s3_bucket.access_logs.id
+  bucket = aws_s3_bucket.invocations.id
+  # `.bucket` rather than `.id`. They are the same string in AWS, but `.id` is
+  # computed, and a plan-time assertion comparing two computed bucket ids cannot tell
+  # these two buckets apart — so an assertion that this points at the access-logs
+  # bucket would hold just as well if it pointed at the invocations bucket itself.
+  target_bucket = aws_s3_bucket.access_logs.bucket
   target_prefix = "invocations/"
 }
 
@@ -332,6 +344,30 @@ resource "aws_iam_role_policy" "bedrock_logging" {
   })
 }
 
+################################################################################
+# ADOPTION: this is a blind put, and terraform cannot make it otherwise.
+#
+# PutModelInvocationLoggingConfiguration takes no identifier. It overwrites whatever
+# the account already had and reports success either way, so on an account that is
+# already configured this component takes ownership of a resource it did not create,
+# records it in state as its own, and will later delete it. The previous destination
+# stops receiving records with nothing going red anywhere.
+#
+# There is no plan-time read to gate on. The pinned provider ships nine `aws_bedrock_*`
+# data sources and the logging configuration is not among them, so a `precondition`
+# or a `count` here would be decoration — it would have nothing to test against.
+#
+# So the precondition is STATED here and ENFORCED one layer up, where the account is
+# actually readable: the installer's preflight calls
+# GetModelInvocationLoggingConfiguration and refuses the run when the account already
+# carries a configuration that is not this one's. The contract before first apply is
+# that the account has either no invocation-logging configuration, or one already
+# pointing at `<prefix>-invocations`.
+#
+# Stating it rather than faking it is the point. A guard that cannot read what it
+# guards is the failure it is supposed to prevent, wearing the costume of a fix.
+################################################################################
+
 resource "aws_bedrock_model_invocation_logging_configuration" "this" {
   # Bedrock validates the bucket policy synchronously, so the policy must
   # be in place before this resource is created. Without the explicit
@@ -350,7 +386,11 @@ resource "aws_bedrock_model_invocation_logging_configuration" "this" {
     }
 
     s3_config {
-      bucket_name = aws_s3_bucket.invocations.id
+      # `.bucket`, not `.id` — see aws_s3_bucket_logging.invocations. Both buckets'
+      # computed ids are indistinguishable at plan time, so this being the configured
+      # name is what lets a test tell "delivers to the invocation record" apart from
+      # "delivers into its own access log".
+      bucket_name = aws_s3_bucket.invocations.bucket
       key_prefix  = "invocations/"
     }
   }

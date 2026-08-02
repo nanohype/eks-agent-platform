@@ -94,8 +94,15 @@ locals {
   # "/x/tenants" and "/x/tenants/" mean the same thing to a reader and different
   # things to IAM — comparing the raw strings would report drift that is not there,
   # and a gate that cries wolf gets bypassed.
-  normalized_cluster_path = endswith(local.cluster_tenant_iam_path, "/") ? local.cluster_tenant_iam_path : "${local.cluster_tenant_iam_path}/"
-  normalized_account_path = endswith(local.account.tenant_iam_path, "/") ? local.account.tenant_iam_path : "${local.account.tenant_iam_path}/"
+  # trimspace before comparing. An SSM value that picked up a trailing newline in shell
+  # or CI plumbing is the same path to IAM and a different string here, and this
+  # precondition FAILS THE APPLY — so whitespace nobody can see would refuse a correctly
+  # built cluster. A gate that cries wolf is a gate that gets bypassed, and then it is
+  # not a gate.
+  trimmed_cluster_path    = trimspace(local.cluster_tenant_iam_path)
+  trimmed_account_path    = trimspace(local.account.tenant_iam_path)
+  normalized_cluster_path = endswith(local.trimmed_cluster_path, "/") ? local.trimmed_cluster_path : "${local.trimmed_cluster_path}/"
+  normalized_account_path = endswith(local.trimmed_account_path, "/") ? local.trimmed_account_path : "${local.trimmed_account_path}/"
 }
 
 ################################################################################
