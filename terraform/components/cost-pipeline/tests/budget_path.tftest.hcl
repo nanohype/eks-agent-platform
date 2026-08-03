@@ -70,7 +70,6 @@ mock_provider "aws" {
 
 variables {
   region           = "us-west-2"
-  cur_report_name  = "eks-agent-platform-test"
   data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
   logs_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
   tags             = {}
@@ -85,13 +84,13 @@ run "aws_can_actually_deliver_the_report" {
 
   assert {
     condition = alltrue([
-      for r in aws_s3_bucket_server_side_encryption_configuration.cur.rule :
+      for r in aws_s3_bucket_server_side_encryption_configuration.estimates.rule :
       alltrue([
         for d in r.apply_server_side_encryption_by_default :
         d.sse_algorithm == "AES256"
       ])
     ])
-    error_message = "the CUR bucket must default to SSE-S3 — billingreports.amazonaws.com holds no KMS grant and AWS publishes none, so an SSE-KMS default silently prevents every delivery"
+    error_message = "the estimates bucket must carry a default encryption rule — the publisher passes its own SSE-KMS key per object, but a bucket with no default leaves anything written by another path unencrypted at rest"
   }
 
   # The estimates the cost publisher writes keep the CMK: the Lambda sets the header
@@ -246,7 +245,11 @@ run "every_cur_consumer_filters_on_the_column_aws_produces" {
   command = plan
 
   assert {
-    condition     = local.cur_platform_tag_column == "resource_tags_user_platform_id"
+    condition = alltrue([
+      strcontains(local.cur_platform_tag_expr, "element_at(tags, 'resourceTags/PlatformId')"),
+      strcontains(local.cur_platform_tag_expr, "element_at(tags, 'iamPrincipal/PlatformId')"),
+      !strcontains(local.cur_platform_tag_expr, "tags['"),
+    ])
     error_message = "AWS inserts an underscore before each uppercase letter, so resourceTags/user:PlatformId becomes resource_tags_user_platform_id — the split inside PlatformId is the part a hand-written name gets wrong, and a wrong column makes the query valid, green and empty"
   }
 
@@ -254,7 +257,7 @@ run "every_cur_consumer_filters_on_the_column_aws_produces" {
   # consumer. It read a different column from the reconciler, so one of the two was always
   # returning nothing.
   assert {
-    condition     = strcontains(aws_athena_named_query.spend_reconciliation.query, local.cur_platform_tag_column)
+    condition     = strcontains(aws_athena_named_query.spend_reconciliation.query, local.cur_platform_tag_expr)
     error_message = "the reconciliation view must filter on the same column the reconciler does"
   }
 
@@ -264,8 +267,7 @@ run "every_cur_consumer_filters_on_the_column_aws_produces" {
   }
 }
 
-# NOTE on the us-east-1 providers. `aws_cur_report_definition` and
-# `aws_ce_cost_allocation_tag` reach APIs with no endpoint outside us-east-1, and both are
+# NOTE on the us-east-1 provider. Cost Explorer reaches APIs with no endpoint outside us-east-1, and both are
 # created through `aws.us_east_1`. That binding is NOT assertable here — the `provider` meta
 # argument is not a resource attribute, so a run block cannot see it, and an assertion phrased
 # around it would pass with the argument deleted. What actually binds it is
@@ -375,7 +377,7 @@ run "the_pipeline_seeds_the_key_it_asks_to_have_activated" {
   expect_failures = [check.the_cost_allocation_tags_are_active]
 
   assert {
-    condition     = aws_s3_bucket.cur.tags["PlatformId"] == "org"
+    condition     = aws_s3_bucket.estimates.tags["PlatformId"] == "org"
     error_message = "the pipeline must tag its own storage with PlatformId even while the key is unactivatable — that observation is what makes AWS list the key at all"
   }
 }

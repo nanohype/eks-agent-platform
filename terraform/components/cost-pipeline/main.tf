@@ -1,13 +1,13 @@
 ################################################################################
 # The account's cost pipeline — ONE of it, not one per environment.
 #
-# `aws_cur_report_definition` has no filter. A Cost and Usage Report always covers
-# the entire account, so three per-environment reports are not three views of
-# anything: they are three complete, identical copies of the same billing data, in
-# three buckets, crawled by three crawlers, into three Glue databases, queried
-# through three Athena workgroups. Every copy is correct and every copy is the whole
-# account, which is why nothing ever went red — the duplication is a bill and a
-# maintenance surface rather than a broken query.
+# A Cost and Usage Report has no filter. It always covers the entire account, so
+# three per-environment pipelines were not three views of anything: they were three
+# complete, identical copies of the same billing data, in three buckets, crawled by
+# three crawlers, into three Glue databases, queried through three Athena
+# workgroups. Every copy correct, every copy the whole account — which is why
+# nothing ever went red. The duplication was a bill and a maintenance surface
+# rather than a broken query.
 #
 # The same is true one layer down. The Bedrock invocation log group is an
 # account+region singleton (bedrock-account owns it), and a log group accepts five
@@ -20,11 +20,46 @@
 # So this component is applied once, from live/org/, and everything per-cluster
 # lives in cost-access: the operator's IAM grant, and the republished handles under
 # the cluster prefix the operator actually sweeps.
+#
+# It owns the QUERY LAYER — the Glue catalog, the crawler, the Athena workgroup, the
+# reconciliation view, and the invocation-cost publisher with its estimates. The
+# report itself belongs to landing-zone, for the reason described below.
 ################################################################################
 
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 data "aws_region" "current" {}
+
+################################################################################
+# The account's Cost and Usage Report belongs to landing-zone, not here.
+#
+# A CUR has no filter — it always covers the whole account — which makes it
+# substrate rather than application, so it lives in landing-zone's org-cost with
+# the rest of the account's billing configuration. This component builds the
+# query layer over it and owns none of it.
+#
+# It is a CUR 2.0 Data Export specifically, and that is not a version preference.
+# A Bedrock model invocation is not a taggable resource, so no `resourceTags/`
+# column is ever populated on one — a query filtering a resource tag returns no
+# rows, successfully, forever. AWS attributes that spend by the calling identity
+# instead, and IAM principal fields exist only in CUR 2.0.
+#
+# Read over SSM rather than a terragrunt `dependency`: a dependency across roots
+# resolves at parse time, so a per-root leaf would fail `init` rather than
+# `apply` whenever landing-zone's state was absent.
+################################################################################
+
+data "aws_ssm_parameter" "cur_export_bucket" {
+  name = "/platform/org/cost/cur-export-bucket"
+}
+
+data "aws_ssm_parameter" "cur_export_prefix" {
+  name = "/platform/org/cost/cur-export-prefix"
+}
+
+data "aws_ssm_parameter" "cur_export_name" {
+  name = "/platform/org/cost/cur-export-name"
+}
 
 locals {
   # Account + region. Region is load-bearing even though a CUR's DATA is
@@ -57,9 +92,20 @@ locals {
   # themselves current versions and an expiry alone never empties them.
   bucket_force_destroy = var.force_destroy_buckets
 
-  # Where AWS delivers the CUR Parquet. The report definition and the lifecycle rule that ages
-  # it out have to agree, so they read one value.
-  cur_prefix = "cur"
+  # Where landing-zone's export actually lands. A CUR 2.0 Data Export writes under
+  # <prefix>/<export name>/, so the crawler needs all three parts — and a wrong one does
+  # not fail: the crawler finds no objects, registers a table with no partitions, and
+  # every query against it returns zero rows and exits zero.
+  #
+  # nonsensitive() because the SSM data source marks every value sensitive regardless of
+  # type, and that mark would propagate into the crawler's S3 target and the IAM policy,
+  # printing both as (sensitive value) in every plan — hiding which bucket the account's
+  # cost crawler is about to be pointed at and granted on.
+  cur_export_bucket   = nonsensitive(data.aws_ssm_parameter.cur_export_bucket.value)
+  cur_export_prefix   = nonsensitive(data.aws_ssm_parameter.cur_export_prefix.value)
+  cur_export_name     = nonsensitive(data.aws_ssm_parameter.cur_export_name.value)
+  cur_export_location = "s3://${local.cur_export_bucket}/${local.cur_export_prefix}/${local.cur_export_name}/"
+  cur_export_arn      = "arn:${data.aws_partition.current.partition}:s3:::${local.cur_export_bucket}"
 
   # The IAM path prefix for the cost publisher's tag-read grant, normalized the same way the
   # operator normalizes it before creating a role (platform_iam.go and platform_session_iam.go
@@ -92,17 +138,30 @@ locals {
   # publisher is about to attach itself to.
   bedrock_invocation_log_group = nonsensitive(data.aws_ssm_parameter.bedrock_invocation_log_group.value)
 
-  # The Athena column AWS produces for the PlatformId cost-allocation tag. Every CUR consumer
-  # in this component filters on it, and the operator's BudgetReconciler derives the same name
-  # from the same tag key in Go (curTagColumn).
+  # How a CUR 2.0 line item names its platform.
   #
-  # Spelled out here rather than shared with the operator, because the two sides must agree by
-  # both agreeing with AWS — one shared derivation would let a single wrong transform satisfy
-  # both. AWS's rule, from "Column names" in the CUR user guide: an underscore is added in
-  # front of uppercase letters, uppercase becomes lowercase, non-alphanumerics become
-  # underscores, duplicates are removed. So `resourceTags/user:PlatformId` becomes the below —
-  # note the split inside PlatformId, which is the part a hand-written name gets wrong.
-  cur_platform_tag_column = "resource_tags_user_platform_id"
+  # There is no flattened per-tag column. CUR 2.0 carries ONE `tags` column of type
+  # map<string,string> holding every tag source at once, keyed by prefix —
+  # `resourceTags/`, `iamPrincipal/`, `accountTag/`, `costCategory/`, `userAttribute/` —
+  # and a key appears in it only once it has been activated as a cost-allocation tag.
+  #
+  # Attribution is a UNION of two prefixes and cannot be either one alone:
+  #
+  #   resourceTags/PlatformId   the tenant's datastores, which carry a resource tag.
+  #   iamPrincipal/PlatformId   model invocations, which do not. An invocation is not a
+  #                             taggable resource, so no resourceTags/ key is ever
+  #                             populated on one and AWS attributes it by the calling
+  #                             identity instead.
+  #
+  # Filtering on the resource prefix alone sees every datastore and no model spend, which
+  # is the dominant cost. Filtering on the principal prefix alone sees the reverse: AWS
+  # scopes IAM-principal allocation to Bedrock runtime calls, so every bucket, database
+  # and queue vanishes. Either half reads as a plausible number.
+  #
+  # element_at(), not tags['...']. Athena is Trino, where the map subscript operator
+  # RAISES on a missing key rather than returning NULL — so a line item carrying one
+  # prefix and not the other would fail the entire query instead of yielding a row.
+  cur_platform_tag_expr = "COALESCE(element_at(tags, 'resourceTags/PlatformId'), element_at(tags, 'iamPrincipal/PlatformId'))"
 }
 
 ################################################################################
@@ -179,8 +238,8 @@ resource "aws_s3_bucket_policy" "access_logs" {
 # existing definitions until further notice.
 ################################################################################
 
-resource "aws_s3_bucket" "cur" {
-  bucket = "${local.prefix}-cur-${data.aws_caller_identity.current.account_id}"
+resource "aws_s3_bucket" "estimates" {
+  bucket = "${local.prefix}-estimates-${data.aws_caller_identity.current.account_id}"
 
   # Versioned, so an expiry alone cannot empty it — delete markers are current versions.
   force_destroy = local.bucket_force_destroy
@@ -188,14 +247,14 @@ resource "aws_s3_bucket" "cur" {
   tags = local.tags
 }
 
-resource "aws_s3_bucket_logging" "cur" {
-  bucket        = aws_s3_bucket.cur.id
+resource "aws_s3_bucket_logging" "estimates" {
+  bucket        = aws_s3_bucket.estimates.id
   target_bucket = aws_s3_bucket.access_logs.id
   target_prefix = "cur/"
 }
 
-resource "aws_s3_bucket_versioning" "cur" {
-  bucket = aws_s3_bucket.cur.id
+resource "aws_s3_bucket_versioning" "estimates" {
+  bucket = aws_s3_bucket.estimates.id
   versioning_configuration {
     status = "Enabled"
   }
@@ -214,8 +273,8 @@ resource "aws_s3_bucket_versioning" "cur" {
 # Lambda sets ServerSideEncryption=aws:kms and SSEKMSKeyId per object, which
 # overrides the bucket default, so first-party data keeps the CMK and only the
 # AWS-delivered billing detail is SSE-S3.
-resource "aws_s3_bucket_server_side_encryption_configuration" "cur" {
-  bucket = aws_s3_bucket.cur.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "estimates" {
+  bucket = aws_s3_bucket.estimates.id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -223,69 +282,21 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "cur" {
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "cur" {
-  bucket                  = aws_s3_bucket.cur.id
+resource "aws_s3_bucket_public_access_block" "estimates" {
+  bucket                  = aws_s3_bucket.estimates.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_policy" "cur" {
-  bucket = aws_s3_bucket.cur.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "BillingReportsAccess"
-        Effect = "Allow"
-        Principal = {
-          Service = "billingreports.amazonaws.com"
-        }
-        Action = [
-          "s3:GetBucketAcl",
-          "s3:GetBucketPolicy",
-          "s3:PutObject"
-        ]
-        Resource = [
-          aws_s3_bucket.cur.arn,
-          "${aws_s3_bucket.cur.arn}/*"
-        ]
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-          }
-          # The CUR (Reports v1) API is global with ARN region always
-          # 'us-east-1' regardless of where the destination bucket
-          # lives. Don't substitute var.region here or billingreports
-          # PutObject silently fails when the workload region differs
-          # — the bucket stays empty and the Budget reconciler reports
-          # zero spend forever.
-          ArnLike = {
-            "aws:SourceArn" = "arn:${data.aws_partition.current.partition}:cur:us-east-1:${data.aws_caller_identity.current.account_id}:definition/*"
-          }
-        }
-      }
-      # No OperatorRead statement. It named ONE cluster's operator role, which a
-      # bucket serving every cluster cannot do — a bucket policy is a single
-      # document, so N clusters would mean N writers rewriting one object and the
-      # last apply deciding who still has access.
-      #
-      # The operators get their read through their own IAM policies instead, minted
-      # per cluster by cost-access. Within one account an identity policy is
-      # sufficient on its own; a resource policy adds nothing here except a
-      # contended object.
-    ]
-  })
-}
 
 # Estimate export retention — the invocation-cost-publisher writes small NDJSON
 # objects under estimates/ on every log batch; bound their accumulation so the
 # Athena scan stays cheap. The CUR Parquet under cur/ is untouched (the rule is
 # prefix-scoped to estimates/).
-resource "aws_s3_bucket_lifecycle_configuration" "cur" {
-  bucket = aws_s3_bucket.cur.id
+resource "aws_s3_bucket_lifecycle_configuration" "estimates" {
+  bucket = aws_s3_bucket.estimates.id
 
   rule {
     id     = "expire-estimates"
@@ -295,26 +306,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "cur" {
     }
     expiration {
       days = var.estimate_retention_days
-    }
-    noncurrent_version_expiration {
-      noncurrent_days = 1
-    }
-  }
-
-  # The CUR Parquet AWS delivers under cur/ is the bulk of this bucket and the input to every
-  # budget decision, so it is kept for a full billing history and then aged out — the bucket has
-  # a bounded size and a teardown has an end. Retention is measured from each object's last
-  # delivery: report_versioning is OVERWRITE_REPORT and refresh_closed_reports is on, so AWS
-  # rewrites a month's objects while it is still inside its refresh window and the clock
-  # restarts. Past that window the objects are final and this rule is what bounds them.
-  rule {
-    id     = "expire-cur-parquet"
-    status = "Enabled"
-    filter {
-      prefix = "${local.cur_prefix}/"
-    }
-    expiration {
-      days = var.cur_retention_days
     }
     noncurrent_version_expiration {
       noncurrent_days = 1
@@ -334,26 +325,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "cur" {
   }
 }
 
-resource "aws_cur_report_definition" "this" {
-  # us-east-1 only — the CUR API has no endpoint anywhere else, so this resource
-  # cannot be created through the workload-region provider at all.
-  provider = aws.us_east_1
-
-  report_name                = var.cur_report_name
-  time_unit                  = "HOURLY"
-  format                     = "Parquet"
-  compression                = "Parquet"
-  additional_schema_elements = ["RESOURCES", "SPLIT_COST_ALLOCATION_DATA"]
-  s3_bucket                  = aws_s3_bucket.cur.id
-  # AWS validation requires this NOT end with `/` or `.` — `^.+[^/|.]$`.
-  s3_prefix              = local.cur_prefix
-  s3_region              = var.region
-  additional_artifacts   = ["ATHENA"]
-  refresh_closed_reports = true
-  report_versioning      = "OVERWRITE_REPORT"
-
-  depends_on = [aws_s3_bucket_policy.cur]
-}
 
 ################################################################################
 # Athena workgroup + database
@@ -511,10 +482,14 @@ resource "aws_iam_role_policy" "cur_crawler" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "ReadCURBucket"
+        # landing-zone's export bucket, not this component's. The grant follows the
+        # crawler's target: a crawler pointed at a bucket it cannot read fails the crawl
+        # rather than the apply, so the table simply never appears and every query
+        # against the database returns nothing.
+        Sid      = "ReadCURExportBucket"
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:ListBucket"]
-        Resource = [aws_s3_bucket.cur.arn, "${aws_s3_bucket.cur.arn}/*"]
+        Resource = [local.cur_export_arn, "${local.cur_export_arn}/*"]
       },
     ]
   })
@@ -528,7 +503,7 @@ resource "aws_glue_crawler" "cur" {
   tags          = local.tags
 
   s3_target {
-    path = "s3://${aws_s3_bucket.cur.id}/${local.cur_prefix}/${var.cur_report_name}/"
+    path = local.cur_export_location
   }
 
   schema_change_policy {
@@ -548,7 +523,11 @@ resource "aws_glue_crawler" "cur" {
 # CUR report name to underscores. Published to SSM so the operator can
 # discover it without hard-coding.
 locals {
-  cur_table_name      = replace(var.cur_report_name, "-", "_")
+  # Glue names the table after the last path segment the crawler was pointed at, with
+  # hyphens normalized to underscores. That segment is the export's name, which
+  # landing-zone owns — so this is derived from the contract rather than from a local
+  # variable that could name a different export than the crawler actually reads.
+  cur_table_name      = replace(local.cur_export_name, "-", "_")
   estimate_prefix     = "estimates"
   estimate_table_name = "invocation_cost_estimates"
   reconciliation_view = "invocation_cost_reconciliation"
@@ -579,11 +558,11 @@ resource "aws_glue_catalog_table" "estimates" {
     "projection.usage_date.range"         = "2025-01-01,NOW"
     "projection.usage_date.interval"      = "1"
     "projection.usage_date.interval.unit" = "DAYS"
-    "storage.location.template"           = "s3://${aws_s3_bucket.cur.id}/${local.estimate_prefix}/usage_date=$${usage_date}"
+    "storage.location.template"           = "s3://${aws_s3_bucket.estimates.id}/${local.estimate_prefix}/usage_date=$${usage_date}"
   }
 
   storage_descriptor {
-    location      = "s3://${aws_s3_bucket.cur.id}/${local.estimate_prefix}/"
+    location      = "s3://${aws_s3_bucket.estimates.id}/${local.estimate_prefix}/"
     input_format  = "org.apache.hadoop.mapred.TextInputFormat"
     output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
 
@@ -690,15 +669,15 @@ resource "aws_athena_named_query" "spend_reconciliation" {
       GROUP BY platform_id, usage_date
     ) e
     LEFT JOIN (
-      SELECT ${local.cur_platform_tag_column}      AS platform_id,
+      SELECT ${local.cur_platform_tag_expr} AS platform_id,
              date_format(line_item_usage_start_date, '%Y-%m-%d') AS day,
              SUM(line_item_unblended_cost)                       AS cur_truth_usd
       FROM ${local.cur_table_name}
       WHERE (line_item_product_code = 'AmazonBedrock'
-             OR product_product_name LIKE '%(Amazon Bedrock Edition)%')
+             OR element_at(product, 'product_name') LIKE '%(Amazon Bedrock Edition)%')
         AND line_item_line_item_type = 'Usage'
-        AND ${local.cur_platform_tag_column} <> ''
-      GROUP BY ${local.cur_platform_tag_column},
+        AND ${local.cur_platform_tag_expr} IS NOT NULL
+      GROUP BY ${local.cur_platform_tag_expr},
                date_format(line_item_usage_start_date, '%Y-%m-%d')
     ) c ON e.platform_id = c.platform_id AND e.usage_date = c.day
   SQL
@@ -790,7 +769,7 @@ resource "aws_iam_role_policy" "invocation_cost_publisher" {
         Sid      = "WriteEstimates"
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
-        Resource = ["${aws_s3_bucket.cur.arn}/${local.estimate_prefix}/*"]
+        Resource = ["${aws_s3_bucket.estimates.arn}/${local.estimate_prefix}/*"]
       },
       {
         Sid      = "EncryptEstimates"
@@ -830,7 +809,7 @@ resource "aws_lambda_function" "invocation_cost_publisher" {
       # it reads the tag the operator stamped on the invoking role. A token here
       # would be a second place the identity is decided, which is precisely the
       # arrangement that made the dimension disagree with every reader.
-      ESTIMATE_BUCKET     = aws_s3_bucket.cur.id
+      ESTIMATE_BUCKET     = aws_s3_bucket.estimates.id
       ESTIMATE_PREFIX     = local.estimate_prefix
       ESTIMATE_KMS_KEY_ID = var.data_kms_key_arn
       # Per-token governance estimate for imported (Custom Model Import) models,
@@ -887,10 +866,14 @@ resource "aws_cloudwatch_log_subscription_filter" "invocations" {
 # operator already knows, now backed by one pipeline instead of three.
 ################################################################################
 
+# landing-zone's export bucket, not this component's. The operator's Athena queries read
+# the CUR objects under the caller's own identity, so its grant has to name the bucket the
+# data is actually in — publishing this component's bucket here would grant read on a
+# bucket holding only estimates and leave every CUR scan AccessDenied.
 resource "aws_ssm_parameter" "cur_bucket" {
   name  = "/eks-agent-platform/org/cost-pipeline/cur_bucket"
   type  = "String"
-  value = aws_s3_bucket.cur.id
+  value = local.cur_export_bucket
   tags  = local.tags
 }
 
@@ -1082,7 +1065,7 @@ resource "aws_ssm_parameter" "athena_results_bucket_arn" {
 resource "aws_ssm_parameter" "cur_bucket_arn" {
   name  = "/eks-agent-platform/org/cost-pipeline/cur_bucket_arn"
   type  = "String"
-  value = aws_s3_bucket.cur.arn
+  value = local.cur_export_arn
   tags  = local.tags
 }
 

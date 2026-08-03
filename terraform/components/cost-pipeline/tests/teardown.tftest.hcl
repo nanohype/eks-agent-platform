@@ -77,7 +77,6 @@ mock_provider "aws" {
 
 variables {
   region           = "us-west-2"
-  cur_report_name  = "eks-agent-platform-test"
   data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
   logs_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
   tags             = {}
@@ -89,7 +88,7 @@ run "protected_environment_keeps_every_bucket" {
   command = plan
 
   assert {
-    condition     = aws_s3_bucket.cur.force_destroy == false
+    condition     = aws_s3_bucket.estimates.force_destroy == false
     error_message = "the CUR bucket holds this environment's billing history, and AWS only re-delivers a month while it is inside its refresh window — so it must not be force-destroyable without the lever"
   }
   assert {
@@ -113,7 +112,7 @@ run "force_destroy_buckets_opens_every_bucket" {
 
   assert {
     condition = alltrue([
-      aws_s3_bucket.cur.force_destroy,
+      aws_s3_bucket.estimates.force_destroy,
       aws_s3_bucket.athena_results.force_destroy,
       aws_s3_bucket.access_logs.force_destroy,
     ])
@@ -136,7 +135,7 @@ run "no_environment_token_can_open_the_teardown_gate" {
   # via an environment token is precisely what stopped being possible.
   assert {
     condition = alltrue([
-      aws_s3_bucket.cur.force_destroy == false,
+      aws_s3_bucket.estimates.force_destroy == false,
       aws_s3_bucket.athena_results.force_destroy == false,
       aws_s3_bucket.access_logs.force_destroy == false,
     ])
@@ -155,23 +154,23 @@ run "no_environment_token_can_open_the_teardown_gate" {
 run "versioned_buckets_can_actually_empty" {
   command = plan
 
-  # The CUR Parquet under cur/ is the bulk of that bucket and the input to every budget
-  # decision. The rule that names it must be enabled AND expire something AND clear the
-  # noncurrent versions its expiry creates — all three on the same rule.
+  # The estimate objects are the bulk of that bucket now that the report lives in
+  # landing-zone. The rule that names them must be enabled AND expire something AND clear
+  # the noncurrent versions its expiry creates — all three on the same rule.
   assert {
     condition = anytrue([
-      for r in aws_s3_bucket_lifecycle_configuration.cur.rule :
-      anytrue([for f in r.filter : f.prefix == "cur/"])
+      for r in aws_s3_bucket_lifecycle_configuration.estimates.rule :
+      anytrue([for f in r.filter : f.prefix == "estimates/"])
       && r.status == "Enabled"
       && anytrue([for e in r.expiration : e.days > 0])
       && length(r.noncurrent_version_expiration) > 0
     ])
-    error_message = "the cur/ rule must be enabled, expire objects, and clear the noncurrent versions that expiry creates — a filter alone leaves the primary data unbounded and the bucket permanently non-empty"
+    error_message = "the estimates/ rule must be enabled, expire objects, and clear the noncurrent versions that expiry creates — a filter alone leaves the data unbounded and the bucket permanently non-empty"
   }
 
   assert {
     condition = anytrue([
-      for r in aws_s3_bucket_lifecycle_configuration.cur.rule :
+      for r in aws_s3_bucket_lifecycle_configuration.estimates.rule :
       anytrue([for f in r.filter : f.prefix == "estimates/"])
       && r.status == "Enabled"
       && anytrue([for e in r.expiration : e.days > 0])
@@ -194,7 +193,7 @@ run "versioned_buckets_can_actually_empty" {
   # block as the flag, and a mocked plan does not catch that — so the shape is asserted here.
   assert {
     condition = alltrue([
-      for cfg in [aws_s3_bucket_lifecycle_configuration.cur, aws_s3_bucket_lifecycle_configuration.athena_results] :
+      for cfg in [aws_s3_bucket_lifecycle_configuration.estimates, aws_s3_bucket_lifecycle_configuration.athena_results] :
       anytrue([
         for r in cfg.rule :
         r.status == "Enabled" && anytrue([
@@ -209,7 +208,7 @@ run "versioned_buckets_can_actually_empty" {
   # Every rule must be live. A Disabled rule is inert and reads as a retention policy.
   assert {
     condition = alltrue(concat(
-      [for r in aws_s3_bucket_lifecycle_configuration.cur.rule : r.status == "Enabled"],
+      [for r in aws_s3_bucket_lifecycle_configuration.estimates.rule : r.status == "Enabled"],
       [for r in aws_s3_bucket_lifecycle_configuration.athena_results.rule : r.status == "Enabled"],
       [for r in aws_s3_bucket_lifecycle_configuration.access_logs.rule : r.status == "Enabled"],
     ))
@@ -217,19 +216,46 @@ run "versioned_buckets_can_actually_empty" {
   }
 }
 
-# The pair, not the literal. AWS delivers the CUR Parquet under the report definition's
-# s3_prefix; the Glue crawler is what registers it as the Athena table the budget reconciler
-# queries. Nothing in the tree made those two agree — the crawler carried its own copy of the
-# prefix, so changing where AWS delivers left the crawler reading an empty path, the stale
-# table registered (schema_change_policy delete_behavior is LOG), and every BudgetPolicy
-# reading zero spend forever, with a green plan and a green apply.
+# The crawler reads where landing-zone actually delivers.
 #
-# Asserted as a relation between two resources so it cannot be satisfied by a copied constant.
-run "the_crawler_reads_where_the_report_is_delivered" {
+# The report is not this component's any more — org-cost owns the account's CUR 2.0
+# export and publishes its location over SSM. This component reads all three parts and
+# composes the path, and a wrong part does not fail: the crawler finds no objects,
+# registers a table with no partitions, and every query against it returns zero rows and
+# exits zero. schema_change_policy delete_behavior is LOG, so a previously-good table
+# would also just sit there stale.
+#
+# Each contract read gets its own sentinel, because the account handles are all the same
+# shape — three parameters resolving to one mock default cannot tell a correct path from
+# a transposed one.
+run "the_crawler_reads_where_the_export_is_delivered" {
   command = plan
 
+  override_data {
+    target = data.aws_ssm_parameter.cur_export_bucket
+    values = { value = "SENTINEL-bucket" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.cur_export_prefix
+    values = { value = "SENTINEL-prefix" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.cur_export_name
+    values = { value = "SENTINEL-name" }
+  }
+
   assert {
-    condition     = one(aws_glue_crawler.cur.s3_target).path == "s3://${aws_s3_bucket.cur.id}/${aws_cur_report_definition.this.s3_prefix}/${var.cur_report_name}/"
-    error_message = "the Glue crawler must crawl exactly where the CUR report definition delivers — a crawler pointed anywhere else registers nothing, leaves the stale table in place, and the budget reconciler reads zero spend with nothing going red"
+    condition     = one(aws_glue_crawler.cur.s3_target).path == "s3://SENTINEL-bucket/SENTINEL-prefix/SENTINEL-name/"
+    error_message = "the Glue crawler must crawl exactly where the account export delivers, composed from all three published parts — a crawler pointed anywhere else registers nothing, leaves any stale table in place, and every budget reads zero spend with nothing going red"
+  }
+
+  # And the grant follows the target. A crawler pointed at a bucket it cannot read fails
+  # the crawl rather than the apply, so the table simply never appears.
+  assert {
+    condition = anytrue([
+      for st in jsondecode(aws_iam_role_policy.cur_crawler.policy).Statement :
+      contains(st.Resource, "arn:aws:s3:::SENTINEL-bucket")
+    ])
+    error_message = "the crawler's IAM must name the export bucket it was pointed at — this component's own bucket holds only estimates, so a stale grant leaves every crawl AccessDenied and the CUR table absent"
   }
 }

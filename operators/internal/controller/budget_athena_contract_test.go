@@ -116,15 +116,25 @@ func TestQuerySpendFromAthena_ContractHappyPath(t *testing.T) {
 	if spend != "1512.734500" {
 		t.Errorf("spend: got %q want 1512.734500", spend)
 	}
-	// The CUR-rollup query contract: it filters on the PlatformId user-tag column
-	// and sums the unblended cost month-to-date.
+	// The CUR-rollup query contract: it names both activated forms of the PlatformId
+	// tag and sums the unblended cost month-to-date.
 	//
-	// The column is spelled out here rather than derived, deliberately. This test and
-	// curTagColumn must agree by AGREEING WITH AWS, not with each other — deriving it
-	// on both sides would let a wrong transform pass its own assertion, which is how
-	// the previous spelling (resource_tags_user_platformid, missing the split inside
-	// PlatformId) survived.
-	for _, want := range []string{"resource_tags_user_platform_id = 'acme'", "line_item_unblended_cost", "date_trunc('month'"} {
+	// The expression is spelled out here rather than derived, deliberately. This test
+	// and curPlatformTagExpr must agree by AGREEING WITH AWS, not with each other —
+	// deriving it on both sides would let one wrong spelling pass its own assertion,
+	// which is how the previous column name (resource_tags_user_platformid, missing the
+	// split inside PlatformId) survived.
+	//
+	// Both prefixes appear because either alone is silently half-blind: resourceTags/
+	// reaches the tenant's datastores and iamPrincipal/ reaches model invocations, which
+	// are not taggable resources at all.
+	for _, want := range []string{
+		"element_at(tags, 'resourceTags/PlatformId')",
+		"element_at(tags, 'iamPrincipal/PlatformId')",
+		") = 'acme'",
+		"line_item_unblended_cost",
+		"date_trunc('month'",
+	} {
 		if !strings.Contains(a.lastQuery, want) {
 			t.Errorf("CUR rollup query missing %q:\n%s", want, a.lastQuery)
 		}
@@ -292,36 +302,46 @@ func TestSleepCtx_RespectsCancellation(t *testing.T) {
 // This is the far end of the budget path that nothing else can reach offline: the
 // real column name is produced by AWS when it loads the Parquet, so the only thing
 // a test here can bind is that the operator applies the same published rule.
-func TestCurTagColumn(t *testing.T) {
-	cases := map[string]string{
-		// The tag the operator stamps. The split inside PlatformId is the whole
-		// point — "an underscore is added in front of uppercase letters" applies
-		// inside the word, not only at its start.
-		"PlatformId": "resource_tags_user_platform_id",
-		// AWS's two published examples, prefixed the way a user tag arrives.
-		"ExampleColumnName":   "resource_tags_user_example_column_name",
-		"Example Column Name": "resource_tags_user_example_column_name",
-		// Non-alphanumerics collapse, and duplicates are removed rather than kept.
-		"cost--center": "resource_tags_user_cost_center",
-		"trailing_":    "resource_tags_user_trailing",
-	}
-	for in, want := range cases {
-		if got := curTagColumn(in); got != want {
-			t.Errorf("curTagColumn(%q) = %q, want %q", in, got, want)
+func TestCurPlatformTagExpr(t *testing.T) {
+	got := curPlatformTagExpr("PlatformId")
+
+	// Both prefixes, because they attribute different halves of the bill and neither
+	// covers the other: resourceTags/ reaches the tenant's datastores, iamPrincipal/
+	// reaches model invocations, which are not taggable resources at all.
+	for _, want := range []string{
+		"element_at(tags, 'resourceTags/PlatformId')",
+		"element_at(tags, 'iamPrincipal/PlatformId')",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("curPlatformTagExpr omits %s — got %q", want, got)
 		}
+	}
+
+	// element_at, never the subscript. Athena is Trino: tags['missing'] RAISES rather
+	// than returning NULL, so a line item carrying one prefix and not the other would
+	// fail the entire query instead of yielding a row.
+	if strings.Contains(got, "tags['") {
+		t.Errorf("curPlatformTagExpr uses the map subscript, which raises on a missing key: %q", got)
+	}
+
+	// A union, not a pick. Without the COALESCE the two halves do not combine.
+	if !strings.HasPrefix(got, "COALESCE(") {
+		t.Errorf("curPlatformTagExpr must COALESCE the two prefixes: %q", got)
 	}
 }
 
-// TestCurTagColumnMatchesTheActivatedTag proves the column the query filters on is
-// derived from the same tag key cost-pipeline activates in Cost Explorer. An
-// activated tag the query does not name, or a named column no tag produces, are the
-// same defect: a query that runs, returns zero, and trips no alarm.
-func TestCurTagColumnMatchesTheActivatedTag(t *testing.T) {
+// TestCurPlatformTagExprMatchesTheActivatedTags proves the expression the query filters
+// on names the same tag key cost-pipeline asserts is activated in Cost Explorer. An
+// activated tag the query does not name, or a named key no tag produces, are the same
+// defect: a query that runs, returns zero, and trips no alarm.
+func TestCurPlatformTagExprMatchesTheActivatedTags(t *testing.T) {
 	if platformIDTagKey != "PlatformId" {
-		t.Fatalf("platformIDTagKey = %q — cost-pipeline activates PlatformId; changing one side alone silently zeroes every budget", platformIDTagKey)
+		t.Fatalf("platformIDTagKey = %q — cost-pipeline asserts PlatformId and iamPrincipal/PlatformId are active; changing one side alone silently zeroes every budget", platformIDTagKey)
 	}
-	if got := curTagColumn(platformIDTagKey); got != "resource_tags_user_platform_id" {
-		t.Errorf("the query would filter on %q, which is not the column AWS produces for %q", got, platformIDTagKey)
+	got := curPlatformTagExpr(platformIDTagKey)
+	if !strings.Contains(got, "'resourceTags/"+platformIDTagKey+"'") ||
+		!strings.Contains(got, "'iamPrincipal/"+platformIDTagKey+"'") {
+		t.Errorf("the query would filter on %q, which does not name both activated forms of %q", got, platformIDTagKey)
 	}
 }
 
