@@ -3,10 +3,21 @@ locals {
 
   environment   = local.env_vars.locals.environment
   region        = local.env_vars.locals.region
-  cluster_name  = local.env_vars.locals.cluster_name
   account_id    = local.env_vars.locals.account_id
   cost_center   = local.env_vars.locals.cost_center
   business_unit = local.env_vars.locals.business_unit
+
+  # Optional, because not every root serves a cluster. Two things in this tree are
+  # account+region singletons — the Bedrock invocation-logging configuration, and a
+  # Cost and Usage Report, which has no filter and always covers the whole account.
+  # Those live under live/org/, whose env.hcl declares no cluster because there is
+  # no cluster to declare.
+  #
+  # Read with try() rather than a sentinel value. A placeholder cluster_name would
+  # satisfy the parse and then flow into resource names and IAM paths as if it meant
+  # something, which is how an account-scoped resource ends up wearing a cluster's
+  # identity.
+  cluster_name = try(local.env_vars.locals.cluster_name, null)
 }
 
 generate "provider" {
@@ -64,12 +75,18 @@ remote_state {
   }
 }
 
-inputs = {
-  environment  = local.environment
-  region       = local.region
-  cluster_name = local.cluster_name
-  tags = {
-    PlatformProject = "eks-agent-platform"
-    Environment     = local.environment
-  }
-}
+# cluster_name is merged in only when the root has one, rather than passed as null.
+# A null TF_VAR is not the same as an absent one to every consumer, and a component
+# that does not declare the variable would take it silently either way — so the
+# account roots simply never send it.
+inputs = merge(
+  {
+    environment = local.environment
+    region      = local.region
+    tags = {
+      PlatformProject = "eks-agent-platform"
+      Environment     = local.environment
+    }
+  },
+  local.cluster_name == null ? {} : { cluster_name = local.cluster_name },
+)

@@ -88,7 +88,7 @@ The total spend reading is `CUR + CloudWatch`. The kill-switch is intentionally 
 
 | Action                                                                                                     | Resource                                            | Granted by                                             |
 | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
-| `athena:StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup` | `arn:aws:athena:*:*:workgroup/<env>-<cluster>-cost` | `terraform/components/cost-pipeline` operator policy   |
+| `athena:StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup` | `arn:aws:athena:*:*:workgroup/org-<account>-<region>-cost` | `terraform/components/cost-access` operator policy     |
 | `glue:GetDatabase`, `GetTable`, `GetTables`, `GetPartitions`                                               | catalog + `<env>-<cluster>-cost-cost` database      | same                                                   |
 | `s3:GetObject`, `PutObject`, `ListBucket`                                                                  | athena results bucket                               | same                                                   |
 | `cloudwatch:GetMetricData`, `GetMetricStatistics`, `ListMetrics`                                           | `*`                                                 | same                                                   |

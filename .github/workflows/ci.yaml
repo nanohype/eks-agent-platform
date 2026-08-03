@@ -67,6 +67,61 @@ jobs:
             echo "::endgroup::"
           done
 
+      # EVERY suite in the tree runs, not only the ones attached to a bucket.
+      #
+      # Running the suites used to be a side effect of the teardown check below, which
+      # enumerates bucket-bearing components — so a component's tests executed only if
+      # it happened to create an S3 bucket. cost-access asserts that the operator can
+      # decrypt what it queries, that its grant reaches the account CUR, and that its
+      # handles land in the subtree the operator actually sweeps; it creates no bucket,
+      # so not one of those runs had ever been executed by CI. A test that does not run
+      # is a comment that costs money to write.
+      - name: tofu test
+        run: |
+          failed=""
+          vacuous=""
+          ran=0
+          for d in terraform/components/*/; do
+            name=$(basename "$d")
+            ls "$d"tests/*.tftest.hcl >/dev/null 2>&1 || continue
+            echo "::group::$name"
+            if out=$(cd "$d" && tofu test -no-color 2>&1); then
+              echo "$out"
+            else
+              echo "$out"
+              failed="${failed}${failed:+ }$name"
+            fi
+            echo "::endgroup::"
+            # A suite that EXISTS is not a suite that ASSERTED. A file of comments, or
+            # one whose run blocks were commented out, exits 0 exactly like a passing
+            # one, so read the count rather than the status.
+            #
+            # This is a floor and not a proof: it catches a suite that ran nothing. It
+            # cannot catch a run whose assertions are tautologies, because nothing in
+            # the output distinguishes those from real ones. Whether an assertion can
+            # fail is established by mutating the component and watching the suite go
+            # red — a thing a human does, not a thing this step can claim.
+            if ! echo "$out" | grep -qE '[1-9][0-9]* passed'; then
+              vacuous="${vacuous}${vacuous:+ }$name"
+            fi
+            ran=$((ran + 1))
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::tofu test failed for: $failed"
+            exit 1
+          fi
+          if [ -n "$vacuous" ]; then
+            echo "::error::these components have a tests/ directory that asserted nothing: $vacuous"
+            echo "  Zero passing runs and a zero exit code are indistinguishable from a suite that"
+            echo "  ran and held. Whatever is in tests/ has to actually execute a run block."
+            exit 1
+          fi
+          if [ "$ran" -eq 0 ]; then
+            echo "::error::discovered no component suites — this step cannot have verified anything"
+            exit 1
+          fi
+          echo "ran $ran component suite(s)"
+
       # Teardown posture is asserted, not assumed. These components' buckets are
       # root-module resources, so a test `assert` reads the attribute the provider will
       # send rather than an output restating the expression that produced it — which is
@@ -76,27 +131,37 @@ jobs:
       # force_destroy = true unconditionally passes and the protection is gone with
       # nothing to show for it; with only the protective one, the teardown wedge that
       # strands a cluster, a VPC and its NAT gateways comes back.
-      # A component that creates an S3 bucket must carry a suite asserting it can be
-      # torn down. Enumerated from the tree rather than from the directories that
-      # happen to have tests, because those two agreeing is the whole property: a
-      # loop over `tests/` dirs reports the same green when a suite is deleted, when
-      # a directory is renamed, and when a new bucket-bearing component lands with no
-      # suite at all. A gate whose healthy output matches its did-nothing output is
-      # the failure it exists to catch.
+      #
+      # This step establishes the OBLIGATION — a component that creates a bucket must
+      # carry a suite — while the step above runs it. Enumerated from the tree rather
+      # than from the directories that happen to have tests, because those two agreeing
+      # is the whole property: a loop over `tests/` dirs reports the same green when a
+      # suite is deleted, when a directory is renamed, and when a new bucket-bearing
+      # component lands with no suite at all. A gate whose healthy output matches its
+      # did-nothing output is the failure it exists to catch.
       - name: teardown posture
         run: |
           missing=""
           ran=0
           for d in terraform/components/*/; do
             name=$(basename "$d")
-            grep -qR '^resource "aws_s3_bucket"' "$d" --include='*.tf' || continue
-            if [ ! -d "$d/tests" ]; then
+            # Tolerant of leading whitespace and of extra spaces after `resource`,
+            # both of which are legal HCL that a `^resource "` anchor walks straight
+            # past; of the JSON syntax, where the type is an object key; and of
+            # directory buckets, which are a different type and the same teardown
+            # problem. What it still cannot see is a bucket created inside a module —
+            # no component here uses one, and if that changes this predicate is the
+            # thing to replace rather than to extend.
+            grep -qRE '(^[[:space:]]*resource[[:space:]]+"aws_s3_(directory_)?bucket"|"aws_s3_(directory_)?bucket"[[:space:]]*:)' \
+              "$d" --include='*.tf' --include='*.tf.json' || continue
+            # Presence of a tests/ DIRECTORY is not presence of a test. `tofu test`
+            # against an empty one prints "Success! 0 passed, 0 failed." and exits 0,
+            # so a component could land with a bucket, an empty suite, and a green
+            # gate. Require a suite file to exist at all.
+            if ! ls "$d"tests/*.tftest.hcl >/dev/null 2>&1; then
               missing="${missing}${missing:+ }$name"
               continue
             fi
-            echo "::group::$name"
-            (cd "$d" && tofu test)
-            echo "::endgroup::"
             ran=$((ran + 1))
           done
           if [ -n "$missing" ]; then
@@ -109,6 +174,7 @@ jobs:
             echo "::error::discovered no components with S3 buckets — this step cannot have verified anything"
             exit 1
           fi
+          echo "teardown posture required of $ran component(s)"
           echo "teardown posture asserted for $ran component(s)"
 
   # ── Chart RBAC gate ──────────────────────────────────────────────────────

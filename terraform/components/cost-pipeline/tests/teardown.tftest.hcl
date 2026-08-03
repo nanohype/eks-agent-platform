@@ -22,6 +22,11 @@ mock_provider "aws" {
       user_id    = "AIDTEST"
     }
   }
+  mock_data "aws_region" {
+    defaults = {
+      region = "us-west-2"
+    }
+  }
   mock_data "aws_partition" {
     defaults = {
       partition          = "aws"
@@ -58,17 +63,24 @@ mock_provider "aws" {
 # be satisfied for the plan to build at all.
 mock_provider "aws" {
   alias = "us_east_1"
+
+  # The component carries a check block asserting both cost-allocation keys are active,
+  # and a firing check fails the run. This suite is about teardown posture, so it
+  # defaults to a correctly configured account rather than tripping on an unrelated
+  # concern.
+  mock_data "aws_ce_tags" {
+    defaults = {
+      tags = ["PlatformId", "iamPrincipal/PlatformId", "CostCenter", "BusinessUnit"]
+    }
+  }
 }
 
 variables {
-  environment                  = "staging"
-  region                       = "us-west-2"
-  cluster_name                 = "staging-platform"
-  cur_report_name              = "eks-agent-platform-test"
-  data_kms_key_arn             = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
-  logs_kms_key_arn             = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
-  bedrock_invocation_log_group = "mock-bedrock-invocations"
-  tags                         = {}
+  region           = "us-west-2"
+  cur_report_name  = "eks-agent-platform-test"
+  data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  logs_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
+  tags             = {}
 }
 
 # A protected environment with the lever unset keeps every bucket. This is the posture a real
@@ -110,21 +122,25 @@ run "force_destroy_buckets_opens_every_bucket" {
 }
 
 # Development is disposable by construction and needs no flag.
-run "development_is_unconditionally_tearable_down" {
+# There is no environment-shortcut run here any more, and its absence is the point.
+#
+# The per-environment version of this component treated `development` as
+# unconditionally destroyable, because a validation run rebuilds it. Applied once for
+# the ACCOUNT, there is no development: this pipeline holds the billing history every
+# environment's budget reads, so nothing about it is disposable by default. The only
+# lever is the explicit one, asserted above.
+run "no_environment_token_can_open_the_teardown_gate" {
   command = plan
 
-  variables {
-    environment  = "development"
-    cluster_name = "development-platform"
-  }
-
+  # force_destroy_buckets defaults false, and nothing else may set it. Reaching this
+  # via an environment token is precisely what stopped being possible.
   assert {
     condition = alltrue([
-      aws_s3_bucket.cur.force_destroy,
-      aws_s3_bucket.athena_results.force_destroy,
-      aws_s3_bucket.access_logs.force_destroy,
+      aws_s3_bucket.cur.force_destroy == false,
+      aws_s3_bucket.athena_results.force_destroy == false,
+      aws_s3_bucket.access_logs.force_destroy == false,
     ])
-    error_message = "development must tear down without an opt-in — it is the environment a validation run rebuilds"
+    error_message = "with no explicit force_destroy_buckets, an account-scoped pipeline must keep every bucket — there is no environment here whose disposability could justify opening the gate"
   }
 }
 

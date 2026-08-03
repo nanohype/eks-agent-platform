@@ -93,7 +93,7 @@ eval-runtime, … Synced/Healthy).
 
 Apply once `agent-iam` (B1 step 5) and the cluster exist. This tree is the
 operator's own AWS substrate — `bedrock`, `agent-egress`, `accelerator-pools`,
-`eval-runtime`, `cost-pipeline`, `kill-switch`, `batch-runtime` — and writes the
+`eval-runtime`, `cost-access`, `kill-switch`, `batch-runtime` — and writes the
 SSM parameters the operator loads at startup
 (`/eks-agent-platform/<cluster>/{bedrock,kill-switch,cost-pipeline,eval-runtime,
 batch-runtime}/*`). `agent-iam` is **not** here — landing-zone owns it (B1 step

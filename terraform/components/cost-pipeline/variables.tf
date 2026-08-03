@@ -1,10 +1,11 @@
 variable "environment" {
-  description = "Environment name"
+  description = "Scope token for this root. Always `org` — a Cost and Usage Report has no filter and always covers the whole account, so this pipeline is applied once and never per workload environment. Carried for tagging only; nothing branches on it, because there is no environment whose teardown posture could apply."
   type        = string
+  default     = "org"
 
   validation {
-    condition     = contains(["development", "staging", "production"], var.environment)
-    error_message = "environment must be development, staging or production — the teardown posture branches on the exact token, so a near-miss like \"dev\" applies green with every bucket un-destroyable and the wedge back."
+    condition     = var.environment == "org"
+    error_message = "cost-pipeline is account-scoped: its only valid environment token is `org` (nanohype/standards/resource-naming.json). A workload environment token here would mean three roots each holding a complete duplicate copy of the same account-wide billing data — three reports, three buckets, three crawlers, three catalogs — which is the defect this component was reshaped to remove."
   }
 }
 
@@ -13,13 +14,34 @@ variable "region" {
   type        = string
 }
 
-variable "cluster_name" {
-  description = "EKS cluster name"
+variable "tenant_iam_path" {
+  description = <<-EOT
+    IAM path every role the operator mints lives under — tenant roles and attribution
+    session roles alike. The cost publisher's tag-read grant is scoped to it.
+
+    It is an input rather than a read of agent-iam's SSM contract because that contract is
+    published per CLUSTER and this component is applied once for the account: there is no
+    single cluster subtree to read. The value is an account-wide constant in landing-zone
+    (agent-iam's local.tenant_role_path), which is what makes one input able to stand for
+    every cluster.
+
+    It is not an unchecked mirror. This component publishes the path it used, and every
+    cluster's cost-access compares it against that cluster's own agent-iam parameter and
+    refuses to mint the operator grant if they disagree — so drift is caught once per
+    cluster, by the layer that can see both values.
+  EOT
   type        = string
+  default     = "/eks-agent-platform/tenants/"
 
   validation {
-    condition     = length(var.cluster_name) <= 27
-    error_message = "cluster_name (<environment>-<base>) must be <= 27 chars: it prefixes cluster-scoped S3 bucket names (e.g. <cluster_name>-cost-access-logs-<account>) that must stay within S3's 63-char limit."
+    # Absolute AND a real subtree. "/" is absolute, and it is the account root: the
+    # publisher's grant renders as `:role/*`, which is iam:ListRoleTags over every role
+    # in the account. That is broader than the `Resource = ["*"]` form the suite already
+    # rejects, and it arrives through a value that looks like a path rather than a
+    # wildcard — so the wildcard check never sees it and this is the only place it can
+    # be stopped.
+    condition     = startswith(var.tenant_iam_path, "/") && length(trimspace(var.tenant_iam_path)) > 1 && !strcontains(var.tenant_iam_path, "//")
+    error_message = "tenant_iam_path must be an absolute IAM path naming a subtree, with no empty segments — \"/\" is the account root, and scoping the publisher's tag-read grant there grants iam:ListRoleTags on every role in the account."
   }
 }
 
@@ -48,11 +70,6 @@ variable "cur_crawler_schedule" {
   description = "Cron expression for the CUR Glue Crawler. AWS publishes CUR partitions hourly with the rest of the previous hour catching up over a ~6h window; daily 06:00 UTC picks up yesterday's full day plus the prior-day backfills."
   type        = string
   default     = "cron(0 6 * * ? *)"
-}
-
-variable "bedrock_invocation_log_group" {
-  description = "Bedrock invocation log group name (from terraform/components/bedrock outputs). The invocation-cost-publisher Lambda subscribes here."
-  type        = string
 }
 
 variable "logs_kms_key_arn" {

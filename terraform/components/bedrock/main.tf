@@ -1,301 +1,9 @@
-data "aws_caller_identity" "current" {}
-
 locals {
   prefix = "${var.cluster_name}-bedrock"
   tags = merge(var.tags, {
     Component = "bedrock"
     Tier      = "platform"
   })
-
-  # Teardown posture: development always permits a full destroy; elsewhere it is opt-in.
-  # Same two-act contract as landing-zone's agent-iam — force_destroy has no effect until an
-  # apply lands it in state, so permitting a teardown and performing one are separate acts.
-  #
-  # The invocations bucket is deliberately outside this. Its force_destroy tracks
-  # object_lock_mode, because a WORM retention is a compliance statement about the model
-  # invocation record and a teardown flag must not be able to talk over it.
-  bucket_force_destroy = var.environment == "development" || var.force_destroy_buckets
-}
-
-################################################################################
-# Access-logs bucket — receives server-access logs from the invocations
-# bucket. Kept separate so audit access can be scoped tightly.
-################################################################################
-
-resource "aws_s3_bucket" "access_logs" {
-  bucket = "${local.prefix}-access-logs-${data.aws_caller_identity.current.account_id}"
-
-  # Server-access logs land from the first PUT the invocations bucket takes, so this is
-  # non-empty long before anyone tries to tear the environment down.
-  force_destroy = local.bucket_force_destroy
-
-  tags = local.tags
-}
-
-resource "aws_s3_bucket_public_access_block" "access_logs" {
-  bucket                  = aws_s3_bucket.access_logs.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs" {
-  bucket = aws_s3_bucket.access_logs.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
-  bucket = aws_s3_bucket.access_logs.id
-  rule {
-    id     = "expire-access-logs"
-    status = "Enabled"
-    filter {}
-    expiration {
-      days = var.access_logs_retention_days
-    }
-  }
-}
-
-resource "aws_s3_bucket_policy" "access_logs" {
-  bucket = aws_s3_bucket.access_logs.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid       = "AllowLogDelivery"
-      Effect    = "Allow"
-      Principal = { Service = "logging.s3.amazonaws.com" }
-      Action    = "s3:PutObject"
-      Resource  = "${aws_s3_bucket.access_logs.arn}/*"
-      Condition = {
-        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
-      }
-    }]
-  })
-}
-
-################################################################################
-# Invocation logging — S3 + CloudWatch
-################################################################################
-
-resource "aws_s3_bucket" "invocations" {
-  bucket = "${local.prefix}-invocations-${data.aws_caller_identity.current.account_id}"
-  # Object Lock is enabled at create time (immutable afterward) so the bucket
-  # can enforce WORM retention on invocation logs. force_destroy is permitted
-  # under GOVERNANCE — where an admin holding s3:BypassGovernanceRetention can
-  # clear the lock — so environments tear down cleanly. Under COMPLIANCE the
-  # objects (and therefore the bucket) cannot be deleted by anyone until
-  # retention expires, so destroy is intentionally left blocked.
-  object_lock_enabled = true
-  force_destroy       = var.object_lock_mode != "COMPLIANCE"
-  tags                = local.tags
-}
-
-resource "aws_s3_bucket_logging" "invocations" {
-  bucket        = aws_s3_bucket.invocations.id
-  target_bucket = aws_s3_bucket.access_logs.id
-  target_prefix = "invocations/"
-}
-
-resource "aws_s3_bucket_versioning" "invocations" {
-  bucket = aws_s3_bucket.invocations.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "invocations" {
-  bucket = aws_s3_bucket.invocations.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = var.logs_kms_key_arn
-    }
-    bucket_key_enabled = true
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "invocations" {
-  bucket                  = aws_s3_bucket.invocations.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_object_lock_configuration" "invocations" {
-  bucket = aws_s3_bucket.invocations.id
-  rule {
-    default_retention {
-      mode = var.object_lock_mode
-      days = var.object_lock_retention_days
-    }
-  }
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "invocations" {
-  bucket = aws_s3_bucket.invocations.id
-
-  rule {
-    id     = "transition-to-ia-then-glacier"
-    status = "Enabled"
-    filter {}
-
-    transition {
-      days          = 90
-      storage_class = "STANDARD_IA"
-    }
-
-    transition {
-      days          = 365
-      storage_class = "GLACIER"
-    }
-
-    # Object Lock holds every version until its own retain-until date, so nothing here can
-    # delete a locked object early — this is what bounds the bucket once the lock lapses.
-    # Without it the invocation record grows for the life of the account: transitions move
-    # the cost down a tier and never end it, and a teardown has nothing to reach.
-    expiration {
-      days = var.object_lock_retention_days + 1
-    }
-
-    noncurrent_version_expiration {
-      noncurrent_days = 1
-    }
-  }
-
-  rule {
-    id     = "drop-expired-delete-markers"
-    status = "Enabled"
-    filter {}
-
-    # A delete marker with no versions left under it is bookkeeping that still counts as an
-    # object. S3 rejects days/date in the same expiration block as this flag, so it is its
-    # own rule.
-    expiration {
-      expired_object_delete_marker = true
-    }
-  }
-}
-
-# Bedrock's PutModelInvocationLoggingConfiguration validates that the
-# target bucket has a policy authorizing bedrock.amazonaws.com to write.
-# Without this policy the API call fails with
-# "ValidationException: Failed to validate permissions for bucket".
-# The aws:SourceAccount + aws:SourceArn conditions scope the trust to
-# Bedrock acting on behalf of this account/log-config only.
-resource "aws_s3_bucket_policy" "invocations" {
-  bucket = aws_s3_bucket.invocations.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "AllowBedrockWriteInvocationLogs"
-        Effect    = "Allow"
-        Principal = { Service = "bedrock.amazonaws.com" }
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.invocations.arn}/*"
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-          }
-          ArnLike = {
-            "aws:SourceArn" = "arn:aws:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
-          }
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_cloudwatch_log_group" "invocations" {
-  name              = "/aws/bedrock/${local.prefix}/invocations"
-  retention_in_days = var.log_retention_days
-  kms_key_id        = var.logs_kms_key_arn
-  tags              = local.tags
-}
-
-resource "aws_iam_role" "bedrock_logging" {
-  name = "${local.prefix}-logging"
-  tags = local.tags
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "bedrock.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-      Condition = {
-        StringEquals = {
-          "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-        }
-      }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "bedrock_logging" {
-  name = "bedrock-logging"
-  role = aws_iam_role.bedrock_logging.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:PutObject",
-          "s3:GetBucketLocation"
-        ]
-        Resource = [
-          aws_s3_bucket.invocations.arn,
-          "${aws_s3_bucket.invocations.arn}/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
-        Resource = "${aws_cloudwatch_log_group.invocations.arn}:*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
-        Resource = var.logs_kms_key_arn
-      }
-    ]
-  })
-}
-
-resource "aws_bedrock_model_invocation_logging_configuration" "this" {
-  # Bedrock validates the bucket policy synchronously, so the policy must
-  # be in place before this resource is created. Without the explicit
-  # depends_on tofu races the two and validation can fail.
-  depends_on = [aws_s3_bucket_policy.invocations]
-
-  logging_config {
-    embedding_data_delivery_enabled = true
-    image_data_delivery_enabled     = true
-    text_data_delivery_enabled      = true
-    video_data_delivery_enabled     = true
-
-    cloudwatch_config {
-      log_group_name = aws_cloudwatch_log_group.invocations.name
-      role_arn       = aws_iam_role.bedrock_logging.arn
-    }
-
-    s3_config {
-      bucket_name = aws_s3_bucket.invocations.id
-      key_prefix  = "invocations/"
-    }
-  }
 }
 
 ################################################################################
@@ -394,27 +102,67 @@ resource "aws_bedrock_guardrail" "baseline" {
 }
 
 ################################################################################
-# SSM outputs
+# The account's invocation logging, republished under this cluster's prefix.
+#
+# The logging configuration, its bucket and its log group are account+region
+# singletons owned by bedrock-account. The operator cannot see them there: its
+# entire configuration is one recursive GetParametersByPath sweep of
+# /eks-agent-platform/<cluster-name>/, so anything published under the account
+# prefix is invisible to every cluster.
+#
+# So this component republishes the account's values under its own prefix. That
+# keeps the operator's contract unchanged — it still reads
+# `bedrock/invocation_log_group` from its own subtree — while the values behind
+# those keys come from the one component that owns them. Read from SSM rather than
+# a terragrunt `dependency` because a dependency across roots resolves at parse
+# time, and a per-environment leaf that cannot `init` without the account root's
+# state is a coupling nobody asked for.
 ################################################################################
+
+data "aws_ssm_parameter" "account_invocation_log_group" {
+  name = "/eks-agent-platform/org/bedrock-account/invocation_log_group"
+}
+
+data "aws_ssm_parameter" "account_invocation_bucket_arn" {
+  name = "/eks-agent-platform/org/bedrock-account/invocation_bucket_arn"
+}
 
 resource "aws_ssm_parameter" "invocation_bucket" {
   name  = "/eks-agent-platform/${var.cluster_name}/bedrock/invocation_bucket_arn"
   type  = "String"
-  value = aws_s3_bucket.invocations.arn
+  value = data.aws_ssm_parameter.account_invocation_bucket_arn.value
   tags  = local.tags
 }
 
 resource "aws_ssm_parameter" "invocation_log_group" {
   name  = "/eks-agent-platform/${var.cluster_name}/bedrock/invocation_log_group"
   type  = "String"
-  value = aws_cloudwatch_log_group.invocations.name
+  value = data.aws_ssm_parameter.account_invocation_log_group.value
   tags  = local.tags
 }
+
+################################################################################
+# Guardrails — genuinely per-cluster. A guardrail is a named resource, so many can
+# exist in one account and each cluster gets its own.
+################################################################################
 
 resource "aws_ssm_parameter" "baseline_guardrail_id" {
   count = local.enable_guardrail ? 1 : 0
   name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_id"
   type  = "String"
   value = aws_bedrock_guardrail.baseline[0].guardrail_id
+  tags  = local.tags
+}
+
+# The operator reads this key (operatorconfig: bedrock/baseline_guardrail_version)
+# and hands it to the ModelGateway reconciler. Nothing published it, so the field
+# was permanently empty — a seam claiming more than it delivered. A guardrail is
+# versioned and the version is what an invocation pins, so publishing the id alone
+# left the consumer unable to name what it was applying.
+resource "aws_ssm_parameter" "baseline_guardrail_version" {
+  count = local.enable_guardrail ? 1 : 0
+  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_version"
+  type  = "String"
+  value = aws_bedrock_guardrail.baseline[0].version
   tags  = local.tags
 }

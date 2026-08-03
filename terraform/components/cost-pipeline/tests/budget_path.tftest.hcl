@@ -16,6 +16,11 @@ mock_provider "aws" {
       user_id    = "AIDTEST"
     }
   }
+  mock_data "aws_region" {
+    defaults = {
+      region = "us-west-2"
+    }
+  }
   mock_data "aws_partition" {
     defaults = {
       partition          = "aws"
@@ -47,51 +52,34 @@ mock_provider "aws" {
 
 mock_provider "aws" {
   alias = "us_east_1"
+
+  # A check block fails the run that triggers it, so the default here is a correctly
+  # configured account — BOTH cost-allocation keys active. Runs that care about an
+  # unactivated state override it and declare the failure they expect.
+  #
+  # Both keys, not just PlatformId: the resource tag attributes datastores and the
+  # principal tag attributes model invocations, and a default carrying only the first
+  # would make every unrelated run in this file fail for a reason none of them are
+  # about.
+  mock_data "aws_ce_tags" {
+    defaults = {
+      tags = ["PlatformId", "iamPrincipal/PlatformId", "CostCenter", "BusinessUnit"]
+    }
+  }
 }
 
 variables {
-  environment                  = "staging"
-  region                       = "us-west-2"
-  cluster_name                 = "staging-platform"
-  cur_report_name              = "eks-agent-platform-test"
-  data_kms_key_arn             = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
-  logs_kms_key_arn             = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
-  bedrock_invocation_log_group = "mock-bedrock-invocations"
-  tags                         = {}
+  region           = "us-west-2"
+  cur_report_name  = "eks-agent-platform-test"
+  data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  logs_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
+  tags             = {}
 }
 
 # The operator executes the Athena query, and Athena reaches S3 and KMS under the
 # CALLER's identity. Reading the SSE-KMS estimates and writing the SSE-KMS result set
 # are both on this key, and the workgroup enforces encrypted results — so Decrypt
 # alone leaves every query failing at the write step.
-run "the_operator_can_decrypt_and_write_what_it_queries" {
-  command = plan
-
-  assert {
-    condition = anytrue([
-      for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
-      contains(s.Action, "kms:Decrypt")
-      && contains(s.Action, "kms:GenerateDataKey")
-      && contains(tolist(s.Resource), var.data_kms_key_arn)
-    ])
-    error_message = "the operator role must hold kms:Decrypt AND kms:GenerateDataKey on the cost data key — without both, StartQueryExecution returns FAILED on every tick, reconcileBudget returns before the kill-switch block, and a tenant at 120% of budget never trips it with nothing going red"
-  }
-
-  # The grant is capped to S3, so it cannot be used to decrypt anything else the key
-  # protects. A grant that works and reaches further than it needs is the next finding.
-  assert {
-    condition = alltrue([
-      for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
-      !contains(s.Action, "kms:Decrypt") || try(s.Condition.StringEquals["kms:ViaService"], null) != null
-    ])
-    error_message = "the KMS grant must be conditioned on kms:ViaService so it only works through S3"
-  }
-}
-
-# AWS's Cost and Usage Reports service delivers with the two S3 statements it
-# publishes and nothing else — it holds no KMS grant, and AWS documents none. An
-# SSE-KMS default on this bucket does not harden it, it makes every delivery fail, so
-# the bucket stays empty and every budget reads zero.
 run "aws_can_actually_deliver_the_report" {
   command = plan
 
@@ -173,17 +161,14 @@ run "the_publisher_can_read_the_tag_it_attributes_by" {
 # (platform_iam.go, platform_session_iam.go); if terraform does not, the same stored value
 # means two different things and the grant matches nothing the operator ever creates.
 #
-# The suite's global mock returns an ARN for every aws_ssm_parameter, which is fine for the
-# resources that only need A value but makes any assertion about THIS one vacuous — it
-# happens not to end in a slash and happens not to end in ":role/*", so both the
-# normalization and the scoping assertions would pass without testing anything. These runs
-# override the data source with the two shapes that actually matter.
+# The path is an input now — agent-iam publishes it per CLUSTER and this component is
+# applied once for the account, so there is no single subtree to read. These runs drive
+# the two shapes that matter through that input.
 run "the_tag_read_grant_survives_a_path_without_a_trailing_slash" {
   command = plan
 
-  override_data {
-    target = data.aws_ssm_parameter.tenant_iam_path
-    values = { value = "/eks-agent-platform/tenants" }
+  variables {
+    tenant_iam_path = "/eks-agent-platform/tenants"
   }
 
   assert {
@@ -204,9 +189,8 @@ run "the_tag_read_grant_survives_a_path_without_a_trailing_slash" {
 run "the_tag_read_grant_is_unchanged_by_a_path_that_already_ends_in_a_slash" {
   command = plan
 
-  override_data {
-    target = data.aws_ssm_parameter.tenant_iam_path
-    values = { value = "/eks-agent-platform/tenants/" }
+  variables {
+    tenant_iam_path = "/eks-agent-platform/tenants/"
   }
 
   # Normalization must be idempotent — a double slash is a different path to IAM, and
@@ -215,6 +199,39 @@ run "the_tag_read_grant_is_unchanged_by_a_path_that_already_ends_in_a_slash" {
     condition     = local.tenant_iam_path == "/eks-agent-platform/tenants/"
     error_message = "normalizing an already-normalized path must not append a second slash"
   }
+}
+
+# The account root is not a path. `/` satisfies "absolute", normalizes to `/`, and
+# renders the grant as `:role/*` — iam:ListRoleTags over every role in the account, on
+# a Lambda subscribed to a log group carrying every Bedrock invocation.
+#
+# This is broader than the `Resource = ["*"]` form asserted against above, and it gets
+# there through a value shaped like a path rather than like a wildcard, so the
+# over-broad check cannot see it: `startswith(r, ":role/")` is trivially true. The
+# variable's own validation is the only place it can be stopped, which is why the
+# assertion lives on the variable.
+#
+# expect_failures names the variable, and tenant_iam_path carries exactly one
+# validation, so this cannot pass on some unrelated failure the way a resource with
+# several preconditions can.
+run "the_account_root_is_not_an_acceptable_tenant_path" {
+  command = plan
+
+  variables {
+    tenant_iam_path = "/"
+  }
+
+  expect_failures = [var.tenant_iam_path]
+}
+
+run "a_path_with_an_empty_segment_is_refused" {
+  command = plan
+
+  variables {
+    tenant_iam_path = "/eks-agent-platform//tenants/"
+  }
+
+  expect_failures = [var.tenant_iam_path]
 }
 
 # The CUR platform-tag column, asserted where terraform composes SQL. The operator derives
@@ -274,6 +291,91 @@ run "the_workgroup_enforces_the_key_the_operator_holds" {
         ])
       ])
     ])
-    error_message = "the workgroup must enforce SSE_KMS results on the same key the operator policy grants — enforcing a key the caller cannot use fails every query at the write step"
+    error_message = "the workgroup must enforce SSE_KMS results on data_kms_key_arn. The other half of this pair — that each cluster's operator actually holds Decrypt AND GenerateDataKey on that key — is asserted in cost-access, which is where the grant is minted; enforcing a key the caller cannot use fails every query at the write step"
+  }
+}
+
+# The cost-allocation tags are ASSERTED, not owned, and the assertion has to be able
+# to fire in both directions.
+#
+# Terraform cannot own this. `aws_ce_tags` reads cost DATA dimensions, so a user-defined
+# key shows up there only once it is already active — a gate on it waits for the thing
+# it is trying to cause. Nothing can see an inactive key. And the provider's activation
+# resource discards the per-key error the API returns inside a 200, so declaring it
+# reports success while doing nothing.
+#
+# What is left is a verifier, and the same property that makes the data source useless
+# as a gate makes it exact as one: presence IS activation.
+run "an_unactivated_key_is_reported_loudly" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["CostCenter", "BusinessUnit"] }
+  }
+
+  # The check MUST fire. A check whose condition is always true is indistinguishable
+  # from no check, so the expectation is what pins that this one can fail at all.
+  expect_failures = [check.the_cost_allocation_tags_are_active]
+}
+
+# Half-activated is the interesting state, because it is the one that looks fine.
+# PlatformId alone attributes every datastore and no model invocation, so the budget
+# is confidently wrong in a specific direction rather than obviously broken — and the
+# missing half is the dominant cost.
+run "activating_only_the_resource_tag_is_still_a_failure" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["PlatformId", "CostCenter"] }
+  }
+
+  expect_failures = [check.the_cost_allocation_tags_are_active]
+}
+
+run "activating_only_the_principal_tag_is_still_a_failure" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["iamPrincipal/PlatformId"] }
+  }
+
+  expect_failures = [check.the_cost_allocation_tags_are_active]
+}
+
+# And it must go quiet when both are active, or it is a warning operators learn to
+# scroll past — which is the same as not having it.
+run "both_keys_active_is_silent" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = ["PlatformId", "iamPrincipal/PlatformId", "CostCenter"] }
+  }
+
+  assert {
+    condition     = length(local.inactive_cost_allocation_tags) == 0
+    error_message = "with both keys active the check must not fire — a gate that cries wolf on a correctly configured account gets ignored on the run that matters"
+  }
+}
+
+# The pipeline stamps its own storage regardless, because that observation is what puts
+# the key into AWS's inventory in the first place. Without it there is nothing for a
+# human to activate, and the account waits forever for a key that will never be listed.
+run "the_pipeline_seeds_the_key_it_asks_to_have_activated" {
+  command = plan
+
+  override_data {
+    target = data.aws_ce_tags.observed
+    values = { tags = [] }
+  }
+
+  expect_failures = [check.the_cost_allocation_tags_are_active]
+
+  assert {
+    condition     = aws_s3_bucket.cur.tags["PlatformId"] == "org"
+    error_message = "the pipeline must tag its own storage with PlatformId even while the key is unactivatable — that observation is what makes AWS list the key at all"
   }
 }
