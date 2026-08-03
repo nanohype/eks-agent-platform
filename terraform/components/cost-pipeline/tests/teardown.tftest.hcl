@@ -258,4 +258,19 @@ run "the_crawler_reads_where_the_export_is_delivered" {
     ])
     error_message = "the crawler's IAM must name the export bucket it was pointed at — this component's own bucket holds only estimates, so a stale grant leaves every crawl AccessDenied and the CUR table absent"
   }
+
+  # And the table name the operator queries is the one this crawler will actually produce.
+  # Glue names the table after the last segment of the path it crawled, with hyphens
+  # normalized to underscores — so the name has to be derived from the export name and
+  # nothing else. The sentinel carries a hyphen precisely so that transform is observable
+  # here rather than assumed.
+  #
+  # A name from any other source is a table that does not exist: every budget query returns
+  # FAILED, reconcileBudget exits before the kill-switch block, and a tenant over its cap is
+  # never stopped. That failure is noisy in the operator's logs and invisible on the
+  # BudgetPolicy, which is the wrong way round.
+  assert {
+    condition     = aws_ssm_parameter.cur_table_name.value == "SENTINEL_name"
+    error_message = "the published CUR table name must be the export's name with hyphens normalized to underscores — the operator queries this table by name, and a name the crawler never creates makes every budget query fail rather than read zero"
+  }
 }
