@@ -404,6 +404,21 @@ resource "aws_s3_bucket_lifecycle_configuration" "athena_results" {
       expired_object_delete_marker = true
     }
   }
+
+  rule {
+    id     = "abort-incomplete-result-uploads"
+    status = "Enabled"
+    filter {}
+
+    # A result set large enough is written as a multipart upload, and the reconciler stops a
+    # query that outruns its poll window — so an aborted or timed-out write leaves parts
+    # behind. Orphaned parts are billed and are invisible to both the expiry rules above and
+    # to a ListObjects, because they are not objects yet. Without this the bucket carries a
+    # cost nothing in the console accounts for and a teardown wedges on it.
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
 resource "aws_athena_workgroup" "cost" {
@@ -439,7 +454,15 @@ resource "aws_glue_catalog_database" "cost" {
 # cost-access, which is applied per cluster and reads this component's published
 # handles.
 #
-# What stays here is what there is one of: the report, the buckets, the catalog, the
+# The same is true of the Athena workgroup a cluster's operator runs in. A workgroup
+# decides the output location and encryption for every caller in it, and enforces
+# them — so one workgroup for the account is one results prefix shared by every
+# cluster, with no way for a caller to vary it. That is one-per-caller-set, the same
+# cardinality as the grant, so it lives in cost-access too. The workgroup that stays
+# here is the account's own query surface, which the reconciliation named query binds
+# to.
+#
+# What stays here is what there is one of: the buckets, the catalog, the account
 # workgroup and the publisher.
 ################################################################################
 

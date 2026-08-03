@@ -37,6 +37,15 @@ mock_provider "aws" {
   }
 }
 
+# The one account handle that cannot take the shared default. The provider validates a
+# workgroup's kms_key_arn as an ARN client-side, so the fixture's IAM-path default fails
+# the plan outright rather than any assertion. Runs that assert on the key override this
+# with their own sentinel; a run-level override wins.
+override_data {
+  target = data.aws_ssm_parameter.account_data_kms_key_arn
+  values = { value = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000" }
+}
+
 variables {
   environment  = "staging"
   region       = "us-west-2"
@@ -83,6 +92,14 @@ run "the_operator_can_decrypt_and_write_what_it_queries" {
     error_message = "the cost key must be read from the account contract's data_kms_key_arn — every other key under that prefix resolves too, so a near-miss applies cleanly and scopes the operator's KMS grant to something that is not a key"
   }
 
+  # And the workgroup enforces that same key. The operator sends no ResultConfiguration,
+  # so the workgroup is the only thing deciding how results are encrypted — a grant on
+  # one key and enforcement on another fails at the write, after the scan.
+  assert {
+    condition     = one(one(aws_athena_workgroup.cluster.configuration).result_configuration).encryption_configuration[0].kms_key_arn == "arn:aws:kms:us-west-2:123456789012:key/SENTINEL-ACCOUNT-COST-KEY"
+    error_message = "this cluster's workgroup must enforce the same account key the operator's grant names — enforcement on a key the caller cannot GenerateDataKey with fails every query at the SSE-KMS write, which the reconciler reports as unreadable spend rather than as access denied"
+  }
+
   # The grant is capped to S3, so it cannot be used to decrypt anything else the key
   # protects. A grant that works and reaches further than it needs is the next finding.
   assert {
@@ -91,6 +108,98 @@ run "the_operator_can_decrypt_and_write_what_it_queries" {
       !contains(s.Action, "kms:Decrypt") || try(s.Condition.StringEquals["kms:ViaService"], null) != null
     ])
     error_message = "the KMS grant must be conditioned on kms:ViaService so it only works through S3"
+  }
+}
+
+# Where this cluster writes, and where it is permitted to write, are one claim.
+#
+# The workgroup's output location and the object grant's resource are both derived from
+# var.cluster_name, and the assertions derive them the same way rather than repeating a
+# literal — two hardcoded strings that agree prove nothing about the pair, which is the
+# defect the KMS run above was written to correct.
+#
+# A workgroup writing where the policy does not permit fails on the WRITE, after the
+# scan: the reconciler reports unreadable spend rather than access denied, returns
+# before the kill-switch block, and every budget holds its last value with nothing red.
+run "this_cluster_writes_only_where_it_is_permitted_to_write" {
+  command = plan
+
+  # The name and the ARN are separate account handles, and both have to denote the same
+  # bucket: the workgroup composes an s3:// URI from the name, the grant is scoped to the
+  # ARN. Overridden to matching sentinels so an assertion cannot pass on the fixture
+  # default resolving both to the same string.
+  override_data {
+    target = data.aws_ssm_parameter.athena_results_bucket
+    values = { value = "SENTINEL-results-bucket" }
+  }
+  override_data {
+    target = data.aws_ssm_parameter.athena_results_bucket_arn
+    values = { value = "arn:aws:s3:::SENTINEL-results-bucket" }
+  }
+
+  assert {
+    condition     = one(one(aws_athena_workgroup.cluster.configuration).result_configuration).output_location == "s3://SENTINEL-results-bucket/results/${var.cluster_name}/"
+    error_message = "the workgroup must write under this cluster's own prefix in the account results bucket — a shared prefix is what lets one cluster's operator overwrite the objects another cluster's reconciler reads back"
+  }
+
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
+      contains(s.Action, "s3:PutObject")
+      # length + contains, not an equality against a literal list: tolist() yields
+      # list(string) and the literal is a tuple, so `==` is false for identical
+      # contents. "Exactly one resource, and it is this one" is the same claim.
+      && length(tolist(s.Resource)) == 1
+      && contains(tolist(s.Resource), "arn:aws:s3:::SENTINEL-results-bucket/results/${var.cluster_name}/*")
+    ])
+    error_message = "the object grant must cover exactly this cluster's results prefix and nothing else — wider and a compromised operator overwrites another cluster's results, narrower or elsewhere and every query fails at the write with the reconciler reporting unreadable spend"
+  }
+
+  # ListBucket is a BUCKET-level action. On an object ARN it matches nothing, and Athena
+  # fails at listing before it writes anything — so the split has to survive, not just
+  # the narrowing.
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
+      contains(s.Action, "s3:ListBucket")
+      && contains(tolist(s.Resource), "arn:aws:s3:::SENTINEL-results-bucket")
+    ])
+    error_message = "s3:ListBucket must be granted on the bucket ARN, not an object ARN — collapsing it into the object prefix statement matches nothing and every query fails at listing"
+  }
+
+  # The workgroup the operator is handed is the one its policy covers. These ship
+  # together or the operator gets a name it may not use.
+  assert {
+    condition = alltrue([
+      nonsensitive(aws_ssm_parameter.athena_workgroup.value) == aws_athena_workgroup.cluster.name,
+      anytrue([
+        for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
+        contains(s.Action, "athena:StartQueryExecution")
+        # flatten, not tolist: this statement's Resource is a single string, and IAM
+        # accepts either form. tolist() on a string raises rather than failing the
+        # assertion, which would make the run error instead of reporting the defect.
+        && contains(flatten([s.Resource]), aws_athena_workgroup.cluster.arn)
+      ]),
+    ])
+    error_message = "the republished workgroup handle and the athena grant must name the same workgroup — the operator runs in whatever the handle says, so a grant on any other workgroup is AccessDenied on every tick and the kill switch never fires"
+  }
+
+  # And the configuration is ENFORCED, which is what makes the prefix above a boundary
+  # rather than a default. Without it a caller's own ResultConfiguration wins, and the
+  # caller chooses both the output location and the encryption — so the per-cluster
+  # prefix becomes advisory and the SSE-KMS guarantee goes with it. Nothing else in this
+  # suite can see that: every assertion here reads the workgroup's own configuration,
+  # which stays exactly as written while quietly ceasing to apply.
+  assert {
+    condition     = one(aws_athena_workgroup.cluster.configuration).enforce_workgroup_configuration
+    error_message = "the workgroup must enforce its configuration — unenforced, a caller supplies its own output location and encryption, so this cluster's results prefix stops being a boundary and the SSE-KMS requirement stops being a requirement, with the workgroup still reading as correct"
+  }
+
+  # The name has to satisfy the operator's own identifier check, or it refuses to build
+  # the query at all — a different failure from AccessDenied, and just as quiet.
+  assert {
+    condition     = can(regex("^[a-zA-Z0-9_-]{1,128}$", aws_athena_workgroup.cluster.name))
+    error_message = "the workgroup name must match the operator's athenaIdentifierRE — it validates the name before building a query and returns early if it fails, so an unmatched name stops every budget tick before Athena is ever called"
   }
 }
 
@@ -205,18 +314,18 @@ run "the_policy_is_attached_to_the_role_that_needs_it" {
 #
 # The mock provider gives every aws_ssm_parameter read the same default, so a suite that
 # asserts only on parameter NAMES passes identically when the values behind them are
-# transposed — cur_bucket republished from the workgroup handle, database from the table
-# name. The operator sweeps the right keys and decodes the wrong values, and every query
-# it builds is syntactically fine and points at nothing.
+# transposed — the database republished from the table-name handle, or the reverse. The
+# operator sweeps the right keys and decodes the wrong values, and every query it builds
+# is syntactically fine and points at nothing.
 #
 # So each source gets a distinct sentinel and each assertion names the one it expects.
+#
+# The workgroup handle is not here: it no longer carries an account value at all. It
+# carries this cluster's own workgroup, and it is asserted against the grant that must
+# cover it in the run above, which is the pairing that actually matters for it.
 run "each_account_handle_republishes_its_own_value" {
   command = plan
 
-  override_data {
-    target = data.aws_ssm_parameter.athena_workgroup
-    values = { value = "SENTINEL-workgroup" }
-  }
   override_data {
     target = data.aws_ssm_parameter.athena_database
     values = { value = "SENTINEL-database" }
@@ -228,7 +337,6 @@ run "each_account_handle_republishes_its_own_value" {
 
   assert {
     condition = alltrue([
-      nonsensitive(aws_ssm_parameter.athena_workgroup.value) == "SENTINEL-workgroup",
       nonsensitive(aws_ssm_parameter.athena_database.value) == "SENTINEL-database",
       nonsensitive(aws_ssm_parameter.cur_table_name.value) == "SENTINEL-cur-table",
     ])
