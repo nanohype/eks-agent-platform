@@ -50,12 +50,6 @@ variable "data_kms_key_arn" {
   type        = string
 }
 
-variable "cur_report_name" {
-  description = "Name of the Cost & Usage Report. Must be unique across the account."
-  type        = string
-  default     = "eks-agent-platform"
-}
-
 variable "athena_results_retention_days" {
   description = "How long to retain saved query outputs in the Athena results bucket. Default 30 is fine for dev (throwaway queries); production should bump to match the audit cycle — set to 90 or 365 depending on regulator requirements."
   type        = number
@@ -81,34 +75,6 @@ variable "invocation_cost_publisher_log_retention_days" {
   description = "How long to retain the invocation-cost-publisher Lambda's own CloudWatch logs"
   type        = number
   default     = 30
-}
-
-variable "cur_retention_days" {
-  description = <<-EOT
-    How long the CUR Parquet AWS delivers under `cur/` is kept. This is the billing history
-    every budget decision reads back over, and AWS re-delivers the current month but never a
-    closed one, so shortening it discards a record that cannot be recovered.
-
-    Measured from each object's last delivery rather than from the billing month:
-    report_versioning is OVERWRITE_REPORT and refresh_closed_reports is on, so AWS rewrites a
-    month's objects while it remains inside its refresh window and the clock restarts. Past
-    that window the objects are final, and this is what bounds them.
-
-    It also bounds the bucket. Without an expiry here the CUR prefix grows for the life of the
-    account, which is both an unbounded storage bill and a teardown with no end.
-  EOT
-  type        = number
-  default     = 730
-
-  validation {
-    condition     = var.cur_retention_days >= 90 && var.cur_retention_days <= 3650
-    error_message = "cur_retention_days must be between 90 (a quarter of billing history) and 3650 (10 years)."
-  }
-
-  validation {
-    condition     = var.cur_retention_days >= var.estimate_retention_days
-    error_message = "cur_retention_days must be >= estimate_retention_days — the reconciliation view joins the in-flight estimates against the CUR line items, so a CUR window shorter than the estimate window silently reconciles estimates against nothing."
-  }
 }
 
 variable "access_logs_retention_days" {

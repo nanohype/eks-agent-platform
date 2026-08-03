@@ -19,8 +19,6 @@ terraform {
 #   - data_kms_key_arn, logs_kms_key_arn  (from lz-secrets)
 inputs = {
   # One report for the account. It carries no environment token because it has no
-  # environment: the data is every environment's, and always was.
-  cur_report_name = "eks-agent-platform"
 
   # The account's billing history is what every environment's budget reads, so the
   # retention is the longest of what the environments used to ask for individually

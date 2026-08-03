@@ -1,6 +1,11 @@
-output "cur_bucket_arn" {
-  description = "S3 bucket holding CUR Parquet partitions"
-  value       = aws_s3_bucket.cur.arn
+output "cur_export_bucket" {
+  description = "The account CUR 2.0 export bucket this pipeline queries. landing-zone's org-cost owns it; this component only reads it."
+  value       = local.cur_export_bucket
+}
+
+output "estimates_bucket_arn" {
+  description = "S3 bucket holding the invocation-cost publisher's per-batch estimate objects."
+  value       = aws_s3_bucket.estimates.arn
 }
 
 output "athena_workgroup" {
@@ -9,7 +14,7 @@ output "athena_workgroup" {
 }
 
 output "athena_database" {
-  description = "Glue catalog database containing the CUR table"
+  description = "Glue catalog database holding the CUR table and the estimate table"
   value       = aws_glue_catalog_database.cost.name
 }
 
@@ -19,7 +24,7 @@ output "athena_results_bucket" {
 }
 
 output "cur_table_name" {
-  description = "Predicted Glue table name produced by the CUR Crawler (CUR report name with hyphens normalized to underscores). Operator reads this from SSM."
+  description = "Glue table the CUR crawler produces over the account export — the export name with hyphens normalized to underscores. Operator reads this from SSM."
   value       = local.cur_table_name
 }
 

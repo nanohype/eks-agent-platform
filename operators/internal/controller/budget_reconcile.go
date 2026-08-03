@@ -14,7 +14,6 @@ import (
 	"math/big"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -124,39 +123,38 @@ func platformCostID(clusterName, platformName string) string {
 	return clusterName + "-" + platformName
 }
 
-// curTagColumn renders a user tag key as the column name it takes once AWS loads a
-// Cost and Usage Report into Athena.
+// curPlatformTagExpr renders the SQL expression that names a line item's platform in a
+// CUR 2.0 export.
 //
-// AWS applies these transforms, in order, and documents them under "Column names"
-// in the Athena section of the CUR user guide:
+// CUR 2.0 has no flattened per-tag columns. There is one `tags` column of type
+// map<string,string> carrying every tag source at once, keyed by prefix —
+// resourceTags/, iamPrincipal/, accountTag/, costCategory/, userAttribute/ — and a key
+// appears in it only once it has been activated as a cost-allocation tag.
 //
-//	an underscore is added in front of uppercase letters
-//	uppercase letters are replaced with lowercase letters
-//	any non-alphanumeric characters are replaced with an underscore
-//	duplicate underscores are removed
-//	any leading and trailing underscores are removed
+// Attribution is a UNION of two prefixes and cannot be either one alone:
 //
-// So `resourceTags/user:PlatformId` becomes `resource_tags_user_platform_id` — note
-// the split inside PlatformId, which is the part a hand-written name gets wrong.
-// Deriving it means the tag key is the single source and the column follows it.
-func curTagColumn(tagKey string) string {
-	var b strings.Builder
-	for _, r := range "resourceTags/user:" + tagKey {
-		switch {
-		case r >= 'A' && r <= 'Z':
-			b.WriteByte('_')
-			b.WriteRune(r + ('a' - 'A'))
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	out := b.String()
-	for strings.Contains(out, "__") {
-		out = strings.ReplaceAll(out, "__", "_")
-	}
-	return strings.Trim(out, "_")
+//	resourceTags/<key>   the tenant's datastores, which carry a resource tag.
+//	iamPrincipal/<key>   model invocations, which do not. An invocation is not a
+//	                     taggable resource, so no resourceTags/ key is ever populated
+//	                     on one and AWS attributes it by the calling identity instead.
+//
+// Filtering on the resource prefix alone sees every datastore and no model spend, which
+// is the dominant cost. The principal prefix alone sees the reverse — AWS scopes
+// IAM-principal allocation to Bedrock runtime calls — so every bucket, database and
+// queue vanishes. Either half reads as a plausible number.
+//
+// element_at rather than tags['...']: Athena is Trino, where the map subscript operator
+// RAISES on a missing key instead of returning NULL, so a line item carrying one prefix
+// and not the other would fail the whole query rather than yield a row.
+//
+// cost-pipeline composes the same expression in HCL. Both sides are written out against
+// AWS's published schema independently, on purpose — one shared derivation would let a
+// single wrong spelling satisfy both and the query would still return nothing.
+func curPlatformTagExpr(tagKey string) string {
+	return fmt.Sprintf(
+		"COALESCE(element_at(tags, 'resourceTags/%s'), element_at(tags, 'iamPrincipal/%s'))",
+		tagKey, tagKey,
+	)
 }
 
 // inflightWindowStart returns the earliest instant the in-flight CloudWatch leg may
@@ -230,7 +228,7 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 		   AND line_item_line_item_type = 'Usage'
 		   AND line_item_usage_start_date >= date_trunc('month', current_date)`,
 		r.AthenaCfg.Database, r.AthenaCfg.CURTableName,
-		curTagColumn(platformIDTagKey), escapeSQL(platformID),
+		curPlatformTagExpr(platformIDTagKey), escapeSQL(platformID),
 	)
 	startOut, err := r.Athena.StartQueryExecution(ctx, &athena.StartQueryExecutionInput{
 		QueryString: aws.String(query),
