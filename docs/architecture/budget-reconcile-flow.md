@@ -88,11 +88,24 @@ The total spend reading is `CUR + CloudWatch`. The kill-switch is intentionally 
 
 | Action                                                                                                     | Resource                                            | Granted by                                             |
 | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
-| `athena:StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup` | `arn:aws:athena:*:*:workgroup/org-<account>-<region>-cost` | `terraform/components/cost-access` operator policy     |
-| `glue:GetDatabase`, `GetTable`, `GetTables`, `GetPartitions`                                               | catalog + `<env>-<cluster>-cost-cost` database      | same                                                   |
-| `s3:GetObject`, `PutObject`, `ListBucket`                                                                  | athena results bucket                               | same                                                   |
+| `athena:StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup` | `arn:aws:athena:*:*:workgroup/<cluster>-cost-access` — THIS cluster's workgroup, not the account's | `terraform/components/cost-access` operator policy     |
+| `glue:GetDatabase`, `GetTable`, `GetTables`, `GetPartitions`                                               | catalog + the account cost database + its tables    | same                                                   |
+| `s3:GetObject`, `PutObject`, `AbortMultipartUpload`, `ListMultipartUploadParts`                            | `<athena-results-bucket>/results/<cluster>/*` only  | same                                                   |
+| `s3:ListBucket`, `GetBucketLocation`, `ListBucketMultipartUploads`                                         | the results bucket ARN (bucket-level, unprefixed)   | same                                                   |
+| `s3:GetObject`, `ListBucket`                                                                               | the account CUR export bucket                       | same                                                   |
+| `kms:Decrypt`, `GenerateDataKey`, `DescribeKey`                                                            | the account cost key, capped to `kms:ViaService` s3 | same                                                   |
 | `cloudwatch:GetMetricData`, `GetMetricStatistics`, `ListMetrics`                                           | `*`                                                 | same                                                   |
 | `events:PutEvents`                                                                                         | kill-switch event bus ARN                           | `terraform/components/kill-switch` operator bus policy |
+
+Two pairs in that table have to agree, and neither side fails loudly when they do not:
+
+- the workgroup the operator is handed (`/eks-agent-platform/<cluster>/cost-pipeline/athena_workgroup`)
+  and the workgroup ARN its policy names — a mismatch is `AccessDenied` on every tick
+- the workgroup's enforced `OutputLocation` and the `s3:PutObject` prefix — a mismatch fails on the
+  **write**, after the scan has already succeeded
+
+Both surface as a FAILED query, which the reconciler records as unreadable spend rather than as an
+access error. So when budgets go stale, check the pairs, not each side on its own.
 
 See [ADR 0003 — Threat model](../adr/0003-threat-model.md) for the full operator IAM surface enumeration.
 

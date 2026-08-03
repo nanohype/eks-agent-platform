@@ -53,6 +53,53 @@ variables {
   tags         = {}
 }
 
+# Every account handle is read from the path its label claims.
+#
+# This is the one assertion the rest of the suite cannot substitute for, and it is not a
+# formality. `override_data` targets a data source by RESOURCE ADDRESS, so it supplies a
+# value no matter which parameter that source's `name` argument actually points at — a
+# sentinel-based assertion is therefore completely blind to the read path. Every other
+# handle assertion in this file has that blind spot by construction.
+#
+# The failure is silent twice over. Every key under /eks-agent-platform/org/cost-pipeline/
+# RESOLVES, because the account publishes all of them — so a handle repointed at a sibling
+# key does not fail the plan or the apply. It succeeds, and hands the operator or the IAM
+# policy a real string that means something else: the CUR grant scoped to the results
+# bucket, the Glue grant scoped to a workgroup ARN, the database name carrying a table
+# name. Every Athena query then fails, which the reconciler records as unreadable spend
+# rather than as an error, so budgets hold their last value and the kill switch is never
+# reached.
+#
+# Pinned as literals rather than composed from local.account_prefix: that local is the
+# thing under test, and deriving both sides from it would agree with any prefix it
+# happened to hold.
+run "every_account_handle_is_read_from_the_path_its_name_claims" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      data.aws_ssm_parameter.cur_bucket_arn.name == "/eks-agent-platform/org/cost-pipeline/cur_bucket_arn",
+      data.aws_ssm_parameter.athena_results_bucket.name == "/eks-agent-platform/org/cost-pipeline/athena_results_bucket",
+      data.aws_ssm_parameter.athena_results_bucket_arn.name == "/eks-agent-platform/org/cost-pipeline/athena_results_bucket_arn",
+      data.aws_ssm_parameter.athena_database.name == "/eks-agent-platform/org/cost-pipeline/athena_database",
+      data.aws_ssm_parameter.athena_database_arn.name == "/eks-agent-platform/org/cost-pipeline/athena_database_arn",
+      data.aws_ssm_parameter.cur_table_name.name == "/eks-agent-platform/org/cost-pipeline/cur_table_name",
+      data.aws_ssm_parameter.account_tenant_iam_path.name == "/eks-agent-platform/org/cost-pipeline/tenant_iam_path",
+      data.aws_ssm_parameter.account_data_kms_key_arn.name == "/eks-agent-platform/org/cost-pipeline/data_kms_key_arn",
+    ])
+    error_message = "every account handle must be read from the contract path its label names — all of these keys resolve, so a handle pointed at a sibling applies cleanly and silently hands a real value that means something else, and no sentinel assertion in this file can see it because override_data substitutes by resource address rather than by parameter name"
+  }
+
+  # And the two per-cluster reads, which name a different subtree entirely.
+  assert {
+    condition = alltrue([
+      data.aws_ssm_parameter.operator_role_name.name == "/eks-agent-platform/${var.cluster_name}/agent-iam/operator_role_name",
+      data.aws_ssm_parameter.cluster_tenant_iam_path.name == "/eks-agent-platform/${var.cluster_name}/agent-iam/tenant_iam_path",
+    ])
+    error_message = "the cluster handles must be read from THIS cluster's agent-iam subtree — a read of another cluster's subtree resolves in a shared account and attaches this cluster's cost grant to a sibling cluster's operator role"
+  }
+}
+
 # Athena reaches S3 and KMS under the CALLER's identity, and the caller is the
 # operator role this policy attaches to. Reading the SSE-KMS estimates and writing
 # the SSE-KMS result set are both on this key, and the workgroup enforces encrypted
@@ -81,16 +128,6 @@ run "the_operator_can_decrypt_and_write_what_it_queries" {
     error_message = "the operator role must hold kms:Decrypt AND kms:GenerateDataKey on the key the ACCOUNT pipeline published — without both, StartQueryExecution returns FAILED on every tick; and named against any other key the failure lands on the SSE-KMS write, which the reconciler reports as unreadable spend rather than as access denied, so a tenant over budget never trips the kill switch"
   }
 
-  # And the read is from the right contract path. The override above targets the data
-  # source by LABEL, so it substitutes a value no matter which parameter that source
-  # actually names — the assertion above passes even if this reads a different key
-  # entirely. Proven by mutation: repointing it at the account's athena_database stayed
-  # green, and that path resolves, so the apply succeeds and scopes the operator's KMS
-  # grant to a Glue database name.
-  assert {
-    condition     = data.aws_ssm_parameter.account_data_kms_key_arn.name == "/eks-agent-platform/org/cost-pipeline/data_kms_key_arn"
-    error_message = "the cost key must be read from the account contract's data_kms_key_arn — every other key under that prefix resolves too, so a near-miss applies cleanly and scopes the operator's KMS grant to something that is not a key"
-  }
 
   # And the workgroup enforces that same key. The operator sends no ResultConfiguration,
   # so the workgroup is the only thing deciding how results are encrypted — a grant on
@@ -142,17 +179,35 @@ run "this_cluster_writes_only_where_it_is_permitted_to_write" {
     error_message = "the workgroup must write under this cluster's own prefix in the account results bucket — a shared prefix is what lets one cluster's operator overwrite the objects another cluster's reconciler reads back"
   }
 
+  # alltrue over EVERY statement, not anytrue over some. "Some statement is exactly this
+  # narrow" is satisfied forever by the narrow statement, no matter what else the policy
+  # grows — a second statement adding s3:PutObject on the whole bucket leaves it green
+  # while restoring precisely the cross-cluster overwrite this component exists to
+  # prevent. The invariant has to be stated as its complement: wherever PutObject
+  # appears, it appears on this prefix and nothing else.
+  #
+  # length + contains rather than an equality against a literal list: tolist() yields
+  # list(string) and the literal is a tuple, so `==` is false for identical contents.
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
+      !contains(s.Action, "s3:PutObject") || (
+        length(tolist(s.Resource)) == 1
+        && contains(tolist(s.Resource), "arn:aws:s3:::SENTINEL-results-bucket/results/${var.cluster_name}/*")
+      )
+    ])
+    error_message = "every s3:PutObject in this policy must be scoped to exactly this cluster's results prefix — one wider statement anywhere restores the cross-cluster overwrite the per-cluster workgroup exists to prevent, and a compromised development operator can rewrite the objects production's reconciler reads back"
+  }
+
+  # And the grant is actually present. The complement form above is vacuously true for a
+  # policy with no PutObject at all, which would be a working-looking policy under which
+  # every query fails at the write.
   assert {
     condition = anytrue([
       for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
       contains(s.Action, "s3:PutObject")
-      # length + contains, not an equality against a literal list: tolist() yields
-      # list(string) and the literal is a tuple, so `==` is false for identical
-      # contents. "Exactly one resource, and it is this one" is the same claim.
-      && length(tolist(s.Resource)) == 1
-      && contains(tolist(s.Resource), "arn:aws:s3:::SENTINEL-results-bucket/results/${var.cluster_name}/*")
     ])
-    error_message = "the object grant must cover exactly this cluster's results prefix and nothing else — wider and a compromised operator overwrites another cluster's results, narrower or elsewhere and every query fails at the write with the reconciler reporting unreadable spend"
+    error_message = "the operator must hold s3:PutObject somewhere — Athena writes the result set under the caller's identity, so without it every query fails after the scan and the reconciler records unreadable spend"
   }
 
   # ListBucket is a BUCKET-level action. On an object ARN it matches nothing, and Athena
