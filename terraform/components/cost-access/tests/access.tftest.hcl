@@ -38,11 +38,10 @@ mock_provider "aws" {
 }
 
 variables {
-  environment      = "staging"
-  region           = "us-west-2"
-  cluster_name     = "staging-platform"
-  data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
-  tags             = {}
+  environment  = "staging"
+  region       = "us-west-2"
+  cluster_name = "staging-platform"
+  tags         = {}
 }
 
 # Athena reaches S3 and KMS under the CALLER's identity, and the caller is the
@@ -54,14 +53,34 @@ variables {
 run "the_operator_can_decrypt_and_write_what_it_queries" {
   command = plan
 
+  # A sentinel, not the fixture default. The key the grant names has to come from the
+  # account contract — the pipeline is the only thing that decides which key encrypts
+  # the results — and a suite that asserted a literal ARN would pass just as happily
+  # if this component invented its own value, which is the whole defect.
+  override_data {
+    target = data.aws_ssm_parameter.account_data_kms_key_arn
+    values = { value = "arn:aws:kms:us-west-2:123456789012:key/SENTINEL-ACCOUNT-COST-KEY" }
+  }
+
   assert {
     condition = anytrue([
       for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
       contains(s.Action, "kms:Decrypt")
       && contains(s.Action, "kms:GenerateDataKey")
-      && contains(tolist(s.Resource), var.data_kms_key_arn)
+      && contains(tolist(s.Resource), "arn:aws:kms:us-west-2:123456789012:key/SENTINEL-ACCOUNT-COST-KEY")
     ])
-    error_message = "the operator role must hold kms:Decrypt AND kms:GenerateDataKey on the cost data key — without both, StartQueryExecution returns FAILED on every tick and a tenant over budget never trips the kill switch"
+    error_message = "the operator role must hold kms:Decrypt AND kms:GenerateDataKey on the key the ACCOUNT pipeline published — without both, StartQueryExecution returns FAILED on every tick; and named against any other key the failure lands on the SSE-KMS write, which the reconciler reports as unreadable spend rather than as access denied, so a tenant over budget never trips the kill switch"
+  }
+
+  # And the read is from the right contract path. The override above targets the data
+  # source by LABEL, so it substitutes a value no matter which parameter that source
+  # actually names — the assertion above passes even if this reads a different key
+  # entirely. Proven by mutation: repointing it at the account's athena_database stayed
+  # green, and that path resolves, so the apply succeeds and scopes the operator's KMS
+  # grant to a Glue database name.
+  assert {
+    condition     = data.aws_ssm_parameter.account_data_kms_key_arn.name == "/eks-agent-platform/org/cost-pipeline/data_kms_key_arn"
+    error_message = "the cost key must be read from the account contract's data_kms_key_arn — every other key under that prefix resolves too, so a near-miss applies cleanly and scopes the operator's KMS grant to something that is not a key"
   }
 
   # The grant is capped to S3, so it cannot be used to decrypt anything else the key

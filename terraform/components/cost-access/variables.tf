@@ -18,10 +18,18 @@ variable "cluster_name" {
   type        = string
 }
 
-variable "data_kms_key_arn" {
-  description = "cmk-data, the key the account cost pipeline encrypts Athena results and estimate exports with. The operator needs Decrypt AND GenerateDataKey on it: the workgroup enforces SSE-KMS results, so Decrypt alone leaves every query failing at the write step."
-  type        = string
-}
+# There is deliberately no data_kms_key_arn variable.
+#
+# The operator needs Decrypt AND GenerateDataKey on the key the account pipeline
+# encrypts Athena results and estimate exports with — the workgroup enforces SSE-KMS
+# results, so Decrypt alone leaves every query failing at the write step. But which key
+# that is, is not this component's to decide: it is read from the account contract at
+# /eks-agent-platform/org/cost-pipeline/data_kms_key_arn.
+#
+# As an input it was a second place the same value was set, with nothing comparing the
+# two. A grant scoped to a key the workgroup does not use fails on the WRITE, which the
+# reconciler reports as an unreadable spend and not as an access error, so every budget
+# goes stale with nothing red.
 
 variable "tags" {
   description = "Common tags applied to all resources"
