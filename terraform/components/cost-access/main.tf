@@ -62,6 +62,7 @@ data "aws_ssm_parameter" "athena_database_arn" { name = "${local.account_prefix}
 data "aws_ssm_parameter" "athena_results_bucket_arn" { name = "${local.account_prefix}/athena_results_bucket_arn" }
 data "aws_ssm_parameter" "cur_table_name" { name = "${local.account_prefix}/cur_table_name" }
 data "aws_ssm_parameter" "account_tenant_iam_path" { name = "${local.account_prefix}/tenant_iam_path" }
+data "aws_ssm_parameter" "account_data_kms_key_arn" { name = "${local.account_prefix}/data_kms_key_arn" }
 
 locals {
   prefix = "${var.cluster_name}-cost-access"
@@ -89,6 +90,12 @@ locals {
     athena_database           = nonsensitive(data.aws_ssm_parameter.athena_database.value)
     athena_results_bucket_arn = nonsensitive(data.aws_ssm_parameter.athena_results_bucket_arn.value)
     tenant_iam_path           = nonsensitive(data.aws_ssm_parameter.account_tenant_iam_path.value)
+
+    # The key the account pipeline actually encrypts with, not a second copy of it.
+    # This component creates nothing encrypted — it only grants the operator use of
+    # what the account already encrypted — so the account is the sole authority and
+    # there is no per-cluster value that could legitimately differ.
+    data_kms_key_arn = nonsensitive(data.aws_ssm_parameter.account_data_kms_key_arn.value)
   }
 
   cluster_tenant_iam_path = nonsensitive(data.aws_ssm_parameter.cluster_tenant_iam_path.value)
@@ -225,7 +232,7 @@ resource "aws_iam_policy" "operator_cost" {
         # before the kill-switch block, and a tenant at 120% of budget never trips it
         # with nothing anywhere going red.
         Action   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
-        Resource = [var.data_kms_key_arn]
+        Resource = [local.account.data_kms_key_arn]
         Condition = {
           StringEquals = {
             "kms:ViaService" = ["s3.${var.region}.amazonaws.com"]

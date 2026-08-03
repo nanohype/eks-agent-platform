@@ -16,6 +16,8 @@ terraform {
 # gets you out of that. The account's handles arrive over SSM instead; apply
 # live/org/cost-pipeline first.
 #
-# Required inputs sourced from the orchestrator:
-#   - data_kms_key_arn  (from lz-secrets)
+# This root takes no orchestrator TF_VARs. Everything it needs — the account's ARNs,
+# the IAM path it checks against, and the KMS key the operator's grant is scoped to —
+# arrives from the account contract that cost-pipeline publishes, so there is no value
+# here that could disagree with the pipeline it grants access to.
 inputs = {}

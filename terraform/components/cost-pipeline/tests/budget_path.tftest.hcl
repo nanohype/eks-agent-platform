@@ -102,6 +102,44 @@ run "aws_can_actually_deliver_the_report" {
   }
 }
 
+# One key, published, and it is the one every encryption site here actually uses.
+#
+# cost-access scopes the operator's kms grant to whatever this parameter carries, and it
+# has no way to check that against anything — the account is the only authority on which
+# key encrypts cost data. So the parameter has to be the same value the workgroup
+# enforces, the results bucket defaults to, and the publisher stamps on each estimate.
+# Publishing any one of the four independently is a grant on a key nothing uses.
+#
+# The failure is silent and lands on the WRITE, not the read: the workgroup enforces
+# SSE-KMS results, so a query whose caller cannot GenerateDataKey on that key fails after
+# scanning, and the reconciler reports unreadable spend rather than access denied.
+#
+# Asserted against a distinct sentinel rather than the fixture default, because the
+# suites on both sides of this contract previously carried the SAME literal ARN — two
+# hardcoded values that agree prove nothing about the wiring between them.
+run "the_published_cost_key_is_the_one_this_pipeline_encrypts_with" {
+  command = plan
+
+  variables {
+    data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/SENTINEL-ACCOUNT-COST-KEY"
+  }
+
+  assert {
+    condition = alltrue([
+      aws_ssm_parameter.data_kms_key_arn.value == "arn:aws:kms:us-west-2:123456789012:key/SENTINEL-ACCOUNT-COST-KEY",
+      one(one(aws_athena_workgroup.cost.configuration).result_configuration).encryption_configuration[0].kms_key_arn == aws_ssm_parameter.data_kms_key_arn.value,
+      one(one(aws_s3_bucket_server_side_encryption_configuration.athena_results.rule).apply_server_side_encryption_by_default).kms_master_key_id == aws_ssm_parameter.data_kms_key_arn.value,
+      aws_lambda_function.invocation_cost_publisher.environment[0].variables["ESTIMATE_KMS_KEY_ID"] == aws_ssm_parameter.data_kms_key_arn.value,
+    ])
+    error_message = "the published data_kms_key_arn must be the key the workgroup enforces, the results bucket defaults to, and the publisher stamps on estimates — every cluster's operator grant is scoped to this parameter and nothing downstream can check it, so a key published here that is not the key in use leaves every query failing at the SSE-KMS write with the reconciler reporting unreadable spend rather than access denied"
+  }
+
+  assert {
+    condition     = aws_ssm_parameter.data_kms_key_arn.name == "/eks-agent-platform/org/cost-pipeline/data_kms_key_arn"
+    error_message = "the key must be published on the exact account-contract path cost-access reads — a near-miss leaves that data source unresolvable and every per-cluster cost-access apply failing on ParameterNotFound"
+  }
+}
+
 # The publisher attributes spend by READING the PlatformId tag off the invoking
 # role, not by taking the role's name apart. That makes one IAM permission
 # load-bearing for the entire in-flight cost signal: without iam:ListRoleTags every

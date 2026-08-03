@@ -1073,6 +1073,35 @@ resource "aws_ssm_parameter" "cur_bucket_arn" {
   tags  = local.tags
 }
 
+# The key this component encrypts cost data with.
+#
+# Published because there is exactly one authority for it and it is here. This value
+# governs three things at once — the Athena results bucket's SSE default, the
+# workgroup's ENFORCED result encryption, and the SSE-KMS header the cost publisher
+# sets on every estimate object — and cost-access needs the same ARN for one thing:
+# the resource its operator grant is scoped to.
+#
+# That asymmetry is why this is published rather than taken as an input on both sides
+# and compared. A per-cluster input could not be right differently; it could only agree
+# or be a bug. And the bug is silent: a grant naming a key the workgroup does not use
+# leaves every query failing at the SSE-KMS WRITE step — not the read — so the
+# reconciler returns before the kill-switch block and every budget goes stale with
+# nothing anywhere going red.
+#
+# It cannot be verified per cluster the way tenant_iam_path is, either. landing-zone
+# mints one secrets CMK per ENVIRONMENT (alias/<environment>-platform-secrets) and
+# there is no `org` secrets root, so this account root is handed whichever
+# environment's key the installer ran with. A cluster comparing its own environment's
+# key against this one would fail two of three clusters by construction — a gate that
+# cries wolf on a correctly built cluster, which is the thing this suite refuses to
+# ship.
+resource "aws_ssm_parameter" "data_kms_key_arn" {
+  name  = "/eks-agent-platform/org/cost-pipeline/data_kms_key_arn"
+  type  = "String"
+  value = var.data_kms_key_arn
+  tags  = local.tags
+}
+
 # The IAM path this component scoped the publisher's tag-read grant to. Published so
 # every cluster's cost-access can compare it against that cluster's agent-iam
 # contract and refuse the operator grant if they have drifted — the account cannot
