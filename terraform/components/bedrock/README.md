@@ -39,28 +39,33 @@ There is no Object Lock mode, retention window or teardown lever here. Those gov
 record, which this component does not own — they live on
 [`bedrock-account`](../bedrock-account/).
 
-## Consumes
-
-From the account contract:
-
-- `/eks-agent-platform/org/bedrock-account/invocation_log_group`
-- `/eks-agent-platform/org/bedrock-account/invocation_bucket_arn`
-
 ## Outputs
 
 `baseline_guardrail_id`, `baseline_guardrail_version`.
 
 Published to SSM under `/eks-agent-platform/<cluster_name>/bedrock/`:
 
-- `invocation_bucket_arn`, `invocation_log_group` — republished from the account contract
 - `baseline_guardrail_id`, `baseline_guardrail_version` — when the baseline is enabled
+
+A guardrail is a named resource, so an account holds many and each cluster gets its own.
+That is the whole reason anything here is per-cluster.
 
 ## Consumed by
 
-- `kill-switch` reads `invocation_log_group` to subscribe a metric filter
 - The operator reads `baseline_guardrail_id` and `baseline_guardrail_version` as the default when
   a `ModelGateway` route (and its `defaultGuardrailRef`) doesn't specify one. The version is
   load-bearing: an invocation pins a guardrail version, so publishing the id alone leaves the
   consumer unable to name what it is applying
-- `cost-pipeline` subscribes its cost publisher to the same invocation log group, but reads the
-  name from the account contract directly — it is account-scoped itself
+
+## Invocation logging is not here
+
+The invocation-logging configuration, its bucket and its log group are account+region
+singletons owned by [`bedrock-account`](../bedrock-account/), published at
+`/eks-agent-platform/org/bedrock-account/`. Consumers read them there:
+
+- `cost-pipeline` subscribes its cost publisher to the invocation log group. It is
+  account-scoped itself, so it reads the account contract directly.
+
+The operator is not a consumer. It has no CloudWatch Logs client and never addresses the
+invocation bucket — the spend it acts on arrives as a CloudWatch metric the cost publisher
+emits, and as CUR rows it reads through Athena.

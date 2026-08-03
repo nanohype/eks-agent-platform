@@ -352,10 +352,9 @@ func main() {
 		budgetReconciler.CloudWatch = awsClients.CloudWatch
 		budgetReconciler.EventBridge = awsClients.EventBridge
 		budgetReconciler.AthenaCfg = controller.AthenaConfig{
-			Workgroup:     opConfig.AthenaWorkgroup,
-			Database:      opConfig.AthenaDatabase,
-			ResultsBucket: opConfig.AthenaResultsBucket,
-			CURTableName:  opConfig.CURTableName,
+			Workgroup:    opConfig.AthenaWorkgroup,
+			Database:     opConfig.AthenaDatabase,
+			CURTableName: opConfig.CURTableName,
 		}
 		budgetReconciler.KillSwitchEventBusName = opConfig.KillSwitchEventBusName
 	}

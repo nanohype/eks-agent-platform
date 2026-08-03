@@ -48,11 +48,12 @@ type Config struct {
 	EvalReportsBucketARN  string
 	EvalReportsBucketName string
 
-	// bedrock outputs
+	// bedrock outputs. The invocation log group and its bucket are deliberately
+	// absent: the operator neither reads Bedrock invocation logs nor addresses the
+	// bucket. The log group's consumer is cost-pipeline's subscription filter, which
+	// reads it from the account contract at /eks-agent-platform/org/bedrock-account/.
 	BaselineGuardrailID      string
 	BaselineGuardrailVersion string
-	InvocationBucketARN      string
-	InvocationLogGroupName   string
 
 	// kill-switch outputs
 	KillSwitchEventBusName string
@@ -67,12 +68,16 @@ type Config struct {
 	// reconciler degrades to a MetricStoreUnavailable condition instead.
 	AMPEndpoint string
 
-	// cost-pipeline outputs
-	CURBucketName       string
-	AthenaWorkgroup     string
-	AthenaDatabase      string
-	AthenaResultsBucket string
-	CURTableName        string
+	// cost-pipeline outputs. Exactly the three the Budget reconciler's query gate
+	// requires — it refuses to build a query with any of them empty. The CUR bucket
+	// and the Athena results bucket are not among them: the query addresses the CUR
+	// through the Glue catalog rather than through S3, and the results location is
+	// enforced by the workgroup, so a client-supplied one would be ignored. Both
+	// buckets are still reached at runtime, under the operator's own identity, by
+	// grants cost-access mints — held in IAM, not in this struct.
+	AthenaWorkgroup string
+	AthenaDatabase  string
+	CURTableName    string
 
 	// eval-runtime outputs
 	EvalRunnerRoleARN        string
@@ -145,10 +150,6 @@ func (c *Config) assign(suffix, value string) {
 		c.BaselineGuardrailID = value
 	case "bedrock/baseline_guardrail_version":
 		c.BaselineGuardrailVersion = value
-	case "bedrock/invocation_bucket_arn":
-		c.InvocationBucketARN = value
-	case "bedrock/invocation_log_group":
-		c.InvocationLogGroupName = value
 	case "kill-switch/event_bus_name":
 		c.KillSwitchEventBusName = value
 	case "kill-switch/event_bus_arn":
@@ -157,14 +158,10 @@ func (c *Config) assign(suffix, value string) {
 		c.StateMachineARN = value
 	case "managed-monitoring/amp_endpoint":
 		c.AMPEndpoint = value
-	case "cost-pipeline/cur_bucket":
-		c.CURBucketName = value
 	case "cost-pipeline/athena_workgroup":
 		c.AthenaWorkgroup = value
 	case "cost-pipeline/athena_database":
 		c.AthenaDatabase = value
-	case "cost-pipeline/athena_results_bucket":
-		c.AthenaResultsBucket = value
 	case "cost-pipeline/cur_table_name":
 		c.CURTableName = value
 	case "eval-runtime/runner_role_arn":

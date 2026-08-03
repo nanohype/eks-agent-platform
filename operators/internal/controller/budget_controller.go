@@ -23,10 +23,12 @@ import (
 
 // AthenaConfig carries the SSM-resolved cost-pipeline outputs the
 // Budget reconciler needs to run its CUR rollup.
+// There is no results-bucket field. The workgroup sets enforce_workgroup_configuration
+// with an output location, so Athena ignores any ResultConfiguration a caller sends —
+// carrying one here would be a knob that reads as configuration and changes nothing.
 type AthenaConfig struct {
-	Workgroup     string
-	Database      string
-	ResultsBucket string
+	Workgroup string
+	Database  string
 	// CURTableName is the Glue table the CUR Crawler materialized. The
 	// table name is the report-name with hyphens normalized to
 	// underscores (e.g. "eks-agent-platform-dev" → "eks_agent_platform_dev").

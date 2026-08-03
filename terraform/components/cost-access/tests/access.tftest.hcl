@@ -100,24 +100,28 @@ run "the_handles_land_where_the_operator_sweeps" {
   assert {
     condition = alltrue([
       for p in [
-        aws_ssm_parameter.cur_bucket,
         aws_ssm_parameter.athena_workgroup,
         aws_ssm_parameter.athena_database,
-        aws_ssm_parameter.athena_results_bucket,
         aws_ssm_parameter.cur_table_name,
-        aws_ssm_parameter.estimate_table_name,
-        aws_ssm_parameter.reconciliation_view,
       ] : startswith(p.name, "/eks-agent-platform/${var.cluster_name}/cost-pipeline/")
     ])
     error_message = "every republished handle must sit under this cluster's prefix — the operator's entire configuration is one GetParametersByPath sweep of that subtree, so a parameter published anywhere else is invisible to it"
   }
 
-  # athena_results_bucket is in that list deliberately. The operator has always
-  # decoded this key and nothing ever published it, so the field was permanently
-  # empty — a seam that claimed more than it delivered.
+  # Exactly these three, by their full names. They are the whole of what the Budget
+  # reconciler needs: it refuses to build a query with any of the workgroup, the
+  # database or the CUR table empty, and it needs nothing else from this pipeline.
+  #
+  # The last segment is the part that matters — the operator decodes each key by that
+  # exact string, so a near-miss publishes and sweeps cleanly and decodes to an empty
+  # field, which reads as an unconfigured cost pipeline rather than as a typo.
   assert {
-    condition     = aws_ssm_parameter.athena_results_bucket.name == "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_results_bucket"
-    error_message = "athena_results_bucket must be published — the operator reads it and previously received nothing"
+    condition = alltrue([
+      aws_ssm_parameter.athena_workgroup.name == "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_workgroup",
+      aws_ssm_parameter.athena_database.name == "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_database",
+      aws_ssm_parameter.cur_table_name.name == "/eks-agent-platform/${var.cluster_name}/cost-pipeline/cur_table_name",
+    ])
+    error_message = "the three republished keys must carry exactly the names the operator decodes — the reconciler refuses to build a query with any of workgroup, database or CUR table empty, so a near-miss on any one of them degrades every tick to errAthenaNotConfigured with nothing going red"
   }
 }
 
@@ -191,10 +195,6 @@ run "each_account_handle_republishes_its_own_value" {
   command = plan
 
   override_data {
-    target = data.aws_ssm_parameter.cur_bucket
-    values = { value = "SENTINEL-cur-bucket" }
-  }
-  override_data {
     target = data.aws_ssm_parameter.athena_workgroup
     values = { value = "SENTINEL-workgroup" }
   }
@@ -203,31 +203,15 @@ run "each_account_handle_republishes_its_own_value" {
     values = { value = "SENTINEL-database" }
   }
   override_data {
-    target = data.aws_ssm_parameter.athena_results_bucket
-    values = { value = "SENTINEL-results-bucket" }
-  }
-  override_data {
     target = data.aws_ssm_parameter.cur_table_name
     values = { value = "SENTINEL-cur-table" }
-  }
-  override_data {
-    target = data.aws_ssm_parameter.estimate_table_name
-    values = { value = "SENTINEL-estimate-table" }
-  }
-  override_data {
-    target = data.aws_ssm_parameter.reconciliation_view
-    values = { value = "SENTINEL-reconciliation-view" }
   }
 
   assert {
     condition = alltrue([
-      nonsensitive(aws_ssm_parameter.cur_bucket.value) == "SENTINEL-cur-bucket",
       nonsensitive(aws_ssm_parameter.athena_workgroup.value) == "SENTINEL-workgroup",
       nonsensitive(aws_ssm_parameter.athena_database.value) == "SENTINEL-database",
-      nonsensitive(aws_ssm_parameter.athena_results_bucket.value) == "SENTINEL-results-bucket",
       nonsensitive(aws_ssm_parameter.cur_table_name.value) == "SENTINEL-cur-table",
-      nonsensitive(aws_ssm_parameter.estimate_table_name.value) == "SENTINEL-estimate-table",
-      nonsensitive(aws_ssm_parameter.reconciliation_view.value) == "SENTINEL-reconciliation-view",
     ])
     error_message = "every republished handle must carry the value of the account handle it names — a transposition publishes under the right key, sweeps cleanly, and hands the operator a query that points at the wrong object"
   }
