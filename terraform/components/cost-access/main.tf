@@ -15,8 +15,17 @@
 #                          here under the keys the operator already reads — same
 #                          contract, one pipeline behind it instead of three.
 #
-# Nothing here creates cost infrastructure. If this component is what you are editing
-# to change the pipeline, you are in the wrong one.
+#   the Athena workgroup  it decides where results land and how they are encrypted,
+#                         and it decides that for every caller in it. Enforced
+#                         configuration means a client cannot vary the output prefix,
+#                         so one workgroup for the account is one results prefix for
+#                         every cluster. Same cardinality as the grant: one per
+#                         caller set.
+#
+# Nothing here creates cost STORAGE or a catalog — no bucket, no database, no
+# retention. The workgroup is a query-execution context bound to one cluster's
+# identity, pointed at the account's bucket. If this component is what you are editing
+# to change the pipeline itself, you are in the wrong one.
 ################################################################################
 
 data "aws_caller_identity" "current" {}
@@ -55,8 +64,7 @@ locals {
 # queries the account (an analyst, a dashboard, a preflight). They are not part of the
 # operator's configuration, so this component does not carry them across.
 data "aws_ssm_parameter" "cur_bucket_arn" { name = "${local.account_prefix}/cur_bucket_arn" }
-data "aws_ssm_parameter" "athena_workgroup" { name = "${local.account_prefix}/athena_workgroup" }
-data "aws_ssm_parameter" "athena_workgroup_arn" { name = "${local.account_prefix}/athena_workgroup_arn" }
+data "aws_ssm_parameter" "athena_results_bucket" { name = "${local.account_prefix}/athena_results_bucket" }
 data "aws_ssm_parameter" "athena_database" { name = "${local.account_prefix}/athena_database" }
 data "aws_ssm_parameter" "athena_database_arn" { name = "${local.account_prefix}/athena_database_arn" }
 data "aws_ssm_parameter" "athena_results_bucket_arn" { name = "${local.account_prefix}/athena_results_bucket_arn" }
@@ -85,9 +93,9 @@ locals {
   # review. These are ARNs and resource names, public by construction.
   account = {
     cur_bucket_arn            = nonsensitive(data.aws_ssm_parameter.cur_bucket_arn.value)
-    athena_workgroup_arn      = nonsensitive(data.aws_ssm_parameter.athena_workgroup_arn.value)
     athena_database_arn       = nonsensitive(data.aws_ssm_parameter.athena_database_arn.value)
     athena_database           = nonsensitive(data.aws_ssm_parameter.athena_database.value)
+    athena_results_bucket     = nonsensitive(data.aws_ssm_parameter.athena_results_bucket.value)
     athena_results_bucket_arn = nonsensitive(data.aws_ssm_parameter.athena_results_bucket_arn.value)
     tenant_iam_path           = nonsensitive(data.aws_ssm_parameter.account_tenant_iam_path.value)
 
@@ -113,6 +121,52 @@ locals {
   trimmed_account_path    = trimspace(local.account.tenant_iam_path)
   normalized_cluster_path = endswith(local.trimmed_cluster_path, "/") ? local.trimmed_cluster_path : "${local.trimmed_cluster_path}/"
   normalized_account_path = endswith(local.trimmed_account_path, "/") ? local.trimmed_account_path : "${local.trimmed_account_path}/"
+}
+
+################################################################################
+# This cluster's Athena workgroup.
+#
+# One workgroup per caller set, not one per account. The workgroup decides where a
+# query's results land and how they are encrypted, and it decides it for everyone who
+# runs in it: enforce_workgroup_configuration means a client-supplied
+# ResultConfiguration is ignored outright, so a shared workgroup gives every cluster's
+# operator the same output prefix and no way to vary it. Each cluster gets its own
+# prefix by getting its own workgroup — there is no other lever.
+#
+# The storage is still the account's. This creates no bucket, no catalog and no
+# retention: it points at the results bucket cost-pipeline owns, under a prefix keyed
+# by cluster name, with the account's own key.
+#
+# What this does NOT buy, stated plainly so nobody reads the boundary as tighter than
+# it is: CUR access remains account-wide. A Cost and Usage Report has no filter — that
+# is why the pipeline is account-scoped at all — so there is no per-cluster CUR prefix
+# to narrow to, and the CurRead grant below still covers the whole export. This scopes
+# where a cluster WRITES its own query output. It is not billing-data isolation.
+################################################################################
+
+resource "aws_athena_workgroup" "cluster" {
+  name = local.prefix
+  tags = local.tags
+
+  configuration {
+    # The operator sends no ResultConfiguration, so this is the only thing deciding
+    # where results land and how they are encrypted. Enforced, so that stays true even
+    # if some future caller does send one.
+    enforce_workgroup_configuration = true
+
+    # Per-cluster Athena metrics. With one shared workgroup, a reconciler burning
+    # scanned bytes is indistinguishable from any other cluster's.
+    publish_cloudwatch_metrics_enabled = true
+
+    result_configuration {
+      output_location = "s3://${local.account.athena_results_bucket}/results/${var.cluster_name}/"
+
+      encryption_configuration {
+        encryption_option = "SSE_KMS"
+        kms_key_arn       = local.account.data_kms_key_arn
+      }
+    }
+  }
 }
 
 ################################################################################
@@ -167,7 +221,10 @@ resource "aws_iam_policy" "operator_cost" {
           "athena:StopQueryExecution",
           "athena:GetWorkGroup"
         ]
-        Resource = local.account.athena_workgroup_arn
+        # This cluster's workgroup, not the account's. The pair is load-bearing: the
+        # SSM handle below hands the operator this workgroup's NAME, and a grant on
+        # any other workgroup ARN makes every StartQueryExecution AccessDenied.
+        Resource = aws_athena_workgroup.cluster.arn
       },
       {
         Sid    = "GlueRead"
@@ -185,17 +242,50 @@ resource "aws_iam_policy" "operator_cost" {
         ]
       },
       {
-        Sid    = "AthenaResults"
+        Sid    = "AthenaResultObjects"
         Effect = "Allow"
+        # Scoped to this cluster's own results prefix — the same prefix the workgroup
+        # above enforces as the output location. The two are derived from
+        # var.cluster_name on both sides so they cannot drift apart into a workgroup
+        # writing where the policy does not permit.
+        #
+        # Athena runs S3 under the CALLER's identity, so this is what actually writes
+        # the result set. Narrowing it is the point of the per-cluster workgroup: a
+        # compromised operator in development can no longer overwrite the objects
+        # production's reconciler reads back.
+        #
+        # The multipart actions are here because a result set large enough is written
+        # as a multipart upload, and a write that cannot complete or clean up fails
+        # after the scan — which the reconciler reports as unreadable spend rather
+        # than as access denied, and a tenant over budget is never stopped.
         Action = [
           "s3:GetObject",
           "s3:PutObject",
-          "s3:ListBucket"
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts"
         ]
-        Resource = [
-          local.account.athena_results_bucket_arn,
-          "${local.account.athena_results_bucket_arn}/*"
+        Resource = ["${local.account.athena_results_bucket_arn}/results/${var.cluster_name}/*"]
+      },
+      {
+        Sid    = "AthenaResultsBucket"
+        Effect = "Allow"
+        # Bucket-level actions take the bucket ARN, never an object ARN — s3:ListBucket
+        # on `bucket/*` matches nothing, and Athena fails at listing before it writes
+        # anything. AWS's own identity-based policy example for Athena splits exactly
+        # this way.
+        #
+        # Deliberately NOT narrowed with an s3:prefix condition. Athena's listing
+        # prefix is internal and not something this component can predict; a condition
+        # that guesses wrong denies every query, and the failure is the silent one
+        # again. The residual is that a cluster's operator can enumerate KEY NAMES in
+        # the shared results bucket — not read their contents, which the object grant
+        # above scopes.
+        Action = [
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:ListBucketMultipartUploads"
         ]
+        Resource = [local.account.athena_results_bucket_arn]
       },
       {
         Sid    = "CurRead"
@@ -274,10 +364,16 @@ resource "aws_iam_role_policy_attachment" "operator_cost" {
 # environment.
 ################################################################################
 
+# This cluster's own workgroup, not the account's. Its pair with the AthenaQuery grant
+# above is why they ship together: publishing the account workgroup while the policy
+# permits only this one is AccessDenied on every tick, and creating this one while the
+# handle still names the account's hands the operator a workgroup its policy does not
+# cover. Either half alone produces stale budgets and a kill switch that never fires,
+# with nothing red.
 resource "aws_ssm_parameter" "athena_workgroup" {
   name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_workgroup"
   type  = "String"
-  value = nonsensitive(data.aws_ssm_parameter.athena_workgroup.value)
+  value = aws_athena_workgroup.cluster.name
   tags  = local.tags
 }
 

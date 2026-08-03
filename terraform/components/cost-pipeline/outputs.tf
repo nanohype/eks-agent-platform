@@ -9,7 +9,7 @@ output "estimates_bucket_arn" {
 }
 
 output "athena_workgroup" {
-  description = "Athena workgroup used by the budget-controller"
+  description = "The ACCOUNT's Athena workgroup — the query surface the reconciliation named query binds to, and where an analyst runs against the cost database. Not what any cluster's budget reconciler uses: each cluster runs in its own workgroup, minted by cost-access, writing to its own results prefix. Wiring a dashboard or a preflight to this one and expecting reconciler activity gets a workgroup whose query metrics stay at zero."
   value       = aws_athena_workgroup.cost.name
 }
 

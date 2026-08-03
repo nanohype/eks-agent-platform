@@ -1,30 +1,25 @@
 # components/bedrock
 
-The per-cluster half of the Bedrock substrate: this cluster's baseline Guardrail, plus the
-republish that puts the account's invocation-logging handles where the operator can find them.
+The per-cluster half of the Bedrock substrate: this cluster's baseline Guardrail.
 
-- **Baseline Guardrail** — denied-topic filters at HIGH input + output, plus PII redaction
-  (email, phone, credit-card → anonymize; SSN → block). A guardrail is a named resource, so an
-  account holds many and each cluster gets its own. Tenants override or extend per route via
-  `ModelGateway.spec.routes[].guardrailRef` (operator-reconciled); this baseline is the cluster's
-  default.
-- **Invocation-logging republish** — reads the account's log-group name and invocation-bucket ARN
-  from the `bedrock-account` contract and republishes them under this cluster's SSM prefix.
+A guardrail is a named resource, so an account holds many and each cluster gets its own. That is
+the whole reason anything here is per-cluster — denied-topic filters at HIGH input + output, plus
+PII redaction (email, phone, credit-card → anonymize; SSN → block). Tenants override or extend per
+route via `ModelGateway.spec.routes[].guardrailRef` (operator-reconciled); this baseline is the
+cluster's default.
 
-The republish exists because of a shape mismatch, not for redundancy. Invocation logging is an
-account+region singleton — `aws_bedrock_model_invocation_logging_configuration` has no name and no
-identifier, so exactly one exists per account per region, and it is owned by
-[`bedrock-account`](../bedrock-account/) under `/eks-agent-platform/org/`. The operator's entire
-configuration is one recursive `GetParametersByPath` sweep of `/eks-agent-platform/<cluster>/`, so
-a parameter published under the account prefix is invisible to it. Republishing keeps the
-operator's contract unchanged while the values behind those keys come from the single component
-that owns them.
+Guardrails are not offered in every region, so the baseline is toggleable. When it is off — by the
+toggle or because the region does not support it — neither key is published at all rather than
+published empty: a key carrying a blank id reads to the operator as a configured guardrail and
+would be applied in place of the route's own reference.
 
-Values arrive over SSM rather than a terragrunt `dependency`: a dependency across roots resolves
-at config-parse time, so a per-cluster leaf would fail `init` — not `apply` — whenever the account
-root's state was absent.
+Invocation logging is **not** here. Its configuration, bucket and log group are account+region
+singletons owned by [`bedrock-account`](../bedrock-account/) — the AWS resource has no name and no
+identifier, so exactly one exists per account per region — and consumers read them from the account
+contract at `/eks-agent-platform/org/bedrock-account/`. See [Invocation logging is not
+here](#invocation-logging-is-not-here) below.
 
-Per-tenant Bedrock access policies are **not** managed here — the operator creates them at
+Per-tenant Bedrock access policies are **not** managed here either — the operator creates them at
 reconcile time, bound to each tenant's IAM role, with model-ARN scoping.
 
 ## Inputs
