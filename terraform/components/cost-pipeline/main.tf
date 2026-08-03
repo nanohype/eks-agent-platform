@@ -1044,10 +1044,14 @@ resource "aws_ssm_parameter" "athena_database_arn" {
   tags  = local.tags
 }
 
-# The operator reads cost-pipeline/athena_results_bucket from its own cluster prefix
-# and nothing ever published it, so the field was permanently empty. Harmless while
-# the workgroup supplies the output location, but a seam claiming more than it
-# delivers — and the grant below genuinely needs the bucket.
+# The results bucket by name, alongside its ARN below. The ARN is what cost-access
+# scopes the operator's grant to; the name is for whoever addresses the bucket directly
+# — a preflight checking the grant covers what the workgroup writes to, or an analyst.
+#
+# It is not part of the operator's configuration. The workgroup sets
+# enforce_workgroup_configuration with an output location, so Athena ignores any
+# ResultConfiguration a caller sends: an operator holding this name could do nothing
+# with it.
 resource "aws_ssm_parameter" "athena_results_bucket" {
   name  = "/eks-agent-platform/org/cost-pipeline/athena_results_bucket"
   type  = "String"

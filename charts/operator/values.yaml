@@ -75,13 +75,18 @@ config:
     businessUnit: ""
     dataClassification: ""
     compliance: ""
-  killSwitch:
-    eventBusName: ""
-  bedrock:
-    baselineGuardrailId: ""
-  cost:
-    athenaWorkgroup: ""
-    athenaDatabase: ""
+
+# There are deliberately no kill-switch, bedrock or cost keys here.
+#
+# The operator resolves those at startup from SSM, in one recursive
+# GetParametersByPath sweep of /eks-agent-platform/<clusterName>/ — the event bus, the
+# baseline guardrail, the Athena workgroup, database and CUR table all arrive that way,
+# published by the terraform component that owns each one. A Helm value for any of them
+# would be a second place the same thing is decided, and the chart's copy would lose:
+# nothing reads it.
+#
+# What belongs here is what Helm genuinely decides — the identity of the cluster this
+# operator serves, and the org-dimension tags it stamps on the roles it mints.
 
 metrics:
   enabled: true

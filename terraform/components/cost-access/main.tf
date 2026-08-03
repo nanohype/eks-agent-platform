@@ -47,17 +47,20 @@ locals {
   account_prefix = "/eks-agent-platform/org/cost-pipeline"
 }
 
-data "aws_ssm_parameter" "cur_bucket" { name = "${local.account_prefix}/cur_bucket" }
+# Only what this component uses: the ARNs the operator's grant is scoped to, the two
+# names the operator's query needs, and the IAM path the precondition below checks.
+#
+# The account publishes more than this — the CUR bucket name, the estimate table, the
+# reconciliation view. Those are the account's own query surface, read by whoever
+# queries the account (an analyst, a dashboard, a preflight). They are not part of the
+# operator's configuration, so this component does not carry them across.
 data "aws_ssm_parameter" "cur_bucket_arn" { name = "${local.account_prefix}/cur_bucket_arn" }
 data "aws_ssm_parameter" "athena_workgroup" { name = "${local.account_prefix}/athena_workgroup" }
 data "aws_ssm_parameter" "athena_workgroup_arn" { name = "${local.account_prefix}/athena_workgroup_arn" }
 data "aws_ssm_parameter" "athena_database" { name = "${local.account_prefix}/athena_database" }
 data "aws_ssm_parameter" "athena_database_arn" { name = "${local.account_prefix}/athena_database_arn" }
-data "aws_ssm_parameter" "athena_results_bucket" { name = "${local.account_prefix}/athena_results_bucket" }
 data "aws_ssm_parameter" "athena_results_bucket_arn" { name = "${local.account_prefix}/athena_results_bucket_arn" }
 data "aws_ssm_parameter" "cur_table_name" { name = "${local.account_prefix}/cur_table_name" }
-data "aws_ssm_parameter" "estimate_table_name" { name = "${local.account_prefix}/estimate_table_name" }
-data "aws_ssm_parameter" "reconciliation_view" { name = "${local.account_prefix}/reconciliation_view" }
 data "aws_ssm_parameter" "account_tenant_iam_path" { name = "${local.account_prefix}/tenant_iam_path" }
 
 locals {
@@ -251,16 +254,18 @@ resource "aws_iam_role_policy_attachment" "operator_cost" {
 ################################################################################
 # The account's handles, republished under this cluster's prefix.
 #
-# The keys are exactly the ones the operator already decodes. What changed is what
-# stands behind them: one pipeline for the account instead of one per environment.
+# Exactly the three keys the operator decodes, and no more. The Budget reconciler
+# refuses to build a query with any of them empty, so these three are the whole of
+# what the cost pipeline contributes to the operator's configuration.
+#
+# A republished key with no decode case is not harmless. It reads as configuration
+# the operator honours, so the next person to change the pipeline changes it here
+# too and watches for an effect that cannot arrive — and the parameter itself is a
+# per-cluster resource that has to be created, tagged, and destroyed for nobody.
+#
+# What stands behind the three is one pipeline for the account, not one per
+# environment.
 ################################################################################
-
-resource "aws_ssm_parameter" "cur_bucket" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/cur_bucket"
-  type  = "String"
-  value = nonsensitive(data.aws_ssm_parameter.cur_bucket.value)
-  tags  = local.tags
-}
 
 resource "aws_ssm_parameter" "athena_workgroup" {
   name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_workgroup"
@@ -276,30 +281,9 @@ resource "aws_ssm_parameter" "athena_database" {
   tags  = local.tags
 }
 
-resource "aws_ssm_parameter" "athena_results_bucket" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/athena_results_bucket"
-  type  = "String"
-  value = nonsensitive(data.aws_ssm_parameter.athena_results_bucket.value)
-  tags  = local.tags
-}
-
 resource "aws_ssm_parameter" "cur_table_name" {
   name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/cur_table_name"
   type  = "String"
   value = nonsensitive(data.aws_ssm_parameter.cur_table_name.value)
-  tags  = local.tags
-}
-
-resource "aws_ssm_parameter" "estimate_table_name" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/estimate_table_name"
-  type  = "String"
-  value = nonsensitive(data.aws_ssm_parameter.estimate_table_name.value)
-  tags  = local.tags
-}
-
-resource "aws_ssm_parameter" "reconciliation_view" {
-  name  = "/eks-agent-platform/${var.cluster_name}/cost-pipeline/reconciliation_view"
-  type  = "String"
-  value = nonsensitive(data.aws_ssm_parameter.reconciliation_view.value)
   tags  = local.tags
 }

@@ -102,44 +102,24 @@ resource "aws_bedrock_guardrail" "baseline" {
 }
 
 ################################################################################
-# The account's invocation logging, republished under this cluster's prefix.
+# The account's invocation logging is NOT republished here.
 #
 # The logging configuration, its bucket and its log group are account+region
-# singletons owned by bedrock-account. The operator cannot see them there: its
-# entire configuration is one recursive GetParametersByPath sweep of
-# /eks-agent-platform/<cluster-name>/, so anything published under the account
-# prefix is invisible to every cluster.
+# singletons owned by bedrock-account, and this component is applied per cluster —
+# so the republish shape would be the right one if anything on a cluster prefix
+# needed them. Nothing does.
 #
-# So this component republishes the account's values under its own prefix. That
-# keeps the operator's contract unchanged — it still reads
-# `bedrock/invocation_log_group` from its own subtree — while the values behind
-# those keys come from the one component that owns them. Read from SSM rather than
-# a terragrunt `dependency` because a dependency across roots resolves at parse
-# time, and a per-environment leaf that cannot `init` without the account root's
-# state is a coupling nobody asked for.
+# A cluster-prefix parameter exists for exactly one reader: the operator's recursive
+# GetParametersByPath sweep of /eks-agent-platform/<cluster-name>/. The operator
+# neither reads Bedrock invocation logs nor addresses that bucket — it has no
+# CloudWatch Logs client at all — so both keys were created, tagged and destroyed
+# per cluster for nobody.
+#
+# The log group's real consumer is cost-pipeline, which subscribes its cost publisher
+# to it and reads it from the account contract directly, at
+# /eks-agent-platform/org/bedrock-account/invocation_log_group. That is the account
+# root reading an account value: no cluster hop, nothing to keep in sync.
 ################################################################################
-
-data "aws_ssm_parameter" "account_invocation_log_group" {
-  name = "/eks-agent-platform/org/bedrock-account/invocation_log_group"
-}
-
-data "aws_ssm_parameter" "account_invocation_bucket_arn" {
-  name = "/eks-agent-platform/org/bedrock-account/invocation_bucket_arn"
-}
-
-resource "aws_ssm_parameter" "invocation_bucket" {
-  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/invocation_bucket_arn"
-  type  = "String"
-  value = data.aws_ssm_parameter.account_invocation_bucket_arn.value
-  tags  = local.tags
-}
-
-resource "aws_ssm_parameter" "invocation_log_group" {
-  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/invocation_log_group"
-  type  = "String"
-  value = data.aws_ssm_parameter.account_invocation_log_group.value
-  tags  = local.tags
-}
 
 ################################################################################
 # Guardrails — genuinely per-cluster. A guardrail is a named resource, so many can
@@ -154,11 +134,11 @@ resource "aws_ssm_parameter" "baseline_guardrail_id" {
   tags  = local.tags
 }
 
-# The operator reads this key (operatorconfig: bedrock/baseline_guardrail_version)
-# and hands it to the ModelGateway reconciler. Nothing published it, so the field
-# was permanently empty — a seam claiming more than it delivered. A guardrail is
-# versioned and the version is what an invocation pins, so publishing the id alone
-# left the consumer unable to name what it was applying.
+# The version, alongside the id (operatorconfig: bedrock/baseline_guardrail_version).
+# Both, because a guardrail is versioned and the version is what an invocation pins —
+# a consumer holding the id alone cannot name what it is applying. The ModelGateway
+# reconciler takes the pair as the default for a route that names no guardrail of
+# its own.
 resource "aws_ssm_parameter" "baseline_guardrail_version" {
   count = local.enable_guardrail ? 1 : 0
   name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_version"
