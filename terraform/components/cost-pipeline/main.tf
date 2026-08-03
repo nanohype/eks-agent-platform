@@ -3,11 +3,10 @@
 #
 # A Cost and Usage Report has no filter. It always covers the entire account, so
 # three per-environment pipelines were not three views of anything: they were three
-# complete, identical copies of the same billing data, in three buckets, crawled by
-# three crawlers, into three Glue databases, queried through three Athena
-# workgroups. Every copy correct, every copy the whole account — which is why
-# nothing ever went red. The duplication was a bill and a maintenance surface
-# rather than a broken query.
+# complete, identical copies of the same billing data, in three buckets, catalogued
+# into three Glue databases, queried through three Athena workgroups. Every copy
+# correct, every copy the whole account — which is why nothing ever went red. The
+# duplication was a bill and a maintenance surface rather than a broken query.
 #
 # The same is true one layer down. The Bedrock invocation log group is an
 # account+region singleton (bedrock-account owns it), and a log group accepts five
@@ -21,9 +20,10 @@
 # lives in cost-access: the operator's IAM grant, and the republished handles under
 # the cluster prefix the operator actually sweeps.
 #
-# It owns the QUERY LAYER — the Glue catalog, the crawler, the Athena workgroup, the
-# reconciliation view, and the invocation-cost publisher with its estimates. The
-# report itself belongs to landing-zone, for the reason described below.
+# It owns the QUERY LAYER — the Glue catalog, the CUR table over landing-zone's
+# export, the Athena workgroup, the reconciliation view, and the invocation-cost
+# publisher with its estimates. The report itself belongs to landing-zone, for the
+# reason described below.
 ################################################################################
 
 data "aws_caller_identity" "current" {}
@@ -93,14 +93,14 @@ locals {
   bucket_force_destroy = var.force_destroy_buckets
 
   # Where landing-zone's export actually lands. A CUR 2.0 Data Export writes under
-  # <prefix>/<export name>/, so the crawler needs all three parts — and a wrong one does
-  # not fail: the crawler finds no objects, registers a table with no partitions, and
-  # every query against it returns zero rows and exits zero.
+  # <prefix>/<export name>/, so the CUR table's location needs all three parts — and a
+  # wrong one does not fail: the table is created over a location holding no objects,
+  # and every query against it returns zero rows and exits zero.
   #
   # nonsensitive() because the SSM data source marks every value sensitive regardless of
-  # type, and that mark would propagate into the crawler's S3 target and the IAM policy,
-  # printing both as (sensitive value) in every plan — hiding which bucket the account's
-  # cost crawler is about to be pointed at and granted on.
+  # type, and that mark would propagate into the table's location and its projection
+  # template, printing both as (sensitive value) in every plan — hiding which bucket the
+  # account's cost table is about to be pointed at.
   cur_export_bucket   = nonsensitive(data.aws_ssm_parameter.cur_export_bucket.value)
   cur_export_prefix   = nonsensitive(data.aws_ssm_parameter.cur_export_prefix.value)
   cur_export_name     = nonsensitive(data.aws_ssm_parameter.cur_export_name.value)
@@ -467,93 +467,179 @@ resource "aws_glue_catalog_database" "cost" {
 ################################################################################
 
 ################################################################################
-# Glue Crawler — catalogs the CUR Parquet files into the Glue database so
-# Athena can query them. Runs daily; the operator's Budget reconciler then
-# issues an aggregating SUM(line_item_unblended_cost) query grouped by the
-# PlatformId resource tag.
+# The CUR table — declared, not discovered.
 #
-# The crawler picks up the partition columns (year, month) from the CUR
-# directory layout automatically. The resulting Glue table is named after
-# the CUR report name (with hyphens normalized to underscores by the
-# Crawler's default schema-change-policy).
+# The operator's Budget reconciler issues `SUM(line_item_unblended_cost) FROM
+# <database>.<table>` against this table on every tick. It reads the table's name
+# from SSM, so the name published there has to be the name of a table that exists.
+#
+# ── Why there is no crawler ────────────────────────────────────────────────
+#
+# A Glue crawler names the tables it creates itself, and AWS does not document the
+# rule. `add-crawler.html` says only "The crawler generates the names for the tables
+# that it creates" and "The name of the table is based on the Amazon S3 prefix or
+# folder name", plus character and length constraints. Every worked example in the
+# Glue docs points the same way — last path segment, character-normalized
+# (`s3://.../sentiment-results` → `sentiment_results`) — but that is an inference
+# from examples, not a contract. AWS itself calls it "the catalog table naming
+# algorithm" and lists, verbatim, as a reason to bypass it: "You want to choose the
+# catalog table name and not rely on the catalog table naming algorithm."
+#
+# So a crawler over this export produces a table named for whichever folder it
+# settles on, and any name this component computes for the operator to query is a
+# prediction of an undocumented algorithm. A prediction that misses does not fail
+# the apply — the table simply is not there under that name, every budget query
+# comes back FAILED, and reconcileBudget records that as UNREADABLE SPEND and
+# returns before the kill-switch block. Budgets hold their last value and a tenant
+# over its cap is never stopped, with nothing red anywhere.
+#
+# Declaring the table removes the prediction: the name below is the name the
+# operator gets, because it is the same string.
+#
+# The alternative — declare the table and point a crawler at it as a catalog target
+# so it keeps the schema fresh — was rejected. A crawler that rewrites a declared
+# table's columns puts Terraform and the crawler in a fight over the same field,
+# which is only settled with `ignore_changes` on the column set; and a column set
+# Terraform declares but never enforces is one a test can assert without the assert
+# meaning anything after the first apply.
+#
+# ── Why partitions are projected, not registered ───────────────────────────
+#
+# Data Exports partitions by billing period: `.../data/BILLING_PERIOD=YYYY-MM/`. A
+# crawler registers those partitions when it runs, which means that at the start of
+# each billing period the new partition does not exist in the catalog until the next
+# crawl. The reconciler's query is month-to-date with no partition predicate, so in
+# that window it matches no rows and `COALESCE(SUM(...), 0)` returns 0 — every
+# tenant reads $0 spend, every budget reads healthy, and the kill switch cannot
+# fire. It looks identical to a quiet month.
+#
+# Partition projection has no registration step. Athena computes the partition
+# locations from the range at query time, so a billing period is queryable the
+# moment its first object lands.
+#
+# Reading the export needs no role here. Athena runs S3 under the CALLER's identity,
+# and the caller is a cluster's operator, whose grant on the export bucket is in
+# cost-access.
 ################################################################################
 
-resource "aws_iam_role" "cur_crawler" {
-  name = "${local.prefix}-crawler"
-  tags = local.tags
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "glue.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "cur_crawler_glue_service" {
-  role       = aws_iam_role.cur_crawler.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSGlueServiceRole"
-}
-
-resource "aws_iam_role_policy" "cur_crawler" {
-  name = "cur-bucket-read"
-  role = aws_iam_role.cur_crawler.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        # landing-zone's export bucket, not this component's. The grant follows the
-        # crawler's target: a crawler pointed at a bucket it cannot read fails the crawl
-        # rather than the apply, so the table simply never appears and every query
-        # against the database returns nothing.
-        Sid      = "ReadCURExportBucket"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:ListBucket"]
-        Resource = [local.cur_export_arn, "${local.cur_export_arn}/*"]
-      },
-    ]
-  })
-}
-
-resource "aws_glue_crawler" "cur" {
-  name          = "${local.prefix}-cur"
-  database_name = aws_glue_catalog_database.cost.name
-  role          = aws_iam_role.cur_crawler.arn
-  schedule      = var.cur_crawler_schedule
-  tags          = local.tags
-
-  s3_target {
-    path = local.cur_export_location
-  }
-
-  schema_change_policy {
-    delete_behavior = "LOG"
-    update_behavior = "UPDATE_IN_DATABASE"
-  }
-
-  recrawl_policy {
-    # CUR is overwrite-style (report_versioning = OVERWRITE_REPORT); a full
-    # recrawl on every run catches schema additions when AWS adds new
-    # columns.
-    recrawl_behavior = "CRAWL_EVERYTHING"
-  }
-}
-
-# Predicted table name after Crawler runs. Glue normalizes hyphens in the
-# CUR report name to underscores. Published to SSM so the operator can
-# discover it without hard-coding.
 locals {
-  # Glue names the table after the last path segment the crawler was pointed at, with
-  # hyphens normalized to underscores. That segment is the export's name, which
-  # landing-zone owns — so this is derived from the contract rather than from a local
-  # variable that could name a different export than the crawler actually reads.
-  cur_table_name      = replace(local.cur_export_name, "-", "_")
+  # The Glue table name is OURS, deliberately not derived from the export name.
+  #
+  # The location is contract — it is composed from all three values landing-zone
+  # publishes, because that is where the data actually is. The name is not: it is a
+  # Data Catalog identity this component owns, and binding it to the export's name
+  # would mean a rename in landing-zone silently repointing every operator at a
+  # table that does not exist yet.
+  cur_table_name = "cur"
+
+  # AWS delivers `<prefix>/<export-name>/data/BILLING_PERIOD=YYYY-MM/` with a SIBLING
+  # `<prefix>/<export-name>/metadata/` holding the manifest JSON. The table location
+  # is the `data` folder specifically — AWS's own procedure for this export says to
+  # point at "the s3://<bucket-name>/<prefix>/<export-name>/data folder". A location
+  # one level up covers the JSON manifests too, which are neither Parquet nor this
+  # schema.
+  cur_data_location = "${local.cur_export_location}data/"
+
+  # First billing period that can hold data. The export cannot deliver a partition
+  # older than itself, and projection over a range that starts before the first
+  # delivery costs nothing — Athena skips locations with no objects.
+  cur_projection_start = "2025-01"
+
   estimate_prefix     = "estimates"
   estimate_table_name = "invocation_cost_estimates"
   reconciliation_view = "invocation_cost_reconciliation"
+}
+
+resource "aws_glue_catalog_table" "cur" {
+  database_name = aws_glue_catalog_database.cost.name
+  name          = local.cur_table_name
+  table_type    = "EXTERNAL_TABLE"
+
+  parameters = {
+    classification = "parquet"
+
+    # `BILLING_PERIOD` is upper-case in the S3 key and `billing_period` as a column,
+    # so the location template spells the key out rather than relying on Hive-style
+    # inference from the partition column's name.
+    "projection.enabled"                      = "true"
+    "projection.billing_period.type"          = "date"
+    "projection.billing_period.format"        = "yyyy-MM"
+    "projection.billing_period.range"         = "${local.cur_projection_start},NOW"
+    "projection.billing_period.interval"      = "1"
+    "projection.billing_period.interval.unit" = "MONTHS"
+    "storage.location.template"               = "${local.cur_data_location}BILLING_PERIOD=$${billing_period}"
+  }
+
+  storage_descriptor {
+    location      = local.cur_data_location
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+
+      # Load-bearing, and stated rather than left to the default.
+      #
+      # The export delivers all 125 CUR 2.0 columns; the columns below are the ones
+      # this org queries. That subset is only legal because Athena resolves Parquet
+      # columns by NAME: "Athena reads Parquet by name by default, as defined in
+      # SERDEPROPERTIES ( 'parquet.column.index.access'='false' )". Reading by name
+      # is also what lets AWS add columns to CUR without this table changing.
+      #
+      # Flipped to "true", every column below would resolve by ORDINAL instead —
+      # `line_item_unblended_cost` would read whatever the first column in the file
+      # happens to be, and the query would succeed and return a number that is not
+      # spend. Silent and wrong beats loud and wrong here, so it is pinned.
+      parameters = {
+        "parquet.column.index.access" = "false"
+      }
+    }
+
+    # Exactly the columns this org's two CUR queries reference: the operator's
+    # month-to-date budget query (budget_reconcile.go) and the reconciliation view
+    # below. Types are CUR 2.0's, from the Data Exports table dictionary.
+    #
+    # A column referenced by a query and missing here is not a schema mismatch that
+    # Athena forgives — the query fails, and a failed query is unreadable spend.
+    # tests/budget_path.tftest.hcl holds this set against the reconciliation query
+    # so the two cannot drift apart.
+    columns {
+      name = "line_item_unblended_cost"
+      type = "double"
+    }
+    columns {
+      name = "line_item_usage_start_date"
+      type = "timestamp"
+    }
+    columns {
+      name = "line_item_line_item_type"
+      type = "string"
+    }
+    columns {
+      name = "line_item_product_code"
+      type = "string"
+    }
+    columns {
+      name = "line_item_usage_account_id"
+      type = "string"
+    }
+    # Both map columns, both queried with element_at() rather than the subscript
+    # operator — Trino's map subscript RAISES on a missing key, and a line item
+    # carrying one tag prefix and not the other would fail the whole query.
+    columns {
+      name = "tags"
+      type = "map<string,string>"
+    }
+    columns {
+      name = "product"
+      type = "map<string,string>"
+    }
+  }
+
+  partition_keys {
+    name = "billing_period"
+    type = "string"
+  }
 }
 
 ################################################################################

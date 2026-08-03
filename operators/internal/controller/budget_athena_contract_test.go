@@ -9,6 +9,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +140,83 @@ func TestQuerySpendFromAthena_ContractHappyPath(t *testing.T) {
 		if !strings.Contains(a.lastQuery, want) {
 			t.Errorf("CUR rollup query missing %q:\n%s", want, a.lastQuery)
 		}
+	}
+}
+
+// The columns this query names must be columns the CUR table actually declares.
+//
+// cost-pipeline DECLARES that table rather than discovering it, and it declares a subset
+// of the export's 125 CUR 2.0 columns — the ones this org queries. The subset is legal
+// because Athena resolves Parquet columns by name, but it means a query naming a column
+// outside the subset is not a mismatch Athena forgives: the query FAILS. reconcileBudget
+// records a failed query as unreadable spend rather than as an error and returns before
+// the kill-switch block, so the budget holds its last value and a tenant over its cap is
+// never stopped — with nothing red anywhere.
+//
+// This reads the Terraform source because that file is the only place the table's column
+// set exists. The tftest suite in that component can see the table but not this query;
+// this package can see the query but has no other view of the table. Asserting it on both
+// sides against two hand-maintained lists is how the two drift apart while each passes its
+// own test.
+func TestCurRollupQueryOnlyNamesColumnsTheTableDeclares(t *testing.T) {
+	const decl = "../../../terraform/components/cost-pipeline/main.tf"
+
+	src, err := os.ReadFile(decl)
+	if err != nil {
+		// Fatal, not Skip. A check that quietly stops checking when it cannot find its
+		// input is the failure mode this whole test exists to prevent.
+		t.Fatalf("cannot read the CUR table declaration at %s: %v", decl, err)
+	}
+
+	// Only the CUR table's own columns. The estimates table in the same file declares its
+	// own, and merging the two would let this pass on a column the CUR table never had.
+	block := regexp.MustCompile(`(?s)resource "aws_glue_catalog_table" "cur" \{.*?\n\}\n`).Find(src)
+	if block == nil {
+		t.Fatalf("no aws_glue_catalog_table.cur block found in %s — the CUR table is declared there, so either it moved or this test can no longer see it", decl)
+	}
+
+	// name -> type, captured as a PAIR. Collecting names and types separately and then
+	// asking whether the block contains each is not the same assertion: `product` is also
+	// a map, so "some column is a map" stays true with `tags` demoted to a string. That
+	// exact mutation went uncaught by the first version of this check.
+	declared := map[string]string{}
+	for _, m := range regexp.MustCompile(`columns \{\s*name\s*=\s*"([a-z_0-9]+)"\s*type\s*=\s*"([^"]+)"`).FindAllSubmatch(block, -1) {
+		declared[string(m[1])] = string(m[2])
+	}
+	if len(declared) == 0 {
+		t.Fatalf("extracted no columns from the aws_glue_catalog_table.cur block — the extraction is broken, and an empty set makes every assertion below vacuously true")
+	}
+
+	a := succeededAthena(curRollupResultSet("1.00"))
+	if _, err := budgetReconciler(a).querySpendFromAthena(context.Background(), "acme"); err != nil {
+		t.Fatalf("querySpendFromAthena: %v", err)
+	}
+
+	// Every CUR column the query names by bare identifier. The tag map is reached through
+	// element_at() and is checked separately below.
+	named := regexp.MustCompile(`line_item_[a-z_]+`).FindAllString(a.lastQuery, -1)
+	if len(named) == 0 {
+		t.Fatalf("the CUR rollup query names no line_item column at all:\n%s", a.lastQuery)
+	}
+	for _, col := range named {
+		if _, ok := declared[col]; !ok {
+			t.Errorf("the CUR rollup query reads %q, which %s does not declare on the CUR table.\n"+
+				"Athena fails the query rather than returning null for an undeclared column, and a failed\n"+
+				"query is recorded as unreadable spend. Declare the column there or stop reading it here.\n"+
+				"query:\n%s", col, decl, a.lastQuery)
+		}
+	}
+
+	// The platform attribution goes through the `tags` map. It has to be declared, and
+	// declared AS A MAP — element_at() on a string column fails the whole query.
+	if got := declared["tags"]; got != "map<string,string>" {
+		t.Errorf("the CUR rollup query attributes spend with element_at(tags, ...), so `tags` must be declared "+
+			"map<string,string> on the CUR table in %s; got %q", decl, got)
+	}
+
+	// The cost column's type is load-bearing in the same way: SUM() over a string fails.
+	if got := declared["line_item_unblended_cost"]; got != "double" {
+		t.Errorf("the CUR rollup query SUMs line_item_unblended_cost, so it must be declared double in %s; got %q", decl, got)
 	}
 }
 

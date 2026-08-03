@@ -64,13 +64,13 @@ Tenant ingress should resume within `tenant TTL + 1 min`.
 | Per-Platform IAM roles                            | yes — IAM is global                           | operator reconciles, finds existing roles, no-ops on Create   |
 | KMS grants                                        | yes — same KMS key                            | operator reconciles, lists existing grants, no-ops            |
 | S3 buckets (artifacts, eval-reports, invocations) | yes — same buckets                            | bucket policy already includes operator role                  |
-| Bedrock invocation logs from primary              | yes (in S3 + cmk-logs cw log group, regional) | accessible via Athena from standby once Glue Crawler catalogs |
+| Bedrock invocation logs from primary              | yes (in S3 + cmk-logs cw log group, regional) | readable from standby; the log group is an account+region singleton |
 | In-flight Bedrock requests                        | no                                            | tenants retry against new endpoint                            |
 
 ## What needs manual rebuild
 
 - If the standby is in a different region from the primary, Bedrock cross-region inference profile ARNs change. Update `Platform.spec.identity.allowedModels` if you pinned specific inference profile ARNs.
-- Athena Glue catalog database is regional — if cost-pipeline was only in the primary region, the standby's Budget reconciler reports zero spend until the Crawler runs. Trigger manually: `aws glue start-crawler --name <crawler> --region <standby-region>`.
+- The Glue catalog database is regional. If cost-pipeline was only applied in the primary region, the standby's Budget reconciler reports zero spend — the table it queries does not exist in the standby region. Apply `terraform/components/cost-pipeline` there; the table is declared, so it is queryable as soon as the apply lands, with no crawl to wait on. CUR data itself is account-global and needs no copy.
 
 ## Postmortem
 

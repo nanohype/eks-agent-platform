@@ -258,7 +258,7 @@ spec:
             persona: finance
           annotations:
             summary: "BudgetPolicy {{ $labels.budgetpolicy }} spend is unreadable — no budget enforcement"
-            description: "The spend query has failed on every reconcile for 15m, so {{ $labels.platform }} has no budget enforcement and the kill switch cannot fire regardless of spend. Usual causes: the operator role missing kms:Decrypt/kms:GenerateDataKey on the cost data key, the PlatformId cost-allocation tag not activated, or the CUR table absent because the crawler has not run."
+            description: "The spend query has failed on every reconcile for 15m, so {{ $labels.platform }} has no budget enforcement and the kill switch cannot fire regardless of spend. Usual causes: the operator role missing kms:Decrypt/kms:GenerateDataKey on the cost data key, the PlatformId cost-allocation tag not activated, or the CUR table absent because cost-pipeline has not been applied for this account and region."
             runbook_url: https://github.com/nanohype/eks-agent-platform/blob/main/docs/runbooks/budget-stale.md
 
         # Kill-switch fired but the platform never suspended. The budget

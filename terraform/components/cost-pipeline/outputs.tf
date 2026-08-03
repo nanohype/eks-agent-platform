@@ -24,7 +24,7 @@ output "athena_results_bucket" {
 }
 
 output "cur_table_name" {
-  description = "Glue table the CUR crawler produces over the account export — the export name with hyphens normalized to underscores. Operator reads this from SSM."
+  description = "Glue table declared over the account export's data prefix. The name is this component's own, not a function of the export's name — the operator reads it from SSM and queries it by that name, so it is a value rather than a prediction of what some discovery step would have called it."
   value       = local.cur_table_name
 }
 
