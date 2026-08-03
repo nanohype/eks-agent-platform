@@ -29,9 +29,10 @@ import (
 type AthenaConfig struct {
 	Workgroup string
 	Database  string
-	// CURTableName is the Glue table the CUR Crawler materialized. The
-	// table name is the report-name with hyphens normalized to
-	// underscores (e.g. "eks-agent-platform-dev" → "eks_agent_platform_dev").
+	// CURTableName is the Glue table cost-pipeline DECLARES over the account's
+	// CUR 2.0 export. It is not derived from the export's name and is not the
+	// output of any discovery step — cost-pipeline names the table and publishes
+	// that same string, so what arrives here is the name of a table that exists.
 	// Resolved from SSM /eks-agent-platform/<cluster>/cost-pipeline/cur_table_name.
 	CURTableName string
 }

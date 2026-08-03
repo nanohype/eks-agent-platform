@@ -5,7 +5,7 @@ variable "environment" {
 
   validation {
     condition     = var.environment == "org"
-    error_message = "cost-pipeline is account-scoped: its only valid environment token is `org` (nanohype/standards/resource-naming.json). A workload environment token here would mean three roots each holding a complete duplicate copy of the same account-wide billing data — three reports, three buckets, three crawlers, three catalogs — which is the defect this component was reshaped to remove."
+    error_message = "cost-pipeline is account-scoped: its only valid environment token is `org` (nanohype/standards/resource-naming.json). A workload environment token here would mean three roots each holding a complete duplicate copy of the same account-wide billing data — three reports, three buckets, three catalogs — which is the defect this component was reshaped to remove."
   }
 }
 
@@ -60,11 +60,10 @@ variable "athena_results_retention_days" {
   }
 }
 
-variable "cur_crawler_schedule" {
-  description = "Cron expression for the CUR Glue Crawler. AWS publishes CUR partitions hourly with the rest of the previous hour catching up over a ~6h window; daily 06:00 UTC picks up yesterday's full day plus the prior-day backfills."
-  type        = string
-  default     = "cron(0 6 * * ? *)"
-}
+# There is no crawler schedule here. The CUR table is declared with its partitions
+# projected, so nothing has to run for a billing period to become queryable — see
+# the table block in main.tf for why a scheduled crawl is the wrong shape for a
+# kill switch that reads month-to-date spend.
 
 variable "logs_kms_key_arn" {
   description = "cmk-logs ARN — the invocation-cost-publisher Lambda's own log group is encrypted here."

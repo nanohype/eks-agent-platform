@@ -338,6 +338,112 @@ run "every_cur_consumer_filters_on_the_column_aws_produces" {
   }
 }
 
+# The table declares a SUBSET of the export's 125 columns — the ones this org queries. That
+# is legal because Athena resolves Parquet by name, and it means a query naming a column the
+# table does not declare is not a schema mismatch Athena forgives: the query FAILS, and a
+# failed query is unreadable spend, which holds the budget at its last value.
+#
+# The column list is not restated here. It is EXTRACTED from the query text, so a clause
+# added to the view that reaches for a new CUR column fails this run until the column is
+# declared — which is the drift a hand-maintained list in a test cannot see.
+run "the_cur_table_declares_every_column_its_consumers_read" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for col in distinct(regexall("line_item_[a-z_]+", aws_athena_named_query.spend_reconciliation.query)) :
+      contains([for c in one(aws_glue_catalog_table.cur.storage_descriptor).columns : c.name], col)
+    ])
+    error_message = "the reconciliation view reads a line_item_* column the CUR table does not declare — Athena fails the query rather than returning null for it, and the reconciler records a failed query as unreadable spend rather than as an error"
+  }
+
+  # The two map columns are reached through element_at() rather than by bare name, so the
+  # extraction above cannot see them. Named explicitly, and asserted to be maps: declared as
+  # `string`, element_at() fails the query outright.
+  assert {
+    condition = alltrue([
+      for col in ["tags", "product"] :
+      contains([
+        for c in one(aws_glue_catalog_table.cur.storage_descriptor).columns : c.name
+        if c.type == "map<string,string>"
+      ], col)
+    ])
+    error_message = "tags and product must be declared as map<string,string> — every platform attribution and the marketplace product filter go through element_at() on those maps, and a column declared as a string there fails the whole query"
+  }
+
+  # The extraction is only a gate if it actually found something. An empty regexall makes
+  # alltrue() vacuously true, so a query rewritten to reference no line_item column at all
+  # would pass the first assertion silently.
+  assert {
+    condition     = length(distinct(regexall("line_item_[a-z_]+", aws_athena_named_query.spend_reconciliation.query))) >= 3
+    error_message = "the reconciliation view no longer references the line_item columns its CUR leg is built from — alltrue([]) is true, so the column check above passes vacuously when the query stops naming any of them"
+  }
+
+  # And each leg has to aggregate the column it claims to. The check above is satisfied by a
+  # query that merely MENTIONS the line_item columns somewhere — measured: replacing
+  # SUM(line_item_unblended_cost) with SUM(1) left every other assertion in this file green,
+  # because the WHERE clause still names three of them. That view would publish a row COUNT
+  # in a column called cur_truth_usd, and every delta against the estimate would be noise
+  # presented as reconciliation.
+  assert {
+    condition = alltrue([
+      length(regexall("SUM\\(line_item_unblended_cost\\)", aws_athena_named_query.spend_reconciliation.query)) == 1,
+      length(regexall("SUM\\(estimate_usd\\)", aws_athena_named_query.spend_reconciliation.query)) == 1,
+    ])
+    error_message = "each leg of the reconciliation view must SUM the amount column it is named for — the CUR leg on line_item_unblended_cost and the estimate leg on estimate_usd. Aggregating anything else still materializes a view, and finance reads whatever it produces as dollars"
+  }
+
+  # The cost column specifically, with its type. Declared as a string it would still be
+  # extracted and still be declared, and SUM() over it fails at query time.
+  assert {
+    condition = contains([
+      for c in one(aws_glue_catalog_table.cur.storage_descriptor).columns : c.name
+      if c.type == "double"
+    ], "line_item_unblended_cost")
+    error_message = "line_item_unblended_cost must be declared as double — it is what both the budget query and the reconciliation view SUM, and summing a string column fails the query rather than reading zero"
+  }
+
+  assert {
+    condition = contains([
+      for c in one(aws_glue_catalog_table.cur.storage_descriptor).columns : c.name
+      if c.type == "timestamp"
+    ], "line_item_usage_start_date")
+    error_message = "line_item_usage_start_date must be declared as timestamp — the budget query's month-to-date window compares it against date_trunc('month', current_date), which a string column does not support"
+  }
+}
+
+# A table is only reachable through the database it was created in, and the operator is
+# told which database to use by a separate SSM publish. Three things have to name the same
+# Glue database — the table, the published handle, and the saved query — and nothing was
+# asserting any of them. A table created in one database while the operator is pointed at
+# another is not a broken apply: it is a query against a database where that table does not
+# exist, which fails, which the reconciler records as unreadable spend.
+run "the_table_the_operator_is_sent_to_is_the_one_that_holds_it" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      aws_glue_catalog_table.cur.database_name == aws_glue_catalog_database.cost.name,
+      aws_glue_catalog_table.estimates.database_name == aws_glue_catalog_database.cost.name,
+      aws_athena_named_query.spend_reconciliation.database == aws_glue_catalog_database.cost.name,
+      aws_ssm_parameter.athena_database.value == aws_glue_catalog_database.cost.name,
+    ])
+    error_message = "the CUR table, the estimates table, the reconciliation query and the published athena_database handle must all name the same Glue database — the operator resolves database and table from two separate parameters, so a table in a different database than the one published is a query against a table that is not there"
+  }
+
+  # The saved query's FROM clauses, extracted rather than restated. Both legs of the
+  # reconciliation read a table this component declares; a FROM repointed at anything else
+  # produces a view that is valid, materializes, and reconciles the wrong thing.
+  assert {
+    condition = alltrue([
+      length(flatten(regexall("FROM ([a-z_0-9]+)", aws_athena_named_query.spend_reconciliation.query))) == 2,
+      contains(flatten(regexall("FROM ([a-z_0-9]+)", aws_athena_named_query.spend_reconciliation.query)), aws_glue_catalog_table.cur.name),
+      contains(flatten(regexall("FROM ([a-z_0-9]+)", aws_athena_named_query.spend_reconciliation.query)), aws_glue_catalog_table.estimates.name),
+    ])
+    error_message = "the reconciliation view must read its CUR leg from the declared CUR table and its estimate leg from the declared estimates table — pointed at anything else it still materializes, and finance reads a reconciliation of something other than what it names"
+  }
+}
+
 # NOTE on the us-east-1 provider. Cost Explorer reaches APIs with no endpoint outside us-east-1, and both are
 # created through `aws.us_east_1`. That binding is NOT assertable here — the `provider` meta
 # argument is not a resource attribute, so a run block cannot see it, and an assertion phrased

@@ -54,9 +54,8 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   subgraph aws["AWS account"]
-    CUR["AWS Cost & Usage Report<br/>(hourly Parquet → S3)"]
-    Crawler["Glue Crawler<br/>(daily 06:00 UTC)"]
-    GlueTable["Glue Catalog table<br/>{database}.{table}"]
+    CUR["CUR 2.0 Data Export<br/>(landing-zone owns it)<br/>s3://…/&lt;export&gt;/data/BILLING_PERIOD=YYYY-MM/"]
+    GlueTable["Glue Catalog table<br/>{database}.{table}<br/>declared, partitions projected"]
     Workgroup["Athena workgroup<br/>(KMS-encrypted results)"]
 
     BL["Bedrock invocation log group<br/>(per-invocation JSON)"]
@@ -64,8 +63,7 @@ flowchart LR
     CWNS["CloudWatch metric<br/>agents/Bedrock:EstimatedInvocationCostUsd<br/>dim: PlatformId"]
   end
 
-  CUR --> Crawler
-  Crawler --> GlueTable
+  CUR -->|table location| GlueTable
   Workgroup -->|reads| GlueTable
 
   BL -->|log subscription filter| Lambda
@@ -114,7 +112,8 @@ See [ADR 0003 — Threat model](../adr/0003-threat-model.md) for the full operat
 | Failure                                       | Reconciler behavior                                                                                                                    |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Athena workgroup not configured (SSM missing) | spendCUR falls back to 0, in-flight reading still used                                                                                 |
-| CUR Crawler hasn't run (table doesn't exist)  | Athena query fails → spendCUR=0; runbook [`budget-stale.md`](../runbooks/budget-stale.md)                                              |
+| CUR table absent (cost-pipeline not applied)  | Athena query fails → spendCUR=0; runbook [`budget-stale.md`](../runbooks/budget-stale.md)                                              |
+| New billing period, export hasn't delivered   | partition projects but holds no objects → 0 rows, spendCUR=0 until the first delivery of the period                                    |
 | Athena query timeout                          | StopQueryExecution defer fires, query stops billing, reconcile returns and retries next tick                                           |
 | CloudWatch GetMetricData errors               | in-flight falls back to 0; CUR-only reading still recorded                                                                             |
 | EventBridge PutEvents partial failure         | reconciler detects `FailedEntryCount > 0`, returns error, killSwitchFiredAt not stamped → retries on next tick (no silent breach drop) |
