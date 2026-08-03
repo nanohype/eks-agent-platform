@@ -256,9 +256,42 @@ run "every_cur_consumer_filters_on_the_column_aws_produces" {
   # The reconciliation view is created by this saved query, so its SQL is the finance-facing
   # consumer. It read a different column from the reconciler, so one of the two was always
   # returning nothing.
+  #
+  # EVERY occurrence, not merely one somewhere. The view names the platform expression three
+  # times — the SELECT, the WHERE and the GROUP BY — and a `strcontains` is satisfied by any
+  # single one of them. A view that SELECTs the union but FILTERS on `resourceTags/` alone
+  # drops every model invocation, because an invocation is not a taggable resource and so
+  # carries no resource tag at all; the view still *contains* the correct expression, and the
+  # containment check still passes. That is the exact shape this component was reshaped to
+  # remove, reintroduced one clause deeper.
+  #
+  # Not reasoned about — measured. The containment form stayed green under precisely that
+  # mutation, which is why it is no longer the assertion.
+  #
+  # The invariant: wherever the query names either prefix, it names both, as one COALESCE.
   assert {
-    condition     = strcontains(aws_athena_named_query.spend_reconciliation.query, local.cur_platform_tag_expr)
-    error_message = "the reconciliation view must filter on the same column the reconciler does"
+    condition = alltrue([
+      (length(split(local.cur_platform_tag_expr, aws_athena_named_query.spend_reconciliation.query)) ==
+      length(split("'resourceTags/PlatformId'", aws_athena_named_query.spend_reconciliation.query))),
+      (length(split(local.cur_platform_tag_expr, aws_athena_named_query.spend_reconciliation.query)) ==
+      length(split("'iamPrincipal/PlatformId'", aws_athena_named_query.spend_reconciliation.query))),
+      strcontains(aws_athena_named_query.spend_reconciliation.query, local.cur_platform_tag_expr),
+    ])
+    error_message = "the reconciliation view names one PlatformId prefix somewhere the other is absent — a clause filtering on resourceTags/ alone drops every model invocation (not a taggable resource, so never resource-tagged) and one filtering on iamPrincipal/ alone drops every datastore, and either way the view renders as a reconciliation that found no disagreement"
+  }
+
+  # `product` is a map in CUR 2.0 as well, so the marketplace filter carries the same two
+  # failure modes as the tag expression: the CUR 1.0 flattened column does not exist in this
+  # export at all, and the Trino subscript RAISES on a row whose product map lacks the key
+  # rather than returning NULL. Anthropic models bill as marketplace products rather than as
+  # AmazonBedrock, so this predicate is what makes the dominant spend visible.
+  assert {
+    condition = alltrue([
+      strcontains(aws_athena_named_query.spend_reconciliation.query, "element_at(product, 'product_name')"),
+      !strcontains(aws_athena_named_query.spend_reconciliation.query, "product_product_name"),
+      !strcontains(aws_athena_named_query.spend_reconciliation.query, "product['"),
+    ])
+    error_message = "the reconciliation view must read the product name out of CUR 2.0's product map with element_at — the flattened product_product_name column is CUR 1.0 and does not exist here, and the subscript form raises on any row whose map lacks the key, failing the whole query"
   }
 
   assert {
