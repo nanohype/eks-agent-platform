@@ -1,7 +1,31 @@
 name: release
 
+# Two ways in, one build definition.
+#
+# A tag is the explicit release: push `operator-v1.2.3` and that is what ships.
+#
+# A push to main is the safety net, and it exists because the alternative
+# failed in a way nothing noticed. `charts/operator/Chart.yaml` carried
+# `appVersion: 0.4.0` for eighty commits while GHCR's newest operator tag was
+# `0.3.2`, because the version bump rode in on a feature commit and no tag ever
+# followed. The addons-agent-operator ApplicationSet renders this chart from
+# main with `image.tag: ""` — which resolves to appVersion — so every cluster
+# syncing it got ImagePullBackOff on the operator itself, and with the operator
+# down nothing it reconciles ran either.
+#
+# So main now releases what main declares. The plan job reads the version out
+# of the chart, asks the registry whether it is already published, and builds
+# only when it is not. Idempotent by construction: the ordinary push, where the
+# version has not moved, is a single API call and no build.
+#
+# The tag it writes back is a record, not a trigger. A tag pushed with
+# GITHUB_TOKEN cannot start another workflow run — GitHub blocks that to
+# prevent recursion — which is exactly why the release lives in this workflow
+# rather than in a separate auto-tagger that would have quietly done nothing.
 on:
   push:
+    branches:
+      - main
     tags:
       - "operator-v*"
       - "sandbox-worker-v*"
@@ -15,9 +39,60 @@ permissions:
   id-token: write
 
 jobs:
+  plan:
+    name: what needs releasing
+    runs-on: ubuntu-latest
+    outputs:
+      operator: ${{ steps.plan.outputs.operator }}
+      eval_runner: ${{ steps.plan.outputs.eval_runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: derive
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Published? Asked per component, against the package's own version
+          # list. A 404 on the package itself means nothing has ever been
+          # published under that name, which is its own kind of missing.
+          published() {
+            gh api --paginate "/orgs/${{ github.repository_owner }}/packages/container/$1/versions" \
+              --jq '.[].metadata.container.tags[]' 2>/dev/null | grep -qxF "$2"
+          }
+
+          emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "plan: $1 -> ${2:-<nothing to do>}"; }
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            # An explicit tag releases exactly its own component and nothing
+            # else, so the other output stays empty.
+            tag="${GITHUB_REF#refs/tags/}"
+            case "$tag" in
+              operator-v*)    emit operator    "${tag#operator-v}";    emit eval_runner "" ;;
+              eval-runner-v*) emit eval_runner "${tag#eval-runner-v}"; emit operator    "" ;;
+              *)              emit operator ""; emit eval_runner "" ;;
+            esac
+            exit 0
+          fi
+
+          # On main the chart is the source of truth: whatever it tells a
+          # cluster to pull is what has to exist.
+          op=$(grep -E '^appVersion:' charts/operator/Chart.yaml | head -1 | tr -d '"' | awk '{print $2}')
+          ev=$(awk '/^evalRuntime:/{f=1} f && /^[[:space:]]+tag:/{gsub(/"/,"",$2); print $2; exit}' charts/operator/values.yaml)
+
+          if [ -z "$op" ] || [ -z "$ev" ]; then
+            echo "::error::could not read a version out of the chart (operator='$op' eval-runner='$ev')"
+            exit 1
+          fi
+
+          published "eks-agent-platform%2Foperator"    "$op" && emit operator    "" || emit operator    "$op"
+          published "eks-agent-platform%2Feval-runner" "$ev" && emit eval_runner "" || emit eval_runner "$ev"
+
   operator-image:
     name: build + sign operator image
-    if: startsWith(github.ref, 'refs/tags/operator-v')
+    needs: plan
+    if: needs.plan.outputs.operator != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +103,7 @@ jobs:
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${GITHUB_REF#refs/tags/operator-v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${{ needs.plan.outputs.operator }}" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
@@ -57,6 +132,23 @@ jobs:
         with:
           name: sbom-operator-${{ steps.ver.outputs.version }}
           path: sbom.spdx.json
+      # Record the release as a tag when main triggered it, so `git tag` and the
+      # registry never disagree about what shipped. Written with GITHUB_TOKEN,
+      # which deliberately cannot re-trigger this workflow.
+      - name: record the tag
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="operator-v${{ steps.ver.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag already exists — nothing to record"
+            exit 0
+          fi
+          git tag "$tag"
+          git push origin "$tag"
+          echo "recorded $tag"
 
   sandbox-worker-image:
     name: build + sign sandbox worker image
@@ -98,7 +190,8 @@ jobs:
 
   eval-runner-image:
     name: build + sign eval runner image
-    if: startsWith(github.ref, 'refs/tags/eval-runner-v')
+    needs: plan
+    if: needs.plan.outputs.eval_runner != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,7 +199,7 @@ jobs:
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${GITHUB_REF#refs/tags/eval-runner-v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${{ needs.plan.outputs.eval_runner }}" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
@@ -136,6 +229,23 @@ jobs:
         with:
           name: sbom-eval-runner-${{ steps.ver.outputs.version }}
           path: sbom.spdx.json
+      # Record the release as a tag when main triggered it, so `git tag` and the
+      # registry never disagree about what shipped. Written with GITHUB_TOKEN,
+      # which deliberately cannot re-trigger this workflow.
+      - name: record the tag
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="eval-runner-v${{ steps.ver.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag already exists — nothing to record"
+            exit 0
+          fi
+          git tag "$tag"
+          git push origin "$tag"
+          echo "recorded $tag"
 
   charts-oci:
     name: package + push charts to OCI

@@ -230,6 +230,19 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
+  # helm lint, template rendering and CRD parity all read the chart against
+  # itself. None of them asks whether the image it tells a cluster to pull
+  # exists — which is how appVersion sat eighty commits ahead of the newest
+  # published operator tag while every gate stayed green.
+  image-refs:
+    name: every image the chart names is published
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker login (ghcr.io)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - run: ./scripts/check-image-refs.py --list
+
   helm:
     name: helm lint + template
     runs-on: ubuntu-latest

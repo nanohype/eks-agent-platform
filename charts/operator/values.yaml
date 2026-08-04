@@ -215,8 +215,10 @@ evalRuntime:
   # Injected per-cluster; empty in the base chart.
   evalReportsBucket: ""
   # The eval-runner image the WorkflowTemplate's run/score/writeback steps run.
-  # Built + cosign-signed + SBOM-attested by release.yaml on an eval-runner-v*
-  # tag; the tag here is the released version, never a floating :latest.
+  # Built + cosign-signed + SBOM-attested by release.yaml — on an eval-runner-v*
+  # tag, or on a push to main that moves this pin to a version GHCR does not
+  # have yet. The tag here is the released version, never a floating :latest,
+  # and scripts/check-image-refs.py fails CI if it names something unpublished.
   image:
     repository: ghcr.io/nanohype/eks-agent-platform/eval-runner
     tag: "0.1.0"
