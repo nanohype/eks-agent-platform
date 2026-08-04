@@ -101,11 +101,15 @@ run "every_account_handle_is_read_from_the_path_its_name_claims" {
 }
 
 # Athena reaches S3 and KMS under the CALLER's identity, and the caller is the
-# operator role this policy attaches to. Reading the SSE-KMS estimates and writing
-# the SSE-KMS result set are both on this key, and the workgroup enforces encrypted
-# results — so Decrypt alone leaves every query failing at the write step, the
-# reconciler returns before the kill-switch block, and a tenant at 120% of budget
-# never trips it with nothing going red.
+# operator role this policy attaches to. Both directions are on this key: Decrypt to
+# read the result set back on GetQueryResults, and GenerateDataKey to WRITE it, because
+# the workgroup enforces encrypted results. So Decrypt alone leaves every query failing
+# at the write step, the reconciler returns before the kill-switch block, and a tenant
+# at 120% of budget never trips it with nothing going red.
+#
+# Not for the estimates objects — the operator queries only the CUR table and holds no
+# s3:GetObject on the estimates bucket. The estimate leg is the account's own query
+# surface, read by whoever runs the reconciliation.
 run "the_operator_can_decrypt_and_write_what_it_queries" {
   command = plan
 

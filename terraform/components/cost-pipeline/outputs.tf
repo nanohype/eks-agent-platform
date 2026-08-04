@@ -19,7 +19,7 @@ output "athena_database" {
 }
 
 output "athena_results_bucket" {
-  description = "S3 bucket for Athena query results (30-day TTL)"
+  description = "S3 bucket for Athena query results, expiring on athena_results_retention_days."
   value       = aws_s3_bucket.athena_results.id
 }
 
