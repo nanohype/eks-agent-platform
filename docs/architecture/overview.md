@@ -57,11 +57,11 @@ flowchart LR
 
   PR --> Ns["tenant ns + quotas<br/>+ LimitRange + NetworkPolicy<br/>+ AppProject"]
   PR --> IAM["IAM role<br/>&lt;env&gt;-&lt;platform&gt;-tenant<br/>+ baseline policy"]
-  PR --> KMS["KMS grant on cmk-data<br/>EncryptionContext: PlatformId"]
-  PR --> S3["S3 bucket policy<br/>statements for tenant prefix"]
+  PR --> KMS["tenant-key-access policy<br/>on the tenant's OWN CMK"]
+  PR --> S3["S3 bucket policy<br/>tenants/&lt;platform&gt;/* — the tenant boundary"]
 
   IAM -. "trust" .- EKSPI["EKS Pod Identity<br/>pods.eks.amazonaws.com"]
-  KMS -. "scoped to" .- DataKey["cmk-data<br/>(landing-zone)"]
+  KMS -. "one ARN, not a pattern" .- TenantKey["per-tenant CMK<br/>(tenant-substrate)"]
   S3 -. "writes" .- Artifacts["artifacts bucket<br/>(model-artifacts)"]
 ```
 

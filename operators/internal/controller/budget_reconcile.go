@@ -112,13 +112,9 @@ const platformIDTagKey = "PlatformId"
 // and it spent the platform's entire in-flight cost signal on a dimension no reader
 // ever queried.
 //
-// NOT to be used for the KMS grant's EncryptionContext, which spells its key
-// "PlatformId" too and is a different thing wearing the same name. That context is
-// an authorization primitive bound into ciphertext (ensureKmsGrant), it is scoped
-// to one cluster's key where the bare name is already unique, and changing it
-// would leave every object encrypted under the old context undecryptable. The two
-// look like an inconsistency and are not; TestKmsGrantContextIsNotTheCostIdentity
-// exists to stop a tidying pass from unifying them.
+// Cluster-qualified because a CUR covers a whole account: the bare Platform name
+// names two different tenants the moment two clusters share one, and this value is
+// what a CUR row carries.
 func platformCostID(clusterName, platformName string) string {
 	return clusterName + "-" + platformName
 }
@@ -198,8 +194,8 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 	}
 
 	// Month-to-date sum of unblended cost grouped by the PlatformId user tag the
-	// operator stamps on every taggable AWS resource (tenant IAM role, KMS grant
-	// tag, bucket prefix tag — see ADR 0003). The column name is DERIVED from the
+	// operator stamps on every taggable AWS resource (tenant IAM role, bucket
+	// prefix tag — see ADR 0003). The column name is DERIVED from the
 	// tag key rather than written out, because the two have to agree and only one
 	// of them is ours: AWS renames CUR columns on the way into Athena, and a
 	// hand-copied name that drifts from that transform produces a query which is

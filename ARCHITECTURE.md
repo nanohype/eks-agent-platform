@@ -67,12 +67,12 @@ Model families therefore are not a code concern. Adding one is a route on a CR; 
 
 ### Two CMKs per cluster, isolated by grant
 
-Each cluster carries two customer-managed keys, provisioned once by landing-zone — not one pair per Platform. Tenant isolation is a scoped grant, not a dedicated key.
+A cluster carries **one** customer-managed key by default, provisioned once by landing-zone's `secrets` component — not one per Platform. Both `data_kms_key_arn` and `logs_kms_key_arn` resolve to it. Setting `separate_logs_key` on that component mints a second CMK and **moves** the CloudWatch Logs and Bedrock grants onto it, which is what makes "reads logs, cannot decrypt data" a boundary rather than a sentence. It is off by default: the second key is worth its rotation, audit and cost only where the log reader and the data reader are different people.
 
-- **`cmk-data`** encrypts the model-artifact bucket, the audit S3 bucket, and the EventBridge archive. The operator issues each tenant role a KMS grant on this key constrained to `EncryptionContext={PlatformId: <platform>}`, so tenant A's role cannot decrypt tenant B's objects — B's data is encrypted under a context A was never granted. The auditor role has **no** decrypt permission.
-- **`cmk-logs`** encrypts CloudWatch log groups and the Bedrock invocation logging bucket. Auditor role has decrypt **only on this key**.
+- **The platform key** encrypts the model-artifacts bucket, the Athena/estimates buckets, and the EventBridge archive; it also encrypts CloudWatch log groups and the Bedrock invocation-logging bucket unless the log path has been separated.
+- **Each tenant's own key** is separate and real: `tenant-substrate` mints one per Platform, and the operator grants the tenant role `GenerateDataKey`/`Decrypt`/`DescribeKey` on exactly that ARN. Resource-scoped to one key, so tenant A's policy names an ARN that is not tenant B's.
 
-A breach of the auditor role surfaces audit history (an acceptable disclosure for oversight) but does not unlock data-plane content, and a breach of one tenant role reaches only that tenant's encryption context.
+**Tenant isolation on the shared model-artifacts bucket is an IAM boundary, not a cryptographic one.** The operator writes a bucket-policy statement per Platform scoped to `tenants/<platform>/*`, and that is the entire separation — nothing else grants a tenant role object access to that bucket, so a cross-tenant read is an implicit deny at S3 before KMS is reached. The KMS layer cannot discriminate between tenants there: the baseline policy gives every tenant role the same `kms:Decrypt` on the platform key (conditioned only on `kms:ViaService = s3`), and S3's SSE-KMS encryption context is `aws:s3:arn` — the *bucket* ARN, since the bucket enables an S3 Bucket Key — which is byte-identical for every tenant's objects. Anything that loosens the prefix policy removes the only control, and there is no second one behind it.
 
 ### Kill-switch is human-recovery only
 

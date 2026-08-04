@@ -17,7 +17,7 @@ under the cluster prefix the operator sweeps — lives in [`cost-access`](../cos
   discovers it and nothing predicts it. See the block comment in `main.tf` for why there is no
   crawler and why the partitions are projected.
 - **Glue database + the account's Athena workgroup** — the account's query surface, where the
-  reconciliation named query binds and where an analyst runs. Results are encrypted with `cmk-data`
+  reconciliation named query binds and where an analyst runs. Results are encrypted with the platform data CMK
   and expire on `athena_results_retention_days`. This is *not* the workgroup any cluster's budget
   reconciler uses; each cluster gets its own from `cost-access`, writing to its own results prefix.
 - **Invocation-cost-publisher Lambda** — subscribes to the Bedrock invocation log group owned by
@@ -39,7 +39,7 @@ The report itself is **not** here. A CUR is account substrate, so it lives in la
 | Variable                                       | Description                                                                                              |
 | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `environment`                                  | always `org` — validated, because a workload token here would mean a duplicate copy of the whole account |
-| `data_kms_key_arn`, `logs_kms_key_arn`         | `cmk-data` encrypts query results and estimates; `cmk-logs` encrypts the publisher's own log group       |
+| `data_kms_key_arn`, `logs_kms_key_arn`         | the data key encrypts query results and estimates; the log-path key encrypts the publisher's own log group. Both resolve to landing-zone's platform CMK unless that environment sets `separate_logs_key` |
 | `tenant_iam_path`                              | IAM path prefix the publisher's tag-read grant is scoped to; verified per cluster by `cost-access`       |
 | `athena_results_retention_days`                | how long saved query output is kept (default 30)                                                         |
 | `estimate_retention_days`                      | how long per-batch estimate NDJSON is kept (default 90)                                                  |

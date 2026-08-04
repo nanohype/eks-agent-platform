@@ -43,7 +43,7 @@ The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 | `eval_reports_bucket_arn`, `eval_reports_bucket_name` | from `model-artifacts`                                           |
 | `bedrock_invoke_resource_arns`                        | default `["*"]`; production should pin to inference profile ARNs |
 | `allowed_regions`                                     | `aws:RequestedRegion` ABAC for Bedrock                           |
-| `data_kms_key_arn`, `logs_kms_key_arn`                | cmk-data + cmk-logs                                              |
+| `data_kms_key_arn`, `logs_kms_key_arn`                | the data key and the log-path key from landing-zone; the same CMK unless `separate_logs_key` is set |
 
 ## Outputs
 

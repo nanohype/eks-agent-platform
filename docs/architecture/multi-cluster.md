@@ -53,7 +53,7 @@ The eks-agent-platform supports a hub-and-spoke ArgoCD topology for hosting tena
 **Cluster-wide** (shared across clusters, AWS-global):
 
 - IAM roles (operator + per-tenant).
-- KMS grants (per-tenant on the regional cmk-data).
+- KMS access policies (each tenant scoped to its own regional CMK).
 - S3 buckets + bucket policies.
 - CUR data (catalogged once in `us-east-1` Athena, queryable from any region's Budget reconciler via cross-region GetMetricData / Athena).
 

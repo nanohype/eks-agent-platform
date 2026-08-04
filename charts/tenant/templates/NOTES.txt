@@ -21,7 +21,7 @@ five things in order (see ADR 0004 + docs/architecture.md):
 
   1. Tenant workload namespace        tenants-{{ .Values.platform.name }}
   2. IAM role + Bedrock-access policy    /eks-agent-platform/tenants/{{ .Values.platform.name }}/
-  3. KMS grant on cmk-data               (per-Platform encryption boundary)
+  3. Bucket-policy statement             (tenants/<platform>/* — the tenant boundary)
   4. gateway routes                      (one per ModelRoute)
   5. a Deployment per Fleet agent        (the tenant's own image)
 

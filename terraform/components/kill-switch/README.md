@@ -6,7 +6,7 @@ When `budget-controller` observes `SpendReport.spend >= BudgetPolicy.threshold *
 
 1. Detaches the Bedrock-invoke baseline policy from the tenant's IAM role (`iam:DetachRolePolicy`). Bedrock invocations from that tenant's pods immediately fail authorization.
 2. Tags the same role `platform.nanohype.dev/suspended=true` (plus a `-suspended-reason`). The tag is the durable signal the operator reads: without it, the Platform reconciler would notice the detached baseline and reattach it within minutes, undoing the kill-switch.
-3. Publishes a `ScaleToZero` notification back onto the bus (archived for compliance and ops visibility) and logs the whole execution to CloudWatch under `cmk-logs`.
+3. Publishes a `ScaleToZero` notification back onto the bus (archived for compliance and ops visibility) and logs the whole execution to CloudWatch under the key `logs_kms_key_arn` names.
 
 Every task retries on backoff and routes to a terminal `RecordFailure` state on exhaustion, so a transient IAM / PutEvents error is recorded to the state machine's CloudWatch execution history (logged at `ALL` with execution data) rather than dropping silently — and any breach that fails to leave the tenant suspended is re-driven by the operator's effect-verifying `KillSwitchUnrouted` net (below), the load-bearing safety net for this path. Every event is archived to an EventBridge archive with 365-day retention for compliance.
 
@@ -19,7 +19,7 @@ The operator closes the loop by **observation, not subscription** — there is n
 | Variable                                | Description |
 | --------------------------------------- | ----------- |
 | `environment`, `region`, `cluster_name` | identifying |
-| `logs_kms_key_arn`                      | cmk-logs    |
+| `logs_kms_key_arn`                      | the log path's CMK — landing-zone's platform key, or its own key where `separate_logs_key` is set |
 
 The operator role ARN (granted PutEvents on the bus), the tenant IAM path (DetachRolePolicy scope), and the tenant baseline policy ARN (detached on breach) are read in-component from landing-zone's canonical `agent-iam` SSM contract (`/eks-agent-platform/<cluster>/agent-iam/*`), not passed as inputs.
 

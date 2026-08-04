@@ -16,7 +16,7 @@ that submits it). This component creates that role, scoped to the shared
   [AWS batch-inference service-role guidance](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-iam-sr.html).
 - A scoped data-access policy: `s3:GetObject`/`s3:PutObject` on
   `<artifacts-bucket>/batch/*`, `s3:ListBucket` on that prefix, and
-  `kms:Decrypt`/`GenerateDataKey` on `cmk-data` via S3.
+  `kms:Decrypt`/`GenerateDataKey` on the platform data CMK, via S3 only.
 - An SSM parameter `/eks-agent-platform/<cluster>/batch-runtime/service_role_arn`
   the operator reads at startup (`operatorconfig.BatchServiceRoleARN`).
 

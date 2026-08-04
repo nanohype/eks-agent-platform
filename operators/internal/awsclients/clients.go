@@ -20,7 +20,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	smithymiddleware "github.com/aws/smithy-go/middleware"
@@ -35,7 +34,6 @@ type Clients struct {
 	IAM         IAM
 	EKS         EKS
 	SSM         SSM
-	KMS         KMS
 	S3          S3
 	Athena      Athena
 	CloudWatch  CloudWatch
@@ -103,7 +101,6 @@ func New(ctx context.Context, region string) (*Clients, error) {
 		IAM:         iam.NewFromConfig(cfg),
 		EKS:         eks.NewFromConfig(cfg),
 		SSM:         ssm.NewFromConfig(cfg),
-		KMS:         kms.NewFromConfig(cfg),
 		S3:          s3.NewFromConfig(cfg),
 		Athena:      athena.NewFromConfig(cfg),
 		CloudWatch:  cloudwatch.NewFromConfig(cfg),
