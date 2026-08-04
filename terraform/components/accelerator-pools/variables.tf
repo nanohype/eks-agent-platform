@@ -8,19 +8,14 @@ variable "cluster_name" {
   }
 }
 
-variable "node_role_name" {
-  description = "Existing Karpenter node IAM role name (from landing-zone cluster). Operator extends this with accelerator-specific permissions."
-  type        = string
-}
-
-variable "neuron_addon_namespace" {
-  description = "Namespace where the AWS Neuron device plugin runs (matches the eks-gitops aws-neuron-device-plugin addon)"
-  type        = string
-  default     = "aws-neuron"
-}
+# node_role_name is deliberately absent. The only thing this component ever put on
+# the Karpenter node role was an ec2:Describe* policy for the Neuron device
+# plugin's topology discovery, and there is no Neuron device plugin. The GPU
+# Operator's node-side needs are covered by the AWS EKS-managed node role
+# baseline, so this component no longer reaches the node role at all.
 
 variable "gpu_operator_namespace" {
-  description = "Namespace where the NVIDIA GPU Operator runs"
+  description = "Namespace where the NVIDIA GPU Operator runs (matches the eks-gitops addons-accelerators-helm ApplicationSet)"
   type        = string
   default     = "gpu-operator"
 }

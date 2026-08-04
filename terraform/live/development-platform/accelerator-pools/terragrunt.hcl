@@ -6,10 +6,9 @@ terraform {
   source = "${get_repo_root()}/terraform/components/accelerator-pools"
 }
 
-# node_role_name (the Karpenter node IAM role, which changes on cluster
-# recreate) comes in as TF_VAR_node_role_name from the orchestrator, like
-# production — it is not pinned here.
+# Nothing is sourced from the orchestrator. This component no longer touches the
+# Karpenter node role, so it takes no input that changes when the cluster is
+# recreated.
 inputs = {
-  neuron_addon_namespace = "aws-neuron"
   gpu_operator_namespace = "gpu-operator"
 }
