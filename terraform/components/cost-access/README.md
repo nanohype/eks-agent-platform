@@ -130,7 +130,8 @@ per-cluster resource that has to be created, tagged and destroyed for nobody.
 The workgroup key and the `AthenaQuery` grant ship together on purpose. Publishing the account
 workgroup while the policy permits only this one is AccessDenied on every tick; creating this one
 while the handle still names the account's hands the operator a workgroup its policy does not cover.
-Either half alone produces stale budgets and a kill switch that never fires, with nothing red.
+Either half alone produces stale budgets and a kill switch that never fires — loudly, on the same
+`BudgetSpendUnreadable` path as the KMS failure above, but only once a tick has run.
 
 ## Consumed by
 
@@ -140,14 +141,16 @@ here is visible:
 - **It reads once, at startup.** `operatorconfig.Load` runs a single sweep from `main.go`; there is
   no watch and no refresh. Changing `athena_workgroup` — the one thing this component exists to make
   per-cluster — does not reach a running operator until the pod restarts.
-- **A missing leaf does not stop it.** `Config.Validate` requires the operator role, the tenant IAM
-  path, the tenant baseline policy, the permissions boundary and the artifacts bucket. The cost keys
-  are deliberately not in that set: they "degrade per-reconciler instead." So a cluster where this
-  component never applied runs an operator that starts clean, reports healthy, and has no budget
-  path at all. Nothing in the operator's startup will tell you.
+- **A missing leaf does not stop it — startup stays clean.** `Config.Validate` requires the operator
+  role, the tenant IAM path, the tenant baseline policy, the permissions boundary and the artifacts
+  bucket. The cost keys are deliberately not in that set: they "degrade per-reconciler instead." So
+  an operator on a cluster where this component never applied starts and reports healthy with no
+  budget path at all.
 
-That is the reason the workgroup key and the `AthenaQuery` grant ship together, one layer up from
-the reason given above: neither half announces its own absence.
+  It does not stay quiet, though. The first reconcile hits the `errAthenaNotConfigured` branch,
+  which counts `agents_budget_spend_unreadable_total` rather than returning a zero — precisely so
+  that a budget with no CUR leg cannot read as healthy. The gap is the window between a clean start
+  and the first tick, not the steady state.
 
 ## Outputs
 
