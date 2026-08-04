@@ -20,11 +20,14 @@ It takes no `cluster_name`, and `environment` is validated to `org`.
   afterwards), versioned, SSE-KMS on the key passed as `logs_kms_key_arn` with a bucket key, and a
   lifecycle that transitions to STANDARD_IA at 90 days, GLACIER at 365, and expires one day past the
   lock retention. That expiry is what bounds the bucket once the lock lapses — transitions move the
-  cost down a tier and never end it.
+  cost down a tier and never end it. Noncurrent versions expire after a single day: versioning is
+  here because Object Lock requires it, not to keep history.
 - **Access-logs bucket** — receives server-access logs from the invocations bucket, its only writer.
-  It lives here rather than next door because a per-environment owner would either strand a bucket
-  with no producer or make the account-scoped log write into one environment's sink, which is the
-  same defect one layer down.
+  Encrypted **SSE-S3 (AES256), not the CMK** — S3 server-access logging to a bucket destination does
+  not support SSE-KMS, so this is a constraint rather than a choice, and it is the one exception to
+  "log storage is on a customer-managed key" in this component. It lives here rather than next door
+  because a per-environment owner would either strand a bucket with no producer or make the
+  account-scoped log write into one environment's sink, which is the same defect one layer down.
 - **CloudWatch log group** — `/aws/bedrock/<prefix>/invocations`, KMS-encrypted, the CloudWatch half
   of the same single configuration.
 - **The logging role** — assumed by `bedrock.amazonaws.com`, conditioned on `aws:SourceAccount`.
@@ -101,7 +104,7 @@ being unable to delete the record for `object_lock_retention_days` is the point.
 | Variable                     | Description                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------------- |
 | `environment`                | always `org` — validated, because a workload token would mean several roots claiming one configuration |
-| `logs_kms_key_arn`           | the landing-zone CMK that encrypts both the invocations bucket and the log group. It currently resolves to the same key the tree passes as `data_kms_key_arn` — the `cmk-data`/`cmk-logs` split is designed but not shipped (ADR 0003) |
+| `logs_kms_key_arn`           | **Required, no default** — the only value this component cannot supply itself. Passed by the orchestrator as a `TF_VAR`, not set in the terragrunt leaf. The landing-zone CMK that encrypts the invocations bucket and the log group (the access-logs bucket is AES256; see Pieces). It currently resolves to the same key the tree passes as `data_kms_key_arn` — the `cmk-data`/`cmk-logs` split is designed but not shipped (ADR 0003) |
 | `log_retention_days`         | CloudWatch retention on the invocation log group (default 365)                                  |
 | `object_lock_mode`           | `GOVERNANCE` (default) or `COMPLIANCE` — see above                                              |
 | `object_lock_retention_days` | WORM retention on each object (default 365); bucket expiry is this plus one day                 |

@@ -132,6 +132,23 @@ workgroup while the policy permits only this one is AccessDenied on every tick; 
 while the handle still names the account's hands the operator a workgroup its policy does not cover.
 Either half alone produces stale budgets and a kill switch that never fires, with nothing red.
 
+## Consumed by
+
+The operator, and only the operator. Two things about how it consumes them decide whether an apply
+here is visible:
+
+- **It reads once, at startup.** `operatorconfig.Load` runs a single sweep from `main.go`; there is
+  no watch and no refresh. Changing `athena_workgroup` — the one thing this component exists to make
+  per-cluster — does not reach a running operator until the pod restarts.
+- **A missing leaf does not stop it.** `Config.Validate` requires the operator role, the tenant IAM
+  path, the tenant baseline policy, the permissions boundary and the artifacts bucket. The cost keys
+  are deliberately not in that set: they "degrade per-reconciler instead." So a cluster where this
+  component never applied runs an operator that starts clean, reports healthy, and has no budget
+  path at all. Nothing in the operator's startup will tell you.
+
+That is the reason the workgroup key and the `AthenaQuery` grant ship together, one layer up from
+the reason given above: neither half announces its own absence.
+
 ## Outputs
 
 `operator_cost_policy_arn`, `athena_database`.
@@ -142,3 +159,13 @@ Either half alone produces stale budgets and a kill switch that never fires, wit
 before both. Expressed through SSM rather than terragrunt `dependency` blocks: terragrunt resolves
 dependencies at **parse** time, so every per-cluster leaf would fail `init` — not `apply` — whenever
 the account state was absent, and no `TF_VAR` gets you out of that.
+
+**Teardown is the exact reverse, and it is not forgiving.** The eight account reads above are
+unconditional `data.aws_ssm_parameter` blocks with no fallback, so once `live/org/cost-pipeline` is
+destroyed, every cluster's `cost-access` can no longer plan even its own destroy — the data sources
+fail to resolve and the only way out is `state rm`. Destroy every `cost-access` leaf first, then the
+account root.
+
+Worth knowing before running one on a live cluster: destroying this leaf detaches a policy from a
+role landing-zone owns, deletes the workgroup the running operator is configured to query, and
+removes the three SSM keys — while the operator keeps running against all three.
