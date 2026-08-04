@@ -2,7 +2,8 @@
 # One cluster's access to the account's cost pipeline.
 #
 # The pipeline itself is applied once for the account (components/cost-pipeline),
-# because a Cost and Usage Report has no filter and always covers the whole account.
+# because a Cost and Usage Report covers the whole account and carries no column that
+# identifies a cluster, so a per-cluster copy would be a duplicate rather than a view.
 # Two things about it are nonetheless per-cluster, and this component is both:
 #
 #   the operator's grant   it attaches to ONE cluster's operator role, discovered
@@ -138,9 +139,9 @@ locals {
 # by cluster name, with the account's own key.
 #
 # What this does NOT buy, stated plainly so nobody reads the boundary as tighter than
-# it is: CUR access remains account-wide. A Cost and Usage Report has no filter — that
-# is why the pipeline is account-scoped at all — so there is no per-cluster CUR prefix
-# to narrow to, and the CurRead grant below still covers the whole export. This scopes
+# it is: CUR access remains account-wide. Nothing in the export identifies a cluster —
+# that is why the pipeline is account-scoped at all — so there is no per-cluster CUR
+# prefix to narrow to, and the CurRead grant below still covers the whole export. This scopes
 # where a cluster WRITES its own query output. It is not billing-data isolation.
 ################################################################################
 

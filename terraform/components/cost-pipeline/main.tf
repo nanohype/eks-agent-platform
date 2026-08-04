@@ -1,12 +1,14 @@
 ################################################################################
 # The account's cost pipeline — ONE of it, not one per environment.
 #
-# A Cost and Usage Report has no filter. It always covers the entire account, so a
-# per-environment pipeline is not a view of that environment — it is another complete
-# copy of the same billing data, in another bucket, catalogued into another Glue
-# database, queried through another Athena workgroup. Every copy correct, every copy
-# the whole account, which is why the duplication never shows up as a broken query.
-# It costs a bill and a maintenance surface instead.
+# A Cost and Usage Report covers the whole account, and nothing in it names a cluster
+# or a workload environment. A CUR 2.0 export CAN be filtered — its query statement
+# takes a WHERE clause — but there is no column to filter ON that would carve out one
+# environment's share. So a per-environment pipeline is not a view of that environment:
+# it is another complete copy of the same billing data, in another bucket, catalogued
+# into another Glue database, queried through another Athena workgroup. Every copy
+# correct, every copy the whole account, which is why the duplication never shows up as
+# a broken query. It costs a bill and a maintenance surface instead.
 #
 # One layer down the same shape stops being merely wasteful. The Bedrock invocation
 # log group is an account+region singleton (bedrock-account owns it), and a log group
@@ -32,10 +34,10 @@ data "aws_region" "current" {}
 ################################################################################
 # The account's Cost and Usage Report belongs to landing-zone, not here.
 #
-# A CUR has no filter — it always covers the whole account — which makes it
-# substrate rather than application, so it lives in landing-zone's org-cost with
-# the rest of the account's billing configuration. This component builds the
-# query layer over it and owns none of it.
+# A CUR covers the whole account and carries no column that would narrow it to one,
+# which makes it substrate rather than application, so it lives in landing-zone's
+# org-cost with the rest of the account's billing configuration. This component builds
+# the query layer over it and owns none of it.
 #
 # It is a CUR 2.0 Data Export specifically, and that is not a version preference.
 # A Bedrock model invocation is not a taggable resource, so no `resourceTags/`
