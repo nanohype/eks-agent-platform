@@ -10,7 +10,7 @@ variable "environment" {
 }
 
 variable "logs_kms_key_arn" {
-  description = "KMS key ARN for encrypting Bedrock invocation logs (cmk-logs from landing-zone)"
+  description = "KMS key ARN for encrypting Bedrock invocation logs — landing-zone's log-path key (its own CMK where separate_logs_key is set, otherwise the platform key)."
   type        = string
 }
 

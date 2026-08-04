@@ -13,8 +13,6 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/kms"
-	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 
@@ -23,120 +21,11 @@ import (
 
 // PlatformAWSConfig is the slice of operatorconfig.Config the KMS + S3
 // helpers need. Kept distinct from IAMConfig so the IAM path can run
-// independently in dev (e.g. when cmk-data isn't reachable from the
+// independently in dev (e.g. when the artifacts bucket isn't reachable from the
 // operator role) without forcing the whole AWS surface to be online.
 type PlatformAWSConfig struct {
-	DataKMSKeyARN       string
 	ArtifactsBucketName string
 	Environment         string
-}
-
-// ensureKmsGrant creates a KMS grant on cmk-data scoped to the tenant
-// role, with EncryptionContext = {PlatformId: <name>}. Idempotent:
-// ListGrants first; CreateGrant only when no grant for this role+context
-// already exists.
-//
-// The EncryptionContext is the load-bearing isolation primitive — tenant
-// role A's grant doesn't let it decrypt tenant B's data because B's
-// data is encrypted under EncryptionContext={PlatformId:B}.
-//
-// The value here is the BARE Platform name, deliberately, and it is not the same
-// thing as the PlatformId cost-allocation tag even though both spell the key
-// "PlatformId". That tag is cluster-qualified (platformCostID) because it is read
-// out of an account-wide CUR; this context is scoped to one cluster's data key,
-// where the bare name is already unique, and it is bound into the ciphertext of
-// every object already written. Qualifying it would not be a rename — it would
-// make existing tenant data undecryptable.
-func (r *PlatformReconciler) ensureKmsGrant(ctx context.Context, p *platformv1alpha1.Platform, roleARN string, cfg PlatformAWSConfig) error {
-	if r.KMS == nil || cfg.DataKMSKeyARN == "" || roleARN == "" {
-		return nil
-	}
-	grantName := "tenant-" + p.Name
-
-	// Idempotency: enumerate existing grants on the key and short-circuit
-	// if a grant for this name already exists. KMS doesn't have an
-	// upsert-by-name API; the alternative is a stable Name tag that
-	// ListGrants exposes.
-	var marker *string
-	for {
-		out, err := r.KMS.ListGrants(ctx, &kms.ListGrantsInput{
-			KeyId:  aws.String(cfg.DataKMSKeyARN),
-			Marker: marker,
-		})
-		if err != nil {
-			return fmt.Errorf("kms ListGrants: %w", err)
-		}
-		for _, g := range out.Grants {
-			if g.Name != nil && *g.Name == grantName {
-				return nil
-			}
-		}
-		if !out.Truncated || out.NextMarker == nil {
-			break
-		}
-		marker = out.NextMarker
-	}
-
-	_, err := r.KMS.CreateGrant(ctx, &kms.CreateGrantInput{
-		KeyId:            aws.String(cfg.DataKMSKeyARN),
-		GranteePrincipal: aws.String(roleARN),
-		Name:             aws.String(grantName),
-		Operations: []kmstypes.GrantOperation{
-			kmstypes.GrantOperationDecrypt,
-			kmstypes.GrantOperationEncrypt,
-			kmstypes.GrantOperationGenerateDataKey,
-			kmstypes.GrantOperationGenerateDataKeyWithoutPlaintext,
-			kmstypes.GrantOperationDescribeKey,
-		},
-		Constraints: &kmstypes.GrantConstraints{
-			// Tenant data must be encrypted with this exact context.
-			// Cross-tenant decrypt is prevented by the constraint
-			// mismatch (operator can't grant a freeform key/ctx pair —
-			// see kms:GrantIsForAWSResource condition in agent-iam).
-			EncryptionContextEquals: map[string]string{
-				"PlatformId": p.Name,
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("kms CreateGrant: %w", err)
-	}
-	return nil
-}
-
-// revokeKmsGrant is the finalizer counterpart: enumerate grants on
-// cmk-data and revoke any whose Name matches our tenant grant.
-func (r *PlatformReconciler) revokeKmsGrant(ctx context.Context, p *platformv1alpha1.Platform, cfg PlatformAWSConfig) error {
-	if r.KMS == nil || cfg.DataKMSKeyARN == "" {
-		return nil
-	}
-	grantName := "tenant-" + p.Name
-	var marker *string
-	for {
-		out, err := r.KMS.ListGrants(ctx, &kms.ListGrantsInput{
-			KeyId:  aws.String(cfg.DataKMSKeyARN),
-			Marker: marker,
-		})
-		if err != nil {
-			return fmt.Errorf("kms ListGrants (revoke path): %w", err)
-		}
-		for _, g := range out.Grants {
-			if g.Name != nil && *g.Name == grantName && g.GrantId != nil {
-				_, err := r.KMS.RevokeGrant(ctx, &kms.RevokeGrantInput{
-					KeyId:   aws.String(cfg.DataKMSKeyARN),
-					GrantId: g.GrantId,
-				})
-				if err != nil && !isAPIErrorCode(err, "NotFoundException") {
-					return fmt.Errorf("kms RevokeGrant %s: %w", *g.GrantId, err)
-				}
-			}
-		}
-		if !out.Truncated || out.NextMarker == nil {
-			break
-		}
-		marker = out.NextMarker
-	}
-	return nil
 }
 
 // baselineDenyTLSSid is the Sid of the always-present statement that denies

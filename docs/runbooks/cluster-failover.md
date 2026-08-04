@@ -64,7 +64,7 @@ Tenant ingress should resume within `tenant TTL + 1 min`.
 | Per-Platform IAM roles                            | yes — IAM is global                           | operator reconciles, finds existing roles, no-ops on Create   |
 | KMS grants                                        | yes — same KMS key                            | operator reconciles, lists existing grants, no-ops            |
 | S3 buckets (artifacts, eval-reports, invocations) | yes — same buckets                            | bucket policy already includes operator role                  |
-| Bedrock invocation logs from primary              | yes (in S3 + cmk-logs cw log group, regional) | readable from standby; the log group is an account+region singleton |
+| Bedrock invocation logs from primary              | yes (in S3 + a KMS-encrypted CW log group, regional) | readable from standby; the log group is an account+region singleton |
 | In-flight Bedrock requests                        | no                                            | tenants retry against new endpoint                            |
 
 ## What needs manual rebuild

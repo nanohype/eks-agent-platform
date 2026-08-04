@@ -321,14 +321,14 @@
       "updated": 1700000000000,
       "link": null,
       "locked": false,
-      "text": "model-artifacts (S3 + KMS)\ncmk-data grants · artifacts · eval-reports",
+      "text": "model-artifacts (S3 + KMS)\nKMS · artifacts · eval-reports",
       "fontSize": 16,
       "fontFamily": 1,
       "textAlign": "left",
       "verticalAlign": "top",
       "baseline": 14,
       "containerId": null,
-      "originalText": "model-artifacts (S3 + KMS)\ncmk-data grants · artifacts · eval-reports",
+      "originalText": "model-artifacts (S3 + KMS)\nKMS · artifacts · eval-reports",
       "lineHeight": 1.25
     },
 

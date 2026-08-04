@@ -23,14 +23,16 @@ Two workload-isolation tiers, dialed per Platform by `spec.isolation` and immuta
 
 ### Identity
 
-- No long-lived credentials anywhere. Tenant pods get credentials from the EKS Pod Identity agent; the operator itself runs with an IRSA role, scoped to the tenant IAM path + KMS grant + Bedrock policy attach/detach.
+- No long-lived credentials anywhere. Tenant pods get credentials from the EKS Pod Identity agent; the operator itself runs with an IRSA role, scoped to the tenant IAM path + Bedrock policy attach/detach. It makes no KMS API call at all — the tenant's key access is an IAM policy the operator writes, not a grant it issues.
 - Tool credentials projected into agent pods via External Secrets Operator (already in `eks-gitops`), backed by AWS Secrets Manager. Tools run in the agent's own process, so a tool's credential is scoped to the agent that uses it rather than to a shared tool server.
 
 ### Encryption
 
-- Two customer-managed keys back every cluster — `cmk-data` and `cmk-logs` — provisioned once by landing-zone, not one pair per Platform. Per-Platform isolation is a scoped KMS grant, not a dedicated key: the operator issues each tenant role a grant on `cmk-data` constrained to `EncryptionContext={PlatformId: <platform>}`, so a tenant role can only decrypt objects written under its own PlatformId. A breach of one tenant role reaches only that tenant's encryption context.
-- All S3 buckets enforce SSE-KMS with `cmk-data`, keyed per Platform by that encryption context.
-- CloudWatch log groups are encrypted with `cmk-logs`. The auditor role has decrypt on `cmk-logs` only.
+- **One customer-managed key backs a cluster by default.** landing-zone's `secrets` component mints it and both `data_kms_key_arn` and `logs_kms_key_arn` resolve to it. An environment that wants the log path on its own key sets `separate_logs_key` there: the CloudWatch Logs and Bedrock grants **move** onto a second CMK, and the platform reads the same two variables either way. Shared is the default because the separation is only worth a second key where the log reader and the data reader are different people — where they are the same one, two keys buy nothing and cost rotation, audit and money.
+- **Each tenant gets its own CMK for its own data.** `tenant-substrate` mints one per Platform, and the operator grants the tenant role use of exactly that ARN — `GenerateDataKey`, `Decrypt`, `DescribeKey`, resource-scoped to the single key, with no key-management verbs. Granting on a name pattern would reach every tenant's key, so the policy names one ARN and a Platform whose key does not exist yet gets no policy rather than a wildcard.
+- **The shared model-artifacts bucket is the exception, and its tenant boundary is IAM, not cryptography.** The operator writes a per-tenant bucket-policy statement scoped to `tenants/<platform>/*`, and that statement is the whole separation: nothing else in the account grants a tenant role object access to that bucket, so a read of another tenant's prefix is an implicit deny at S3 before KMS is ever consulted. The KMS layer contributes no tenant-vs-tenant discrimination there — every tenant role holds the same `kms:Decrypt` on the platform key through the baseline policy, conditioned only on `kms:ViaService = s3`, and S3's SSE-KMS encryption context is `aws:s3:arn`, which with an S3 Bucket Key enabled is the *bucket* ARN and therefore identical for every tenant. Read the prefix policy as the control, not as one of two.
+- S3 buckets enforce SSE-KMS, with one exception worth naming rather than discovering: the server-access-log destination buckets are SSE-S3, because S3 does not support SSE-KMS for that delivery path.
+- CloudWatch log groups are encrypted with whichever key `logs_kms_key_arn` resolves to.
 
 ### Egress
 
@@ -51,6 +53,7 @@ A `BudgetPolicy` breach at ≥120% publishes a `BudgetBreach` event that an Even
 ## Known limitations
 
 - Bedrock Guardrails are region-gated: the `bedrock` component creates the baseline Guardrail only where the service is available and publishes a null id elsewhere, and a route runs without a guardrail rather than failing when none resolves. Guardrails attach per route through `ModelGateway.spec.routes[].guardrailRef` (falling back to the gateway's `defaultGuardrailRef`, then the account baseline); the gateway reconciler stamps the resolved `{identifier, version}` onto the route's request headers, which Bedrock enforces on input and output. The mutation uses `set` rather than `add`, so a caller that sends its own guardrail headers has them overwritten rather than honoured.
+- There is no auditor role. landing-zone declares an `Auditor` IAM Identity Center permission set, but it carries no account assignments, so it materializes as no IAM role in any account; its `SecurityAudit` policy grants KMS metadata reads (`Describe*`/`Get*`/`List*`) and no `kms:Decrypt`. The posture where a principal reads operational logs but not platform data needs both the key separation (available per environment via landing-zone's `separate_logs_key`, off by default) and a principal assigned to use it. ADR 0003 tracks it.
 - DRA is beta in Kubernetes; behavior depends on the `featureGates` enabled in your EKS cluster version.
 - The `vcluster` tier adds API-server-level isolation, not compute isolation — synced pods share the host's nodes and kernel. Pair it with the tainted sandbox node pool when node-level separation is required. It also depends on ArgoCD and a vcluster-internal naming algorithm; the operator discovers the syncer-renamed host ServiceAccount by label and cross-checks it against a byte-identical replica of vcluster's algorithm, so an upstream naming change on upgrade fails loud rather than binding Pod Identity to the wrong name.
 

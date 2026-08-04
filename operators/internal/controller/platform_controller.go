@@ -38,10 +38,10 @@ import (
 //   - the ArgoCD AppProject scoped to that namespace + Platform source repos,
 //   - the per-Platform tenant IAM role (baseline attachment + the
 //     bedrock-model-scoping inline policy reconciled from spec.identity),
-//     KMS grant, and S3 bucket policy.
+//     and the per-tenant S3 bucket-policy statement.
 //
 // The k8s-side reconciliation runs first and unconditionally; AWS-side
-// state is reconciled behind interface-injected clients (IAM/KMS/S3) that
+// state is reconciled behind interface-injected clients (IAM/S3) that
 // can be nil in tests, so the reconciler stays unit-testable.
 type PlatformReconciler struct {
 	client.Client
@@ -57,7 +57,6 @@ type PlatformReconciler struct {
 	// in unit-test paths that exercise only k8s-side reconciliation.
 	IAM awsclients.IAM
 	EKS awsclients.EKS
-	KMS awsclients.KMS
 	S3  awsclients.S3
 	// SSM resolves the per-tenant master-secret ARNs the tenant-substrate
 	// component publishes. Read per reconcile rather than at startup: a tenant's
@@ -68,8 +67,8 @@ type PlatformReconciler struct {
 	// IAMCfg carries the SSM-resolved values the IAM step needs:
 	// TenantIAMPath, TenantBaselinePolicyARN, ClusterName, Environment.
 	IAMCfg IAMConfig
-	// AWSCfg carries the SSM-resolved values the KMS + S3 steps need:
-	// DataKMSKeyARN, ArtifactsBucketName, Environment.
+	// AWSCfg carries the SSM-resolved values the S3 step needs:
+	// ArtifactsBucketName, Environment.
 	AWSCfg PlatformAWSConfig
 
 	// VCluster builds the per-Platform virtual-cluster client for the vcluster
@@ -149,10 +148,6 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			}
 			if err := r.cleanupTenantResources(ctx, platform); err != nil {
 				logger.Error(err, "k8s cleanup failed; will retry")
-				return ctrl.Result{}, err
-			}
-			if err := r.revokeKmsGrant(ctx, platform, r.AWSCfg); err != nil {
-				logger.Error(err, "KMS grant revocation failed; will retry")
 				return ctrl.Result{}, err
 			}
 			if err := r.removeBucketPolicyStatements(ctx, platform, r.AWSCfg); err != nil {
@@ -270,14 +265,11 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	// AWS-side: KMS grant + S3 bucket policy. Skip when suspended — the
-	// tenant role has had its baseline detached and we don't want to
-	// hand it data-key access while the kill-switch is in effect.
+	// AWS-side: the tenant's S3 bucket-policy statement, which is the whole
+	// boundary between one tenant's objects and another's. Skipped when
+	// suspended — the tenant role has had its baseline detached and must not
+	// regain artifact access while the kill-switch is in effect.
 	if !susp.Suspended {
-		if err := r.ensureKmsGrant(ctx, platform, susp.RoleARN, r.AWSCfg); err != nil {
-			logger.Error(err, "ensureKmsGrant failed")
-			return ctrl.Result{}, err
-		}
 		if err := r.ensureBucketPolicy(ctx, platform, susp.RoleARN, r.AWSCfg); err != nil {
 			logger.Error(err, "ensureBucketPolicy failed")
 			return ctrl.Result{}, err

@@ -30,7 +30,7 @@ data "aws_ssm_parameter" "eval_reports_bucket_name" {
 #     + junit.xml artifacts
 #   - s3:GetObject on eval-reports/{platform}/manifests/* — when EvalSuite.spec
 #     .casesFromManifest points at a manifest JSON
-#   - kms:Decrypt on cmk-data — eval-reports is SSE-KMS-encrypted
+#   - kms:Decrypt on the platform data CMK — eval-reports is SSE-KMS-encrypted
 #
 # Region access is constrained via aws:RequestedRegion to match the agent-iam
 # baseline policy convention (model ARNs aren't taggable).

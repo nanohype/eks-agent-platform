@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	smithy "github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -483,100 +482,6 @@ func TestReconcileSessionBaseline_SuspendedDetachError(t *testing.T) {
 	if err := r.reconcileSessionBaseline(context.Background(), name, baseline, true); err == nil {
 		t.Fatal("a DetachRolePolicy error on the suspend path must propagate")
 	}
-}
-
-// ── platform_kms_s3.go ───────────────────────────────────────────────────────
-
-func TestEnsureKmsGrant_Errors(t *testing.T) {
-	cfg := PlatformAWSConfig{DataKMSKeyARN: "arn:aws:kms:us-west-2:123:key/abc"}
-	t.Run("list error", func(t *testing.T) {
-		k := &fakeKMS{listReturnsErr: errBoom}
-		r := &PlatformReconciler{KMS: k}
-		if err := r.ensureKmsGrant(context.Background(), newPlatform("acme", "t"), "role", cfg); err == nil {
-			t.Fatal("a ListGrants error must propagate")
-		}
-	})
-	t.Run("create error", func(t *testing.T) {
-		k := &fakeKMS{createReturnsErr: errBoom}
-		r := &PlatformReconciler{KMS: k}
-		if err := r.ensureKmsGrant(context.Background(), newPlatform("acme", "t"), "role", cfg); err == nil {
-			t.Fatal("a CreateGrant error must propagate")
-		}
-	})
-	t.Run("nil client is a no-op", func(t *testing.T) {
-		r := &PlatformReconciler{}
-		if err := r.ensureKmsGrant(context.Background(), newPlatform("acme", "t"), "role", cfg); err != nil {
-			t.Fatalf("nil KMS client must be a silent no-op: %v", err)
-		}
-	})
-}
-
-func TestRevokeKmsGrant(t *testing.T) {
-	cfg := PlatformAWSConfig{DataKMSKeyARN: "arn:aws:kms:us-west-2:123:key/abc"}
-	p := newPlatform("acme", "t")
-
-	t.Run("revokes the matching grant, ignores others", func(t *testing.T) {
-		k := &fakeKMS{grants: []kmstypes.GrantListEntry{
-			{Name: aws.String("tenant-other"), GrantId: aws.String("g0")},
-			{Name: aws.String("tenant-acme"), GrantId: aws.String("g1")},
-		}}
-		r := &PlatformReconciler{KMS: k}
-		if err := r.revokeKmsGrant(context.Background(), p, cfg); err != nil {
-			t.Fatalf("revokeKmsGrant: %v", err)
-		}
-		if len(k.revoked) != 1 || k.revoked[0] != "g1" {
-			t.Errorf("expected only the tenant-acme grant revoked, got %v", k.revoked)
-		}
-	})
-	t.Run("finds the grant across pages", func(t *testing.T) {
-		k := &fakeKMS{
-			grants: []kmstypes.GrantListEntry{
-				{Name: aws.String("tenant-other"), GrantId: aws.String("g0")},
-				{Name: aws.String("tenant-acme"), GrantId: aws.String("g1")},
-			},
-			pageBoundary: 1,
-		}
-		r := &PlatformReconciler{KMS: k}
-		if err := r.revokeKmsGrant(context.Background(), p, cfg); err != nil {
-			t.Fatalf("revokeKmsGrant paginated: %v", err)
-		}
-		if len(k.revoked) != 1 {
-			t.Errorf("paginated revoke: got %v", k.revoked)
-		}
-	})
-	t.Run("list error", func(t *testing.T) {
-		k := &fakeKMS{listReturnsErr: errBoom}
-		r := &PlatformReconciler{KMS: k}
-		if err := r.revokeKmsGrant(context.Background(), p, cfg); err == nil {
-			t.Fatal("a ListGrants error on the revoke path must propagate")
-		}
-	})
-	t.Run("revoke hard error", func(t *testing.T) {
-		k := &fakeKMS{
-			grants:           []kmstypes.GrantListEntry{{Name: aws.String("tenant-acme"), GrantId: aws.String("g1")}},
-			revokeReturnsErr: errBoom,
-		}
-		r := &PlatformReconciler{KMS: k}
-		if err := r.revokeKmsGrant(context.Background(), p, cfg); err == nil {
-			t.Fatal("a non-NotFound RevokeGrant error must propagate")
-		}
-	})
-	t.Run("revoke NotFound is tolerated", func(t *testing.T) {
-		k := &fakeKMS{
-			grants:           []kmstypes.GrantListEntry{{Name: aws.String("tenant-acme"), GrantId: aws.String("g1")}},
-			revokeReturnsErr: apiErr("NotFoundException"),
-		}
-		r := &PlatformReconciler{KMS: k}
-		if err := r.revokeKmsGrant(context.Background(), p, cfg); err != nil {
-			t.Fatalf("a grant already gone must be a tolerated no-op: %v", err)
-		}
-	})
-	t.Run("nil client is a no-op", func(t *testing.T) {
-		r := &PlatformReconciler{}
-		if err := r.revokeKmsGrant(context.Background(), p, cfg); err != nil {
-			t.Fatalf("nil KMS revoke must be a no-op: %v", err)
-		}
-	})
 }
 
 func TestEnsureBucketPolicy_Errors(t *testing.T) {

@@ -14,7 +14,7 @@ variable "cluster_name" {
 }
 
 variable "data_kms_key_arn" {
-  description = "cmk-data ARN — the artifacts bucket is SSE-KMS-encrypted, so the batch service role needs scoped decrypt/generate via s3."
+  description = "The platform data CMK ARN — the artifacts bucket is SSE-KMS-encrypted, so the batch service role needs scoped decrypt/generate via s3."
   type        = string
 }
 

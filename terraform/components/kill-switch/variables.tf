@@ -9,7 +9,7 @@ variable "cluster_name" {
 }
 
 variable "logs_kms_key_arn" {
-  description = "cmk-logs for Step Functions execution history encryption"
+  description = "KMS key ARN for Step Functions execution-history encryption — the log path's key from landing-zone (its own CMK where separate_logs_key is set, otherwise the platform key)."
   type        = string
 }
 

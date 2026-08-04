@@ -80,7 +80,7 @@ variable "athena_results_retention_days" {
 # kill switch that reads month-to-date spend.
 
 variable "logs_kms_key_arn" {
-  description = "cmk-logs ARN — the invocation-cost-publisher Lambda's own log group is encrypted here."
+  description = "Log-path KMS key ARN — the invocation-cost-publisher Lambda's own log group is encrypted here. Landing-zone's platform CMK unless that environment sets separate_logs_key."
   type        = string
 }
 

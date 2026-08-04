@@ -65,7 +65,41 @@ if [ -n "$hits" ]; then
   fail=1
 fi
 
+# ── 3. no doc may name a KMS key no component receives ────────────────────────
+# `cmk-data` and `cmk-logs` named a two-key split that landing-zone never
+# provisioned: `secrets` minted ONE key, and both `data_kms_key_arn` and
+# `logs_kms_key_arn` resolved to it. The names were load-bearing in the worst
+# way — SECURITY.md and ARCHITECTURE.md built an auditor-sees-logs-not-data
+# posture on a separation that did not exist, and nothing failed, because prose
+# has no compiler.
+#
+# The keys a component can actually receive are named by their VARIABLES
+# (data_kms_key_arn, logs_kms_key_arn) or by what landing-zone aliases them —
+# `<environment>-platform-secrets`, and `<environment>-platform-logs` where that
+# environment sets `separate_logs_key`. Say one of those. An invented nickname
+# is a claim about topology that nothing checks.
+hits=$(grep -rnE '\bcmk-(data|logs)\b' \
+  --exclude-dir='.git' --exclude-dir='node_modules' --exclude-dir='dist' \
+  --exclude-dir='vendor' --exclude-dir='.terraform' \
+  --exclude-dir='.terragrunt-cache' \
+  . 2>/dev/null \
+  | grep -v 'scripts/check-doc-contracts.sh' \
+  || true)
+
+if [ -n "$hits" ]; then
+  echo "cmk-data / cmk-logs name a key no component receives:"
+  echo "$hits"
+  echo
+  echo "landing-zone's secrets component mints ONE CMK (alias/<environment>-platform-secrets)"
+  echo "and publishes it as both kms_key_arn and logs_kms_key_arn. An environment that sets"
+  echo "separate_logs_key gets a second key, alias/<environment>-platform-logs, and the"
+  echo "CloudWatch Logs + Bedrock grants MOVE onto it."
+  echo
+  echo "Name the variable (data_kms_key_arn / logs_kms_key_arn) or the real alias."
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM)"
+echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM + real KMS key names)"

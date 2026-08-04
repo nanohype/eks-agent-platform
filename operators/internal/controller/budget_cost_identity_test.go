@@ -291,7 +291,7 @@ func TestKillSwitchEventCarriesTheBarePlatformName(t *testing.T) {
 	// nonexistent role routes to RecordFailure with no alarm path — a kill switch
 	// that reports firing and detaches nothing.
 	//
-	// Pinned for the same reason as TestKmsGrantContextIsNotTheCostIdentity: three
+	// Pinned because three
 	// values now share one key name, and the only one that must stay bare is the one
 	// whose consumer adds the qualification itself.
 	bp := &governancev1alpha1.BudgetPolicy{

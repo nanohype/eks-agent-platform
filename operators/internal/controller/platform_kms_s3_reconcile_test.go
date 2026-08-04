@@ -13,56 +13,9 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/kms"
-	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	smithy "github.com/aws/smithy-go"
 )
-
-// fakeKMS is a minimal in-memory awsclients.KMS. The interface is exactly the
-// three methods below, so there is nothing left to panic-guard.
-type fakeKMS struct {
-	grants       []kmstypes.GrantListEntry
-	created      []kms.CreateGrantInput
-	revoked      []string
-	pageBoundary int // if > 0, paginate ListGrants at this size
-
-	// Error-injection hooks (default nil = no error).
-	listReturnsErr   error
-	createReturnsErr error
-	revokeReturnsErr error
-}
-
-func (f *fakeKMS) ListGrants(_ context.Context, params *kms.ListGrantsInput, _ ...func(*kms.Options)) (*kms.ListGrantsOutput, error) {
-	if f.listReturnsErr != nil {
-		return nil, f.listReturnsErr
-	}
-	if f.pageBoundary > 0 && len(f.grants) > f.pageBoundary {
-		if params.Marker == nil {
-			return &kms.ListGrantsOutput{Grants: f.grants[:f.pageBoundary], Truncated: true, NextMarker: aws.String("page-2")}, nil
-		}
-		return &kms.ListGrantsOutput{Grants: f.grants[f.pageBoundary:]}, nil
-	}
-	return &kms.ListGrantsOutput{Grants: f.grants}, nil
-}
-
-func (f *fakeKMS) CreateGrant(_ context.Context, params *kms.CreateGrantInput, _ ...func(*kms.Options)) (*kms.CreateGrantOutput, error) {
-	if f.createReturnsErr != nil {
-		return nil, f.createReturnsErr
-	}
-	f.created = append(f.created, *params)
-	id := "grant-" + aws.ToString(params.Name)
-	f.grants = append(f.grants, kmstypes.GrantListEntry{Name: params.Name, GrantId: aws.String(id)})
-	return &kms.CreateGrantOutput{GrantId: aws.String(id)}, nil
-}
-
-func (f *fakeKMS) RevokeGrant(_ context.Context, params *kms.RevokeGrantInput, _ ...func(*kms.Options)) (*kms.RevokeGrantOutput, error) {
-	if f.revokeReturnsErr != nil {
-		return nil, f.revokeReturnsErr
-	}
-	f.revoked = append(f.revoked, aws.ToString(params.GrantId))
-	return &kms.RevokeGrantOutput{}, nil
-}
 
 // fakeS3 is a minimal in-memory awsclients.S3 holding one bucket-policy doc.
 type fakeS3 struct {
@@ -147,96 +100,6 @@ func countSid(sids []string, want string) int {
 		}
 	}
 	return n
-}
-
-func TestEnsureKmsGrant_CreatesTenantScopedGrant(t *testing.T) {
-	k := &fakeKMS{}
-	r := &PlatformReconciler{KMS: k}
-	cfg := PlatformAWSConfig{DataKMSKeyARN: "arn:aws:kms:us-west-2:123456789012:key/abc"}
-	role := "arn:aws:iam::123456789012:role/tenant-acme"
-
-	if err := r.ensureKmsGrant(context.Background(), newPlatform("acme", "acme"), role, cfg); err != nil {
-		t.Fatalf("ensureKmsGrant: %v", err)
-	}
-	if len(k.created) != 1 {
-		t.Fatalf("want exactly 1 CreateGrant, got %d", len(k.created))
-	}
-	got := k.created[0]
-	if aws.ToString(got.GranteePrincipal) != role {
-		t.Errorf("grantee = %q, want %q", aws.ToString(got.GranteePrincipal), role)
-	}
-	if aws.ToString(got.Name) != "tenant-acme" {
-		t.Errorf("grant name = %q, want tenant-acme", aws.ToString(got.Name))
-	}
-	// The EncryptionContext is the load-bearing cross-tenant isolation primitive.
-	if got.Constraints == nil || got.Constraints.EncryptionContextEquals["PlatformId"] != "acme" {
-		t.Fatalf("EncryptionContextEquals[PlatformId] != acme: %+v", got.Constraints)
-	}
-}
-
-func TestKmsGrantContextIsNotTheCostIdentity(t *testing.T) {
-	// Two different values share the key name "PlatformId", and they must stay
-	// different. The cost-allocation TAG is cluster-qualified (platformCostID)
-	// because it is read out of a CUR, which covers an entire account and so
-	// cannot tell two same-named Platforms apart. This ENCRYPTION CONTEXT is
-	// scoped to one cluster's data key, where the bare name is already unique —
-	// and unlike a tag it is bound into the ciphertext of everything already
-	// written, so changing it does not rename an identity, it strands data.
-	//
-	// The pair looks like an inconsistency, which is why this test exists: a
-	// tidying pass that makes them agree is a data-loss change, and it should
-	// fail here with the reason rather than land quietly and surface as
-	// AccessDenied on a decrypt months later.
-	k := &fakeKMS{}
-	r := &PlatformReconciler{KMS: k}
-	cfg := PlatformAWSConfig{DataKMSKeyARN: "arn:aws:kms:us-west-2:123456789012:key/abc"}
-	p := newPlatform("acme", "acme")
-
-	if err := r.ensureKmsGrant(context.Background(), p, "arn:aws:iam::123456789012:role/tenant-acme", cfg); err != nil {
-		t.Fatalf("ensureKmsGrant: %v", err)
-	}
-	ctxValue := k.created[0].Constraints.EncryptionContextEquals["PlatformId"]
-	if ctxValue != p.Name {
-		t.Errorf("the KMS EncryptionContext must stay the BARE Platform name, got %q\n"+
-			"    It is bound into the ciphertext of every object already encrypted under it.\n"+
-			"    Qualifying it to match the cost tag makes that data undecryptable.", ctxValue)
-	}
-	if ctxValue == platformCostID("some-cluster", p.Name) {
-		t.Error("the KMS EncryptionContext has been unified with the cost-attribution identity — " +
-			"these are deliberately different values behind one key name")
-	}
-}
-
-func TestEnsureKmsGrant_IdempotentWhenGrantExists(t *testing.T) {
-	k := &fakeKMS{grants: []kmstypes.GrantListEntry{{Name: aws.String("tenant-acme"), GrantId: aws.String("g1")}}}
-	r := &PlatformReconciler{KMS: k}
-	cfg := PlatformAWSConfig{DataKMSKeyARN: "arn:aws:kms:us-west-2:123:key/abc"}
-
-	if err := r.ensureKmsGrant(context.Background(), newPlatform("acme", "acme"), "role", cfg); err != nil {
-		t.Fatalf("ensureKmsGrant: %v", err)
-	}
-	if len(k.created) != 0 {
-		t.Fatalf("an existing grant must short-circuit CreateGrant, got %d creates", len(k.created))
-	}
-}
-
-func TestEnsureKmsGrant_FindsGrantOnSecondPage(t *testing.T) {
-	k := &fakeKMS{
-		grants: []kmstypes.GrantListEntry{
-			{Name: aws.String("tenant-other"), GrantId: aws.String("g0")},
-			{Name: aws.String("tenant-acme"), GrantId: aws.String("g1")},
-		},
-		pageBoundary: 1,
-	}
-	r := &PlatformReconciler{KMS: k}
-	cfg := PlatformAWSConfig{DataKMSKeyARN: "arn:aws:kms:us-west-2:123:key/abc"}
-
-	if err := r.ensureKmsGrant(context.Background(), newPlatform("acme", "acme"), "role", cfg); err != nil {
-		t.Fatalf("ensureKmsGrant: %v", err)
-	}
-	if len(k.created) != 0 {
-		t.Fatalf("a grant on page 2 must be found before create, got %d creates", len(k.created))
-	}
 }
 
 func TestEnsureBucketPolicy_AddsTenantStatementsToEmptyPolicy(t *testing.T) {

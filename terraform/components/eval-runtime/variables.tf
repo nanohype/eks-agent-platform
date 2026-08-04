@@ -37,7 +37,7 @@ variable "allowed_regions" {
 }
 
 variable "logs_kms_key_arn" {
-  description = "KMS key ARN for encrypting eval-runner CloudWatch log group (cmk-logs)"
+  description = "KMS key ARN for encrypting the eval-runner CloudWatch log group — landing-zone's log-path key."
   type        = string
 }
 
@@ -48,7 +48,7 @@ variable "log_retention_days" {
 }
 
 variable "data_kms_key_arn" {
-  description = "cmk-data ARN — eval-runner pods get kms:Decrypt scoped via EncryptionContext for the eval-reports bucket reads."
+  description = "The platform data CMK ARN — eval-runner pods get kms:Decrypt scoped via kms:ViaService for the eval-reports bucket reads."
   type        = string
 }
 

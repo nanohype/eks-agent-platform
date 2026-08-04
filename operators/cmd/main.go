@@ -262,7 +262,6 @@ func main() {
 	if awsClients != nil {
 		platformReconciler.IAM = awsClients.IAM
 		platformReconciler.EKS = awsClients.EKS
-		platformReconciler.KMS = awsClients.KMS
 		platformReconciler.S3 = awsClients.S3
 		platformReconciler.SSM = awsClients.SSM
 		platformReconciler.IAMCfg = controller.IAMConfig{
@@ -278,12 +277,6 @@ func main() {
 			Compliance:                   compliance,
 		}
 		platformReconciler.AWSCfg = controller.PlatformAWSConfig{
-			// The data CMK ARN is the one substrate value still read from an
-			// env var rather than the operatorconfig SSM subtree. Moving it to
-			// SSM needs the landing-zone agent-iam component to publish the key
-			// first, so the env var stays the wiring until then — tracked in
-			// nanohype/eks-agent-platform#97.
-			DataKMSKeyARN:       os.Getenv("AGENTS_DATA_KMS_KEY_ARN"),
 			ArtifactsBucketName: opConfig.ArtifactsBucketName,
 			Environment:         environment,
 		}
