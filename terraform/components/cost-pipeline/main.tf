@@ -975,17 +975,10 @@ resource "aws_cloudwatch_log_subscription_filter" "invocations" {
 # operator already knows, now backed by one pipeline instead of three.
 ################################################################################
 
-# landing-zone's export bucket, not this component's. The operator's Athena queries read
-# the CUR objects under the caller's own identity, so its grant has to name the bucket the
-# data is actually in — publishing this component's bucket here would grant read on a
-# bucket holding only estimates and leave every CUR scan AccessDenied.
-resource "aws_ssm_parameter" "cur_bucket" {
-  name  = "/eks-agent-platform/org/cost-pipeline/cur_bucket"
-  type  = "String"
-  value = local.cur_export_bucket
-  tags  = local.tags
-}
-
+# ssm-consumer: whoever runs the reconciliation by hand — the workgroup the
+# spend_reconciliation named query lives in, and the only one that enforces SSE-KMS
+# results on the account key. No component reads it: each cluster mints its own
+# workgroup in cost-access.
 resource "aws_ssm_parameter" "athena_workgroup" {
   name  = "/eks-agent-platform/org/cost-pipeline/athena_workgroup"
   type  = "String"
@@ -1007,6 +1000,9 @@ resource "aws_ssm_parameter" "cur_table_name" {
   tags  = local.tags
 }
 
+# ssm-consumer: whoever queries the account — the estimates table the reconciliation
+# view joins against. The operator never names it: it reads the view's inputs through
+# cost-access's per-cluster republish, not the account's query surface.
 resource "aws_ssm_parameter" "estimate_table_name" {
   name  = "/eks-agent-platform/org/cost-pipeline/estimate_table_name"
   type  = "String"
@@ -1014,6 +1010,9 @@ resource "aws_ssm_parameter" "estimate_table_name" {
   tags  = local.tags
 }
 
+# ssm-consumer: whoever queries the account — the view name to SELECT from. It is
+# created by the spend_reconciliation named query rather than by terraform, so this is
+# the only place its name is written down for a caller.
 resource "aws_ssm_parameter" "reconciliation_view" {
   name  = "/eks-agent-platform/org/cost-pipeline/reconciliation_view"
   type  = "String"
@@ -1137,15 +1136,12 @@ check "the_cost_allocation_tags_are_active" {
 
 # Handles cost-access needs to mint each cluster's operator grant. ARNs are published
 # rather than left to be reconstructed from names: a consumer composing
-# `arn:aws:athena:<region>:<account>:workgroup/<name>` has to get three more things
+# `arn:aws:glue:<region>:<account>:database/<name>` has to get three more things
 # right than it has to know, and a grant scoped to a mis-composed ARN denies silently.
-resource "aws_ssm_parameter" "athena_workgroup_arn" {
-  name  = "/eks-agent-platform/org/cost-pipeline/athena_workgroup_arn"
-  type  = "String"
-  value = aws_athena_workgroup.cost.arn
-  tags  = local.tags
-}
-
+#
+# The account WORKGROUP's ARN is not among them. Each cluster mints its own workgroup
+# in cost-access and scopes its grant to that one; this account workgroup exists to
+# hold the reconciliation named query, which nothing grants on.
 resource "aws_ssm_parameter" "athena_database_arn" {
   name  = "/eks-agent-platform/org/cost-pipeline/athena_database_arn"
   type  = "String"
