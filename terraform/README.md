@@ -34,7 +34,7 @@ eval-runtime  → agent-iam          (eval-reports bucket, landing-zone's contra
 batch-runtime → agent-iam          (model-artifacts bucket, landing-zone's contract)
 ```
 
-The first two run account-first: `bedrock-account`, then `cost-pipeline`, then each cluster's
+The cost path runs account-first: `bedrock-account`, then `cost-pipeline`, then each cluster's
 `cost-access`. Everything else (`bedrock`, `agent-egress`, `accelerator-pools`, `kill-switch`)
 applies independently.
 
@@ -45,7 +45,11 @@ account root would fail `init` — not `apply` — whenever that account state w
 
 ## Apply order
 
-Each environment is its own Terragrunt root. `terragrunt run --all apply` resolves the dependency graph above; `agent-iam` is applied separately as a landing-zone component (this tree only reads its SSM outputs).
+Each root is applied on its own. **`terragrunt run --all apply` does not order the graph above** —
+those edges are SSM reads, not `dependency` blocks, so terragrunt cannot see them and will happily
+start `cost-pipeline` before `bedrock-account` has published the log-group name. Apply the account
+roots under `live/org/` first, in the order shown, then the per-cluster roots. `agent-iam` is a
+landing-zone component applied before any of them; this tree only reads its SSM outputs.
 
 ## Wiring `landing-zone` outputs
 
