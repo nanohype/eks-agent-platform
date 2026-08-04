@@ -18,10 +18,9 @@ terraform {
 # Required inputs sourced from the orchestrator:
 #   - data_kms_key_arn, logs_kms_key_arn  (from lz-secrets)
 inputs = {
-  # One report for the account. It carries no environment token because it has no
-
-  # The account's billing history is what every environment's budget reads, so the
-  # retention is the longest of what the environments used to ask for individually
-  # rather than the shortest.
+  # Query results for the whole account, including the reconciliation view's output.
+  # Every cluster's budget decisions are audited against this one bucket, so the
+  # retention is set to a full year rather than to the component's throwaway-query
+  # default.
   athena_results_retention_days = 365
 }

@@ -5,14 +5,17 @@ variable "environment" {
 
   validation {
     condition     = var.environment == "org"
-    error_message = "cost-pipeline is account-scoped: its only valid environment token is `org` (nanohype/standards/resource-naming.json). A workload environment token here would mean three roots each holding a complete duplicate copy of the same account-wide billing data — three reports, three buckets, three catalogs — which is the defect this component was reshaped to remove."
+    error_message = "cost-pipeline is account-scoped: its only valid environment token is `org` (nanohype/standards/resource-naming.json). A workload environment token here would mean one root per environment, each holding a complete duplicate copy of the same account-wide billing data — N buckets, N catalogs, N publishers all processing every record into the same account-global metric namespace, and every copy correct."
   }
 }
 
-variable "region" {
-  description = "AWS region"
-  type        = string
-}
+# There is deliberately no `region` variable. Everything this component names, places
+# or grants on is regional, and the region that decides all of it is the one the
+# provider is configured with — read once from data.aws_region.current. A variable
+# beside it would be a second answer to a question with one authority, and the two
+# disagreeing is not an error anything reports: the buckets, the workgroup and the
+# subscription filter land in the provider's region while the publisher's KMS condition
+# and the log-group grant name the variable's, and both halves apply green.
 
 variable "tenant_iam_path" {
   description = <<-EOT
@@ -46,12 +49,23 @@ variable "tenant_iam_path" {
 }
 
 variable "data_kms_key_arn" {
-  description = "cmk-data for CUR report bucket encryption"
+  description = <<-EOT
+    The account's cost CMK. One key governs four things at once, which is why it is a
+    single input rather than one per site: the Athena workgroup's ENFORCED result
+    encryption, the results bucket's SSE default, the estimates bucket's SSE default,
+    and the SSE-KMS header the cost publisher stamps on every estimate object.
+
+    It is also published to SSM, because each cluster's cost-access scopes its operator's
+    KMS grant to it and has no way to check that value against anything — the account is
+    the only authority on which key encrypts cost data. A grant on a key nothing uses
+    fails every query at the SSE-KMS WRITE step, which the reconciler records as
+    unreadable spend rather than as access denied.
+  EOT
   type        = string
 }
 
 variable "athena_results_retention_days" {
-  description = "How long to retain saved query outputs in the Athena results bucket. Default 30 is fine for dev (throwaway queries); production should bump to match the audit cycle — set to 90 or 365 depending on regulator requirements."
+  description = "How long to retain saved query outputs in the Athena results bucket. These are the account's own query results — the reconciliation view's output and whatever an analyst ran — not billing history, which lives in landing-zone's export. Set it to whatever the audit cycle asks for."
   type        = number
   default     = 30
   validation {
@@ -83,7 +97,7 @@ variable "access_logs_retention_days" {
 }
 
 variable "estimate_retention_days" {
-  description = "How long to retain per-batch invocation-cost estimate NDJSON objects under the CUR bucket's estimates/ prefix. The reconciliation view only needs recent days (estimate-vs-CUR drift), so the default bounds object accumulation without losing useful history."
+  description = "How long to retain per-batch invocation-cost estimate NDJSON objects under the estimates bucket's estimates/ prefix. The reconciliation view only needs recent days (estimate-vs-CUR drift), so the default bounds object accumulation without losing useful history."
   type        = number
   default     = 90
   validation {
@@ -119,9 +133,9 @@ variable "tags" {
 
 variable "force_destroy_buckets" {
   description = <<-EOT
-    Allow this component's S3 buckets to be destroyed while they still hold objects, in any
-    environment. Development already allows it unconditionally; this is the opt-in for
-    everywhere else.
+    Allow this component's S3 buckets to be destroyed while they still hold objects. There
+    is no environment to branch on — this root is applied once for the account — so the
+    lever is this flag and nothing else.
 
     It exists because a cluster here is an agent-managed, often short-lived thing — eks-fleet
     vends spokes with a ttlDays and a hub reaper that deletes them on expiry — so a teardown is
@@ -133,10 +147,12 @@ variable "force_destroy_buckets" {
     lands it in state, so an operator (or an agent) must apply with this set and only then
     destroy. There is no single command that reaches a populated production bucket.
 
-    What it exposes: the CUR delivery — this environment's billing history, which AWS only
-    re-delivers while a month is inside its refresh window — plus Athena query results and the
-    access logs over both. The cost data is the input to every budget decision, so a teardown
-    here loses the record of what was spent, not just the substrate that spent it.
+    What it exposes: the invocation-cost estimates, which are this account's only
+    sub-CUR-partition record of what each tenant spent. They are re-derivable only while the
+    Bedrock invocation logs behind them are still inside their own retention, so past that
+    window a teardown loses them for good. Plus Athena query results and the access logs over
+    both. The account's billing detail itself is safe: it lives in landing-zone's export
+    bucket, which this component only reads.
   EOT
   type        = bool
   default     = false

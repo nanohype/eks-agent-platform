@@ -76,7 +76,6 @@ mock_provider "aws" {
 }
 
 variables {
-  region           = "us-west-2"
   data_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"
   logs_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
   tags             = {}
@@ -89,7 +88,7 @@ run "protected_environment_keeps_every_bucket" {
 
   assert {
     condition     = aws_s3_bucket.estimates.force_destroy == false
-    error_message = "the CUR bucket holds this environment's billing history, and AWS only re-delivers a month while it is inside its refresh window — so it must not be force-destroyable without the lever"
+    error_message = "the estimates bucket holds the account's per-invocation cost estimates — the only sub-CUR-partition record of what each tenant spent, and re-derivable only for as long as the Bedrock invocation logs behind it are still inside their own retention. It must not be force-destroyable without the lever"
   }
   assert {
     condition     = aws_s3_bucket.athena_results.force_destroy == false

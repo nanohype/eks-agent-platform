@@ -1,20 +1,19 @@
 ################################################################################
 # The account's cost pipeline — ONE of it, not one per environment.
 #
-# A Cost and Usage Report has no filter. It always covers the entire account, so
-# three per-environment pipelines were not three views of anything: they were three
-# complete, identical copies of the same billing data, in three buckets, catalogued
-# into three Glue databases, queried through three Athena workgroups. Every copy
-# correct, every copy the whole account — which is why nothing ever went red. The
-# duplication was a bill and a maintenance surface rather than a broken query.
+# A Cost and Usage Report has no filter. It always covers the entire account, so a
+# per-environment pipeline is not a view of that environment — it is another complete
+# copy of the same billing data, in another bucket, catalogued into another Glue
+# database, queried through another Athena workgroup. Every copy correct, every copy
+# the whole account, which is why the duplication never shows up as a broken query.
+# It costs a bill and a maintenance surface instead.
 #
-# The same is true one layer down. The Bedrock invocation log group is an
-# account+region singleton (bedrock-account owns it), and a log group accepts five
-# subscription filters — so three per-environment cost publishers WOULD all attach
-# cleanly, and each would process every record into the account-global
-# `agents/Bedrock` namespace that the budget reconciler reads with Stat=Sum. Three
-# times the real number, three green applies. An apply that failed would have been
-# kinder than one that succeeded.
+# One layer down the same shape stops being merely wasteful. The Bedrock invocation
+# log group is an account+region singleton (bedrock-account owns it), and a log group
+# accepts five subscription filters — so per-environment cost publishers all attach
+# cleanly, and each processes every record into the account-global `agents/Bedrock`
+# namespace that the budget reconciler reads with Stat=Sum. N copies means N times the
+# real number, from N green applies. An apply that failed would be kinder.
 #
 # So this component is applied once, from live/org/, and everything per-cluster
 # lives in cost-access: the operator's IAM grant, and the republished handles under
@@ -22,7 +21,7 @@
 #
 # It owns the QUERY LAYER — the Glue catalog, the CUR table over landing-zone's
 # export, the Athena workgroup, the reconciliation view, and the invocation-cost
-# publisher with its estimates. The report itself belongs to landing-zone, for the
+# publisher with its estimates. The export itself belongs to landing-zone, for the
 # reason described below.
 ################################################################################
 
@@ -87,9 +86,9 @@ locals {
   # component is applied once for the account, so `development` is not a thing it
   # can be. The lever is the explicit one only.
   #
-  # All three buckets need it. access-logs takes writes from the first PUT; cur and
-  # athena are versioned, so their lifecycle rules write delete markers that are
-  # themselves current versions and an expiry alone never empties them.
+  # All three buckets need it. access-logs takes writes from the first PUT; estimates
+  # and athena-results are versioned, so their lifecycle rules write delete markers that
+  # are themselves current versions and an expiry alone never empties them.
   bucket_force_destroy = var.force_destroy_buckets
 
   # Where landing-zone's export actually lands. A CUR 2.0 Data Export writes under
@@ -113,16 +112,13 @@ locals {
   # without the same normalization here a value of "/eks-agent-platform/tenants" yields the
   # grant `role/eks-agent-platform/tenants*` while the operator creates roles under
   # `/eks-agent-platform/tenants/` — a grant that matches nothing, every lookup AccessDenied,
-  # every invocation attributed to "unknown", every budget reading low. One value read two ways
-  # is the shape this whole component is being corrected for; it should not be reintroduced by
-  # the fix.
+  # every invocation attributed to "unknown", every budget reading low.
   #
-  # It arrives as a variable rather than from agent-iam's SSM contract, and that is a
-  # downgrade forced by the scope change: agent-iam publishes the path per CLUSTER,
-  # and this component is applied once for the account, so there is no single cluster
-  # subtree it could read. The value is an account-wide constant in landing-zone
-  # (agent-iam's local.tenant_role_path), which is why one variable can stand for all
-  # of them.
+  # It arrives as a variable rather than from agent-iam's SSM contract because agent-iam
+  # publishes the path per CLUSTER and this component is applied once for the account,
+  # so there is no single cluster subtree it could read. The value is an account-wide
+  # constant in landing-zone (agent-iam's local.tenant_role_path), which is why one
+  # variable can stand for every cluster.
   #
   # It is not left as an unchecked mirror. This component publishes the path it used,
   # and every cluster's cost-access reads BOTH that and its own agent-iam parameter
@@ -165,7 +161,7 @@ locals {
 }
 
 ################################################################################
-# Access-logs bucket — receives server-access logs from the CUR + Athena
+# Access-logs bucket — receives server-access logs from the estimates and Athena
 # results buckets so audit access stays separable from the data path.
 ################################################################################
 
@@ -225,17 +221,16 @@ resource "aws_s3_bucket_policy" "access_logs" {
 }
 
 ################################################################################
-# CUR report bucket
+# Estimates bucket
 #
-# Cost & Usage Reports v1 API (aws_cur_report_definition + the
-# billingreports.amazonaws.com service principal). The CUR resource itself
-# must be created in us-east-1; the destination S3 bucket can live in any
-# region. Consumers pass a region-aliased provider for the report
-# definition; the bucket is created in the workload region.
+# Holds one thing: the per-(platform, model, day) NDJSON records the
+# invocation-cost publisher writes under `estimates/`, which the Glue table further
+# down reads through partition projection. The account's billing detail is not here
+# — landing-zone owns the CUR 2.0 export and its bucket, and this component only
+# queries it.
 #
-# Migration path: aws_bcmdataexports_export + bcm-data-exports.amazonaws.com
-# is the successor API; the CUR v1 surface remains supported by AWS for
-# existing definitions until further notice.
+# So the objects in this bucket are first-party output with exactly one writer, and
+# that is what decides its encryption below.
 ################################################################################
 
 resource "aws_s3_bucket" "estimates" {
@@ -250,7 +245,7 @@ resource "aws_s3_bucket" "estimates" {
 resource "aws_s3_bucket_logging" "estimates" {
   bucket        = aws_s3_bucket.estimates.id
   target_bucket = aws_s3_bucket.access_logs.id
-  target_prefix = "cur/"
+  target_prefix = "estimates/"
 }
 
 resource "aws_s3_bucket_versioning" "estimates" {
@@ -260,25 +255,25 @@ resource "aws_s3_bucket_versioning" "estimates" {
   }
 }
 
-# The bucket default is SSE-S3 because the Cost and Usage Reports service cannot
-# deliver into an SSE-KMS bucket. Its delivery role is the service principal
-# billingreports.amazonaws.com holding exactly the two statements AWS publishes —
-# GetBucketAcl/GetBucketPolicy and PutObject — and AWS documents no KMS key-policy
-# statement for it anywhere, stating instead that exports are encrypted with
-# SSE-S3 and that using SSE-KMS means re-encrypting after delivery. A CMK default
-# here does not harden the bucket: it makes every PutObject fail, so the bucket
-# stays empty and every budget decision reads zero.
+# The account cost key, same as the results bucket and the workgroup.
 #
-# The estimates the cost publisher writes under estimates/ are NOT affected — the
-# Lambda sets ServerSideEncryption=aws:kms and SSEKMSKeyId per object, which
-# overrides the bucket default, so first-party data keeps the CMK and only the
-# AWS-delivered billing detail is SSE-S3.
+# No AWS service delivers into this bucket, so nothing here has to tolerate a service
+# principal that cannot use a CMK. The only writer is the publisher Lambda, which sets
+# ServerSideEncryption=aws:kms and SSEKMSKeyId per object and holds GenerateDataKey on
+# exactly this key — so the default governs nothing on the live path and everything on
+# any other path, which is what a default is for. Leaving it at SSE-S3 would mean an
+# object written by anything but the Lambda is weaker than the object beside it.
+#
+# bucket_key_enabled because every object here is small and written on a per-batch
+# cadence; a data key per object would bill a KMS request per put.
 resource "aws_s3_bucket_server_side_encryption_configuration" "estimates" {
   bucket = aws_s3_bucket.estimates.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = var.data_kms_key_arn
     }
+    bucket_key_enabled = true
   }
 }
 
@@ -291,10 +286,16 @@ resource "aws_s3_bucket_public_access_block" "estimates" {
 }
 
 
-# Estimate export retention — the invocation-cost-publisher writes small NDJSON
-# objects under estimates/ on every log batch; bound their accumulation so the
-# Athena scan stays cheap. The CUR Parquet under cur/ is untouched (the rule is
-# prefix-scoped to estimates/).
+# Estimate retention — the invocation-cost-publisher writes small NDJSON objects under
+# estimates/ on every log batch; bound their accumulation so the Athena scan stays
+# cheap. Prefix-scoped rather than bucket-wide so anything later written outside the
+# publisher's prefix keeps whatever retention it is given.
+#
+# The projected partition range starts before this retention does, deliberately. The
+# range advertises every day back to the projection start while the rule empties days
+# older than estimate_retention_days, so a query walks locations that hold nothing —
+# which Athena skips at no charge. Narrowing the range to track the retention would
+# make it a function of plantimestamp() and put the table into a perpetual diff.
 resource "aws_s3_bucket_lifecycle_configuration" "estimates" {
   bucket = aws_s3_bucket.estimates.id
 
@@ -646,12 +647,21 @@ resource "aws_glue_catalog_table" "cur" {
 # Estimate export + reconciliation
 #
 # The invocation-cost-publisher Lambda (below) also writes per-(platform, model)
-# daily estimate records as Hive-partitioned NDJSON under <cur-bucket>/estimates/
-# usage_date=<d>/. This Glue table reads that prefix via partition projection
+# daily estimate records as Hive-partitioned NDJSON into the estimates bucket under
+# estimates/usage_date=<d>/. This Glue table reads that prefix via partition projection
 # (date on usage_date; platform_id is a data column, not a partition, so the
 # reconciliation view can aggregate across all platforms without a per-partition
 # predicate). The reconciliation view LEFT JOINs the daily estimate against the
 # CUR truth so finance can watch estimate-vs-billed drift.
+#
+# Nothing links the writer to this table. The Lambda composes an object key from two
+# environment variables and the table projects a location from two parameters, and if
+# the two addresses disagree the export keeps succeeding into a prefix nothing reads:
+# Athena returns zero rows from the projected locations, the view's estimate leg is
+# empty, and a LEFT JOIN with an empty left side renders as a reconciliation that found
+# nothing to disagree about. tests/budget_path.tftest.hcl binds the two addresses
+# together, and the Lambda's own suite checks the objects it really writes against the
+# columns declared here.
 ################################################################################
 
 resource "aws_glue_catalog_table" "estimates" {
@@ -795,12 +805,16 @@ resource "aws_athena_named_query" "spend_reconciliation" {
 ################################################################################
 # Invocation-cost-publisher Lambda
 #
-# Subscribes to the Bedrock invocation log group emitted by
-# terraform/components/bedrock and republishes the per-invocation cost
-# as a CloudWatch custom metric dimensioned by PlatformId. The Budget
-# reconciler reads this metric via GetMetricData to get sub-CUR-partition
-# in-flight cost (Bedrock invocation logs land in seconds; CUR partitions
-# lag by ~24h).
+# Subscribes to the account's Bedrock invocation log group, which bedrock-account owns
+# and publishes over SSM, and republishes the per-invocation cost as a CloudWatch custom
+# metric dimensioned by PlatformId. The Budget reconciler reads this metric via
+# GetMetricData to get sub-CUR-partition in-flight cost (Bedrock invocation logs land in
+# seconds; CUR partitions lag by ~24h).
+#
+# That makes the subscription the whole in-flight leg. When it is not delivering, the
+# reconciler's GetMetricData still succeeds and returns no datapoints, which reads as
+# $0 rather than as an error — so the leg fails to the same value a quiet tenant
+# produces.
 ################################################################################
 
 # Package the whole lambda/ directory so the generated pricing_data.py ships
@@ -886,8 +900,16 @@ resource "aws_iam_role_policy" "invocation_cost_publisher" {
         Action   = ["kms:GenerateDataKey", "kms:Encrypt", "kms:DescribeKey"]
         Resource = [var.data_kms_key_arn]
         Condition = {
+          # The region here is the PROVIDER's, read from data.aws_region, and it has to
+          # be: the estimates bucket is created by that provider, so an S3-mediated KMS
+          # request from it carries `s3.<that region>.amazonaws.com` and nothing else.
+          # A region taken from anywhere the provider does not decide can disagree with
+          # the bucket, and the condition then matches no request the publisher ever
+          # makes — every PutObject fails on the KMS call, `_write_estimates` swallows
+          # the exception (it must, so an S3 hiccup cannot poison the metric path), and
+          # the handler returns status=ok on every batch while writing nothing.
           StringEquals = {
-            "kms:ViaService" = ["s3.${var.region}.amazonaws.com"]
+            "kms:ViaService" = ["s3.${data.aws_region.current.region}.amazonaws.com"]
           }
         }
       }
@@ -944,12 +966,41 @@ data "aws_ssm_parameter" "bedrock_invocation_log_group" {
   name = "/eks-agent-platform/org/bedrock-account/invocation_log_group"
 }
 
+# CloudWatch Logs is granted the invoke, narrowed to the one log group it may deliver
+# from. Every part of the ARN is derived rather than configured — the region from the
+# provider that creates the subscription filter, the account from the caller, the group
+# name from the account contract — because a resource policy is evaluated on every
+# invoke, so a part that disagrees denies every one of them.
+#
+# What a denial does NOT do is change the subscription filter, which goes on existing
+# and describing itself as healthy while nothing is delivered. The Lambda never runs, so
+# it has no errors and writes no logs, and the operator's in-flight leg reads $0 for
+# every tenant through a GetMetricData call that succeeds with no datapoints.
+#
+# There is one signal, and it is not in this account's hands: CloudWatch Logs publishes
+# AWS/Logs DeliveryErrors — log events for which an error was received forwarding to the
+# subscription destination. Nothing in this repo alarms on it. It is the first thing to
+# look at when the estimate table is empty and the publisher's own log group is silent,
+# because a Lambda that is never invoked leaves no other trace.
+#
+# The principal is the REGIONAL form. AWS's published add-permission example uses the
+# non-regional logs.amazonaws.com and both are accepted, so this is not a place to
+# "correct" on the strength of the doc alone: landing-zone's logs CMK key policy grants
+# the same regional principal, and CreateLogGroup with a KMS key fails loudly when that
+# string does not match — which is the evidence that this is the principal CloudWatch
+# Logs actually presents in this partition.
 resource "aws_lambda_permission" "invocation_cost_publisher_logs" {
   statement_id  = "AllowCloudWatchLogsInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.invocation_cost_publisher.function_name
-  principal     = "logs.${var.region}.amazonaws.com"
-  source_arn    = "arn:${data.aws_partition.current.partition}:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.bedrock_invocation_log_group}:*"
+  principal     = "logs.${data.aws_region.current.region}.amazonaws.com"
+  source_arn    = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:${local.bedrock_invocation_log_group}:*"
+
+  # The service principal is regional but not account-scoped on its own, so the source
+  # account is stated alongside the ARN — AWS's own procedure for a CloudWatch Logs
+  # destination passes both, and without it the grant's only account binding is a
+  # substring of the ARN.
+  source_account = data.aws_caller_identity.current.account_id
 }
 
 resource "aws_cloudwatch_log_subscription_filter" "invocations" {
@@ -971,8 +1022,8 @@ resource "aws_cloudwatch_log_subscription_filter" "invocations" {
 #
 # The operator cannot read these. Its whole configuration is one recursive
 # GetParametersByPath sweep of its OWN cluster prefix, so cost-access republishes
-# each handle under /eks-agent-platform/<cluster>/cost-pipeline/ — the keys the
-# operator already knows, now backed by one pipeline instead of three.
+# each handle under /eks-agent-platform/<cluster>/cost-pipeline/, which is where the
+# operator looks for them.
 ################################################################################
 
 # ssm-consumer: whoever runs the reconciliation by hand — the workgroup the
@@ -1024,9 +1075,11 @@ resource "aws_ssm_parameter" "reconciliation_view" {
 # PlatformId cost-allocation tag — account-global, not retroactive, and the reason
 # the CUR leg of every budget can read zero while every query succeeds.
 #
-# Activating this key is what makes `resource_tags_user_platform_id` a column in the
-# report at all. Until it is active the column is absent from the Parquet, so the
-# reconciler's predicate matches nothing and every tenant reads zero spend with a
+# Activating this key is what puts it into the report at all. CUR 2.0 carries one
+# `tags` column of type map<string,string> holding every tag source at once, and a key
+# appears in that map only once it has been activated as a cost-allocation tag — so
+# until then `element_at(tags, 'resourceTags/PlatformId')` is NULL on every row, the
+# reconciler's predicate matches nothing, and every tenant reads zero spend through a
 # query that ran and returned. Nothing goes red.
 #
 # ─── why terraform asserts this rather than owning it ───

@@ -310,9 +310,11 @@ resource "aws_iam_policy" "operator_cost" {
         # Athena runs S3 and KMS access under the CALLER's identity, and the caller
         # here is the operator role this policy attaches to. Three actions, all
         # load-bearing on the same key:
-        #   Decrypt         - read the estimates/ objects the cost publisher writes
-        #                     with an explicit SSE-KMS header, and read a result set
-        #                     back on GetQueryResults
+        #   Decrypt         - read the result set back on GetQueryResults. NOT for the
+        #                     estimates objects: the operator queries only the CUR
+        #                     table, and holds no s3:GetObject on the estimates bucket
+        #                     at all. Trimming this grant against that reading would
+        #                     break every GetQueryResults instead
         #   GenerateDataKey - WRITE the result set. The workgroup enforces SSE_KMS
         #                     results, so this is not optional, and Decrypt alone
         #                     leaves every query failing at the write step

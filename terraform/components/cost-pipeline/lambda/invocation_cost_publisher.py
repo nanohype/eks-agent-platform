@@ -75,6 +75,15 @@ TOKENS_OUT_METRIC = "TokensOut"
 UNPRICED_METRIC = "UnpricedInvocations"
 UNATTRIBUTED_METRIC = "UnattributedInvocations"
 
+# Estimate exports that were attempted and failed. The put has to be swallowed — an S3
+# hiccup must not poison the metric path or trigger a log-subscription retry — and that
+# swallow is the component's most silent seam: a grant that misses the prefix, a KMS
+# condition that matches nothing, a bucket that is not there, all end as a warning in a
+# log group nothing reads while the handler reports success on every batch. This counts
+# them, so the difference between a misconfigured export and an idle account is a
+# number rather than an inference. Alarm on it at any non-zero value.
+EXPORT_FAILURE_METRIC = "EstimateExportFailures"
+
 # The tag the operator stamps on every role it mints, carrying the
 # cluster-qualified cost identity (operators/internal/controller/budget_reconcile.go,
 # platformCostID). This Lambda READS that tag rather than reconstructing the value
@@ -84,12 +93,29 @@ PLATFORM_ID_TAG = "PlatformId"
 
 # Estimate export → S3 (Hive-partitioned NDJSON under usage_date=<d>/) feeds
 # the Athena `invocation_cost_estimates` table, which the
-# `invocation_cost_reconciliation` view SUMs against CUR truth. An empty
-# ESTIMATE_BUCKET disables the export (the CloudWatch metric path is
-# unaffected) so the handler degrades cleanly if the env wiring is absent.
+# `invocation_cost_reconciliation` view SUMs against CUR truth.
+#
+# These three values are the whole address of that export, and the table that reads it
+# is declared in terraform with no reference to this file. The bucket and prefix here
+# have to be the bucket and prefix the table's location and projection template are
+# built from; the fallbacks below are what runs if terraform ever stops setting the
+# environment, so they are the declared values rather than convenient ones.
+# ESTIMATE_BUCKET's fallback is empty on purpose — no bucket means no export, which is
+# a visible absence, where a guessed bucket name would be a write into somewhere real.
 ESTIMATE_BUCKET = os.environ.get("ESTIMATE_BUCKET", "")
 ESTIMATE_PREFIX = os.environ.get("ESTIMATE_PREFIX", "estimates")
 ESTIMATE_KMS_KEY_ID = os.environ.get("ESTIMATE_KMS_KEY_ID", "")
+
+# Hive partition column for the estimate export. Spelled once, used to build the object
+# key; the table declares the same name as its partition key and substitutes it into
+# `storage.location.template`. A disagreement is not an error on either side — Athena
+# projects locations that hold no objects and returns zero rows.
+ESTIMATE_PARTITION_KEY = "usage_date"
+
+# strftime format for that partition value, matching the table's
+# `projection.usage_date.format` of yyyy-MM-dd. Athena generates projected date
+# partitions in UTC, which is why every timestamp below is made UTC-aware first.
+ESTIMATE_PARTITION_FORMAT = "%Y-%m-%d"
 
 # Custom Model Import (open-weight) models are capacity-billed (per active model
 # copy per minute, i.e. CMUs), not per-token, so no per-token rate is derivable
@@ -377,12 +403,28 @@ def _emit_metrics(per_platform: dict[str, float]) -> None:
         )
 
 
-def _emit_token_metrics(aggregates: dict[tuple[str, str], dict[str, float]]) -> None:
+def _emit_token_metrics(aggregates: dict[tuple[str, str, str], dict[str, float]]) -> None:
     # TokensIn/TokensOut per (PlatformId, ModelId), same agents/Bedrock
     # namespace. Distinct dimensions from EstimatedInvocationCostUsd (which the
     # Budget reconciler reads by PlatformId only), so this is purely additive.
+    #
+    # The usage_date in the aggregate key is collapsed here. It exists for the estimate
+    # export, which is a date-partitioned TABLE; these are metric datapoints, which
+    # carry their own timestamp and are aggregated by CloudWatch at read time.
+    #
+    # Collapsing is not a correctness requirement — two partials on identical
+    # dimensions sum back to the same total under Stat=Sum, which is how the finance
+    # dashboard reads them. It keeps this emission byte-identical to what it was
+    # before the export gained a day, so a change made for the export's benefit cannot
+    # quietly alter a metric something else already graphs. Adding a real per-day
+    # dimension later is a safe change; it is just not this one.
+    totals: dict[tuple[str, str], dict[str, float]] = defaultdict(lambda: {"in": 0.0, "out": 0.0})
+    for (_usage_date, platform_id, model_id), agg in aggregates.items():
+        totals[(platform_id, model_id)]["in"] += agg["in"]
+        totals[(platform_id, model_id)]["out"] += agg["out"]
+
     data: list[dict[str, Any]] = []
-    for (platform_id, model_id), agg in aggregates.items():
+    for (platform_id, model_id), agg in totals.items():
         dims = [
             {"Name": "PlatformId", "Value": platform_id},
             {"Name": "ModelId", "Value": model_id},
@@ -444,46 +486,111 @@ def _emit_unattributed(counts: dict[str, int]) -> None:
         cloudwatch.put_metric_data(Namespace=NAMESPACE, MetricData=chunk)
 
 
-def _write_estimates(aggregates: dict[tuple[str, str], dict[str, float]], usage_date: str) -> None:
+def _emit_export_failures(count: int) -> None:
+    # No dimensions. The failure is a property of this account's export wiring rather
+    # than of any one platform or model, and every cause — a grant that misses the
+    # prefix, a KMS condition on the wrong region, a bucket that is not there — hits
+    # every record in the batch identically.
+    cloudwatch.put_metric_data(
+        Namespace=NAMESPACE,
+        MetricData=[{"MetricName": EXPORT_FAILURE_METRIC, "Unit": "Count", "Value": float(count)}],
+    )
+
+
+def _usage_date(log_event: dict[str, Any]) -> str:
+    """The partition day for one invocation, from the log event's own timestamp.
+
+    CloudWatch Logs carries a `timestamp` on every event in a subscription payload —
+    milliseconds since the epoch, set by the producer, which for a Bedrock invocation
+    log is when the invocation happened. That is the value the CUR leg of the
+    reconciliation buckets by (line_item_usage_start_date), so it is the one this side
+    has to bucket by too.
+
+    The handler's own clock is the wrong answer and not obviously so: it agrees for
+    every batch that does not cross UTC midnight, which is almost all of them. It
+    disagrees for the tail of each day, and it disagrees for an entire batch whenever
+    CloudWatch Logs retries a delivery across the boundary or a filter is recreated
+    and replays. Nothing reports that — both days get rows.
+
+    Falls back to now() only when the event carries no usable timestamp, which the
+    subscription contract says cannot happen; a record with no day at all would be
+    dropped from the export entirely, and a day that is approximately right beats a
+    row that silently is not there.
     """
-    Write one NDJSON object per log batch to the Hive-partitioned estimate
-    prefix (s3://$ESTIMATE_BUCKET/$ESTIMATE_PREFIX/usage_date=<d>/<uuid>.json),
-    one record per (platform_id, model_id). The Athena table partitions on
-    usage_date only (date projection) and treats platform_id as a data column,
-    so the reconciliation view can SUM across all platforms without a
-    per-partition predicate.
+    raw = log_event.get("timestamp")
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        try:
+            return datetime.fromtimestamp(raw / 1000, timezone.utc).strftime(ESTIMATE_PARTITION_FORMAT)
+        except (OverflowError, OSError, ValueError):
+            logger.warning("log event carried an unusable timestamp: %r", raw)
+    return datetime.now(timezone.utc).strftime(ESTIMATE_PARTITION_FORMAT)
+
+
+def _write_estimates(aggregates: dict[tuple[str, str, str], dict[str, float]]) -> None:
+    """
+    Write the batch's estimate records to the Hive-partitioned estimate prefix
+    (s3://$ESTIMATE_BUCKET/$ESTIMATE_PREFIX/usage_date=<d>/<uuid>.json), one NDJSON
+    record per (platform_id, model_id) and one OBJECT per usage_date present in the
+    batch. The Athena table partitions on usage_date only (date projection) and
+    treats platform_id as a data column, so the reconciliation view can SUM across
+    all platforms without a per-partition predicate.
+
+    A batch normally holds one day and writes one object. It holds two when the
+    invocations it carries straddle UTC midnight, and those have to be written to
+    different partitions: the day comes from each invocation's own event time, and
+    the reconciliation joins these rows to CUR on line_item_usage_start_date. A
+    single object stamped with the handler's wall clock would put the tail of one
+    day into the next one's partition, which is not a failure anything reports —
+    both days still have rows, one reads low and the next reads high, and the view
+    presents the skew as estimate-vs-billed drift.
 
     A failed put is logged and swallowed — an S3 hiccup must never poison the
-    CloudWatch metric path or trigger log-subscription retries.
+    CloudWatch metric path or trigger log-subscription retries. That is also why
+    nothing downstream can tell a misconfigured export from an idle account, and why
+    the address this writes to is asserted against the table's rather than reviewed.
     """
     if not ESTIMATE_BUCKET or not aggregates:
         return
-    records = [
-        {
-            "platform_id": platform_id,
-            "model_id": model_id,
-            "estimate_usd": round(agg["cost"], 6),
-            "input_tokens": int(agg["in"]),
-            "output_tokens": int(agg["out"]),
-            "invocation_count": int(agg["count"]),
+
+    failures = 0
+    by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for (usage_date, platform_id, model_id), agg in aggregates.items():
+        by_day[usage_date].append(
+            {
+                "platform_id": platform_id,
+                "model_id": model_id,
+                "estimate_usd": round(agg["cost"], 6),
+                "input_tokens": int(agg["in"]),
+                "output_tokens": int(agg["out"]),
+                "invocation_count": int(agg["count"]),
+            }
+        )
+
+    for usage_date, records in by_day.items():
+        body = "\n".join(json.dumps(r) for r in records).encode("utf-8")
+        key = f"{ESTIMATE_PREFIX}/{ESTIMATE_PARTITION_KEY}={usage_date}/{uuid.uuid4().hex}.json"
+        put_kwargs: dict[str, Any] = {
+            "Bucket": ESTIMATE_BUCKET,
+            "Key": key,
+            "Body": body,
+            "ContentType": "application/x-ndjson",
         }
-        for (platform_id, model_id), agg in aggregates.items()
-    ]
-    body = "\n".join(json.dumps(r) for r in records).encode("utf-8")
-    key = f"{ESTIMATE_PREFIX}/usage_date={usage_date}/{uuid.uuid4().hex}.json"
-    put_kwargs: dict[str, Any] = {
-        "Bucket": ESTIMATE_BUCKET,
-        "Key": key,
-        "Body": body,
-        "ContentType": "application/x-ndjson",
-    }
-    if ESTIMATE_KMS_KEY_ID:
-        put_kwargs["ServerSideEncryption"] = "aws:kms"
-        put_kwargs["SSEKMSKeyId"] = ESTIMATE_KMS_KEY_ID
-    try:
-        s3.put_object(**put_kwargs)
-    except Exception as exc:  # telemetry export must never block the metric path
-        logger.warning("estimate export failed: %s", exc)
+        if ESTIMATE_KMS_KEY_ID:
+            put_kwargs["ServerSideEncryption"] = "aws:kms"
+            put_kwargs["SSEKMSKeyId"] = ESTIMATE_KMS_KEY_ID
+        try:
+            s3.put_object(**put_kwargs)
+        except Exception as exc:  # telemetry export must never block the metric path
+            failures += 1
+            logger.error("estimate export failed for %s: %s", usage_date, exc)
+
+    # Emitted after the loop rather than per failure, and outside the try: a swallowed
+    # write that nothing counts is indistinguishable from a write that never had to
+    # happen. This call is deliberately NOT guarded — every other metric emission here
+    # is unguarded too, and a CloudWatch outage that fails the batch is the correct
+    # outcome for the metric path, which is the leg the kill switch actually reads.
+    if failures:
+        _emit_export_failures(failures)
 
 
 def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -498,7 +605,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     _BATCH_FAILED_ROLES.clear()
 
     per_platform: dict[str, float] = defaultdict(float)
-    aggregates: dict[tuple[str, str], dict[str, float]] = {}
+    aggregates: dict[tuple[str, str, str], dict[str, float]] = {}
     unpriced: dict[tuple[str, str], int] = defaultdict(int)
     parsed = 0
     skipped = 0
@@ -517,7 +624,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             skipped += 1
             continue
         per_platform[platform_id] += cost
-        agg = aggregates.setdefault((platform_id, model_id), {"cost": 0.0, "in": 0.0, "out": 0.0, "count": 0.0})
+        key = (_usage_date(log_event), platform_id, model_id)
+        agg = aggregates.setdefault(key, {"cost": 0.0, "in": 0.0, "out": 0.0, "count": 0.0})
         agg["cost"] += cost
         agg["in"] += in_tokens
         agg["out"] += out_tokens
@@ -527,7 +635,7 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     if per_platform:
         _emit_metrics(dict(per_platform))
         _emit_token_metrics(aggregates)
-        _write_estimates(aggregates, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        _write_estimates(aggregates)
     if unpriced:
         _emit_unpriced(dict(unpriced))
     if _UNTAGGED_ROLES:

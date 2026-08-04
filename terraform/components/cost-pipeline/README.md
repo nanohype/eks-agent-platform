@@ -39,7 +39,6 @@ The report itself is **not** here. A CUR is account substrate, so it lives in la
 | Variable                                       | Description                                                                                              |
 | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `environment`                                  | always `org` — validated, because a workload token here would mean a duplicate copy of the whole account |
-| `region`                                       | AWS region; the Glue database and the buckets are regional even though CUR data is account-global        |
 | `data_kms_key_arn`, `logs_kms_key_arn`         | `cmk-data` encrypts query results and estimates; `cmk-logs` encrypts the publisher's own log group       |
 | `tenant_iam_path`                              | IAM path prefix the publisher's tag-read grant is scoped to; verified per cluster by `cost-access`       |
 | `athena_results_retention_days`                | how long saved query output is kept (default 30)                                                         |
@@ -52,6 +51,11 @@ The report itself is **not** here. A CUR is account substrate, so it lives in la
 
 There is no crawler schedule and no report name. The export's identity comes from landing-zone's SSM
 contract, and the table name is a constant this component owns.
+
+There is also no `region`. Everything this component names, places or grants on takes its region
+from the provider it is configured with, read once through `data.aws_region.current` — a variable
+beside it would be a second answer to a question with one authority, and the two disagreeing is not
+an error anything reports.
 
 ## Outputs
 
