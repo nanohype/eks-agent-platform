@@ -167,12 +167,10 @@ resource "aws_wafv2_web_acl_association" "model_gateway" {
 }
 
 ################################################################################
-# SSM outputs
+# This component publishes nothing to SSM.
+#
+# It used to publish the endpoint security group's id. Nothing read it: the
+# operator's Config.assign does not decode an agent-egress key, no component
+# reads it, and no chart resolves it. The group is attached to the endpoints
+# here, which is the only place anything needs to know it exists.
 ################################################################################
-
-resource "aws_ssm_parameter" "endpoint_sg_id" {
-  name  = "/eks-agent-platform/${var.cluster_name}/agent-egress/endpoint_sg_id"
-  type  = "String"
-  value = aws_security_group.endpoints.id
-  tags  = local.tags
-}

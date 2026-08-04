@@ -35,19 +35,11 @@ resource "aws_ssm_parameter" "invocation_log_group" {
   tags  = local.tags
 }
 
-resource "aws_ssm_parameter" "invocation_log_group_arn" {
-  name  = "${local.ssm_prefix}/invocation_log_group_arn"
-  type  = "String"
-  value = aws_cloudwatch_log_group.invocations.arn
-  tags  = local.tags
-}
-
-resource "aws_ssm_parameter" "invocation_bucket_arn" {
-  name  = "${local.ssm_prefix}/invocation_bucket_arn"
-  type  = "String"
-  value = aws_s3_bucket.invocations.arn
-  tags  = local.tags
-}
+# The ARNs of both are NOT published. cost-pipeline is the only consumer of either, it
+# needs the log group's NAME to attach a subscription filter, and it composes the ARN it
+# grants on from that name. A published ARN nobody reads is a contract with one side, and
+# this component had two of them. They remain module outputs below, where a caller that
+# wants them can take them.
 
 output "invocation_bucket_arn" {
   description = "S3 bucket ARN receiving Bedrock invocation logs for the whole account."
