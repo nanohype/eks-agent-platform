@@ -27,10 +27,12 @@ variable "object_lock_mode" {
     not be able to talk over a compliance statement.
 
     GOVERNANCE (default): the retention holds, and a principal carrying
-    `s3:BypassGovernanceRetention` can clear it so the environment tears down. Nothing in this
-    repo or in landing-zone grants that action, so the destroy depends on the caller already
-    having it. An operator running a teardown without it sees the bucket refuse, object by
-    object, with the lock as the reason.
+    `s3:BypassGovernanceRetention` can clear it so the account tears down. Neither repo grants
+    that action by name, but AdministratorAccess implies it, and landing-zone attaches that to
+    the break-glass role in every workload environment and to the Admin SSO permission set — so
+    read GOVERNANCE as "an administrator can delete the record", not as a barrier. An operator
+    running a teardown without it sees the bucket refuse, object by object, with the lock as the
+    reason.
 
     COMPLIANCE: nothing and nobody can shorten the retention, including the root account. The
     bucket, and therefore this component, cannot be destroyed until every object's
