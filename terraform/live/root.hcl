@@ -9,7 +9,7 @@ locals {
 
   # Optional, because not every root serves a cluster. Two things in this tree are
   # account+region singletons — the Bedrock invocation-logging configuration, and a
-  # Cost and Usage Report, which has no filter and always covers the whole account.
+  # Cost and Usage Report, which covers the whole account and names no cluster.
   # Those live under live/org/, whose env.hcl declares no cluster because there is
   # no cluster to declare.
   #
@@ -67,11 +67,11 @@ remote_state {
   }
 
   config = {
-    bucket         = "eks-agent-platform-tfstate-${local.account_id}-${local.region}"
-    key            = "eks-agent-platform/${path_relative_to_include()}/terraform.tfstate"
-    region         = local.region
-    encrypt        = true
-    use_lockfile   = true
+    bucket       = "eks-agent-platform-tfstate-${local.account_id}-${local.region}"
+    key          = "eks-agent-platform/${path_relative_to_include()}/terraform.tfstate"
+    region       = local.region
+    encrypt      = true
+    use_lockfile = true
   }
 }
 

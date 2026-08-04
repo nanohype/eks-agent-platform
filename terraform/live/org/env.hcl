@@ -6,7 +6,7 @@ locals {
   #   the Bedrock invocation-logging configuration, of which AWS keeps exactly one
   #     per account per region, so the last apply silently repoints every
   #     environment's logs and any environment's destroy deletes it for all of them
-  #   the Cost and Usage Report, which has no filter and always covers the whole
+  #   the Cost and Usage Report, which covers the whole
   #     account, so per-environment reports are complete duplicates of one another
   #
   # `org` is the reserved account-scope token from nanohype/standards/resource-naming.json,

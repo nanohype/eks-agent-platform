@@ -63,8 +63,8 @@ locals {
 #   the cost publisher   it subscribes to this log group, but it writes its estimates
 #                        into the CUR bucket and its table lives in the cost database,
 #                        so it belongs to cost-pipeline — which is account-scoped for
-#                        its own reason (a CUR has no filter and always covers the
-#                        whole account). cost-pipeline reads the log-group name from
+#                        its own reason: a CUR covers the whole account and names no
+#                        cluster). cost-pipeline reads the log-group name from
 #                        this component's SSM contract.
 #
 #                        Worth stating because the pairing is not optional: a log

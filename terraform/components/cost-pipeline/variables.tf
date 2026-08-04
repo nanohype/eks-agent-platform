@@ -1,5 +1,5 @@
 variable "environment" {
-  description = "Scope token for this root. Always `org` — a Cost and Usage Report has no filter and always covers the whole account, so this pipeline is applied once and never per workload environment. Carried for tagging only; nothing branches on it, because there is no environment whose teardown posture could apply."
+  description = "Scope token for this root. Always `org` — a Cost and Usage Report covers the whole account and carries no column identifying a cluster or environment, so this pipeline is applied once and never per workload environment. Carried for tagging only; nothing branches on it, because there is no environment whose teardown posture could apply."
   type        = string
   default     = "org"
 

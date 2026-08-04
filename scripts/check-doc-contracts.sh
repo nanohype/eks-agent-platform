@@ -99,7 +99,44 @@ if [ -n "$hits" ]; then
   fail=1
 fi
 
+# ── 4. a CUR 2.0 export CAN be filtered ───────────────────────────────────────
+# "A Cost and Usage Report has no filter" justified account-scoping in ten places.
+# It was true of legacy CUR — aws_cur_report_definition has no filter attribute —
+# and false of the Data Export this org actually runs, whose QueryStatement takes
+# `WHERE <column> OPERATOR <value>`
+# (docs.aws.amazon.com/cur/latest/userguide/dataexports-data-query.html).
+#
+# The conclusion survived the correction; the reason did not. Account-scoping is
+# right because nothing in the export identifies a cluster or a workload
+# environment, so a per-environment copy is a duplicate rather than a view. Say
+# that, because it is the part that stays true if AWS ever adds a filterable
+# column — at which point the old sentence would have been both wrong AND
+# load-bearing.
+#
+# What this gate can and cannot do: it catches the phrase coming back. It cannot
+# catch the next unchecked claim about how an AWS service behaves, which is what
+# the original defect was. That one is caught by reading the AWS docs before
+# writing the sentence, and by nothing else.
+hits=$(grep -rniE '(CUR|Cost and Usage Report)[^.]{0,40}has no filter' \
+  --exclude-dir='.git' --exclude-dir='node_modules' --exclude-dir='dist' \
+  --exclude-dir='vendor' --exclude-dir='.terraform' \
+  --exclude-dir='.terragrunt-cache' \
+  . 2>/dev/null \
+  | grep -v 'scripts/check-doc-contracts.sh' \
+  || true)
+
+if [ -n "$hits" ]; then
+  echo "a CUR 2.0 export can be filtered — its query statement takes a WHERE clause:"
+  echo "$hits"
+  echo
+  echo "That claim is true of legacy CUR (aws_cur_report_definition) and false of the"
+  echo "Data Export this org runs. Account-scoping is still right, for a reason that"
+  echo "holds: nothing in the export identifies a cluster or workload environment, so a"
+  echo "per-environment copy is a complete duplicate rather than a view of one share."
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM + real KMS key names)"
+echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM + KMS key names + CUR filterability)"

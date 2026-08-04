@@ -6,9 +6,9 @@ terraform {
   source = "${dirname(find_in_parent_folders("root.hcl"))}/../components/cost-pipeline"
 }
 
-# Applied ONCE for the account. A Cost and Usage Report has no filter — it always
-# covers the whole account — so per-environment reports are complete duplicates of one
-# another rather than three views of anything.
+# Applied ONCE for the account. A Cost and Usage Report covers the whole account and
+# carries no column that identifies a cluster or environment, so per-environment reports
+# are complete duplicates of one another rather than three views of anything.
 #
 # Depends on live/org/bedrock-account only in ordering, and that ordering is expressed
 # through SSM rather than a terragrunt `dependency`: this root reads the account's

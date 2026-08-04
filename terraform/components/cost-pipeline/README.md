@@ -3,7 +3,7 @@
 The account's spend query layer — what `BudgetPolicy` reconciliation reads to decide whether a
 tenant is over its cap.
 
-Applied **once per account**, from `live/org/`. A Cost and Usage Report has no filter: it always
+Applied **once per account**, from `live/org/`. A Cost and Usage Report always
 covers the whole account, so a per-environment copy of this component would be a complete duplicate
 of the same billing data rather than a view of one environment's share. Everything that is genuinely
 per-cluster — the operator's IAM grant, that cluster's Athena workgroup, the republished handles
