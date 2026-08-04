@@ -74,6 +74,25 @@ access-logs bucket carries no lock at all — it simply refuses a non-empty dele
 can resolve by emptying it. Only the invocation record is genuinely immutable; the table is about
 that bucket.
 
+**"Blocked" does not mean "nothing happened."** Terraform destroys dependents before the things they
+depend on, and nothing here carries `prevent_destroy`. The logging configuration references the log
+group, the role and the bucket, so a `destroy` that is going to fail on the bucket has already
+deleted the account's invocation-logging configuration, its log group and its delivery role by the
+time it reaches it. What is left is an account logging nothing — for every environment, and for any
+other workload sharing it — a `cost-pipeline` subscription pointing at a log group that no longer
+exists, and an orphaned bucket with the rest of the state gone. The same holds under `GOVERNANCE`
+when the caller lacks the bypass permission. A failed destroy here is more destructive than no
+attempt, so if the record must be kept, do not start one.
+
+**The two lock variables are first-apply decisions, not levers.** S3 writes lock information into
+each object version's metadata at PUT time, and an existing version stays locked according to the
+configuration it was written with. Changing `object_lock_mode` afterwards does not retroactively
+lock what is already there, and lowering `object_lock_retention_days` releases nothing. That second
+variable also feeds two places — the lock default and the lifecycle expiry
+(`object_lock_retention_days + 1`) — which agree only while it never changes: lower it and the
+expiry lands on a date the existing locks will not permit, raise it and objects written earlier
+expire sooner than this page claims.
+
 `COMPLIANCE` is not a stricter default to reach for; it is a commitment with no exit. Choose it when
 being unable to delete the record for `object_lock_retention_days` is the point.
 

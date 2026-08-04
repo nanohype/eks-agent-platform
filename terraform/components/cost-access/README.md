@@ -76,6 +76,14 @@ bypassed.
 
 It fails rather than warns because the consequence is a wrong number, not an error: if the paths
 drift, every invocation from this cluster attributes to `unknown` and every budget here reads low.
+The failure names the fix — set cost-pipeline's `tenant_iam_path` to match agent-iam's
+`tenant_role_path` and re-apply `live/org/cost-pipeline` before this leaf.
+
+**It asks once; it does not watch.** A `lifecycle.precondition` is evaluated only when this leaf
+runs. Drift introduced afterwards — someone re-applies `live/org/cost-pipeline` with a different
+path — is caught by nothing until a human re-applies `cost-access`. The gate protects the apply, not
+the steady state, and the failure it guards produces no error of its own, so nothing else will
+surface it in between.
 
 ## Inputs
 
