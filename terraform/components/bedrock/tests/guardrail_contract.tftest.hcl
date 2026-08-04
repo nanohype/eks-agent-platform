@@ -52,12 +52,20 @@ run "the_guardrail_handles_land_on_the_keys_the_operator_decodes" {
   # recursive GetParametersByPath of /eks-agent-platform/<cluster>/, so a key published
   # anywhere else is invisible to it — and invisible is indistinguishable from absent,
   # which the operator reads as a field nobody set rather than as an error.
+  # The count is stated, not assumed. Both parameters are count-gated on
+  # enable_guardrail, so in a region without guardrails the concat is empty and
+  # `alltrue([])` is TRUE — the assertion would report that every published key sits
+  # under the prefix precisely when nothing was published. The `one(...)` assertions
+  # above happen to fail in that case, but relying on a sibling to hold this one up is
+  # how an assertion ends up unable to fail on its own.
   assert {
-    condition = alltrue([
-      for p in concat(aws_ssm_parameter.baseline_guardrail_id, aws_ssm_parameter.baseline_guardrail_version) :
-      startswith(p.name, "/eks-agent-platform/${var.cluster_name}/bedrock/")
+    condition = length(
+      concat(aws_ssm_parameter.baseline_guardrail_id, aws_ssm_parameter.baseline_guardrail_version)
+      ) == 2 && alltrue([
+        for p in concat(aws_ssm_parameter.baseline_guardrail_id, aws_ssm_parameter.baseline_guardrail_version) :
+        startswith(p.name, "/eks-agent-platform/${var.cluster_name}/bedrock/")
     ])
-    error_message = "every published key must sit under this cluster's bedrock prefix — the operator sweeps that subtree and nothing else"
+    error_message = "both guardrail keys must be published, and both must sit under this cluster's bedrock prefix — the operator sweeps that subtree and nothing else"
   }
 
   # And each value comes off the guardrail this component actually created. A version

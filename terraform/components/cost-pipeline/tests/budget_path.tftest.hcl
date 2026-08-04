@@ -82,14 +82,18 @@ variables {
 run "aws_can_actually_deliver_the_report" {
   command = plan
 
+  # Reached by index rather than by a comprehension over each nested block.
+  #
+  # `alltrue([])` is TRUE, so `alltrue([for d in <optional block> : ...])` passes when
+  # the block is DELETED — which is the single edit that removes the behaviour the
+  # assertion exists to protect. A value mutation cannot see that class; only deleting
+  # the block can, and against the old form deleting it was green. try() collapses a
+  # missing block to null instead, which matches nothing.
   assert {
-    condition = alltrue([
-      for r in aws_s3_bucket_server_side_encryption_configuration.estimates.rule :
-      alltrue([
-        for d in r.apply_server_side_encryption_by_default :
-        d.sse_algorithm == "AES256"
-      ])
-    ])
+    condition = try(
+      one(aws_s3_bucket_server_side_encryption_configuration.estimates.rule).apply_server_side_encryption_by_default[0].sse_algorithm,
+      null
+    ) == "AES256"
     error_message = "the estimates bucket must carry a default encryption rule — the publisher passes its own SSE-KMS key per object, but a bucket with no default leaves anything written by another path unencrypted at rest"
   }
 
@@ -458,19 +462,32 @@ run "the_table_the_operator_is_sent_to_is_the_one_that_holds_it" {
 run "the_workgroup_enforces_the_key_the_operator_holds" {
   command = plan
 
+  # Three claims, three assertions, each reached by index.
+  #
+  # This was one condition nesting a comprehension per nested block, and every one of
+  # those blocks is optional. `alltrue([])` is TRUE, so deleting encryption_configuration
+  # from the workgroup left this green while the workgroup stopped enforcing SSE-KMS on
+  # results — the run's entire subject. Split apart and indexed, a missing block reads
+  # null and fails the specific claim that depended on it.
   assert {
-    condition = alltrue([
-      for c in aws_athena_workgroup.cost.configuration :
-      c.enforce_workgroup_configuration
-      && alltrue([
-        for rc in c.result_configuration :
-        alltrue([
-          for e in rc.encryption_configuration :
-          e.encryption_option == "SSE_KMS" && e.kms_key_arn == var.data_kms_key_arn
-        ])
-      ])
-    ])
-    error_message = "the workgroup must enforce SSE_KMS results on data_kms_key_arn. The other half of this pair — that each cluster's operator actually holds Decrypt AND GenerateDataKey on that key — is asserted in cost-access, which is where the grant is minted; enforcing a key the caller cannot use fails every query at the write step"
+    condition     = try(one(aws_athena_workgroup.cost.configuration).enforce_workgroup_configuration, false)
+    error_message = "the workgroup must enforce its own configuration — without it a caller that sends its own ResultConfiguration decides where results land and how they are encrypted, and every assertion below describes a default nobody has to take"
+  }
+
+  assert {
+    condition = try(
+      one(one(aws_athena_workgroup.cost.configuration).result_configuration).encryption_configuration[0].encryption_option,
+      null
+    ) == "SSE_KMS"
+    error_message = "the workgroup must enforce SSE_KMS on result sets — with no encryption_configuration at all the results land unencrypted and nothing here goes red"
+  }
+
+  assert {
+    condition = try(
+      one(one(aws_athena_workgroup.cost.configuration).result_configuration).encryption_configuration[0].kms_key_arn,
+      null
+    ) == var.data_kms_key_arn
+    error_message = "the workgroup must enforce results on data_kms_key_arn. The other half of this pair — that each cluster's operator actually holds Decrypt AND GenerateDataKey on that key — is asserted in cost-access, which is where the grant is minted; enforcing a key the caller cannot use fails every query at the write step"
   }
 }
 

@@ -139,12 +139,26 @@ run "the_operator_can_decrypt_and_write_what_it_queries" {
 
   # The grant is capped to S3, so it cannot be used to decrypt anything else the key
   # protects. A grant that works and reaches further than it needs is the next finding.
+  #
+  # The VALUE, not just the key's presence. Asserting the condition exists says the
+  # statement is conditioned on something — change it from s3 to athena and the grant
+  # stops working while this stays green, which is the same failure as no condition at
+  # all except that it also fails closed in production and green in CI.
+  #
+  # Exactly one service, too: a second entry alongside s3 widens the grant back out, and
+  # `contains` alone cannot see that.
   assert {
     condition = alltrue([
       for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
-      !contains(s.Action, "kms:Decrypt") || try(s.Condition.StringEquals["kms:ViaService"], null) != null
+      !contains(s.Action, "kms:Decrypt") || (
+        length(try(tolist(s.Condition.StringEquals["kms:ViaService"]), [])) == 1
+        && contains(
+          try(tolist(s.Condition.StringEquals["kms:ViaService"]), []),
+          "s3.${var.region}.amazonaws.com"
+        )
+      )
     ])
-    error_message = "the KMS grant must be conditioned on kms:ViaService so it only works through S3"
+    error_message = "every kms:Decrypt grant here must be conditioned on kms:ViaService naming exactly S3 in this region — the operator reaches the key only through S3, and any other service named there either breaks the grant or widens it past what reading cost data needs"
   }
 }
 
@@ -265,12 +279,30 @@ run "this_cluster_writes_only_where_it_is_permitted_to_write" {
 run "the_operator_can_read_the_account_cur" {
   command = plan
 
+  # Against a sentinel, because the statement has to be checked for WHAT it grants and
+  # not only for existing. This asserted the Sid and the two actions and never touched
+  # s.Resource: repoint CurRead at the results bucket and every CUR scan is AccessDenied
+  # with the suite green. No run overrode cur_bucket_arn either, so there was nothing to
+  # assert the resource against even if it had been read.
+  override_data {
+    target = data.aws_ssm_parameter.cur_bucket_arn
+    values = { value = "arn:aws:s3:::SENTINEL-account-cur-bucket" }
+  }
+
+  # Both ARNs, because the two actions need different ones. ListBucket is a BUCKET-level
+  # action and matches nothing on an object ARN; GetObject is object-level and matches
+  # nothing on the bucket ARN. A grant carrying one of the two fails at whichever half is
+  # missing — listing before it reads, or reading after it lists.
   assert {
     condition = anytrue([
       for s in jsondecode(aws_iam_policy.operator_cost.policy).Statement :
-      s.Sid == "CurRead" && contains(s.Action, "s3:GetObject") && contains(s.Action, "s3:ListBucket")
+      s.Sid == "CurRead"
+      && contains(s.Action, "s3:GetObject")
+      && contains(s.Action, "s3:ListBucket")
+      && contains(tolist(s.Resource), "arn:aws:s3:::SENTINEL-account-cur-bucket")
+      && contains(tolist(s.Resource), "arn:aws:s3:::SENTINEL-account-cur-bucket/*")
     ])
-    error_message = "the operator must be granted s3:GetObject and s3:ListBucket on the account CUR bucket through its identity policy — the bucket policy no longer names it, so nothing else grants this"
+    error_message = "the operator must be granted s3:GetObject and s3:ListBucket on the ACCOUNT CUR bucket published by the pipeline, at both the bucket ARN and its object ARN — the bucket policy no longer names it, so nothing else grants this, and a statement pointed at any other bucket leaves every CUR scan AccessDenied"
   }
 }
 
