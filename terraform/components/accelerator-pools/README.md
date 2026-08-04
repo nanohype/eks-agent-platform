@@ -1,22 +1,53 @@
 # components/accelerator-pools
 
-AWS-side prerequisites for accelerator scheduling. The actual Karpenter `NodePool` and DRA `DeviceClass` resources live in the eks-gitops `accelerators` category (they are Kubernetes resources, not AWS resources). This component provisions:
+The AWS half of accelerator scheduling, and nothing more. The Karpenter
+`NodePool` and the DRA `DeviceClass` are Kubernetes resources and live in the
+eks-gitops `accelerators` category; the nodes are Karpenter's, and it launches
+one only when a pod requests `nvidia.com/gpu`.
 
-- **Pod Identity-bound roles** for the NVIDIA GPU Operator and the AWS Neuron device plugin (introspection-only permissions: `ec2:DescribeInstances`, `ec2:DescribeInstanceTypes`).
-- **Karpenter node role extension** for Neuron topology discovery.
-- **Pool catalog SSM parameter** — JSON document listing the five default accelerator pools (`nvidia-l4`, `nvidia-l40s`, `nvidia-h100`, `neuron-inf2`, `neuron-trn2`) with their instance types, capacity types, device class, and node labels. It is the source catalog for fleet-level accelerator scheduling; the operator-side consumption path is tracked in [#106](https://github.com/nanohype/eks-agent-platform/issues/106).
+So applying this costs nothing. It grants an identity; it does not reserve
+capacity.
+
+This component provisions one thing:
+
+- **A Pod Identity-bound role for the NVIDIA GPU Operator**, with
+  introspection-only permissions (`ec2:DescribeInstances`,
+  `ec2:DescribeInstanceTypes`), bound to the `gpu-operator` ServiceAccount in the
+  namespace the eks-gitops `addons-accelerators-helm` ApplicationSet installs
+  into. No IRSA role-arn annotation is set on that ServiceAccount.
+
+## No Neuron
+
+There is no Inferentia or Trainium counterpart here, deliberately. eks-gitops
+installs the GPU Operator and the NVIDIA DRA driver; it has no Neuron device
+plugin addon. A role bound to a `neuron-device-plugin` ServiceAccount would be
+bound to a ServiceAccount nothing creates — an identity for a workload that is
+not deployed, which reads to anyone auditing IAM as though Neuron were
+supported.
+
+Neuron comes back as an eks-gitops addon first. This component follows it.
+
+## No published outputs
+
+This component publishes no SSM parameters and exports no outputs.
+
+It used to publish three: the two role ARNs and a JSON catalog of accelerator
+pool defaults. Nothing read any of them. The role ARNs are the IRSA paste seam
+that EKS Pod Identity exists to remove — the binding is made here, by
+`aws_eks_pod_identity_association`, so no consumer needs the ARN. The catalog
+was a static instance-type table published for an `AcceleratorPool` CR that was
+never built; the consumption path is tracked in
+[#106](https://github.com/nanohype/eks-agent-platform/issues/106), and the
+catalog belongs with the controller that reads it rather than ahead of it.
 
 ## Inputs
 
-| Variable                                           | Description                                                |
-| -------------------------------------------------- | ---------------------------------------------------------- |
-| `environment`, `region`, `cluster_name`            | identifying                                                |
-| `node_role_name`                                   | existing Karpenter node IAM role (managed in landing-zone) |
-| `neuron_addon_namespace`, `gpu_operator_namespace` | defaults match the eks-gitops accelerator values           |
+| Variable                 | Description                                                         |
+| ------------------------ | ------------------------------------------------------------------- |
+| `cluster_name`           | identifying; prefixes the role name                                 |
+| `gpu_operator_namespace` | defaults to `gpu-operator`, matching the eks-gitops ApplicationSet   |
+| `tags`                   | common tags                                                          |
 
-Each role is bound to its ServiceAccount by an EKS Pod Identity association — `neuron-device-plugin` in `aws-neuron` and `gpu-operator` in `gpu-operator`. No IRSA role-arn annotation is set on those ServiceAccounts.
-
-## Outputs
-
-- `neuron_role_arn`, `gpu_operator_role_arn` — the Pod Identity-bound roles for the Neuron device plugin and the NVIDIA GPU Operator
-- `pool_catalog_ssm_path` — SSM path to the accelerator pool catalog
+`node_role_name` is gone. The only thing this component ever put on the Karpenter
+node role was an `ec2:Describe*` policy for Neuron topology discovery; the GPU
+Operator's node-side needs are covered by the AWS EKS-managed node role baseline.
