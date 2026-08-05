@@ -326,6 +326,11 @@ jobs:
   # itself. None of them asks whether the image it tells a cluster to pull
   # exists — which is how appVersion sat eighty commits ahead of the newest
   # published operator tag while every gate stayed green.
+  #
+  # Keep this job name stable — it is a required status check on main, and it is
+  # what makes tag-only releases safe. release.yaml no longer builds on a push to
+  # main, so nothing downstream repairs a chart that points at an unpublished
+  # image; this is the thing that stops one merging.
   image-refs:
     name: every image the chart names is published
     runs-on: ubuntu-latest
