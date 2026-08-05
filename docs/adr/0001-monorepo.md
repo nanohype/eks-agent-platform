@@ -18,7 +18,7 @@ One monorepo with polyglot workspaces:
 - `terraform/` — OpenTofu + Terragrunt (per-tenant AWS state)
 - `examples/`, `docs/`
 
-Cluster delivery — which clusters run the operator and the AI/Argo/accelerator addons — lives in `eks-gitops`, not here. This repo builds the product; `eks-gitops` deploys it.
+Cluster delivery — which clusters run the operator and the AI/Argo addons — lives in `eks-gitops`, not here. This repo builds the product; `eks-gitops` deploys it.
 
 ## Why
 

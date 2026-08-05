@@ -14,7 +14,6 @@ what they own has exactly one instance per account. The rest are per-cluster.
 | `bedrock`           | cluster | baseline Guardrail (a guardrail is a named resource, so an account holds many)                              |
 | `cost-access`       | cluster | this cluster's Athena workgroup + the operator's cost-read grant, and the SSM republish the operator reads |
 | `agent-egress`      | cluster | VPC interface + gateway endpoints + optional WAF on the model gateway ALB                                  |
-| `accelerator-pools` | cluster | Pod Identity roles for the NVIDIA GPU Operator + Neuron device plugin + pool catalog (SSM JSON)             |
 | `kill-switch`       | cluster | EventBridge bus + Step Functions state machine for budget-breach detach                                    |
 | `batch-runtime`     | cluster | Bedrock batch-inference service role, scoped to `model-invocation-job/*` and the `batch/` prefix of the model-artifacts bucket |
 | `eval-runtime`      | cluster | Pod Identity role for the eval runner + its controller log group                                           |
@@ -35,7 +34,7 @@ batch-runtime → agent-iam          (model-artifacts bucket, landing-zone's con
 ```
 
 The cost path runs account-first: `bedrock-account`, then `cost-pipeline`, then each cluster's
-`cost-access`. Everything else (`bedrock`, `agent-egress`, `accelerator-pools`, `kill-switch`)
+`cost-access`. Everything else (`bedrock`, `agent-egress`, `kill-switch`)
 applies independently.
 
 Every edge here is expressed through SSM rather than a terragrunt `dependency` block. That is
@@ -53,7 +52,7 @@ landing-zone component applied before any of them; this tree only reads its SSM 
 
 ## Wiring `landing-zone` outputs
 
-Across all environments, the landing-zone-supplied infrastructure identifiers — KMS key ARNs, VPC/subnet IDs, route tables, the cluster security group, and the Karpenter node-role name — are passed in as `TF_VAR_*` environment variables by the orchestrator (the leaf `variables.tf` declares them; the `terragrunt.hcl` files don't pin them). For a manual run, `export` them alongside `AWS_ACCOUNT_ID`. Operator-side values — the operator role and tenant baseline — are read in-component from landing-zone's `agent-iam` SSM contract; the accelerator and eval-runner roles bind to their ServiceAccounts via EKS Pod Identity associations, so no OIDC issuer is consumed here. A future step may replace the `TF_VAR_*` handoff with `aws_ssm_parameter` data sources reading a stable `/landing-zone/<env>/*` output contract.
+Across all environments, the landing-zone-supplied infrastructure identifiers — KMS key ARNs, VPC/subnet IDs, route tables, the cluster security group, and the Karpenter node-role name — are passed in as `TF_VAR_*` environment variables by the orchestrator (the leaf `variables.tf` declares them; the `terragrunt.hcl` files don't pin them). For a manual run, `export` them alongside `AWS_ACCOUNT_ID`. Operator-side values — the operator role and tenant baseline — are read in-component from landing-zone's `agent-iam` SSM contract; the eval-runner role binds to its ServiceAccount via an EKS Pod Identity association, so no OIDC issuer is consumed here. A future step may replace the `TF_VAR_*` handoff with `aws_ssm_parameter` data sources reading a stable `/landing-zone/<env>/*` output contract.
 
 ## Outputs
 
@@ -80,7 +79,6 @@ under the cluster prefix rather than the operator reaching across.
 Consumers:
 
 - **Operator pod** reads SSM at startup for `agent-iam.operator_role_arn` (its own role), `agent-iam.tenant_iam_path`, `agent-iam.tenant_baseline_policy_arn` (the `agent-iam.*` params are landing-zone's contract, not this tree's), `kill-switch.event_bus_name`, `cost-pipeline.athena_workgroup`, `cost-pipeline.athena_database`, `bedrock.baseline_guardrail_id`, `model-artifacts.bucket_name`.
-- **accelerator roles** (`accelerator-pools.neuron_role_arn`, `accelerator-pools.gpu_operator_role_arn`) are bound to the device-plugin / operator ServiceAccounts by EKS Pod Identity associations created in this component — not by an annotation on the eks-gitops side.
 
 ## Backends
 

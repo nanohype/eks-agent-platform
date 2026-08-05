@@ -74,9 +74,8 @@ From `landing-zone/live/aws/<account>/<region>/<env>/`, `terragrunt apply` each:
    the `monitoring/grafana-url` annotation the dashboards ApplicationSet injects
    into the Grafana CR. ArgoCD then syncs the addon catalog onto every labeled
    cluster: `addons-ai-platform` (Envoy AI Gateway), `addons-argo-platform`
-   (argo-workflows/rollouts/events), the `accelerators` category (gpu-operator,
-   NVIDIA DRA driver, AWS Neuron device plugin), and `addons-agent-operator` (the
-   operator itself).
+   (argo-workflows/rollouts/events), and `addons-agent-operator` (the operator
+   itself).
 5. `agent-iam` — the operator IRSA role (path-scoped, boundary-gated), the tenant
    permissions boundary + baseline policies, and the SSM params the operator
    reads (`/eks-agent-platform/<cluster>/agent-iam/*`).
@@ -92,8 +91,8 @@ eval-runtime, … Synced/Healthy).
 ### B1b. Agent-platform AWS substrate (`eks-agent-platform/terraform`)
 
 Apply once `agent-iam` (B1 step 5) and the cluster exist. This tree is the
-operator's own AWS substrate — `bedrock`, `agent-egress`, `accelerator-pools`,
-`eval-runtime`, `cost-access`, `kill-switch`, `batch-runtime` — and writes the
+operator's own AWS substrate — `bedrock`, `agent-egress`, `eval-runtime`,
+`cost-access`, `kill-switch`, `batch-runtime` — and writes the
 SSM parameters the operator loads at startup
 (`/eks-agent-platform/<cluster>/{bedrock,kill-switch,cost-pipeline,eval-runtime,
 batch-runtime}/*`). `agent-iam` is **not** here — landing-zone owns it (B1 step
@@ -103,8 +102,7 @@ the operator role, tenant baseline, and the eval-reports/model-artifacts buckets
 from that landing-zone SSM contract.
 
 **Prereq:** the `eks-pod-identity-agent` EKS addon must be installed — the
-accelerator (neuron, gpu-operator) and eval-runner roles bind via EKS Pod
-Identity, which is inert without it. Check: `aws eks describe-addon
+eval-runner role binds via EKS Pod Identity, which is inert without it. Check: `aws eks describe-addon
 --cluster-name <cluster> --addon-name eks-pod-identity-agent`.
 
 From `eks-agent-platform/`, export `AWS_ACCOUNT_ID` (it names the state bucket)
