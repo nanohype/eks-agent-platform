@@ -337,13 +337,11 @@ resource "aws_ssm_parameter" "event_bus_name" {
   tags  = local.tags
 }
 
-resource "aws_ssm_parameter" "event_bus_arn" {
-  name  = "/eks-agent-platform/${var.cluster_name}/kill-switch/event_bus_arn"
-  type  = "String"
-  value = aws_cloudwatch_event_bus.killswitch.arn
-  tags  = local.tags
-}
-
+# ssm-consumer: read by hand during an incident — kill-switch-fired.md and
+# platform-suspended.md both resolve the state machine with `aws ssm
+# get-parameter` before listing its executions. No code path reads it: the
+# operator publishes to the event bus and Step Functions is downstream of
+# EventBridge, so the operator never needs the ARN.
 resource "aws_ssm_parameter" "state_machine_arn" {
   name  = "/eks-agent-platform/${var.cluster_name}/kill-switch/state_machine_arn"
   type  = "String"

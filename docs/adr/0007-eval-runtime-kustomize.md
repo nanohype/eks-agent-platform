@@ -54,6 +54,6 @@ Option 2. The `WorkflowTemplate` + `AnalysisTemplate` + Namespace + SA + RBAC sh
 ## Cross-references
 
 - Implementation: `gitops/addons/eval-runtime/` (kustomize), `operators/internal/controller/eval_reconcile.go` (the consumer).
-- Terraform-side: `terraform/components/eval-runtime/` (IRSA + SSM publication of `runner_namespace` / `runner_service_account` / `runner_role_arn`).
+- Terraform-side: `terraform/components/eval-runtime/` (IRSA + SSM publication of `runner_namespace` / `runner_service_account` / `eval_reports_bucket`).
 - ApplicationSet wiring: `gitops/applicationsets/kustomize-only.yaml`.
 - Flow diagram: [`docs/architecture/eval-gating-flow.md`](../architecture/eval-gating-flow.md).

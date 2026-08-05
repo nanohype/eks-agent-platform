@@ -20,8 +20,14 @@ AWS-side substrate for `EvalSuite` reconciliation. The Kubernetes-side
   errors (template parse failures, scheduling) have their own retention
   policy.
 * **SSM outputs** the operator picks up at startup:
-  `/eks-agent-platform/<cluster>/eval-runtime/runner_role_arn` (and
-  `runner_namespace`, `runner_service_account`, `eval_reports_bucket`).
+  `/eks-agent-platform/<cluster>/eval-runtime/` — `runner_namespace`,
+  `runner_service_account` and `eval_reports_bucket`. All three reach the
+  submitted Argo `Workflow`: the namespace is its destination, and the other
+  two become `spec.serviceAccountName` and the `eval-reports-bucket` argument.
+
+  There is deliberately no `runner_role_arn`. The role binds to its
+  ServiceAccount through an EKS Pod Identity association created here, so no
+  consumer ever needs the ARN — publishing it was a parameter with one side.
 
 The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 `spec.schedule` is set) into `runner_namespace` referencing the
