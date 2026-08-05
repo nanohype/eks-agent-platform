@@ -1,0 +1,67 @@
+# The columns the account's CUR 2.0 export actually delivers, and the key shape of
+# its map columns. This file is the ground truth the Glue table and every CUR query
+# in main.tf are checked against.
+#
+# It exists because the previous assumption — "the export delivers all 125 CUR 2.0
+# columns" — was false, and nothing could tell. The table declared `tags` and
+# `product`; the export delivers neither. Athena resolves Parquet by NAME with
+# parquet.column.index.access=false, so a declared column absent from the data reads
+# NULL for every row rather than failing. The reconciliation view therefore
+# attributed every line item to a NULL platform and its Bedrock marketplace branch
+# never matched, while every test passed — because the tests asserted that the query
+# said what the table said, and both restated the same wrong premise.
+#
+# PROVENANCE. Read from the export itself, not from the AWS dictionary:
+#   aws bcm-data-exports get-export --query 'Export.DataQuery.QueryStatement'
+#   plus the map keys read out of a delivered Parquet file
+#   (cur2/landing-zone-cost-cur/data/BILLING_PERIOD=2026-08/*.snappy.parquet).
+# Verified 2026-08-05 against the live export `landing-zone-cost-cur`.
+#
+# WHEN THE EXPORT CHANGES this file changes with it, and the tests that read it will
+# name whatever no longer lines up. A CUR export's table configuration cannot be
+# altered after creation, so a change here means the export was recreated — which is
+# a deliberate act, not a drift.
+
+[columns]
+bill_billing_period_start_date  timestamp
+bill_payer_account_id           string
+line_item_usage_account_id      string
+line_item_line_item_type        string
+line_item_product_code          string
+line_item_usage_start_date      timestamp
+resource_tags                   map<string,string>
+cost_category                   map<string,string>
+line_item_unblended_cost        double
+line_item_usage_amount          double
+
+# Keys observed in the map columns. CUR 2.0 prefixes a resource tag key with `user_`
+# — NOT `resourceTags/`, which is CUR 1.0's flattened-column naming and appears
+# nowhere in this data. Cost category keys are bare.
+[resource_tags_key_prefix]
+user_
+
+[cost_category_key_prefix]
+
+# UNRESOLVED, and deliberately not guessed. Cost Explorer in this account lists
+# iamPrincipal/* keys (iamPrincipal/BusinessUnit, iamPrincipal/CostCenter, …), all
+# Inactive. Where an ACTIVATED principal tag lands in this export cannot be observed
+# until one is active and a tagged role has invoked Bedrock — there is no such row in
+# the delivered data. It may key into resource_tags, or it may need a column this
+# 10-column projection does not carry.
+#
+# Consequence while it stays unresolved: attribution reaches resource-tagged spend
+# (datastores) and not model invocations, which are not taggable resources. Nothing in
+# this repo asserts otherwise, and no query claims the principal branch works.
+[iamprincipal_key_shape]
+UNVERIFIED
+
+# Columns this export does NOT carry, listed so their absence is a recorded fact
+# rather than a discovery. `product` is the one that matters: without it no query can
+# identify a Bedrock model billed as a marketplace product, because the opaque
+# line_item_product_code (e.g. 7zgyu5r4uonlsrnaq20qq63eo, observed in this data) is
+# the only other handle and is not a stable identifier.
+[absent]
+product
+discount
+identity_line_item_id
+line_item_resource_id

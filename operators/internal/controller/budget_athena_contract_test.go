@@ -127,12 +127,13 @@ func TestQuerySpendFromAthena_ContractHappyPath(t *testing.T) {
 	// which is how the previous column name (resource_tags_user_platformid, missing the
 	// split inside PlatformId) survived.
 	//
-	// Both prefixes appear because either alone is silently half-blind: resourceTags/
-	// reaches the tenant's datastores and iamPrincipal/ reaches model invocations, which
-	// are not taggable resources at all.
+	// The column and prefix are the ones the export delivers
+	// (terraform/components/cost-pipeline/cur-export-schema.txt), not the ones the
+	// dictionary suggests. `tags`, `resourceTags/` and `iamPrincipal/` all read NULL
+	// against this export instead of failing, which reported every platform at zero
+	// spend and left the kill switch nothing to act on.
 	for _, want := range []string{
-		"element_at(tags, 'resourceTags/PlatformId')",
-		"element_at(tags, 'iamPrincipal/PlatformId')",
+		"element_at(resource_tags, 'user_PlatformId')",
 		") = 'acme'",
 		"line_item_unblended_cost",
 		"date_trunc('month'",
@@ -207,10 +208,11 @@ func TestCurRollupQueryOnlyNamesColumnsTheTableDeclares(t *testing.T) {
 		}
 	}
 
-	// The platform attribution goes through the `tags` map. It has to be declared, and
-	// declared AS A MAP — element_at() on a string column fails the whole query.
-	if got := declared["tags"]; got != "map<string,string>" {
-		t.Errorf("the CUR rollup query attributes spend with element_at(tags, ...), so `tags` must be declared "+
+	// The platform attribution goes through the `resource_tags` map. It has to be
+	// declared, and declared AS A MAP — element_at() on a string column fails the
+	// whole query.
+	if got := declared["resource_tags"]; got != "map<string,string>" {
+		t.Errorf("the CUR rollup query attributes spend with element_at(resource_tags, ...), so `resource_tags` must be declared "+
 			"map<string,string> on the CUR table in %s; got %q", decl, got)
 	}
 
@@ -384,28 +386,24 @@ func TestSleepCtx_RespectsCancellation(t *testing.T) {
 func TestCurPlatformTagExpr(t *testing.T) {
 	got := curPlatformTagExpr("PlatformId")
 
-	// Both prefixes, because they attribute different halves of the bill and neither
-	// covers the other: resourceTags/ reaches the tenant's datastores, iamPrincipal/
-	// reaches model invocations, which are not taggable resources at all.
-	for _, want := range []string{
-		"element_at(tags, 'resourceTags/PlatformId')",
-		"element_at(tags, 'iamPrincipal/PlatformId')",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("curPlatformTagExpr omits %s — got %q", want, got)
+	// The column and key prefix the export actually delivers.
+	if want := "element_at(resource_tags, 'user_PlatformId')"; got != want {
+		t.Errorf("curPlatformTagExpr = %q, want %q — see cur-export-schema.txt", got, want)
+	}
+
+	// The spellings that read NULL against this export rather than failing. Each one
+	// shipped at some point and each reported zero spend for every platform.
+	for _, forbidden := range []string{"resourceTags/", "iamPrincipal/", "element_at(tags,"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("curPlatformTagExpr contains %q, which is absent from the export and resolves to NULL: %q", forbidden, got)
 		}
 	}
 
-	// element_at, never the subscript. Athena is Trino: tags['missing'] RAISES rather
-	// than returning NULL, so a line item carrying one prefix and not the other would
-	// fail the entire query instead of yielding a row.
-	if strings.Contains(got, "tags['") {
+	// element_at, never the subscript. Athena is Trino: resource_tags['missing'] RAISES
+	// rather than returning NULL, so the first untagged line item would fail the entire
+	// query instead of yielding a row.
+	if strings.Contains(got, "resource_tags['") {
 		t.Errorf("curPlatformTagExpr uses the map subscript, which raises on a missing key: %q", got)
-	}
-
-	// A union, not a pick. Without the COALESCE the two halves do not combine.
-	if !strings.HasPrefix(got, "COALESCE(") {
-		t.Errorf("curPlatformTagExpr must COALESCE the two prefixes: %q", got)
 	}
 }
 
@@ -415,12 +413,11 @@ func TestCurPlatformTagExpr(t *testing.T) {
 // defect: a query that runs, returns zero, and trips no alarm.
 func TestCurPlatformTagExprMatchesTheActivatedTags(t *testing.T) {
 	if platformIDTagKey != "PlatformId" {
-		t.Fatalf("platformIDTagKey = %q — cost-pipeline asserts PlatformId and iamPrincipal/PlatformId are active; changing one side alone silently zeroes every budget", platformIDTagKey)
+		t.Fatalf("platformIDTagKey = %q — cost-pipeline asserts PlatformId is the activated cost-allocation key; changing one side alone silently zeroes every budget", platformIDTagKey)
 	}
 	got := curPlatformTagExpr(platformIDTagKey)
-	if !strings.Contains(got, "'resourceTags/"+platformIDTagKey+"'") ||
-		!strings.Contains(got, "'iamPrincipal/"+platformIDTagKey+"'") {
-		t.Errorf("the query would filter on %q, which does not name both activated forms of %q", got, platformIDTagKey)
+	if !strings.Contains(got, "'user_"+platformIDTagKey+"'") {
+		t.Errorf("the query would filter on %q, which does not name the activated key %q with the `user_` prefix CUR 2.0 gives it", got, platformIDTagKey)
 	}
 }
 

@@ -74,32 +74,32 @@ Built at runtime, with `<database>` and `<table>` from SSM (`cost-pipeline/athen
 ```sql
 SELECT COALESCE(SUM(line_item_unblended_cost), 0) AS spend_usd
 FROM "<database>"."<table>"
-WHERE COALESCE(element_at(tags, 'resourceTags/PlatformId'),
-               element_at(tags, 'iamPrincipal/PlatformId')) = '<platform-id>'
+WHERE element_at(resource_tags, 'user_PlatformId') = '<platform-id>'
   AND line_item_line_item_type = 'Usage'
   AND line_item_usage_start_date >= date_trunc('month', current_date);
 ```
 
 Three things about that query are load-bearing:
 
-- **Attribution is a union of two tag prefixes.** CUR 2.0 carries one `tags` map holding every tag
-  source at once, keyed by prefix. A tenant's datastores carry `resourceTags/PlatformId`; model
-  invocations do not, because an invocation is not a taggable resource — AWS attributes those by
-  calling identity under `iamPrincipal/PlatformId`. Either prefix alone returns a plausible number
-  that is missing most of the spend.
-- **`element_at()`, not `tags['...']`.** Athena is Trino, where the map subscript operator raises on
-  a missing key. A line item carrying one prefix and not the other would fail the whole query.
+- **The column is `resource_tags` and its keys carry a `user_` prefix.** Both are read out of the
+  delivered export and recorded in [`cur-export-schema.txt`](cur-export-schema.txt), not taken from
+  the AWS dictionary. The distinction is load-bearing: a `tags` column, a `resourceTags/` prefix and
+  an `iamPrincipal/` prefix are all plausible from the documentation and none of them exists in this
+  export. Athena resolves Parquet by name, so naming one reads NULL for every row rather than
+  failing, every platform's spend reads zero, and the kill switch has nothing to act on.
+- **`element_at()`, not `resource_tags['...']`.** Athena is Trino, where the map subscript operator
+  raises on a missing key. The first untagged line item would fail the whole query.
 - **`line_item_type = 'Usage'` makes this gross consumption, not net billed.** A credit would offset
   real consumption and hold a runaway tenant under its cap. The switch exists to stop consumption,
   so it counts consumption.
 
 ## Both tag keys must be ACTIVATED, and activation is not retroactive
 
-The query above reads two cost-allocation tag keys. Neither column exists in the CUR at all until
+The query above reads a cost-allocation tag key. It does not appear in the CUR at all until
 the key is **activated in Cost Explorer** — stamping the tag on a resource is not enough. This
 component declares that requirement as a `check` block,
 `the_cost_allocation_tags_are_active`, over
-`required_cost_allocation_tags = ["PlatformId", "iamPrincipal/PlatformId"]`, compared against
+`required_cost_allocation_tags`, compared against
 `data.aws_ce_tags.observed`. It **warns** on every plan while either key is inactive; it does not
 fail, because a component cannot activate a key it does not own and failing would block the apply
 that stamps the tag in the first place.

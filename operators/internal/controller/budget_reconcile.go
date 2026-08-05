@@ -122,35 +122,41 @@ func platformCostID(clusterName, platformName string) string {
 // curPlatformTagExpr renders the SQL expression that names a line item's platform in a
 // CUR 2.0 export.
 //
-// CUR 2.0 has no flattened per-tag columns. There is one `tags` column of type
-// map<string,string> carrying every tag source at once, keyed by prefix —
-// resourceTags/, iamPrincipal/, accountTag/, costCategory/, userAttribute/ — and a key
-// appears in it only once it has been activated as a cost-allocation tag.
+// The column is `resource_tags` and its keys carry a `user_` prefix. Both are read out
+// of the delivered export, not out of the AWS dictionary — see
+// terraform/components/cost-pipeline/cur-export-schema.txt, which records the columns
+// and the observed key shape (user_project, user_business_unit, user_cost_center).
 //
-// Attribution is a UNION of two prefixes and cannot be either one alone:
+// The plausible-but-absent spellings are the hazard here, and there are three of
+// them:
 //
-//	resourceTags/<key>   the tenant's datastores, which carry a resource tag.
-//	iamPrincipal/<key>   model invocations, which do not. An invocation is not a
-//	                     taggable resource, so no resourceTags/ key is ever populated
-//	                     on one and AWS attributes it by the calling identity instead.
+//	element_at(tags, 'resourceTags/<key>')     no `tags` column, no `resourceTags/` prefix
+//	element_at(tags, 'iamPrincipal/<key>')     no `iamPrincipal/` prefix either
+//	resource_tags_user_<key>                   CUR 1.0 flattening, not present in CUR 2.0
 //
-// Filtering on the resource prefix alone sees every datastore and no model spend, which
-// is the dominant cost. The principal prefix alone sees the reverse — AWS scopes
-// IAM-principal allocation to Bedrock runtime calls — so every bucket, database and
-// queue vanishes. Either half reads as a plausible number.
+// Each reads naturally off the AWS documentation, and each fails the same silent way.
+// Athena resolves Parquet by name with parquet.column.index.access=false, so an absent
+// column yields NULL rather than an error: the WHERE clause matches no row, SUM returns
+// nothing, and COALESCE(SUM(...), 0) reports 0. Every platform's month-to-date spend
+// reads zero, which is a number the kill switch can never act on.
 //
-// element_at rather than tags['...']: Athena is Trino, where the map subscript operator
-// RAISES on a missing key instead of returning NULL, so a line item carrying one prefix
-// and not the other would fail the whole query rather than yield a row.
+// cost-pipeline composes the same expression in HCL. Deriving each side independently
+// does not protect against this — independence does not help when the shared input is a
+// false premise about the data — so both sides are checked against the recorded export
+// instead of against each other.
 //
-// cost-pipeline composes the same expression in HCL. Both sides are written out against
-// AWS's published schema independently, on purpose — one shared derivation would let a
-// single wrong spelling satisfy both and the query would still return nothing.
+// element_at rather than resource_tags['...']: Athena is Trino, where the map subscript
+// operator RAISES on a missing key instead of returning NULL, so the first untagged line
+// item would fail the whole query rather than yield a row.
+//
+// SCOPE, stated rather than implied: this reaches resource-tagged spend. A Bedrock
+// invocation is not a taggable resource, and where an activated iamPrincipal/<key> lands
+// in a CUR 2.0 export is unverified — Cost Explorer lists such keys in this account but
+// all are Inactive, so no delivered row carries one to read. cur-export-schema.txt
+// records that as UNVERIFIED instead of guessing a second COALESCE branch, because a
+// guessed branch resolves to NULL and reads exactly like a correct one.
 func curPlatformTagExpr(tagKey string) string {
-	return fmt.Sprintf(
-		"COALESCE(element_at(tags, 'resourceTags/%s'), element_at(tags, 'iamPrincipal/%s'))",
-		tagKey, tagKey,
-	)
+	return fmt.Sprintf("element_at(resource_tags, 'user_%s')", tagKey)
 }
 
 // inflightWindowStart returns the earliest instant the in-flight CloudWatch leg may
