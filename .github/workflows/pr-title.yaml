@@ -1,0 +1,63 @@
+# The PR title gate lives alone so it can subscribe to `edited`.
+#
+# `edited` is the event a title change emits, and without it the check runs once
+# on open, goes red on a bad title, and never runs again — fixing the title does
+# not re-trigger it. Adding `edited` to `ci.yaml` instead would re-run all of its
+# jobs on every description tweak, which is why this is its own file: one action,
+# no checkout, seconds to run, cheap to fire on every edit.
+#
+# `scripts/check-workflow-triggers.py` enforces the general rule.
+name: pr title
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  conventional-pr:
+    name: conventional PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+            harden
+          scopes: |
+            operators
+            charts
+            terraform
+            core
+            sdk
+            pricing
+            client
+            cli
+            examples
+            docs
+            ci
+            release
+            deps
+            security
+          requireScope: false
+          subjectPattern: ^[a-z].+$
