@@ -392,6 +392,8 @@ func main() {
 	}
 	if opConfig != nil {
 		evalReconciler.RunnerNamespace = opConfig.EvalRunnerNamespace
+		evalReconciler.RunnerServiceAccount = opConfig.EvalRunnerServiceAccount
+		evalReconciler.ReportsBucket = opConfig.EvalReportsBucket
 	}
 	if err := evalReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "Eval")

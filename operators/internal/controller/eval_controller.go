@@ -38,6 +38,29 @@ type EvalReconciler struct {
 	// from SSM /eks-agent-platform/<cluster>/eval-runtime/runner_namespace.
 	// Empty falls back to the package default.
 	RunnerNamespace string
+
+	// RunnerServiceAccount is the ServiceAccount the emitted Workflow runs
+	// under. Resolved from SSM
+	// /eks-agent-platform/<cluster>/eval-runtime/runner_service_account.
+	// Empty falls back to the package default.
+	//
+	// The chart makes this name a value, so a cluster that overrides it gets
+	// a ServiceAccount and a WorkflowTemplate under the new name. Emitting a
+	// hardcoded name here would submit Workflows bound to a ServiceAccount
+	// that does not exist on such a cluster.
+	RunnerServiceAccount string
+
+	// ReportsBucket is the S3 bucket the workflow uploads reports to,
+	// resolved from SSM
+	// /eks-agent-platform/<cluster>/eval-runtime/eval_reports_bucket.
+	//
+	// It is passed as a workflow argument rather than left to the
+	// WorkflowTemplate's default. Argo argument values override the
+	// template's, so the operator's SSM read is what reaches the data path
+	// and the terraform -> cluster-Secret -> ApplicationSet -> Helm-value
+	// chain stops being load-bearing for it. Empty means the reconciler
+	// refuses to submit: every upload in the run would resolve to `s3:///…`.
+	ReportsBucket string
 }
 
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites,verbs=get;list;watch;update;patch
@@ -78,12 +101,12 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: time.Millisecond * 100}, nil
 	}
 
-	phase, err := r.reconcileEval(ctx, &suite)
+	phase, reason, err := r.reconcileEval(ctx, &suite)
 	if err != nil {
 		logger.Error(err, "reconcile failed")
 		return ctrl.Result{}, err
 	}
-	if err := r.applyEvalStatus(ctx, &suite, phase); err != nil {
+	if err := r.applyEvalStatus(ctx, &suite, phase, reason); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)
 	}
 	if phase == phasePending {
