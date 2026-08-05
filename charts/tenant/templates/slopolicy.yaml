@@ -19,6 +19,14 @@
 {{- if or (eq $k "le") (eq $k "__name__") }}
 {{- fail (printf "slo.sli.selector may not set %q — `le` is owned by the latency query's bucket boundary and `__name__` would redirect the query at a different series entirely" $k) }}
 {{- end }}
+{{- end }}
+{{- range $k, $_ := .Values.slo.sli.errorSelector }}
+{{- if or (eq $k "le") (eq $k "__name__") }}
+{{- fail (printf "slo.sli.errorSelector may not set %q — the same reservation applies as on selector" $k) }}
+{{- end }}
+{{- end }}
+{{- if and (eq .Values.slo.sli.type "latency") .Values.slo.sli.errorSelector }}
+{{- fail "slo.sli.errorSelector applies only to an availability SLI — a latency SLI's numerator is a bucket boundary, not a label selection, so it would be silently ignored" }}
 {{- end -}}
 {{- /*
   namespace is controlPlaneNamespace, not the workload namespace. platformRef
@@ -47,6 +55,12 @@ spec:
     metric: {{ .Values.slo.sli.metric | quote }}
     {{- with .Values.slo.sli.selector }}
     selector:
+      {{- range $k, $v := . }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+    {{- end }}
+    {{- with .Values.slo.sli.errorSelector }}
+    errorSelector:
       {{- range $k, $v := . }}
       {{ $k }}: {{ $v | quote }}
       {{- end }}

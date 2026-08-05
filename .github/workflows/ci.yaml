@@ -401,7 +401,22 @@ jobs:
       # per package (75%), a per-file 100% on the security-critical IAM/KMS
       # paths, and documented lower floors for agentctl/awsclients. A drop below
       # any floor fails here rather than shipping an unproven control.
+      # promtool executes the PromQL the SLO reconciler builds against synthetic
+      # series, so the assertion is the number that comes out rather than the
+      # query string going in. REQUIRE_PROMTOOL turns the local "skip if absent"
+      # into a hard failure here — a runner that lost the binary must not report
+      # a green suite that executed none of those cases.
+      - name: install promtool
+        run: |
+          set -euo pipefail
+          ver=3.13.1
+          curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${ver}/prometheus-${ver}.linux-amd64.tar.gz" \
+            | tar -xz -C /tmp
+          sudo install -m 0755 "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
       - name: go test with envtest + coverage floors
+        env:
+          REQUIRE_PROMTOOL: "1"
         run: cd operators && make coverage-check
       - uses: golangci/golangci-lint-action@v7
         with:
