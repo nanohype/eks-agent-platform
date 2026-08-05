@@ -138,28 +138,41 @@ locals {
 
   # How a CUR 2.0 line item names its platform.
   #
-  # There is no flattened per-tag column. CUR 2.0 carries ONE `tags` column of type
-  # map<string,string> holding every tag source at once, keyed by prefix —
-  # `resourceTags/`, `iamPrincipal/`, `accountTag/`, `costCategory/`, `userAttribute/` —
-  # and a key appears in it only once it has been activated as a cost-allocation tag.
+  # The column is `resource_tags`, and its keys carry a `user_` prefix. Both of those
+  # are read out of the export, not out of the dictionary — see
+  # cur-export-schema.txt, which records the delivered columns and the observed key
+  # shape (`user_project`, `user_business_unit`, `user_cost_center`). A tag key
+  # appears there only once it has been activated as a cost-allocation tag.
   #
-  # Attribution is a UNION of two prefixes and cannot be either one alone:
+  # This previously read `element_at(tags, 'resourceTags/PlatformId')`, which was
+  # wrong three ways at once: no `tags` column exists, no `resourceTags/` prefix
+  # exists, and the second COALESCE branch named an `iamPrincipal/` prefix that
+  # appears nowhere in the delivered data either. Athena resolves Parquet by name
+  # with parquet.column.index.access=false, so all three resolved to NULL instead of
+  # failing, and every line item attributed to a NULL platform. The tests passed
+  # throughout, because they asserted the query said what the table said.
   #
-  #   resourceTags/PlatformId   the tenant's datastores, which carry a resource tag.
-  #   iamPrincipal/PlatformId   model invocations, which do not. An invocation is not a
-  #                             taggable resource, so no resourceTags/ key is ever
-  #                             populated on one and AWS attributes it by the calling
-  #                             identity instead.
+  # element_at(), not resource_tags['...']. Athena is Trino, where the map subscript
+  # operator RAISES on a missing key rather than returning NULL — so an untagged
+  # line item would fail the entire query instead of yielding a row.
+  cur_platform_tag_expr = "element_at(resource_tags, 'user_PlatformId')"
+
+  # Bedrock spend this export CAN identify.
   #
-  # Filtering on the resource prefix alone sees every datastore and no model spend, which
-  # is the dominant cost. Filtering on the principal prefix alone sees the reverse: AWS
-  # scopes IAM-principal allocation to Bedrock runtime calls, so every bucket, database
-  # and queue vanishes. Either half reads as a plausible number.
+  # Only the AmazonBedrock product code. Anthropic models bill through AWS
+  # Marketplace under opaque per-product codes (7zgyu5r4uonlsrnaq20qq63eo is one,
+  # observed in this account's data), and the only handle that names them is the
+  # `product` map — which this export does not deliver. That is recorded in
+  # cur-export-schema.txt under [absent], not left as a surprise.
   #
-  # element_at(), not tags['...']. Athena is Trino, where the map subscript operator
-  # RAISES on a missing key rather than returning NULL — so a line item carrying one
-  # prefix and not the other would fail the entire query instead of yielding a row.
-  cur_platform_tag_expr = "COALESCE(element_at(tags, 'resourceTags/PlatformId'), element_at(tags, 'iamPrincipal/PlatformId'))"
+  # THE CONSEQUENCE IS REAL AND IS NOT PAPERED OVER: this filter sees the
+  # AmazonBedrock-coded share of model spend and nothing else. A prior live
+  # measurement put that at $0.01 of $0.78. Recovering the rest requires an export
+  # carrying the product map, which means recreating the export — a CUR export's
+  # table configuration cannot be altered after creation. Until then the
+  # reconciliation view is honest about a narrow slice rather than confidently wrong
+  # about all of it, and reconciliation_scope below says so in the view's own output.
+  cur_bedrock_filter = "line_item_product_code = 'AmazonBedrock'"
 }
 
 ################################################################################
@@ -583,8 +596,9 @@ resource "aws_glue_catalog_table" "cur" {
 
       # Load-bearing, and stated rather than left to the default.
       #
-      # The export delivers all 125 CUR 2.0 columns; the columns below are the ones
-      # this org queries. That subset is only legal because Athena resolves Parquet
+      # The export delivers the ten columns recorded in cur-export-schema.txt; the
+      # columns below are the ones this org queries. That subset is only legal
+      # because Athena resolves Parquet
       # columns by NAME: "Athena reads Parquet by name by default, as defined in
       # SERDEPROPERTIES ( 'parquet.column.index.access'='false' )". Reading by name
       # is also what lets AWS add columns to CUR without this table changing.
@@ -600,12 +614,16 @@ resource "aws_glue_catalog_table" "cur" {
 
     # Exactly the columns this org's two CUR queries reference: the operator's
     # month-to-date budget query (budget_reconcile.go) and the reconciliation view
-    # below. Types are CUR 2.0's, from the Data Exports table dictionary.
+    # below. Every one is present in cur-export-schema.txt, which is read from the
+    # live export rather than from the AWS dictionary.
     #
-    # A column referenced by a query and missing here is not a schema mismatch that
-    # Athena forgives — the query fails, and a failed query is unreadable spend.
-    # tests/budget_path.tftest.hcl holds this set against the reconciliation query
-    # so the two cannot drift apart.
+    # Both directions matter and they fail differently. A column referenced by a
+    # query and missing HERE fails the query outright, and a failed query is
+    # unreadable spend — loud. A column declared here and missing from the EXPORT
+    # resolves to NULL for every row, because parquet.column.index.access=false
+    # makes Athena match by name and shrug at an absent one — silent, and how a
+    # NULL-attributed reconciliation view passed every gate. tests/budget_path.tftest.hcl
+    # holds this set against both the queries and the recorded export.
     columns {
       name = "line_item_unblended_cost"
       type = "double"
@@ -626,15 +644,15 @@ resource "aws_glue_catalog_table" "cur" {
       name = "line_item_usage_account_id"
       type = "string"
     }
-    # Both map columns, both queried with element_at() rather than the subscript
-    # operator — Trino's map subscript RAISES on a missing key, and a line item
-    # carrying one tag prefix and not the other would fail the whole query.
+    # Queried with element_at() rather than the subscript operator — Trino's map
+    # subscript RAISES on a missing key, so an untagged line item would fail the
+    # whole query rather than yielding a row.
+    #
+    # `resource_tags`, not `tags`: `tags` is not a CUR 2.0 column name and never
+    # appeared in this export. There is no `product` column here either — see
+    # cur-export-schema.txt [absent] and the reconciliation scope note in locals.
     columns {
-      name = "tags"
-      type = "map<string,string>"
-    }
-    columns {
-      name = "product"
+      name = "resource_tags"
       type = "map<string,string>"
     }
   }
@@ -794,8 +812,7 @@ resource "aws_athena_named_query" "spend_reconciliation" {
              date_format(line_item_usage_start_date, '%Y-%m-%d') AS day,
              SUM(line_item_unblended_cost)                       AS cur_truth_usd
       FROM ${local.cur_table_name}
-      WHERE (line_item_product_code = 'AmazonBedrock'
-             OR element_at(product, 'product_name') LIKE '%(Amazon Bedrock Edition)%')
+      WHERE ${local.cur_bedrock_filter}
         AND line_item_line_item_type = 'Usage'
         AND ${local.cur_platform_tag_expr} IS NOT NULL
       GROUP BY ${local.cur_platform_tag_expr},

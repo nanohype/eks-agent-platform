@@ -163,14 +163,46 @@ elif ! grep -q "$check_name" terraform/components/cost-pipeline/README.md; then
   fail=1
 fi
 
-for key in 'resourceTags/PlatformId' 'iamPrincipal/PlatformId'; do
+# The README has to name the column and key prefix the export actually delivers, and
+# has to keep naming the spellings that do NOT work.
+#
+# This previously required the README to mention `resourceTags/PlatformId` and
+# `iamPrincipal/PlatformId` — pinning the doc to a claim about the data that was
+# never checked against the data. Both prefixes are absent from the delivered export
+# and read NULL rather than failing, so the gate held the README faithful to a query
+# that returned zero for every platform. A doc contract is only as good as the fact
+# it encodes.
+for key in 'resource_tags' 'user_PlatformId'; do
   if ! grep -q "$key" terraform/components/cost-pipeline/README.md; then
     echo "cost-pipeline/README.md does not mention $key."
-    echo "Both prefixes must be activated in Cost Explorer or the column does not exist;"
-    echo "either one alone returns a plausible number that is missing most of the spend."
+    echo "That is the column and key prefix the export delivers (cur-export-schema.txt);"
+    echo "a reader who takes the AWS dictionary at face value writes a query that reads"
+    echo "NULL for every row and reports zero spend without failing."
     fail=1
   fi
 done
+
+# And it has to keep warning about the spellings that silently return nothing.
+if ! grep -q 'resourceTags/' terraform/components/cost-pipeline/README.md; then
+  echo "cost-pipeline/README.md no longer names resourceTags/ as a spelling that does not work."
+  echo "It is the one the AWS documentation leads you to, it is absent from this export,"
+  echo "and it fails by returning NULL rather than by erroring. Dropping the warning is"
+  echo "how it gets written again."
+  fail=1
+fi
+
+# The recorded export schema is what every CUR claim in this component is checked
+# against, so it has to exist and has to carry its provenance.
+if [ ! -f terraform/components/cost-pipeline/cur-export-schema.txt ]; then
+  echo "cost-pipeline/cur-export-schema.txt is missing — every CUR assertion in this"
+  echo "component is checked against it, and without it they check each other again."
+  fail=1
+elif ! grep -qi 'PROVENANCE' terraform/components/cost-pipeline/cur-export-schema.txt; then
+  echo "cur-export-schema.txt records no provenance. It is only worth more than the AWS"
+  echo "dictionary because it was read off the live export; without saying how, it is"
+  echo "another restatement."
+  fail=1
+fi
 
 if ! grep -qi 'not retroactive' terraform/components/cost-pipeline/README.md; then
   echo "cost-pipeline/README.md does not state that tag activation is not retroactive."

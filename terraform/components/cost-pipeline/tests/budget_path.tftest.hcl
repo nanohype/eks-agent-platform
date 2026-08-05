@@ -324,69 +324,39 @@ run "a_path_with_an_empty_segment_is_refused" {
 run "every_cur_consumer_filters_on_the_column_aws_produces" {
   command = plan
 
+  # Everything that reads CUR filters on the same expression. The reconciliation view
+  # and the reconciler were once on different spellings, so one of the two always read
+  # zero. This holds them equal; what the expression must BE is asserted against the
+  # export itself in cur_schema.tftest.hcl, because equality alone was satisfied for
+  # months by both sides naming a column that does not exist.
   assert {
-    condition = alltrue([
-      strcontains(local.cur_platform_tag_expr, "element_at(tags, 'resourceTags/PlatformId')"),
-      strcontains(local.cur_platform_tag_expr, "element_at(tags, 'iamPrincipal/PlatformId')"),
-      !strcontains(local.cur_platform_tag_expr, "tags['"),
-    ])
-    error_message = "CUR 2.0 carries ONE `tags` column of type map<string,string> holding every tag source keyed by prefix, so attribution is element_at(tags, '<prefix>/PlatformId') over both prefixes — the resource prefix for datastores and the principal prefix for model invocations. A flattened per-tag column is CUR 1.0 and does not exist in this export at all, and the Trino subscript form raises on a row whose map lacks the key rather than returning NULL"
+    condition = strcontains(
+    aws_athena_named_query.spend_reconciliation.query, local.cur_platform_tag_expr)
+    error_message = "the reconciliation view does not use the same platform-attribution expression as the reconciler — one of the two reads zero while the other reads correctly, and the disagreement is silent"
   }
 
-  # The reconciliation view is created by this saved query, so its SQL is the finance-facing
-  # consumer. It has to name the same expression the reconciler does, or one of the two reads
-  # zero while the other reads correctly and the disagreement is silent.
-  #
-  # EVERY occurrence, not merely one somewhere. The view names the platform expression three
-  # times — the SELECT, the WHERE and the GROUP BY — and a `strcontains` is satisfied by any
-  # single one of them. A view that SELECTs the union but FILTERS on `resourceTags/` alone
-  # drops every model invocation, because an invocation is not a taggable resource and so
-  # carries no resource tag at all; the view still *contains* the correct expression, and the
-  # containment check still passes. That is the exact shape this component was reshaped to
-  # remove, reintroduced one clause deeper.
-  #
-  # Not reasoned about — measured. The containment form stayed green under precisely that
-  # mutation, which is why it is no longer the assertion.
-  #
-  # The invariant: wherever the query names either prefix, it names both, as one COALESCE.
+  # EVERY occurrence, not merely one somewhere: the view names the expression three
+  # times (SELECT, WHERE, GROUP BY) and a clause left on an older spelling still
+  # renders a view, just one that groups by something the filter never selected.
   assert {
-    condition = alltrue([
-      (length(split(local.cur_platform_tag_expr, aws_athena_named_query.spend_reconciliation.query)) ==
-      length(split("'resourceTags/PlatformId'", aws_athena_named_query.spend_reconciliation.query))),
-      (length(split(local.cur_platform_tag_expr, aws_athena_named_query.spend_reconciliation.query)) ==
-      length(split("'iamPrincipal/PlatformId'", aws_athena_named_query.spend_reconciliation.query))),
-      strcontains(aws_athena_named_query.spend_reconciliation.query, local.cur_platform_tag_expr),
-    ])
-    error_message = "the reconciliation view names one PlatformId prefix somewhere the other is absent — a clause filtering on resourceTags/ alone drops every model invocation (not a taggable resource, so never resource-tagged) and one filtering on iamPrincipal/ alone drops every datastore, and either way the view renders as a reconciliation that found no disagreement"
-  }
-
-  # `product` is a map in CUR 2.0 as well, so the marketplace filter carries the same two
-  # failure modes as the tag expression: the CUR 1.0 flattened column does not exist in this
-  # export at all, and the Trino subscript RAISES on a row whose product map lacks the key
-  # rather than returning NULL. Anthropic models bill as marketplace products rather than as
-  # AmazonBedrock, so this predicate is what makes the dominant spend visible.
-  assert {
-    condition = alltrue([
-      strcontains(aws_athena_named_query.spend_reconciliation.query, "element_at(product, 'product_name')"),
-      !strcontains(aws_athena_named_query.spend_reconciliation.query, "product_product_name"),
-      !strcontains(aws_athena_named_query.spend_reconciliation.query, "product['"),
-    ])
-    error_message = "the reconciliation view must read the product name out of CUR 2.0's product map with element_at — the flattened product_product_name column is CUR 1.0 and does not exist here, and the subscript form raises on any row whose map lacks the key, failing the whole query"
+    condition = length(split(local.cur_platform_tag_expr,
+    aws_athena_named_query.spend_reconciliation.query)) == 4
+    error_message = "the reconciliation view names the platform expression somewhere other than its SELECT, WHERE and GROUP BY — a clause left on a different spelling renders a view that groups by something its filter never selected"
   }
 
   # The CUR 1.0 flattened spellings, refused explicitly. They are what a query written
-  # against the older export shape reaches for, and neither column exists here — Athena
-  # fails on an unknown column, which the reconciler records as unreadable spend.
+  # against the older export shape reaches for, and no such column exists here.
   assert {
     condition = alltrue([
       !strcontains(aws_athena_named_query.spend_reconciliation.query, "resource_tags_user_platformid"),
       !strcontains(aws_athena_named_query.spend_reconciliation.query, "resource_tags_user_platform_id"),
     ])
-    error_message = "the reconciliation view must not name a flattened per-tag CUR 1.0 column — this is a CUR 2.0 export where every tag source lives in the `tags` map, so the flat column is simply absent"
+    error_message = "the reconciliation view must not name a flattened per-tag CUR 1.0 column — this is a CUR 2.0 export where resource tags live in the `resource_tags` map, so the flat column is simply absent"
   }
 }
 
-# The table declares a SUBSET of the export's 125 columns — the ones this org queries. That
+# The table declares a SUBSET of the columns the export delivers (cur-export-schema.txt) — the
+# ones this org queries. That
 # is legal because Athena resolves Parquet by name, and it means a query naming a column the
 # table does not declare is not a schema mismatch Athena forgives: the query FAILS, and a
 # failed query is unreadable spend, which holds the budget at its last value.
@@ -405,18 +375,19 @@ run "the_cur_table_declares_every_column_its_consumers_read" {
     error_message = "the reconciliation view reads a line_item_* column the CUR table does not declare — Athena fails the query rather than returning null for it, and the reconciler records a failed query as unreadable spend rather than as an error"
   }
 
-  # The two map columns are reached through element_at() rather than by bare name, so the
-  # extraction above cannot see them. Named explicitly, and asserted to be maps: declared as
-  # `string`, element_at() fails the query outright.
+  # The map column is reached through element_at() rather than by bare name, so the
+  # extraction above cannot see it. Named explicitly, and asserted to be a map: declared
+  # as `string`, element_at() fails the query outright.
+  #
+  # Only resource_tags. There is no `product` column in this export, which is why the
+  # marketplace branch is gone — cur_schema.tftest.hcl holds that against the recorded
+  # export rather than against another restatement of the same assumption.
   assert {
-    condition = alltrue([
-      for col in ["tags", "product"] :
-      contains([
-        for c in one(aws_glue_catalog_table.cur.storage_descriptor).columns : c.name
-        if c.type == "map<string,string>"
-      ], col)
-    ])
-    error_message = "tags and product must be declared as map<string,string> — every platform attribution and the marketplace product filter go through element_at() on those maps, and a column declared as a string there fails the whole query"
+    condition = contains([
+      for c in one(aws_glue_catalog_table.cur.storage_descriptor).columns : c.name
+      if c.type == "map<string,string>"
+    ], "resource_tags")
+    error_message = "resource_tags must be declared as map<string,string> — platform attribution goes through element_at() on that map, and a column declared as a string there fails the whole query"
   }
 
   # The extraction is only a gate if it actually found something. An empty regexall makes
@@ -922,5 +893,96 @@ run "the_pipeline_seeds_the_key_it_asks_to_have_activated" {
   assert {
     condition     = aws_s3_bucket.estimates.tags["PlatformId"] == "org"
     error_message = "the pipeline must tag its own storage with PlatformId even while the key is unactivatable — that observation is what makes AWS list the key at all"
+  }
+}
+
+################################################################################
+# The CUR table and every CUR query, held against the schema the export actually
+# delivers.
+#
+# The assertions above pin the query to the table and the table to the query. That
+# loop was satisfied for as long as it existed by both sides restating the same
+# wrong premise: the export delivers neither a `tags` column nor a `product` column,
+# and its resource-tag keys carry a `user_` prefix rather than `resourceTags/`. With
+# parquet.column.index.access=false Athena resolves by name and returns NULL for an
+# absent column, so the reconciliation view attributed every line item to a NULL
+# platform and its Bedrock branch matched nothing — silently.
+#
+# The fix is not a better string assertion. It is anchoring the assertion to
+# something outside the code: cur-export-schema.txt, read from the export itself.
+################################################################################
+
+run "the_table_declares_only_columns_the_export_delivers" {
+  command = plan
+
+  assert {
+    # Parse the [columns] block of the recorded export schema and require every
+    # declared Glue column to appear in it. A column declared here and absent from
+    # the export is the SILENT direction — NULL for every row, no error anywhere.
+    condition = length(setsubtract(
+      [for c in aws_glue_catalog_table.cur.storage_descriptor[0].columns : c.name],
+      # A DELIVERED column is a line carrying both a name and a type. The [absent]
+      # section lists bare names, and reading those as delivered is what made the
+      # first version of this assertion vacuous — it accepted `product`, the exact
+      # column whose absence it exists to catch. Requiring two fields is what
+      # separates "the export has this" from "the export does not".
+      [for line in split("\n", file("${path.module}/cur-export-schema.txt")) :
+        regexall("\\S+", line)[0]
+        if length(regexall("\\S+", line)) >= 2 && !startswith(trimspace(line), "#")
+      ]
+    )) == 0
+
+    error_message = "the CUR Glue table declares a column the export does not deliver. Athena resolves Parquet by NAME (parquet.column.index.access=false), so that column reads NULL for every row instead of failing — which is how a reconciliation view that attributed everything to a NULL platform passed every gate. Reconcile against cur-export-schema.txt, which is read from the live export"
+  }
+}
+
+run "every_column_the_queries_read_is_declared" {
+  command = plan
+
+  assert {
+    # The reconciliation query and the platform-attribution expression may only name
+    # columns the table declares. This is the LOUD direction — an undeclared column
+    # fails the query outright — but it is cheap to hold and it catches a rename.
+    condition = alltrue([
+      for col in [
+        "line_item_unblended_cost", "line_item_usage_start_date",
+        "line_item_line_item_type", "line_item_product_code", "resource_tags",
+        ] : contains(
+        [for c in aws_glue_catalog_table.cur.storage_descriptor[0].columns : c.name],
+        col
+      )
+    ])
+
+    error_message = "a column the reconciliation query or the budget query reads is not declared on the CUR Glue table — the query fails outright, and a failed query is unreadable spend"
+  }
+}
+
+run "attribution_reads_the_column_and_prefix_the_export_uses" {
+  command = plan
+
+  assert {
+    condition = (
+      strcontains(local.cur_platform_tag_expr, "element_at(resource_tags,")
+      && strcontains(local.cur_platform_tag_expr, "'user_")
+      && !strcontains(local.cur_platform_tag_expr, "resourceTags/")
+      && !strcontains(local.cur_platform_tag_expr, "iamPrincipal/")
+      && !strcontains(local.cur_platform_tag_expr, "resource_tags[")
+    )
+
+    error_message = "platform attribution must read the `resource_tags` map with a `user_` key prefix, which is what the export delivers (cur-export-schema.txt). `tags`, `resourceTags/` and `iamPrincipal/` all resolve to NULL against this export rather than failing, so every line item attributes to a NULL platform and the view renders as a clean reconciliation of nothing. The subscript form is also forbidden: Trino RAISES on a missing key and would fail the whole query on the first untagged row"
+  }
+}
+
+run "the_bedrock_filter_does_not_read_the_absent_product_map" {
+  command = plan
+
+  assert {
+    condition = (
+      strcontains(aws_athena_named_query.spend_reconciliation.query, "line_item_product_code = 'AmazonBedrock'")
+      && !strcontains(aws_athena_named_query.spend_reconciliation.query, "element_at(product")
+      && !strcontains(aws_athena_named_query.spend_reconciliation.query, "product_product_name")
+    )
+
+    error_message = "the reconciliation view must not read a `product` map — this export does not deliver one (cur-export-schema.txt [absent]), so element_at(product, ...) returns NULL and the marketplace branch never matches. Identifying Anthropic models billed through Marketplace requires an export carrying the product map, which means recreating the export; until then the filter is the AmazonBedrock product code alone and the scope note says so"
   }
 }
