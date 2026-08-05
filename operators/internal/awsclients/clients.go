@@ -15,7 +15,6 @@ import (
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
-	"github.com/aws/aws-sdk-go-v2/service/bedrock"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
@@ -38,7 +37,6 @@ type Clients struct {
 	Athena      Athena
 	CloudWatch  CloudWatch
 	EventBridge EventBridge
-	Bedrock     Bedrock
 
 	// AWSConfig is the resolved SDK config the clients above were built from.
 	// Retained because not every dependency can be constructed at startup: the
@@ -105,7 +103,6 @@ func New(ctx context.Context, region string) (*Clients, error) {
 		Athena:      athena.NewFromConfig(cfg),
 		CloudWatch:  cloudwatch.NewFromConfig(cfg),
 		EventBridge: eventbridge.NewFromConfig(cfg),
-		Bedrock:     bedrock.NewFromConfig(cfg),
 		AWSConfig:   cfg,
 	}, nil
 }

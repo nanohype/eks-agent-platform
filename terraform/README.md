@@ -15,7 +15,6 @@ what they own has exactly one instance per account. The rest are per-cluster.
 | `cost-access`       | cluster | this cluster's Athena workgroup + the operator's cost-read grant, and the SSM republish the operator reads |
 | `agent-egress`      | cluster | VPC interface + gateway endpoints + optional WAF on the model gateway ALB                                  |
 | `kill-switch`       | cluster | EventBridge bus + Step Functions state machine for budget-breach detach                                    |
-| `batch-runtime`     | cluster | Bedrock batch-inference service role, scoped to `model-invocation-job/*` and the `batch/` prefix of the model-artifacts bucket |
 | `eval-runtime`      | cluster | Pod Identity role for the eval runner + its controller log group                                           |
 
 There is no `model-artifacts` component in this tree. The buckets are owned by landing-zone's
@@ -30,7 +29,6 @@ Every component reads landing-zone's outputs — the cluster VPC / subnet / rout
 cost-pipeline → bedrock-account   (invocation log group)
 cost-access   → cost-pipeline      (database, tables, results bucket, cost key, tenant IAM path)
 eval-runtime  → agent-iam          (eval-reports bucket, landing-zone's contract)
-batch-runtime → agent-iam          (model-artifacts bucket, landing-zone's contract)
 ```
 
 The cost path runs account-first: `bedrock-account`, then `cost-pipeline`, then each cluster's

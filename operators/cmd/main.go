@@ -84,8 +84,6 @@ func main() {
 	var budgetWorkers int
 	var sloWorkers int
 	var evalWorkers int
-	var batchWorkers int
-	var batchPollInterval time.Duration
 	var tenantWorkers int
 	var tenantRequeueInterval time.Duration
 
@@ -138,8 +136,6 @@ func main() {
 	flag.IntVar(&budgetWorkers, "budget-workers", 1, "MaxConcurrentReconciles for the Budget reconciler.")
 	flag.IntVar(&sloWorkers, "slo-workers", 2, "MaxConcurrentReconciles for the SLOPolicy reconciler.")
 	flag.IntVar(&evalWorkers, "eval-workers", 2, "MaxConcurrentReconciles for the EvalSuite reconciler.")
-	flag.IntVar(&batchWorkers, "batch-workers", 2, "MaxConcurrentReconciles for the BatchJob reconciler.")
-	flag.DurationVar(&batchPollInterval, "batch-poll-interval", 2*time.Minute, "How often the BatchJob reconciler polls a submitted Bedrock job.")
 	flag.IntVar(&tenantWorkers, "tenant-workers", 1, "MaxConcurrentReconciles for the Tenant reconciler.")
 	flag.DurationVar(&tenantRequeueInterval, "tenant-requeue-interval", 5*time.Minute, "How often the Tenant reconciler re-aggregates owned Platforms.")
 	flag.StringVar(&shimImage, "shim-image", os.Getenv("AGENTS_SHIM_IMAGE"), "Operator image used for the SandboxPool KEDA metrics bridge. Empty disables queue-depth autoscaling.")
@@ -397,22 +393,6 @@ func main() {
 	}
 	if err := evalReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "Eval")
-		os.Exit(1)
-	}
-	batchReconciler := &controller.BatchJobReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Concurrency:  batchWorkers,
-		PollInterval: batchPollInterval,
-	}
-	if awsClients != nil {
-		batchReconciler.Bedrock = awsClients.Bedrock
-	}
-	if opConfig != nil {
-		batchReconciler.ServiceRoleARN = opConfig.BatchServiceRoleARN
-	}
-	if err := batchReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "BatchJob")
 		os.Exit(1)
 	}
 	if err := (&controller.TenantReconciler{

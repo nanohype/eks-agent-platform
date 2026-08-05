@@ -39,7 +39,7 @@ Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragr
 
 ## CRDs
 
-Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Agents are plain Deployments running the tenant's own image under the tenant's identity.
+Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Agents are plain Deployments running the tenant's own image under the tenant's identity.
 
 | Kind           | Scope      | Owns                                                                                     |
 | -------------- | ---------- | ---------------------------------------------------------------------------------------- |

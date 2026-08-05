@@ -32,7 +32,6 @@ rules:
   - agents.nanohype.dev
   resources:
   - agentfleets
-  - batchjobs
   - modelgateways
   - sandboxpools
   verbs:
@@ -46,7 +45,6 @@ rules:
   resources:
   - agentfleets/finalizers
   - agentsandboxes/finalizers
-  - batchjobs/finalizers
   - modelgateways/finalizers
   - sandboxpools/finalizers
   verbs:
@@ -56,7 +54,6 @@ rules:
   resources:
   - agentfleets/status
   - agentsandboxes/status
-  - batchjobs/status
   - modelgateways/status
   - sandboxpools/status
   verbs:

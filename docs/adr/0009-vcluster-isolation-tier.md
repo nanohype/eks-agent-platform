@@ -67,7 +67,7 @@ cluster on top of the unchanged host-side Platform provisioning:
    `AppProject`. ArgoCD performs the Helm render+install. The operator never shells
    out to Helm and never renders the vcluster's own manifests.
 2. **Drive workloads** — the workload reconcilers (AgentFleet, AgentSandbox,
-   BatchJob, ModelGateway, EvalSuite) resolve a **target client** at the top of
+   ModelGateway, EvalSuite) resolve a **target client** at the top of
    reconcile: the host client for the `namespace` tier, a cached client built from
    the vcluster's kubeconfig Secret for the `vcluster` tier. The reconcile _logic_
    is unchanged; only the API it writes to moves inside the virtual cluster.
@@ -155,7 +155,7 @@ instead.
 ### Drive workloads: a target-client swap, not a parallel reconcile path
 
 Once the vcluster is up, the workload CRDs the operator reconciles from
-(`AgentFleet`, `AgentSandbox`, `BatchJob`, `ModelGateway`, `EvalSuite`) must land
+(`AgentFleet`, `AgentSandbox`, `ModelGateway`, `EvalSuite`) must land
 their objects — agent `Deployment`s, KEDA `ScaledObject`s, sandbox pods — inside
 the virtual cluster's API, so that the tenant's pods see the vcluster API server
 rather than the host's.

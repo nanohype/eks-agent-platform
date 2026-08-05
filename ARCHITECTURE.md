@@ -19,7 +19,7 @@ The system organizes around nine bounded contexts. Each gets a CRD, a reconciler
 The CRDs are split across three capability groups under the `nanohype.dev` domain, all at version `v1alpha1`:
 
 - **`platform.nanohype.dev`** — the Tenancy and Workspace contexts: `Tenant`, `Platform`
-- **`agents.nanohype.dev`** — the Model-access and Agent-runtime contexts plus the sandbox kinds: `AgentFleet`, `ModelGateway`, `AgentSandbox`, `SandboxPool`, `BatchJob`
+- **`agents.nanohype.dev`** — the Model-access and Agent-runtime contexts plus the sandbox kinds: `AgentFleet`, `ModelGateway`, `AgentSandbox`, `SandboxPool`
 - **`governance.nanohype.dev`** — the Budgets and Evals contexts: `BudgetPolicy`, `EvalSuite`
 
 The field-level reference is regenerated from godoc on every `make manifests` into [`docs/crd-reference/v1alpha1.md`](./docs/crd-reference/v1alpha1.md).
