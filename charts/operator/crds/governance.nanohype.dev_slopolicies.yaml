@@ -112,6 +112,30 @@ spec:
               sli:
                 description: SLI is the ratio this objective is measured on.
                 properties:
+                  errorSelector:
+                    additionalProperties:
+                      type: string
+                    description: "ErrorSelector narrows the SAME series the denominator
+                      counts down to its\nerror subset, for services that emit one
+                      dimensioned counter rather than\na separate errors counter.
+                      With it set, an availability SLI reads\n\n\t<metric>_requests_total{<selector>,<errorSelector>}\n\t
+                      \ over <metric>_requests_total{<selector>}\n\nrather than dividing
+                      a distinct _errors_total series by _requests_total.\nThat is
+                      how a counter with a `status` dimension is normally instrumented,\nand
+                      without this the only way to get an availability objective was
+                      to emit\na second, redundant counter whose sole purpose was
+                      to satisfy the query\nshape.\n\nSame rules as Selector: exact-match
+                      label names, values escaped, `le` and\n`__name__` reserved.
+                      Availability only — a latency SLI's numerator is a\nbucket boundary,
+                      not a label selection.\n\nOne limitation, stated because it
+                      is the failure this field can produce.\nThe query defaults an
+                      empty numerator to zero only when every key named\nhere is present
+                      on the series, so a misspelled KEY reads NoData rather\nthan
+                      a permanent healthy zero. A misspelled VALUE cannot be distinguished\nfrom
+                      a service that is genuinely not erroring, and reads zero. Confirm
+                      the\nselector against the metric store once when authoring the
+                      objective."
+                    type: object
                   metric:
                     description: |-
                       Metric is the base series name in Prometheus form — the OTLP service name
@@ -165,6 +189,10 @@ spec:
             - message: sli.thresholdSeconds applies only to a latency SLI; setting
                 it on an availability SLI silently does nothing
               rule: self.sli.type != 'availability' || !has(self.sli.thresholdSeconds)
+            - message: sli.errorSelector applies only to an availability SLI; a latency
+                SLI's numerator is a bucket boundary, not a label selection, so it
+                would be silently ignored
+              rule: self.sli.type != 'latency' || !has(self.sli.errorSelector)
           status:
             description: |-
               SLOPolicyStatus surfaces the most recent burn-rate evaluation. The SLO

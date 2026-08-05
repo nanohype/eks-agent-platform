@@ -224,6 +224,15 @@ slo:
     # is owned by the latency query's bucket boundary, the second would redirect
     # the query at a different series entirely.
     selector: {}
+    # Set this when the workload emits ONE counter with a status dimension
+    # rather than a separate errors counter — which is the ordinary OTel shape.
+    # The objective then reads
+    #   <metric>_requests_total{<selector>,<errorSelector>}
+    #     over <metric>_requests_total{<selector>}
+    # instead of dividing a distinct _errors_total series by _requests_total,
+    # so a service does not need a second, redundant counter to be measurable.
+    # Availability only. Same reserved labels as selector.
+    errorSelector: {}
     # Decimal seconds naming a bucket boundary the histogram actually
     # publishes. Required for type=latency, rejected for type=availability.
     thresholdSeconds: ""

@@ -39,6 +39,32 @@ type SLI struct {
 	// +optional
 	Selector map[string]string `json:"selector,omitempty"`
 
+	// ErrorSelector narrows the SAME series the denominator counts down to its
+	// error subset, for services that emit one dimensioned counter rather than
+	// a separate errors counter. With it set, an availability SLI reads
+	//
+	//	<metric>_requests_total{<selector>,<errorSelector>}
+	//	  over <metric>_requests_total{<selector>}
+	//
+	// rather than dividing a distinct _errors_total series by _requests_total.
+	// That is how a counter with a `status` dimension is normally instrumented,
+	// and without this the only way to get an availability objective was to emit
+	// a second, redundant counter whose sole purpose was to satisfy the query
+	// shape.
+	//
+	// Same rules as Selector: exact-match label names, values escaped, `le` and
+	// `__name__` reserved. Availability only — a latency SLI's numerator is a
+	// bucket boundary, not a label selection.
+	//
+	// One limitation, stated because it is the failure this field can produce.
+	// The query defaults an empty numerator to zero only when every key named
+	// here is present on the series, so a misspelled KEY reads NoData rather
+	// than a permanent healthy zero. A misspelled VALUE cannot be distinguished
+	// from a service that is genuinely not erroring, and reads zero. Confirm the
+	// selector against the metric store once when authoring the objective.
+	// +optional
+	ErrorSelector map[string]string `json:"errorSelector,omitempty"`
+
 	// ThresholdSeconds is the histogram bucket boundary a latency SLI counts as
 	// good, as a decimal-string of seconds ("0.5"). Required for
 	// type=latency, ignored for type=availability. It must name a bucket the
@@ -60,6 +86,7 @@ type SLI struct {
 // objective that is in fact measuring everything.
 // +kubebuilder:validation:XValidation:rule="self.sli.type != 'latency' || has(self.sli.thresholdSeconds)",message="a latency SLI requires sli.thresholdSeconds — without it the objective can never be evaluated and every tick fails"
 // +kubebuilder:validation:XValidation:rule="self.sli.type != 'availability' || !has(self.sli.thresholdSeconds)",message="sli.thresholdSeconds applies only to a latency SLI; setting it on an availability SLI silently does nothing"
+// +kubebuilder:validation:XValidation:rule="self.sli.type != 'latency' || !has(self.sli.errorSelector)",message="sli.errorSelector applies only to an availability SLI; a latency SLI's numerator is a bucket boundary, not a label selection, so it would be silently ignored"
 type SLOPolicySpec struct {
 	PlatformRef commonv1alpha1.LocalRef `json:"platformRef"`
 

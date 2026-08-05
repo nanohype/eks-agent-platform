@@ -244,6 +244,54 @@ func buildErrorRatioQuery(sli governancev1alpha1.SLI, window string) (string, er
 		// errors series falls through to an empty result and is reported as
 		// NoData. That is the direction the pipeline's own rule demands: absent
 		// is not healthy.
+		if len(sli.ErrorSelector) > 0 {
+			// Same-series shape: the errors are a label selection on the very
+			// counter the denominator sums, which is how a counter with a
+			// `status` dimension is normally instrumented. Without this the only
+			// way to get an availability objective was to emit a second,
+			// redundant counter to satisfy the query shape.
+			//
+			// The zero-default is guarded differently here, and it has to be.
+			// The two-counter shape probes `absent(<m>_errors_total)` — the
+			// whole family — to tell "never errored" from "wrong series". That
+			// probe is unavailable here: the family definitely exists, because
+			// it is the denominator. So the guard probes whether every key the
+			// error selector names is PRESENT on the series, with `key=~".+"`,
+			// and defaults to zero only then:
+			//
+			//	key present, no matching samples  -> 0        (genuinely healthy)
+			//	key absent entirely (typo'd key)  -> NoData   (selector is wrong)
+			//
+			// `unless on()` rather than `and`: absent() answers with a sample
+			// only when its argument is missing, so the default must apply in
+			// the complement. `on()` because vector(0) carries no labels and
+			// absent() carries the matchers', which would never match.
+			//
+			// A misspelled VALUE still reads zero — indistinguishable from a
+			// service that is not erroring. That limit is documented on the CRD
+			// field rather than papered over.
+			errMatchers, err := selectorMatchers(sli.ErrorSelector)
+			if err != nil {
+				return "", fmt.Errorf("error selector: %w", err)
+			}
+			numMatchers := append(append([]string{}, matchers...), errMatchers...)
+			sort.Strings(numMatchers)
+			numSel := "{" + strings.Join(numMatchers, ",") + "}"
+
+			presenceMatchers := make([]string, 0, len(matchers)+len(sli.ErrorSelector))
+			presenceMatchers = append(presenceMatchers, matchers...)
+			for k := range sli.ErrorSelector {
+				presenceMatchers = append(presenceMatchers, fmt.Sprintf(`%s=~".+"`, k))
+			}
+			sort.Strings(presenceMatchers)
+			presenceSel := "{" + strings.Join(presenceMatchers, ",") + "}"
+
+			ratio = fmt.Sprintf(
+				"(sum(rate(%s_requests_total%s[%s])) or (vector(0) unless on() absent(%s_requests_total%s))) / clamp_min(sum(rate(%s_requests_total%s[%s])), %s)",
+				sli.Metric, numSel, window, sli.Metric, presenceSel, sli.Metric, sel, window, sliDenominatorFloor,
+			)
+			break
+		}
 		ratio = fmt.Sprintf(
 			"(sum(rate(%s_errors_total%s[%s])) or (vector(0) and absent(%s_errors_total))) / clamp_min(sum(rate(%s_requests_total%s[%s])), %s)",
 			sli.Metric, sel, window, sli.Metric, sli.Metric, sel, window, sliDenominatorFloor,

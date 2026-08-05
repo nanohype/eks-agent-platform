@@ -1,0 +1,15 @@
+# expect: slo.sli.errorSelector may not set "__name__"
+# `__name__` would redirect the numerator at an entirely different series than
+# the denominator counts, which is precisely the comparison this shape exists to
+# keep honest.
+platform:
+  name: cover
+  tenant: coverco
+slo:
+  enabled: true
+  sli:
+    type: availability
+    metric: cover_api
+    errorSelector:
+      __name__: something_else
+  objective: "0.999"

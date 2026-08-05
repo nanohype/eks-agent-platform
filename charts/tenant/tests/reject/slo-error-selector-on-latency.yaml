@@ -1,0 +1,16 @@
+# expect: slo.sli.errorSelector applies only to an availability SLI
+# A latency SLI's numerator is a bucket boundary, not a label selection, so an
+# errorSelector on one is silently ignored — the author believes errors are
+# narrowed and the objective measures every slow request instead.
+platform:
+  name: cover
+  tenant: coverco
+slo:
+  enabled: true
+  sli:
+    type: latency
+    metric: cover_api
+    thresholdSeconds: "0.5"
+    errorSelector:
+      status: error
+  objective: "0.999"
