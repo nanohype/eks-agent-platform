@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -389,7 +390,7 @@ func (r *PlatformReconciler) ensureVClusterControlPlaneEgress(ctx context.Contex
 // under both cilium and kube-proxy the ClusterIP is translated to the backend
 // pod and port BEFORE policy is evaluated, so a rule written against 443 matches
 // nothing and the packet is dropped with no error anyone can read.
-const vclusterAPIBackendPort = "8443"
+const vclusterAPIBackendPort = 8443
 
 // vclusterDNSLabel is the k8s-app value the vcluster syncer stamps on the
 // CoreDNS pod it copies into the tenant namespace. It is deliberately NOT
@@ -405,15 +406,20 @@ const vclusterDNSLabel = "vcluster-kube-dns"
 //
 // Same trap as vclusterAPIBackendPort: every rule here is evaluated AFTER
 // ClusterIP translation, so a service port never appears.
-var vclusterDNSBackendPorts = []string{"1053", "53"}
+var vclusterDNSBackendPorts = []int{1053, 53}
 
 // dnsPortRules renders those ports as cilium port rules.
 func dnsPortRules() []interface{} {
 	out := make([]interface{}, 0, len(vclusterDNSBackendPorts)*2)
 	for _, port := range vclusterDNSBackendPorts {
+		// cilium spells a port as a string; a vanilla NetworkPolicy requires an
+		// int, because a string there is a NAMED port and must contain a letter.
+		// The API server rejects "1053" outright — which envtest caught and the
+		// fake client used by the unit test did not, since it runs no validation.
+		text := strconv.Itoa(port)
 		out = append(out,
-			map[string]interface{}{"port": port, "protocol": "UDP"},
-			map[string]interface{}{"port": port, "protocol": "TCP"},
+			map[string]interface{}{"port": text, "protocol": "UDP"},
+			map[string]interface{}{"port": text, "protocol": "TCP"},
 		)
 	}
 	return out
@@ -423,7 +429,7 @@ func dnsPortRules() []interface{} {
 func dnsNetworkPolicyPorts(udp, tcp *corev1.Protocol) []networkingv1.NetworkPolicyPort {
 	out := make([]networkingv1.NetworkPolicyPort, 0, len(vclusterDNSBackendPorts)*2)
 	for _, port := range vclusterDNSBackendPorts {
-		pp := intstr.FromString(port)
+		pp := intstr.FromInt(port)
 		out = append(out,
 			networkingv1.NetworkPolicyPort{Protocol: udp, Port: &pp},
 			networkingv1.NetworkPolicyPort{Protocol: tcp, Port: &pp},
@@ -485,7 +491,7 @@ func (r *PlatformReconciler) ensureVClusterAPIAccess(ctx context.Context, p *pla
 							"release": vclusterInstanceName,
 						}}},
 						"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
-							map[string]interface{}{"port": vclusterAPIBackendPort, "protocol": "TCP"},
+							map[string]interface{}{"port": strconv.Itoa(vclusterAPIBackendPort), "protocol": "TCP"},
 						}}},
 					},
 					// The vcluster's own CoreDNS, which the syncer places in this
@@ -509,7 +515,7 @@ func (r *PlatformReconciler) ensureVClusterAPIAccess(ctx context.Context, p *pla
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "vcluster-api-access", Namespace: ns}}
 	tcp := corev1.ProtocolTCP
 	udp := corev1.ProtocolUDP
-	apiPort := intstr.FromString(vclusterAPIBackendPort)
+	apiPort := intstr.FromInt(vclusterAPIBackendPort)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = labels
 		np.Spec = networkingv1.NetworkPolicySpec{
