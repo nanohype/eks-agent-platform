@@ -145,7 +145,7 @@ func TestPlatform_RejectsIsolationChange(t *testing.T) {
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: testNs}, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	got.Spec.Isolation = "vcluster" //nolint:goconst // the isolation-tier enum value, distinct from the vcluster chart/release-name literals elsewhere in this package
+	got.Spec.Isolation = isolationVCluster
 	if err := k8sClient.Update(ctx, &got); err == nil {
 		t.Fatalf("expected validation error changing spec.isolation namespace→vcluster, got nil (CEL immutability rule should fire)")
 	}
