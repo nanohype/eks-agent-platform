@@ -149,6 +149,29 @@ func buildVClusterValues(p *platformv1alpha1.Platform, cfg VClusterConfig) map[s
 			"containerSecurityContext": containerSecurity(),
 		}
 	}
+	// CoreDNS needs NET_BIND_SERVICE back, and PSS restricted permits exactly
+	// that one addition ("containers must drop ALL capabilities, and are only
+	// permitted to add back NET_BIND_SERVICE").
+	//
+	// This is not about binding a privileged port. The coredns binary ships with
+	// file capabilities set, and the kernel refuses to exec a file that carries
+	// them when the process capability bounding set is empty — `execve` returns
+	// EPERM before any of CoreDNS's own code runs. The container never starts,
+	// with `exec /coredns: operation not permitted` as its only output.
+	//
+	// Adding the capability back puts it in the bounding set, which is all the
+	// exec check needs.
+	corednsSecurity := func() map[string]interface{} {
+		container := containerSecurity()
+		container["capabilities"] = map[string]interface{}{
+			"drop": []interface{}{"ALL"},
+			"add":  []interface{}{"NET_BIND_SERVICE"},
+		}
+		return map[string]interface{}{
+			"podSecurityContext":       podSecurity(),
+			"containerSecurityContext": container,
+		}
+	}
 	values := map[string]interface{}{
 		"sync": map[string]interface{}{
 			"toHost": map[string]interface{}{
@@ -187,7 +210,7 @@ func buildVClusterValues(p *platformv1alpha1.Platform, cfg VClusterConfig) map[s
 				"security": statefulSetSecurity(),
 			},
 			"coredns": map[string]interface{}{
-				"security": statefulSetSecurity(),
+				"security": corednsSecurity(),
 			},
 		},
 	}
