@@ -40,7 +40,12 @@ import (
 // that seam: what the reconciler puts on the submitted object, and that the
 // template consumes exactly those names.
 
-const testReportsBucket = "development-platform-111111111111-us-west-2-eval-reports"
+const (
+	testReportsBucket = "development-platform-111111111111-us-west-2-eval-reports"
+	// The EvalSuite's namespace, deliberately unequal to the tenant name below.
+	testSuiteNamespace = "eks-agent-platform"
+	testTenant         = "acme"
+)
 
 func evalWorkflowTemplatePath(t *testing.T) string {
 	t.Helper()
@@ -54,9 +59,8 @@ func evalWorkflowTemplatePath(t *testing.T) string {
 // suite in a namespace named after the tenant — and a fixture that lets them
 // be equal cannot tell the fixed code from the broken code.
 func evalFixtures() (*governancev1alpha1.EvalSuite, *platformv1alpha1.Platform, *agentsv1alpha1.AgentFleet) {
-	const suiteNamespace = "eks-agent-platform"
 	suite := &governancev1alpha1.EvalSuite{
-		ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: suiteNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: testSuiteNamespace},
 		Spec: governancev1alpha1.EvalSuiteSpec{
 			PlatformRef:   commonv1alpha1.LocalRef{Name: "analytics"},
 			AgentFleetRef: commonv1alpha1.LocalRef{Name: "triage"},
@@ -67,11 +71,11 @@ func evalFixtures() (*governancev1alpha1.EvalSuite, *platformv1alpha1.Platform, 
 		},
 	}
 	platform := &platformv1alpha1.Platform{
-		ObjectMeta: metav1.ObjectMeta{Name: "analytics", Namespace: suiteNamespace},
-		Spec:       platformv1alpha1.PlatformSpec{Tenant: "acme"},
+		ObjectMeta: metav1.ObjectMeta{Name: "analytics", Namespace: testSuiteNamespace},
+		Spec:       platformv1alpha1.PlatformSpec{Tenant: testTenant},
 	}
 	fleet := &agentsv1alpha1.AgentFleet{
-		ObjectMeta: metav1.ObjectMeta{Name: "triage", Namespace: suiteNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "triage", Namespace: testSuiteNamespace},
 	}
 	return suite, platform, fleet
 }
@@ -196,8 +200,8 @@ func TestSubmittedWorkflowCarriesTheValuesTheOperatorHolds(t *testing.T) {
 
 	// The namespace the writeback step patches. Must be the suite's own, not
 	// the tenant name.
-	if got := params["suite-namespace"]; got != "eks-agent-platform" {
-		t.Errorf("suite-namespace = %q, want the EvalSuite's namespace %q", got, "eks-agent-platform")
+	if got := params["suite-namespace"]; got != testSuiteNamespace {
+		t.Errorf("suite-namespace = %q, want the EvalSuite's namespace %q", got, testSuiteNamespace)
 	}
 	if params["suite-namespace"] == params["tenant"] {
 		t.Errorf("suite-namespace and tenant are both %q; the fixture is meant to keep them distinct", params["tenant"])
