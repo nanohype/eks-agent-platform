@@ -384,6 +384,153 @@ func (r *PlatformReconciler) ensureVClusterControlPlaneEgress(ctx context.Contex
 	return err
 }
 
+// vclusterAPIBackendPort is the port the vcluster control plane actually listens
+// on. Its Service publishes 443, but a network policy never sees that number:
+// under both cilium and kube-proxy the ClusterIP is translated to the backend
+// pod and port BEFORE policy is evaluated, so a rule written against 443 matches
+// nothing and the packet is dropped with no error anyone can read.
+const vclusterAPIBackendPort = "8443"
+
+// vclusterDNSLabel is the k8s-app value the vcluster syncer stamps on the
+// CoreDNS pod it copies into the tenant namespace. It is deliberately NOT
+// "kube-dns" — that name belongs to the host resolver, and the two must stay
+// distinguishable in a policy.
+const vclusterDNSLabel = "vcluster-kube-dns"
+
+// vclusterDNSBackendPorts are the ports the vcluster's CoreDNS actually listens
+// on, which is what a policy has to name. Its Service publishes 53 and targets
+// 1053, because that CoreDNS runs unprivileged. Both are listed so a control
+// plane that binds 53 directly is covered too — the unused one costs nothing,
+// and its absence costs a silent timeout.
+//
+// Same trap as vclusterAPIBackendPort: every rule here is evaluated AFTER
+// ClusterIP translation, so a service port never appears.
+var vclusterDNSBackendPorts = []string{"1053", "53"}
+
+// dnsPortRules renders those ports as cilium port rules.
+func dnsPortRules() []interface{} {
+	out := make([]interface{}, 0, len(vclusterDNSBackendPorts)*2)
+	for _, port := range vclusterDNSBackendPorts {
+		out = append(out,
+			map[string]interface{}{"port": port, "protocol": "UDP"},
+			map[string]interface{}{"port": port, "protocol": "TCP"},
+		)
+	}
+	return out
+}
+
+// dnsNetworkPolicyPorts is the vanilla-NetworkPolicy form of the same list.
+func dnsNetworkPolicyPorts(udp, tcp *corev1.Protocol) []networkingv1.NetworkPolicyPort {
+	out := make([]networkingv1.NetworkPolicyPort, 0, len(vclusterDNSBackendPorts)*2)
+	for _, port := range vclusterDNSBackendPorts {
+		pp := intstr.FromString(port)
+		out = append(out,
+			networkingv1.NetworkPolicyPort{Protocol: udp, Port: &pp},
+			networkingv1.NetworkPolicyPort{Protocol: tcp, Port: &pp},
+		)
+	}
+	return out
+}
+
+// ensureVClusterAPIAccess lets pods in the tenant namespace reach the vcluster's
+// OWN apiserver and its OWN DNS.
+//
+// This is a different boundary from the one ensureVClusterControlPlaneEgress
+// guards, and permitting it costs nothing there. That policy keeps the HOST
+// apiserver reachable only by the syncer. This one is intra-namespace traffic to
+// the virtual cluster's apiserver — which, for anything running inside the
+// vcluster, IS `kubernetes.default`. Denying it does not isolate the tenant from
+// anything; it isolates the tenant from itself.
+//
+// Two failures, both invisible from inside the pod:
+//
+//  1. CoreDNS is synced into the tenant namespace, so the namespace-wide tenant
+//     egress policy selects it, and nothing in that policy named the vcluster.
+//     Its kubernetes plugin could never reach the API, so it logged "waiting for
+//     Kubernetes API before starting server" forever, started with an unsynced
+//     cache, and never became Ready.
+//
+//  2. Even once CoreDNS is Ready, a tenant pod could not reach it. The tenant
+//     policy's DNS rule names `kube-system`/`k8s-app: kube-dns` — the HOST's
+//     resolver. A pod inside the vcluster resolves through the vcluster's own
+//     CoreDNS, which the syncer places in the tenant namespace under
+//     `k8s-app: vcluster-kube-dns`. Different namespace, different label, so the
+//     rule never matched and every lookup timed out.
+//
+// Neither produced an error a reader could act on. Cilium reported the first
+// only as `Policy denied ... -> <vcluster-pod>:8443 tcp SYN` in a drop trace,
+// and the second as `connection timed out; no servers could be reached` —
+// a dropped packet is not a refused one.
+func (r *PlatformReconciler) ensureVClusterAPIAccess(ctx context.Context, p *platformv1alpha1.Platform) error {
+	ns := PlatformNamespace(p)
+	labels := labelsForPlatform(p)
+
+	if r.NetworkEngine == NetworkEngineCilium {
+		cnp := &unstructured.Unstructured{}
+		cnp.SetGroupVersionKind(ciliumNetworkPolicyGVK)
+		cnp.SetName("vcluster-api-access")
+		cnp.SetNamespace(ns)
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cnp, func() error {
+			cnp.SetLabels(labels)
+			spec := map[string]interface{}{
+				// Every endpoint in the namespace: CoreDNS, and every tenant
+				// workload the syncer places here. They all address the vcluster
+				// apiserver as their own.
+				"endpointSelector": map[string]interface{}{},
+				"egress": []interface{}{
+					// The vcluster's apiserver.
+					map[string]interface{}{
+						"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": map[string]interface{}{
+							"app":     "vcluster",
+							"release": vclusterInstanceName,
+						}}},
+						"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
+							map[string]interface{}{"port": vclusterAPIBackendPort, "protocol": "TCP"},
+						}}},
+					},
+					// The vcluster's own CoreDNS, which the syncer places in this
+					// namespace. Not the host resolver the tenant policy allows.
+					map[string]interface{}{
+						"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": map[string]interface{}{
+							"k8s:k8s-app": vclusterDNSLabel,
+						}}},
+						"toPorts": []interface{}{map[string]interface{}{"ports": dnsPortRules()}},
+					},
+				},
+			}
+			return unstructured.SetNestedField(cnp.Object, spec, "spec")
+		})
+		if isNoKindMatch(err) {
+			return nil
+		}
+		return err
+	}
+
+	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "vcluster-api-access", Namespace: ns}}
+	tcp := corev1.ProtocolTCP
+	udp := corev1.ProtocolUDP
+	apiPort := intstr.FromString(vclusterAPIBackendPort)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
+		np.Labels = labels
+		np.Spec = networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: vclusterControlPlaneSelector()}}},
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &apiPort}},
+				},
+				{
+					To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": vclusterDNSLabel}}}},
+					Ports: dnsNetworkPolicyPorts(&udp, &tcp),
+				},
+			},
+		}
+		return nil
+	})
+	return err
+}
+
 // ensureVClusterInternalBootstrap creates, inside the virtual cluster, the tenant
 // workload namespace and the tenant-runtime ServiceAccount. The SA is what
 // vcluster's syncer copies down to the host under a translated name — the whole
@@ -612,6 +759,13 @@ func (r *PlatformReconciler) reconcileVClusterTier(ctx context.Context, p *platf
 	//     namespace's default-deny egress. Scoped to the vcluster pod only.
 	if err := r.ensureVClusterControlPlaneEgress(ctx, p); err != nil {
 		return false, fmt.Errorf("ensure vcluster control-plane egress: %w", err)
+	}
+	// 1b. Open every pod in the namespace to the VCLUSTER's own apiserver, also
+	//     before it starts. CoreDNS is synced in here and blocks on the API at
+	//     startup; without this it never becomes Ready and the vcluster has no
+	//     DNS. Distinct from 1a, which is about the HOST apiserver.
+	if err := r.ensureVClusterAPIAccess(ctx, p); err != nil {
+		return false, fmt.Errorf("ensure vcluster api access: %w", err)
 	}
 	// 2. Is the vcluster up (kubeconfig published)?
 	vc, err := r.VCluster.ClientFor(ctx, p)
