@@ -93,6 +93,31 @@ Three things about that query are load-bearing:
   real consumption and hold a runaway tenant under its cap. The switch exists to stop consumption,
   so it counts consumption.
 
+## Both tag keys must be ACTIVATED, and activation is not retroactive
+
+The query above reads two cost-allocation tag keys. Neither column exists in the CUR at all until
+the key is **activated in Cost Explorer** — stamping the tag on a resource is not enough. This
+component declares that requirement as a `check` block,
+`the_cost_allocation_tags_are_active`, over
+`required_cost_allocation_tags = ["PlatformId", "iamPrincipal/PlatformId"]`, compared against
+`data.aws_ce_tags.observed`. It **warns** on every plan while either key is inactive; it does not
+fail, because a component cannot activate a key it does not own and failing would block the apply
+that stamps the tag in the first place.
+
+Two properties make the warning worth acting on the day you see it:
+
+- **Activation is payer-level and account-global.** It is not per-cluster, not per-environment, and
+  not something a second apply of this component can fix.
+- **It is not retroactive.** Every hour before activation is permanently NULL for that key. There is
+  no backfill. A tag activated a week after a tenant starts running produces a budget report that is
+  simply missing that week, and the gap is invisible in the query result — it reads as low spend.
+
+AWS can take up to 24 hours to *list* a newly observed key, so the key has to be stamped before it
+can be activated, and activated before the numbers mean anything. The cost of missing this is paid a
+month later, on a partial-month budget report nobody can explain.
+
+`bedrock-account` stamps `PlatformId` and is where the clock starts; see its "Not here" section.
+
 Identifier inputs are validated against `^[a-zA-Z0-9_-]{1,128}$` in the reconciler before
 interpolation, and the platform id flows through a single-quote escaper.
 

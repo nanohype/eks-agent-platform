@@ -136,7 +136,50 @@ if [ -n "$hits" ]; then
   fail=1
 fi
 
+# ── the cost-allocation-tag check is documented where it lives ──────────────
+#
+# cost-pipeline declares `check "the_cost_allocation_tags_are_active"`, which
+# warns on every plan while either tag key is inactive. The requirement it warns
+# about — activation is payer-level, account-global, and NOT retroactive, so
+# every hour before it is permanently NULL — was documented only in
+# bedrock-account's "Not here" section, a page whose whole job is to say what it
+# does not own. An operator who applied cost-pipeline and read its README learned
+# nothing about a warning they were about to see, or about a gap they would
+# discover a month later on a partial-month report.
+#
+# So: the component that owns the check owns the explanation, and the two must
+# name the same thing. A renamed check with a stale README is the same silent
+# drift in miniature.
+check_name=$(grep -oE 'check "[a-z_]+"' terraform/components/cost-pipeline/main.tf \
+  | head -1 | sed 's/check "//; s/"//')
+
+if [ -z "$check_name" ]; then
+  echo "cost-pipeline/main.tf declares no check block; this gate cannot verify what it documents"
+  fail=1
+elif ! grep -q "$check_name" terraform/components/cost-pipeline/README.md; then
+  echo "cost-pipeline declares check \"$check_name\" and its README does not name it."
+  echo "The check warns on every plan. A reader who only has the README cannot tell"
+  echo "whether the warning is expected or a defect."
+  fail=1
+fi
+
+for key in 'resourceTags/PlatformId' 'iamPrincipal/PlatformId'; do
+  if ! grep -q "$key" terraform/components/cost-pipeline/README.md; then
+    echo "cost-pipeline/README.md does not mention $key."
+    echo "Both prefixes must be activated in Cost Explorer or the column does not exist;"
+    echo "either one alone returns a plausible number that is missing most of the spend."
+    fail=1
+  fi
+done
+
+if ! grep -qi 'not retroactive' terraform/components/cost-pipeline/README.md; then
+  echo "cost-pipeline/README.md does not state that tag activation is not retroactive."
+  echo "That is the property that makes the cost of missing it unrecoverable: every hour"
+  echo "before activation is permanently NULL, and it reads as low spend rather than as a gap."
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM + KMS key names + CUR filterability)"
+echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM + KMS key names + CUR filterability + cost-tag activation)"
