@@ -32,6 +32,33 @@ metadata:
 spec:
   serviceAccountName: eval-runner
 
+  # The eval-runner namespace enforces the restricted Pod Security Standard
+  # (templates/eval-runtime/namespace.yaml), and PSA is a built-in admission
+  # plugin with no exclusion list — so a non-compliant step pod is REJECTED, not
+  # warned. Every step of this pipeline was, on every cluster:
+  #
+  #   pods "…-resolve-cases-…" is forbidden: violates PodSecurity
+  #   "restricted:latest": allowPrivilegeEscalation != false (containers "init",
+  #   "wait", "main" must set …), unrestricted capabilities …, runAsNonRoot !=
+  #   true …, seccompProfile …
+  #
+  # Note "init" and "wait": those are the containers ARGO injects, not ours.
+  # A securityContext on the step templates alone is not sufficient, and the
+  # pod-level block below is what reaches them for runAsNonRoot/seccompProfile.
+  # Their allowPrivilegeEscalation + capabilities are per-container and cannot
+  # be set from here at all — that comes from the workflow controller's
+  # `executor.securityContext` (eks-gitops addons/argo-platform/argo-workflows).
+  # Both halves are required; neither alone admits the pod.
+  #
+  # uid 1000 is the `node` user the eval-runner image already runs as.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
   arguments:
     parameters:
       - name: platform
@@ -127,6 +154,20 @@ spec:
         # literal, so the tag stays pinned by .Values.evalRuntime.image.
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
+        # PSS restricted, per container. The pod-level block covers
+        # runAsNonRoot/seccompProfile; these two are container-scoped and have no
+        # pod-level equivalent. Verified against the eval-runner image: every
+        # binary the steps invoke (node, aws, jq, kubectl, evaluate, score) execs
+        # cleanly under --cap-drop ALL as uid 1000, so unlike CoreDNS nothing here
+        # carries file capabilities that an empty bounding set would break.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
         source: |
           set -eu
           inline='{{inputs.parameters.cases-inline}}'
@@ -170,6 +211,20 @@ spec:
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
+        # PSS restricted, per container. The pod-level block covers
+        # runAsNonRoot/seccompProfile; these two are container-scoped and have no
+        # pod-level equivalent. Verified against the eval-runner image: every
+        # binary the steps invoke (node, aws, jq, kubectl, evaluate, score) execs
+        # cleanly under --cap-drop ALL as uid 1000, so unlike CoreDNS nothing here
+        # carries file capabilities that an empty bounding set would break.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
         # run-cases is the AI workload of the pipeline — it invokes the agent
         # under test. Carry the platform-tenant-contract OTel resource
         # attributes (agents.tenant / agents.platform) so eval-run telemetry
@@ -218,10 +273,32 @@ spec:
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
+        # PSS restricted, per container. The pod-level block covers
+        # runAsNonRoot/seccompProfile; these two are container-scoped and have no
+        # pod-level equivalent. Verified against the eval-runner image: every
+        # binary the steps invoke (node, aws, jq, kubectl, evaluate, score) execs
+        # cleanly under --cap-drop ALL as uid 1000, so unlike CoreDNS nothing here
+        # carries file capabilities that an empty bounding set would break.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
         source: |
           set -eu
           echo '{{inputs.parameters.results-json}}' > /tmp/results.json
-          run_id="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
+          # The uniquifier is the workflow's own UID, not $RANDOM. /bin/sh in
+          # this image is dash, which has no $RANDOM, and `set -u` makes that a
+          # fatal error on the line itself:
+          #     /argo/staging/script: 3: RANDOM: parameter not set
+          # So this step exited 2 before scoring anything, on every run, on every
+          # cluster — while report.html and junit.xml were never written and
+          # writeback was Omitted for an unmet dependency. workflow.uid is unique
+          # per run by construction and needs no shell feature at all.
+          run_id="$(date -u +%Y%m%dT%H%M%SZ)-{{workflow.uid}}"
           score \
             --results /tmp/results.json \
             --pass-threshold '{{inputs.parameters.pass-threshold}}' \
@@ -265,6 +342,20 @@ spec:
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
+        # PSS restricted, per container. The pod-level block covers
+        # runAsNonRoot/seccompProfile; these two are container-scoped and have no
+        # pod-level equivalent. Verified against the eval-runner image: every
+        # binary the steps invoke (node, aws, jq, kubectl, evaluate, score) execs
+        # cleanly under --cap-drop ALL as uid 1000, so unlike CoreDNS nothing here
+        # carries file capabilities that an empty bounding set would break.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
         source: |
           set -eu
           # score-json shape (one line):

@@ -240,6 +240,28 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
+  # ── eval workflow gate ───────────────────────────────────────────────────
+  # The eval pipeline was dead twice over, and both failures were invisible to
+  # helm lint, helm template, kubeconform and trivy, because nothing was wrong
+  # with the YAML. Its namespace enforces the restricted Pod Security Standard
+  # and the WorkflowTemplate carried no securityContext, so PSA — a built-in
+  # plugin with no exclusion list — rejected every step pod. And the score step
+  # used $RANDOM under /bin/sh, which is dash in that image, so `set -u` killed
+  # it on the line itself before it scored anything.
+  #
+  # Both are the same shape: a perfectly valid manifest that cannot work. This
+  # asserts the containers satisfy the profile the namespace actually enforces
+  # (read from the namespace, not hardcoded), and that no POSIX-shell script
+  # uses a bash-only construct.
+  eval-workflow:
+    name: the eval workflow can be admitted and can run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: pip install pyyaml
+      - run: ./scripts/check-eval-workflow.py
+
   # ── vcluster chart acceptance gate ───────────────────────────────────────
   # buildVClusterValues returns a map[string]interface{} that nothing checks
   # against the chart it is handed to. The unit tests assert what the operator
