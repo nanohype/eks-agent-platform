@@ -38,7 +38,6 @@ func TestSetupWithManager_RegistersEveryReconciler(t *testing.T) {
 		"tenant":       (&controller.TenantReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"agentfleet":   (&controller.AgentFleetReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"agentsandbox": (&controller.AgentSandboxReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
-		"batch":        (&controller.BatchJobReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"budget":       (&controller.BudgetReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"eval":         (&controller.EvalReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"modelgateway": (&controller.ModelGatewayReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,

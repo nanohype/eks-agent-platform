@@ -77,7 +77,6 @@ func TestLoad_DecodesEveryKnownKeyAcrossPages(t *testing.T) {
 			"eval-runtime/runner_namespace":             "evals",
 			"eval-runtime/runner_service_account":       "eval-runner",
 			"eval-runtime/eval_reports_bucket":          "eval-reports",
-			"batch-runtime/service_role_arn":            "arn:batch",
 			"unrecognized/key":                          "ignored",
 		},
 	}
@@ -104,7 +103,6 @@ func TestLoad_DecodesEveryKnownKeyAcrossPages(t *testing.T) {
 		"EvalRunnerNamespace":          cfg.EvalRunnerNamespace,
 		"EvalRunnerServiceAccount":     cfg.EvalRunnerServiceAccount,
 		"EvalReportsBucket":            cfg.EvalReportsBucket,
-		"BatchServiceRoleARN":          cfg.BatchServiceRoleARN,
 	}
 	for field, got := range checks {
 		if got == "" {

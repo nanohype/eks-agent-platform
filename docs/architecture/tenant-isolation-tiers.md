@@ -43,7 +43,7 @@ per-Platform virtual cluster on top of the unchanged host-side provisioning:
   cluster without it, a vcluster-tier Platform goes to `Failed` with
   `VClusterReady=False` (reason `ArgoCDRequired`) — it never silently downgrades to
   namespace isolation.
-- **Drive workloads.** Each workload reconciler (AgentFleet, AgentSandbox, BatchJob,
+- **Drive workloads.** Each workload reconciler (AgentFleet, AgentSandbox,
   ModelGateway, EvalSuite) resolves a **target client** at the top of reconcile: the
   host client for the `namespace` tier, a cached client built from the vcluster's
   kubeconfig Secret for the `vcluster` tier. The reconcile logic is unchanged — only

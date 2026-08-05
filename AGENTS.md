@@ -4,7 +4,7 @@ You're an AI client (or the author of one) about to declare a tenant on an EKS c
 
 ## What this repo gives you
 
-A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, tenant IAM identity, KMS grants, network policies, and runtime resources. Ten CRDs (version `v1alpha1`) split across three capability groups under the `nanohype.dev` domain — `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite, SLOPolicy):
+A Kubernetes-native control plane that lets you declare agent platforms as CRDs and have an operator reconcile the AWS state, namespace boundary, tenant IAM identity, KMS grants, network policies, and runtime resources. Nine CRDs (version `v1alpha1`) split across three capability groups under the `nanohype.dev` domain — `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite, SLOPolicy):
 
 | CRD            | What it owns                                                                                                                                                                               |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -14,7 +14,6 @@ A Kubernetes-native control plane that lets you declare agent platforms as CRDs 
 | `AgentFleet`   | Deployment per agent running the tenant's own image, KEDA ScaledObject, per-fleet NetworkPolicy, all under the tenant ServiceAccount bound to the tenant IAM role via EKS Pod Identity      |
 | `SandboxPool`  | Pull-based pool of always-on Managed Agents sandbox workers — a worker Deployment, default-deny NetworkPolicy, and a KEDA-autoscaled metrics bridge keyed on work-queue depth              |
 | `AgentSandbox` | Single-use hardened pod for one agent role-session — push-dispatched, Platform-gated, default-deny networked, garbage-collected after a TTL                                                |
-| `BatchJob`     | Amazon Bedrock batch-inference job (CreateModelInvocationJob) — S3 JSONL in, S3 JSONL out; one CR per run, idempotent on spec, no schedule                                                 |
 | `BudgetPolicy` | Hourly Athena rollup of CUR + CloudWatch in-flight estimate. Writes spend / percent / conditions to status. Publishes BudgetBreach to EventBridge at ≥120%                                 |
 | `EvalSuite`    | Argo CronWorkflow per suite. Gates Argo Rollouts via AnalysisTemplate on `status.lastScore`                                                                                                |
 | `SLOPolicy`    | Multi-window burn-rate evaluation of one objective against Amazon Managed Prometheus. Publishes BurnRateBreach to EventBridge, and holds the tenant's ArgoCD auto-sync on a page-tier burn |
@@ -113,7 +112,7 @@ Recovery is **human-only** — an operator clears the suspension tag manually af
 - Go: `go fmt`, `go vet`, `golangci-lint` on PR
 - Tests: `go test ./internal/...`; in-memory fakes for AWS clients (see `operators/internal/controller/platform_iam_reconcile_test.go` for the pattern)
 - Generated artifacts (CRD manifests, deepcopy code) committed; `make manifests` regenerates them
-- CRD API groups are org-aligned under the `nanohype.dev` domain: `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool, BatchJob), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Finalizers, label/tag keys, and the leader-election lease ID follow the same domain. A Platform's tenant field carries the owning team's real name — `strategy`, `growth`, `reliability`, `workplace`
+- CRD API groups are org-aligned under the `nanohype.dev` domain: `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Finalizers, label/tag keys, and the leader-election lease ID follow the same domain. A Platform's tenant field carries the owning team's real name — `strategy`, `growth`, `reliability`, `workplace`
 
 ## Pointers
 

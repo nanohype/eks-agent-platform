@@ -13,7 +13,6 @@ Package v1alpha1 contains API Schema definitions for the agents v1alpha1 API gro
 ### Resource Types
 - [AgentFleet](#agentfleet)
 - [AgentSandbox](#agentsandbox)
-- [BatchJob](#batchjob)
 - [ModelGateway](#modelgateway)
 - [SandboxPool](#sandboxpool)
 
@@ -180,77 +179,6 @@ _Appears in:_
 | `image` _string_ | Image is the container the agent runs — the tenant's own build, carrying<br />its agent loop and its tools.<br />There is no platform-supplied agent runtime and no separate tool server.<br />A tool server would execute the agent's actions under its own identity,<br />which is exactly what makes an action untraceable to the agent that<br />requested it: the audit log names the tool server, and the agent's claim<br />to have done something cannot be confirmed or refuted. Tools run in the<br />agent's process, as the tenant, so the two records line up. |  |  |
 | `replicas` _integer_ | Replicas overrides the fleet-wide scaling minimum for this agent. |  | Optional: \{\} <br /> |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#resourcerequirements-v1-core)_ | Resources overrides the default container resources. The tenant's<br />ResourceQuota applies either way; this is for an agent that needs a<br />different shape than the default. |  | Optional: \{\} <br /> |
-
-
-#### BatchJob
-
-
-
-BatchJob runs a single Amazon Bedrock batch-inference job for a Platform tenant.
-
-
-
-
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `apiVersion` _string_ | `agents.nanohype.dev/v1alpha1` | | |
-| `kind` _string_ | `BatchJob` | | |
-| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
-| `spec` _[BatchJobSpec](#batchjobspec)_ |  |  |  |
-| `status` _[BatchJobStatus](#batchjobstatus)_ |  |  |  |
-
-
-#### BatchJobSpec
-
-
-
-BatchJobSpec submits an Amazon Bedrock batch-inference job
-(CreateModelInvocationJob): an S3 JSONL of records in, an S3 JSONL of
-results out. One BatchJob maps to exactly one Bedrock job — there is no
-schedule; create a new CR for each run (the reconciler is idempotent on
-the spec, so re-applying the same CR never double-submits).
-
-
-
-_Appears in:_
-- [BatchJob](#batchjob)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `platformRef` _[LocalRef](#localref)_ |  |  |  |
-| `modelId` _string_ | ModelID is the Bedrock model id or inference-profile id the batch job<br />invokes (e.g. "anthropic.claude-3-5-sonnet-20241022-v2:0" or a<br />cross-region "us.anthropic.…" profile). Validated server-side by<br />Bedrock; kept a free string here like Identity.AllowedModels. |  | MinLength: 1 <br /> |
-| `modelInvocationType` _string_ | ModelInvocationType selects the record schema in the input JSONL —<br />raw InvokeModel bodies or Converse turns. | InvokeModel | Enum: [InvokeModel Converse] <br /> |
-| `inputS3Uri` _string_ | InputS3Uri is the s3:// URI of the input JSONL (or its prefix). |  | Pattern: `^s3://.+` <br /> |
-| `outputS3Prefix` _string_ | OutputS3Prefix is the s3:// prefix Bedrock writes results under. |  | Pattern: `^s3://.+` <br /> |
-| `timeoutHours` _integer_ | TimeoutHours bounds the job's runtime. Bedrock requires 24..168. | 24 | Maximum: 168 <br />Minimum: 24 <br /> |
-| `serviceRoleArnOverride` _string_ | ServiceRoleArnOverride replaces the operator-resolved Bedrock batch<br />service role (the role Bedrock assumes to read input / write output).<br />Normally empty — the reconciler injects the SSM-resolved role. |  | Optional: \{\} <br /> |
-
-
-#### BatchJobStatus
-
-
-
-BatchJobStatus tracks the Bedrock job the reconciler submitted and polls.
-
-
-
-_Appears in:_
-- [BatchJob](#batchjob)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `jobArn` _string_ | JobArn is the submitted job's ARN. Non-empty is the idempotency guard:<br />once set, the reconciler polls rather than re-submitting. |  | Optional: \{\} <br /> |
-| `jobName` _string_ | JobName is the deterministic, Bedrock-sanitized job name. |  | Optional: \{\} <br /> |
-| `phase` _string_ | Phase: Pending, Provisioning, Running, Succeeded, Failed, Stopped. |  | Optional: \{\} <br /> |
-| `submittedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | SubmittedAt / CompletedAt timestamps. |  | Optional: \{\} <br /> |
-| `completedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ |  |  | Optional: \{\} <br /> |
-| `outputLocation` _string_ | OutputLocation is the s3:// URI Bedrock reports for the results. |  | Optional: \{\} <br /> |
-| `recordCount` _integer_ | RecordCount / SucceededCount / FailedCount mirror Bedrock's<br />ProcessedRecordCount / SuccessRecordCount / ErrorRecordCount once the<br />job is running or terminal. |  | Optional: \{\} <br /> |
-| `succeededCount` _integer_ |  |  | Optional: \{\} <br /> |
-| `failedCount` _integer_ |  |  | Optional: \{\} <br /> |
-| `message` _string_ | Message carries the last Bedrock status / failure reason. |  | Optional: \{\} <br /> |
-| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
 
 
 #### ModelGateway
