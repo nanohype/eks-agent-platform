@@ -288,6 +288,38 @@ func TestWritebackPatchesTheSuiteNamespace(t *testing.T) {
 	}
 }
 
+// TestNoStepDeclaresAnArtifact pins the delivery path to one mechanism. An
+// `outputs.artifacts` entry makes Argo push the file to the controller's
+// configured artifact repository — of which dev and staging have none, so the
+// step fails after the run, on a file the script has already uploaded to S3
+// under its own credentials. Two delivery paths for one file, one of which
+// cannot work.
+func TestNoStepDeclaresAnArtifact(t *testing.T) {
+	var doc struct {
+		Spec struct {
+			Templates []struct {
+				Name    string `json:"name"`
+				Outputs struct {
+					Artifacts []struct {
+						Name string `json:"name"`
+					} `json:"artifacts"`
+				} `json:"outputs"`
+			} `json:"templates"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(readEvalWorkflowTemplate(t)), &doc); err != nil {
+		t.Fatalf("parse WorkflowTemplate: %v", err)
+	}
+	if len(doc.Spec.Templates) == 0 {
+		t.Fatal("parsed no templates; this check would pass vacuously")
+	}
+	for _, tpl := range doc.Spec.Templates {
+		for _, a := range tpl.Outputs.Artifacts {
+			t.Errorf("step %q declares outputs.artifacts %q; no artifact repository is configured on dev or staging, and the script already uploads to S3", tpl.Name, a.Name)
+		}
+	}
+}
+
 // TestEveryScriptStepHasTheBinariesItInvokes catches the class directly: a step
 // whose image does not carry a command its script runs exits 127 partway
 // through, after the earlier steps have already done their work.
