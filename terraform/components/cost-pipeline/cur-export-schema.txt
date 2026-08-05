@@ -11,11 +11,37 @@
 # never matched, while every test passed — because the tests asserted that the query
 # said what the table said, and both restated the same wrong premise.
 #
-# PROVENANCE. Read from the export itself, not from the AWS dictionary:
+# PROVENANCE, and the caveat is as important as the data.
+#
+# Read from a real export, not from the AWS dictionary:
 #   aws bcm-data-exports get-export --query 'Export.DataQuery.QueryStatement'
 #   plus the map keys read out of a delivered Parquet file
 #   (cur2/landing-zone-cost-cur/data/BILLING_PERIOD=2026-08/*.snappy.parquet).
-# Verified 2026-08-05 against the live export `landing-zone-cost-cur`.
+#
+# THE EXPORT READ WAS NOT THIS SYSTEM'S. `landing-zone-cost-cur` belongs to the
+# stxkxs estate that shares the account. nanohype's own export, the one org-cost
+# declares, DOES NOT EXIST: `org-cost` has never been applied, there is no
+# `org-<account>-cur-export` bucket, there are zero Glue databases in the
+# account, and Athena has only its default workgroup. Verified 2026-08-05.
+#
+# So what this file proves and what it does not:
+#   - PROVES the shape a CUR 2.0 export actually delivers, including the `user_`
+#     resource-tag prefix and the absence of `product` under an explicit column
+#     projection. That is what made the queries wrong, and fixing them was right.
+#   - DOES NOT PROVE that nanohype's export, once created, will carry these ten
+#     columns. That is decided by the `query_statement` in org-cost at the moment
+#     the export is created, and org-cost currently declares `SELECT *`.
+#
+# Which means the reconciliation this file anchors is provisional until org-cost
+# applies. If it applies as written, the delivered set is every CUR 2.0 column
+# and this file is a subset — the queries still work, because they name columns
+# rather than positions, and the extra columns are simply unread. If it applies
+# with a projection, this file has to be re-read against it. Either way the
+# assertion in tests/budget_path.tftest.hcl is what fails loudly on the
+# difference, rather than a query quietly reading NULL.
+#
+# Ledger item O28 asks rackctl whether its apply path reaches org-cost, because
+# that decides whether a future run creates the export and fixes the shape.
 #
 # WHEN THE EXPORT CHANGES this file changes with it, and the tests that read it will
 # name whatever no longer lines up. A CUR export's table configuration cannot be
