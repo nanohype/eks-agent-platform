@@ -146,19 +146,6 @@ resource "aws_cloudwatch_log_group" "controller" {
   tags              = local.tags
 }
 
-################################################################################
-# SSM outputs — picked up by the operator at startup (see
-# operators/internal/operatorconfig/config.go) and consumed by the reconciler
-# emit step that needs the role ARN for the eval-runner ServiceAccount
-# annotation.
-################################################################################
-
-resource "aws_ssm_parameter" "eval_runner_role_arn" {
-  name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/runner_role_arn"
-  type  = "String"
-  value = aws_iam_role.eval_runner.arn
-  tags  = local.tags
-}
 
 resource "aws_ssm_parameter" "eval_runner_namespace" {
   name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/runner_namespace"

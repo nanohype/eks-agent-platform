@@ -21,9 +21,22 @@ So a published parameter has to name its consumer, and this checks that each one
 does. A parameter is consumed when any of these holds:
 
   1. Some component in this repo reads it with `data "aws_ssm_parameter"`.
-  2. It sits under /eks-agent-platform/<cluster>/ AND its relative key appears
-     in the operator's Config.assign switch, which is the exhaustive list of
-     what the operator actually decodes out of its sweep.
+  2. It sits under /eks-agent-platform/<cluster>/, its relative key appears in
+     the operator's Config.assign switch, AND the struct field that case arm
+     assigns to is read somewhere outside the operatorconfig package.
+
+     The last clause is the whole point. "Decoded" is not "consumed": a case arm
+     writes a field, and a field nothing reads is a value that arrived and
+     stopped. Six parameters passed this check on that technicality — three
+     eval-runtime and kill-switch keys this repo writes, plus three
+     model-artifacts keys landing-zone writes — while the code that needed them
+     used hardcoded literals instead. Requiring a reader is what makes the rule
+     mean what its name says.
+
+     The operatorconfig package is excluded from the reader search on purpose.
+     Its own test asserts every field is populated after a decode, which is a
+     decode test and not a use; counting it would launder every dead field back
+     into "consumed".
   3. The resource carries an `# ssm-consumer: <who>` comment, for a parameter
      published as a query surface rather than to code — the account's Athena
      handles, read by an analyst or a dashboard.
@@ -50,7 +63,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 COMPONENTS = REPO / "terraform" / "components"
-OPERATOR_CONFIG = REPO / "operators" / "internal" / "operatorconfig" / "config.go"
+OPERATORS = REPO / "operators"
+OPERATOR_CONFIG = OPERATORS / "internal" / "operatorconfig" / "config.go"
 
 # The subtree the operator sweeps. A parameter under it is a candidate for rule
 # (2); anything else — /eks-agent-platform/org/... — is not, because the sweep is
@@ -206,17 +220,18 @@ def collect() -> tuple[list[Param], set[str]]:
     return written, read
 
 
-def operator_keys() -> set[str]:
-    """The relative keys the operator's Config.assign actually decodes."""
+def operator_keys() -> dict[str, str]:
+    """{relative key: the Config field its case arm assigns}."""
     src = OPERATOR_CONFIG.read_text()
     body = re.search(r"func \(c \*Config\) assign\(.*?\n\}", src, re.S)
     if not body:
         print(f"ERROR: cannot find Config.assign in {OPERATOR_CONFIG}", file=sys.stderr)
         sys.exit(2)
-    keys = set(re.findall(r'case\s+"([^"]+)":', body.group(0)))
+    arms = re.findall(r'case\s+"([^"]+)":\s*\n\s*c\.(\w+)\s*=', body.group(0))
+    keys = dict(arms)
     if len(keys) < 10:
         print(
-            f"ERROR: found only {len(keys)} keys in Config.assign; the parse is wrong "
+            f"ERROR: found only {len(keys)} case arms in Config.assign; the parse is wrong "
             "and every operator-consumed parameter would look like an orphan",
             file=sys.stderr,
         )
@@ -224,11 +239,43 @@ def operator_keys() -> set[str]:
     return keys
 
 
+def live_fields() -> set[str]:
+    """Config fields read somewhere outside the operatorconfig package.
+
+    A field assigned by a case arm and referenced nowhere else is a value the
+    operator decodes and drops. Its own package is excluded: load_test.go
+    asserts each field is populated after a decode, which proves the decode and
+    nothing about consumption.
+    """
+    live: set[str] = set()
+    for path in sorted(OPERATORS.rglob("*.go")):
+        if OPERATOR_CONFIG.parent in path.parents:
+            continue
+        for m in re.finditer(r"\.([A-Z]\w*)\b", path.read_text()):
+            live.add(m.group(1))
+    if not live:
+        print(
+            f"ERROR: found no field references anywhere under {OPERATORS}; the walk "
+            "is not seeing the tree and every field would look dead",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return live
+
+
 def main() -> int:
     verbose = "--verbose" in sys.argv
 
     written, read = collect()
     keys = operator_keys()
+    live = live_fields()
+
+    # A field decoded from a parameter and read by nothing. Reported separately
+    # from orphan parameters because the remedy differs: the parameter may have
+    # a legitimate non-code consumer, while the field never does.
+    dead_fields = sorted(
+        (key, field) for key, field in keys.items() if field not in live
+    )
 
     if not written:
         print("ERROR: no aws_ssm_parameter resources found; the walk is not seeing the tree", file=sys.stderr)
@@ -240,8 +287,12 @@ def main() -> int:
     for p in written:
         if p.name in read:
             consumed.append((p, "read by a component in this repo"))
-        elif p.name.startswith(CLUSTER_ROOT) and p.name[len(CLUSTER_ROOT):] in keys:
-            consumed.append((p, "decoded by the operator's Config.assign"))
+        elif (
+            p.name.startswith(CLUSTER_ROOT)
+            and keys.get(p.name[len(CLUSTER_ROOT):]) in live
+        ):
+            field = keys[p.name[len(CLUSTER_ROOT):]]
+            consumed.append((p, f"decoded into Config.{field}, which is read by the operator"))
         elif p.consumer:
             consumed.append((p, f"declared: {p.consumer}"))
         else:
@@ -252,6 +303,19 @@ def main() -> int:
             print(f"  ok  {p.name}\n        {p} — {why}")
 
     print(f"{len(written)} parameters published, {len(consumed)} consumed, {len(orphans)} unaccounted for")
+
+    if dead_fields:
+        print()
+        print("These parameters are decoded into a Config field that nothing reads:")
+        print()
+        for key, field in dead_fields:
+            print(f"  {CLUSTER_ROOT}{key}")
+            print(f"      assigned to Config.{field}, referenced nowhere outside operatorconfig")
+        print()
+        print("Decoding is not consuming. Either wire the field to the code that needs it —")
+        print("the usual finding is a literal hardcoded where the field should have been — or")
+        print("delete the field, the case arm, and the parameter together.")
+        print()
 
     if orphans:
         print()
@@ -271,6 +335,8 @@ def main() -> int:
         print("A parameter with no reader and no such line is a contract with one side.")
         return 1
 
+    if dead_fields:
+        return 1
     return 0
 
 

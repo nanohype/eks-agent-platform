@@ -40,13 +40,9 @@ type Config struct {
 	TenantIAMPath                string
 	TenantBaselinePolicyARN      string
 	TenantPermissionsBoundaryARN string
-	AllowedRegions               []string
 
 	// model-artifacts outputs
-	ArtifactsBucketARN    string
-	ArtifactsBucketName   string
-	EvalReportsBucketARN  string
-	EvalReportsBucketName string
+	ArtifactsBucketName string
 
 	// bedrock outputs. The invocation log group and its bucket are deliberately
 	// absent: the operator neither reads Bedrock invocation logs nor addresses the
@@ -57,8 +53,6 @@ type Config struct {
 
 	// kill-switch outputs
 	KillSwitchEventBusName string
-	KillSwitchEventBusARN  string
-	StateMachineARN        string
 
 	// managed-monitoring outputs. AMPEndpoint is the Amazon Managed Prometheus
 	// workspace base URL the SLO reconciler queries. Deliberately absent from
@@ -80,7 +74,6 @@ type Config struct {
 	CURTableName    string
 
 	// eval-runtime outputs
-	EvalRunnerRoleARN        string
 	EvalRunnerNamespace      string
 	EvalRunnerServiceAccount string
 	EvalReportsBucket        string
@@ -138,24 +131,14 @@ func (c *Config) assign(suffix, value string) {
 		c.TenantBaselinePolicyARN = value
 	case "agent-iam/tenant_permissions_boundary_arn":
 		c.TenantPermissionsBoundaryARN = value
-	case "model-artifacts/bucket_arn":
-		c.ArtifactsBucketARN = value
 	case "model-artifacts/bucket_name":
 		c.ArtifactsBucketName = value
-	case "model-artifacts/eval_reports_bucket_arn":
-		c.EvalReportsBucketARN = value
-	case "model-artifacts/eval_reports_bucket_name":
-		c.EvalReportsBucketName = value
 	case "bedrock/baseline_guardrail_id":
 		c.BaselineGuardrailID = value
 	case "bedrock/baseline_guardrail_version":
 		c.BaselineGuardrailVersion = value
 	case "kill-switch/event_bus_name":
 		c.KillSwitchEventBusName = value
-	case "kill-switch/event_bus_arn":
-		c.KillSwitchEventBusARN = value
-	case "kill-switch/state_machine_arn":
-		c.StateMachineARN = value
 	case "managed-monitoring/amp_endpoint":
 		c.AMPEndpoint = value
 	case "cost-pipeline/athena_workgroup":
@@ -164,8 +147,6 @@ func (c *Config) assign(suffix, value string) {
 		c.AthenaDatabase = value
 	case "cost-pipeline/cur_table_name":
 		c.CURTableName = value
-	case "eval-runtime/runner_role_arn":
-		c.EvalRunnerRoleARN = value
 	case "eval-runtime/runner_namespace":
 		c.EvalRunnerNamespace = value
 	case "eval-runtime/runner_service_account":
