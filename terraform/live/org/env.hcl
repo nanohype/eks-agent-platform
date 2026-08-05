@@ -17,7 +17,18 @@ locals {
   # without a cluster passes nothing rather than a placeholder that would flow into
   # resource names as if it meant something.
   environment = "org"
-  region      = "us-west-2"
+
+  # The region follows the deployment, it is not pinned here. Both objects above
+  # are account+REGION singletons, so a run against any other region configured
+  # Bedrock invocation logging in us-west-2 — a region where nothing was
+  # deployed — while the apply reported success. Nothing downstream disagreed,
+  # because a logging configuration in the wrong region is a valid object.
+  #
+  # Read the same way account_id is, and for the same reason: it names the state
+  # bucket in root.hcl before any AWS call, so it cannot arrive as a TF_VAR_.
+  # Deliberately no default — a silent fallback to us-west-2 is the defect. The
+  # orchestrator sets AWS_REGION on every invocation; for a manual run, export it.
+  region = get_env("AWS_REGION")
 
   # account_id resolves at parse time from AWS_ACCOUNT_ID — it names the state
   # bucket in root.hcl before any AWS call, so it can't arrive as a TF_VAR_. The
