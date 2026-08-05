@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/yaml"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
@@ -118,6 +119,43 @@ func TestSubmittedWorkflowSurvivesDeepCopy(t *testing.T) {
 	runtime.DeepCopyJSONValue(obj.Object)
 }
 
+func readEvalWorkflowTemplate(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile(evalWorkflowTemplatePath(t))
+	if err != nil {
+		t.Fatalf("read WorkflowTemplate: %v", err)
+	}
+	return string(body)
+}
+
+// templateArguments parses spec.arguments.parameters rather than searching the
+// file for the name. The same names appear again on the writeback step's
+// inputs.parameters, so a substring search matches a parameter that is threaded
+// between steps but never declared as a workflow argument — which is the one
+// thing this is meant to catch. Found by mutation: deleting the declaration
+// left the check green.
+func templateArguments(t *testing.T, template string) map[string]string {
+	t.Helper()
+	var doc struct {
+		Spec struct {
+			Arguments struct {
+				Parameters []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"parameters"`
+			} `json:"arguments"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(template), &doc); err != nil {
+		t.Fatalf("parse WorkflowTemplate: %v", err)
+	}
+	out := map[string]string{}
+	for _, p := range doc.Spec.Arguments.Parameters {
+		out[p.Name] = p.Value
+	}
+	return out
+}
+
 func workflowParams(t *testing.T, obj *unstructured.Unstructured) map[string]string {
 	t.Helper()
 	raw, found, err := unstructured.NestedSlice(obj.Object, "spec", "arguments", "parameters")
@@ -209,11 +247,7 @@ func TestReconcilerRefusesWithoutAReportsBucket(t *testing.T) {
 // error at any layer — so both directions are checked against the chart file
 // the operator's Workflows reference by name.
 func TestWorkflowTemplateConsumesEveryParameterTheOperatorSends(t *testing.T) {
-	body, err := os.ReadFile(evalWorkflowTemplatePath(t))
-	if err != nil {
-		t.Fatalf("read WorkflowTemplate: %v", err)
-	}
-	template := string(body)
+	template := readEvalWorkflowTemplate(t)
 
 	r := &EvalReconciler{ReportsBucket: testReportsBucket}
 	params := workflowParams(t, submitEvalWorkflow(t, r))
@@ -221,9 +255,13 @@ func TestWorkflowTemplateConsumesEveryParameterTheOperatorSends(t *testing.T) {
 		t.Fatal("the reconciler sent no parameters at all; this check would pass vacuously")
 	}
 
+	declared := templateArguments(t, template)
+	if len(declared) == 0 {
+		t.Fatal("parsed no spec.arguments.parameters out of the WorkflowTemplate; this check would pass vacuously")
+	}
 	for name := range params {
-		if !strings.Contains(template, "- name: "+name+"\n") {
-			t.Errorf("the reconciler sends %q, which the WorkflowTemplate does not declare — Argo drops it silently", name)
+		if _, ok := declared[name]; !ok {
+			t.Errorf("the reconciler sends %q, which the WorkflowTemplate does not declare in spec.arguments.parameters — Argo drops it silently", name)
 		}
 	}
 
@@ -240,11 +278,7 @@ func TestWorkflowTemplateConsumesEveryParameterTheOperatorSends(t *testing.T) {
 // parameter can be threaded correctly all the way to the writeback template
 // and still be unused by the kubectl invocation inside it.
 func TestWritebackPatchesTheSuiteNamespace(t *testing.T) {
-	body, err := os.ReadFile(evalWorkflowTemplatePath(t))
-	if err != nil {
-		t.Fatalf("read WorkflowTemplate: %v", err)
-	}
-	template := string(body)
+	template := readEvalWorkflowTemplate(t)
 
 	if !strings.Contains(template, "--namespace '{{inputs.parameters.suite-namespace}}'") {
 		t.Error("the writeback step does not patch in the suite's namespace")
@@ -258,15 +292,12 @@ func TestWritebackPatchesTheSuiteNamespace(t *testing.T) {
 // whose image does not carry a command its script runs exits 127 partway
 // through, after the earlier steps have already done their work.
 func TestEveryScriptStepHasTheBinariesItInvokes(t *testing.T) {
-	body, err := os.ReadFile(evalWorkflowTemplatePath(t))
-	if err != nil {
-		t.Fatalf("read WorkflowTemplate: %v", err)
-	}
+	template := readEvalWorkflowTemplate(t)
 
 	// amazon/aws-cli ships no jq — verified by running the image. Any step
 	// that pipes through jq needs the eval-runner image, which carries aws,
 	// jq and kubectl together.
-	for _, line := range strings.Split(string(body), "\n") {
+	for _, line := range strings.Split(template, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "image:") && strings.Contains(trimmed, "amazon/aws-cli") {
 			t.Errorf("step image %q ships no jq, kubectl or node; every step in this template needs at least two of those", trimmed)
