@@ -8,9 +8,11 @@ package controller
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // protoTCP is the protocol string these policies carry. A constant because it
@@ -277,4 +280,99 @@ func TestGatewayEgressCiliumRules_AllowsXDS(t *testing.T) {
 	t.Fatalf("gateway cilium egress must allow TCP %d to namespace %q — without it the "+
 		"data plane never reaches xDS and the Gateway never programs, while the "+
 		"ModelGateway CR still reports Ready", envoyGatewayXDSPort, envoyGatewayNamespace)
+}
+
+// The vcluster tier's policies are written against Services, but a policy never
+// sees a Service. Both cilium and kube-proxy translate a ClusterIP to the
+// backend pod and port BEFORE policy evaluation, so a rule naming the published
+// port matches nothing and the packet is dropped — silently, because a dropped
+// SYN is not a refused one.
+//
+// That cost this tier its DNS twice over. CoreDNS could not reach the vcluster
+// apiserver (Service 443, backend 8443), and once it could, tenant pods still
+// could not reach CoreDNS (Service 53, backend 1053). Both were found with
+// `cilium monitor --type drop` against a live cluster; neither pod logged
+// anything actionable.
+func TestVClusterAPIAccess_NamesBackendPortsNotServicePorts(t *testing.T) {
+	cl := ciliumTestClient(t)
+	r := &PlatformReconciler{Client: cl, NetworkEngine: NetworkEngineCilium}
+	p := &platformv1alpha1.Platform{ObjectMeta: metav1.ObjectMeta{Name: "acme"}}
+
+	if err := r.ensureVClusterAPIAccess(context.Background(), p); err != nil {
+		t.Fatalf("ensureVClusterAPIAccess: %v", err)
+	}
+	cnp := getCNP(t, cl, PlatformNamespace(p), "vcluster-api-access")
+
+	// Every pod in the namespace, not just the syncer: CoreDNS and every synced
+	// tenant workload address the vcluster apiserver as their own.
+	sel, found, _ := unstructured.NestedMap(cnp.Object, "spec", "endpointSelector")
+	if !found || len(sel) != 0 {
+		t.Errorf("endpointSelector = %v, want empty (every pod in the namespace)", sel)
+	}
+
+	egress, found, _ := unstructured.NestedSlice(cnp.Object, "spec", "egress")
+	if !found || len(egress) == 0 {
+		t.Fatal("policy declares no egress; this check would pass vacuously")
+	}
+
+	ports := map[string]bool{}
+	sawVCluster, sawDNS := false, false
+	for _, raw := range egress {
+		rule, _ := raw.(map[string]interface{})
+		eps, _, _ := unstructured.NestedSlice(rule, "toEndpoints")
+		for _, e := range eps {
+			m, _ := e.(map[string]interface{})
+			labels, _, _ := unstructured.NestedStringMap(m, "matchLabels")
+			if labels["app"] == "vcluster" {
+				sawVCluster = true
+			}
+			if labels["k8s:k8s-app"] == "vcluster-kube-dns" {
+				sawDNS = true
+			}
+		}
+		tps, _, _ := unstructured.NestedSlice(rule, "toPorts")
+		for _, tp := range tps {
+			m, _ := tp.(map[string]interface{})
+			pl, _, _ := unstructured.NestedSlice(m, "ports")
+			for _, pe := range pl {
+				pm, _ := pe.(map[string]interface{})
+				if s, ok := pm["port"].(string); ok {
+					ports[s] = true
+				}
+			}
+		}
+	}
+
+	if !sawVCluster {
+		t.Error("no rule targets the vcluster control plane; CoreDNS cannot reach the apiserver")
+	}
+	// Literals, deliberately, not vclusterDNSLabel / vclusterAPIBackendPort /
+	// vclusterDNSBackendPorts. Asserting against the same constants the policy is
+	// built from is a tautology: change the constant and both sides move
+	// together, so the test passes while the cluster breaks. Mutation-testing
+	// caught exactly that — reverting the API port to 443, the DNS port to 53,
+	// and the DNS label to the host resolver all left this test green.
+	//
+	// These three values were established against a running cluster with
+	// `cilium monitor --type drop`. Changing one should fail here and send the
+	// next person back to a cluster to re-establish it, which is the only way
+	// any of them were learned.
+	if !sawDNS {
+		t.Error(`no rule targets k8s-app "vcluster-kube-dns"; tenant pods resolve through the vcluster's own CoreDNS, not the host resolver`)
+	}
+	if !ports["8443"] {
+		t.Errorf("apiserver backend port 8443 absent (ports=%v). The Service publishes 443, but policy is evaluated after ClusterIP translation", keysOf(ports))
+	}
+	if !ports["1053"] {
+		t.Errorf("DNS backend port 1053 absent (ports=%v). The Service publishes 53 and targets 1053, because that CoreDNS runs unprivileged", keysOf(ports))
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

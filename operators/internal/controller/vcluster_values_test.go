@@ -103,3 +103,59 @@ func TestHostHasVClusterManagedObjects(t *testing.T) {
 		t.Fatalf("lingering synced SA: got (%v, %v) want (true, nil)", lingering, err)
 	}
 }
+
+// TestCoreDNSKeepsNetBindService pins the one capability CoreDNS needs to exec
+// at all.
+//
+// Found by running it: in the kx workspace a per-Platform vcluster's synced
+// CoreDNS had been in CrashLoopBackOff for eighteen days with 4530 restarts and
+// one line of output, `exec /coredns: operation not permitted`, while its ArgoCD
+// Application reported Synced/Healthy and the Platform reported Ready. Every
+// vcluster-isolated tenant had no cluster DNS the whole time.
+//
+// The cause is not the uid and not a privileged port. The coredns binary carries
+// file capabilities, and the kernel refuses to exec such a file when the
+// capability bounding set is empty — execve returns EPERM before CoreDNS runs a
+// line of its own code. Isolated with a three-way container experiment: uid
+// 12345 + drop ALL fails, uid 12345 with capabilities kept succeeds, and root +
+// drop ALL fails too.
+//
+// PSS restricted permits adding back NET_BIND_SERVICE and nothing else, so the
+// fix stays inside the profile the tenant namespace enforces.
+func TestCoreDNSKeepsNetBindService(t *testing.T) {
+	values := buildVClusterValues(&platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: "acme"},
+	}, VClusterConfig{})
+
+	caps := nestedMap(t, values, "controlPlane", "coredns", "security", "containerSecurityContext", "capabilities")
+
+	drop, _ := caps["drop"].([]interface{})
+	if len(drop) != 1 || drop[0] != "ALL" {
+		t.Errorf("coredns capabilities.drop = %v, want [ALL] — PSS restricted requires dropping all", drop)
+	}
+	add, _ := caps["add"].([]interface{})
+	if len(add) != 1 || add[0] != "NET_BIND_SERVICE" {
+		t.Errorf("coredns capabilities.add = %v, want [NET_BIND_SERVICE]; without it the container cannot exec its own binary", add)
+	}
+
+	// The control plane's own container has no file capabilities, so it keeps the
+	// stricter form. If this ever needs the same treatment it should be a
+	// deliberate change, not a copy of the CoreDNS block.
+	spCaps := nestedMap(t, values, "controlPlane", "statefulSet", "security", "containerSecurityContext", "capabilities")
+	if _, hasAdd := spCaps["add"]; hasAdd {
+		t.Error("the control-plane container added a capability back; only coredns needs one")
+	}
+}
+
+func nestedMap(t *testing.T, m map[string]interface{}, path ...string) map[string]interface{} {
+	t.Helper()
+	cur := m
+	for i, key := range path {
+		next, ok := cur[key].(map[string]interface{})
+		if !ok {
+			t.Fatalf("values path %v is absent at %q", path[:i+1], key)
+		}
+		cur = next
+	}
+	return cur
+}
