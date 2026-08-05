@@ -25,6 +25,24 @@ import (
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
+// Two different things that happen to spell the same word, named apart because
+// conflating them is the mistake worth preventing: `vcluster` is a value of the
+// Platform.spec.isolation enum, and it is also the name of the Helm chart and
+// the ArgoCD release the vcluster isolation tier installs. A rename of either
+// must not silently drag the other with it.
+//
+// They are constants rather than a `//nolint:goconst` because the suppression
+// was order-dependent. goconst reports a repeated string at ONE occurrence, and
+// which occurrence it picks moves with file processing order — so a nolint on
+// one of them passed locally and failed in CI, on identical code with an
+// identical linter version. A suppression that works by luck is worse than the
+// lint it silences.
+const (
+	isolationVCluster   = "vcluster"
+	vclusterChartName   = "vcluster"
+	vclusterReleaseName = "vcluster"
+)
+
 // fakeVClusterFactory is the faked vcluster-client seam (the awsclients-fake
 // idiom, one tier up): it returns an in-memory client standing in for the virtual
 // cluster's API, so the target-client swap is exercised in envtest without a real
@@ -88,7 +106,7 @@ func seedSyncedSA(ctx context.Context, t *testing.T, p *platformv1alpha1.Platfor
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      controller.SyncedHostSAName(ns),
 			Namespace: ns,
-			Labels:    map[string]string{"vcluster.loft.sh/managed-by": "vcluster"},
+			Labels:    map[string]string{"vcluster.loft.sh/managed-by": isolationVCluster},
 			Annotations: map[string]string{
 				"vcluster.loft.sh/object-name":      "tenant-runtime",
 				"vcluster.loft.sh/object-namespace": ns,
@@ -147,7 +165,7 @@ func TestPlatformReconciler_VClusterTier_ObservablyChangesReconciliation(t *test
 			Persona: "ops", Tenant: "acme",
 			Budget:    platformv1alpha1.BudgetRef{Name: "x"},
 			Identity:  platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
-			Isolation: "vcluster",
+			Isolation: isolationVCluster,
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -181,11 +199,11 @@ func TestPlatformReconciler_VClusterTier_ObservablyChangesReconciliation(t *test
 	}
 	app := &appList.Items[0]
 	chart, _, _ := unstructured.NestedString(app.Object, "spec", "source", "chart")
-	if chart != "vcluster" {
+	if chart != vclusterChartName {
 		t.Errorf("Application source chart: got %q want vcluster", chart)
 	}
 	releaseName, _, _ := unstructured.NestedString(app.Object, "spec", "source", "helm", "releaseName")
-	if releaseName != "vcluster" {
+	if releaseName != vclusterReleaseName {
 		t.Errorf("Application helm releaseName: got %q want vcluster (must equal the syncer suffix)", releaseName)
 	}
 	saSyncOn, _, _ := unstructured.NestedBool(app.Object, "spec", "source", "helm", "valuesObject", "sync", "toHost", "serviceAccounts", "enabled")
@@ -271,7 +289,7 @@ func TestPlatformReconciler_VClusterTier_RequeuesUntilSyncedNoDowngrade(t *testi
 			Persona: "ops", Tenant: "acme",
 			Budget:    platformv1alpha1.BudgetRef{Name: "x"},
 			Identity:  platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
-			Isolation: "vcluster",
+			Isolation: isolationVCluster,
 		},
 	}
 	mustCreate(ctx, t, p)
@@ -327,7 +345,7 @@ func TestPlatformReconciler_VClusterTier_FinalizerTearsDownInOrder(t *testing.T)
 			Persona: "ops", Tenant: "acme",
 			Budget:    platformv1alpha1.BudgetRef{Name: "x"},
 			Identity:  platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
-			Isolation: "vcluster",
+			Isolation: isolationVCluster,
 		},
 	}
 	mustCreate(ctx, t, p)

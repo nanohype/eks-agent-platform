@@ -37,6 +37,37 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CHART = ROOT / "charts" / "operator"
+OPERATORS = ROOT / "operators"
+
+# Image references the operator compiles in rather than reading from the chart.
+# A Go constant is invisible to every chart-shaped check, which is how
+# `sandbox-worker:0.1.0` came to be the default the reconciler applies to every
+# SandboxPool while the package had never been published — no chart names it, so
+# nothing ever asked the registry about it.
+#
+# Anchored on the registry rather than on a variable name, so a second one added
+# later is caught without editing a list.
+GO_IMAGE_REF = re.compile(r'"(ghcr\.io/[^"\s]+:[^"\s]+)"')
+
+# References that genuinely do not resolve, each with the reason and what
+# closing it means. A ledger of known gaps, not a mute button: every entry is
+# printed loudly on each run, and an entry whose image HAS been published fails
+# the check, so it cannot outlive the gap it records.
+#
+# Keep it empty when you can. An unargued entry turns this gate into a list of
+# things it has agreed not to look at.
+UNPUBLISHED_BY_DESIGN: dict[str, str] = {
+    "ghcr.io/nanohype/eks-agent-platform/sandbox-worker:0.1.0": """
+        The SandboxPool tier is unfinished, and this is the same gap
+        check-crd-instantiation.py records from the other side: the CRD ships a
+        controller and no CR exists anywhere in the org, so nothing has ever
+        asked for this image. Its release job is tag-only and no
+        sandbox-worker-v* tag has ever been pushed.
+        Closing it means shipping the tier — a SandboxPool in charts/tenant and
+        a sandbox-worker-v0.1.0 release — at which point BOTH exception entries
+        go away together.
+    """,
+}
 
 
 def sh(*args: str) -> tuple[int, str]:
@@ -97,6 +128,28 @@ def chart_images() -> list[tuple[str, str]]:
                 rel = path.relative_to(ROOT)
                 refs.append((f"{rel}:{i}", m.group(1)))
 
+    # Image references compiled into the operator. These reach a cluster with no
+    # chart involved — the SandboxPool reconciler applies its default to every
+    # pool that does not override it — so a chart-shaped check cannot see them,
+    # and did not.
+    go_refs = 0
+    for path in sorted(OPERATORS.rglob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            for m in GO_IMAGE_REF.finditer(line):
+                go_refs += 1
+                refs.append((f"{path.relative_to(ROOT)}:{i}", m.group(1)))
+    if go_refs == 0:
+        # The operator has always compiled in at least one image reference. Zero
+        # means the pattern stopped matching, not that the class went away — and
+        # a silently-empty source is how this check would go back to being blind
+        # to exactly what it was widened for.
+        print("could not find any ghcr.io image reference in operators/**.go — the",
+              file=sys.stderr)
+        print("Go source scan matched nothing, so it is asserting nothing.", file=sys.stderr)
+        sys.exit(2)
+
     # Same ref in three workflow steps is one question for the registry.
     seen: dict[str, str] = {}
     out: list[tuple[str, str]] = []
@@ -131,12 +184,32 @@ def main() -> int:
         return 2
 
     failures: list[tuple[str, str, str]] = []
+    known: list[tuple[str, str]] = []
     for where, ref in refs:
         ok, why = resolves(ref)
-        if show or not ok:
+        excused = not ok and ref in UNPUBLISHED_BY_DESIGN
+        if show or (not ok and not excused):
             print(f"{'ok  ' if ok else 'FAIL'}  {ref}\n        {where}" + ("" if ok else f"\n        {why}"))
-        if not ok:
-            failures.append((where, ref, why))
+        if ok:
+            if ref in UNPUBLISHED_BY_DESIGN:
+                # Publishing it is what retires the entry. A stale one left
+                # behind would let the next unpublished image inherit a pass.
+                print(f"FAIL  {ref} resolves, but UNPUBLISHED_BY_DESIGN still excuses it.")
+                print("      Delete the entry — the gap it recorded is closed.")
+                failures.append((where, ref, "stale exception"))
+            continue
+        if excused:
+            known.append((ref, UNPUBLISHED_BY_DESIGN[ref]))
+            continue
+        failures.append((where, ref, why))
+
+    if known:
+        print()
+        print("KNOWN GAPS — these do not resolve, and that is recorded rather than fixed:")
+        for ref, why in known:
+            print(f"  {ref}")
+            for line in why.strip().splitlines():
+                print(f"    {line.strip()}")
 
     if failures:
         print()
@@ -152,7 +225,12 @@ def main() -> int:
         print("operator-v<appVersion> (release-on-merge should have done it; see release.yaml).")
         return 1
 
-    print(f"✓ all {len(refs)} image references resolve")
+    if known:
+        print()
+        print(f"✓ {len(refs) - len(known)} of {len(refs)} image references resolve; "
+              f"{len(known)} recorded above as a known gap")
+    else:
+        print(f"✓ all {len(refs)} image references resolve")
     return 0
 
 

@@ -67,7 +67,7 @@ func TestAgentFleetReconciler_VClusterTier_RoutesWorkloadIntoVCluster(t *testing
 			Persona: "ops", Tenant: "acme",
 			Budget:    platformv1alpha1.BudgetRef{Name: "x"},
 			Identity:  platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}},
-			Isolation: "vcluster",
+			Isolation: isolationVCluster,
 		},
 	}
 	mustCreate(ctx, t, p)
