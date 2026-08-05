@@ -58,6 +58,24 @@ not silent: the BudgetPolicy goes `BudgetReconciled=False` / `ReconcileFailed`, 
 added for precisely this shape (a policy whose every tick has failed since it was created, so there
 is no `lastReconciled` series for a lag alert to key on).
 
+## Why there is no scan ceiling
+
+The workgroup sets no `bytes_scanned_cutoff_per_query`, and that is a decision rather than an
+omission. The operator's budget reconciler scans the account CUR on every tick, and a cost
+component is the natural place to put a ceiling on that — but a ceiling that is too low does not
+degrade, it *fails the query*, and a failed budget query is exactly the
+[budget-stale](../../../docs/runbooks/budget-stale.md) condition it would be meant to prevent.
+It would trade a cost risk for an availability risk on the control that enforces spend limits.
+
+Picking a safe number needs a measurement nobody has yet: CUR row count grows with account
+activity and with the number of tenants, so a value chosen against a small account silently
+becomes a hard failure as the account grows, on a schedule nothing surfaces.
+
+The exposure is bounded instead by `publish_cloudwatch_metrics_enabled` above, which is
+per-cluster on purpose: `ProcessedBytes` per workgroup makes a reconciler that starts scanning
+more attributable to the cluster doing it, which is the signal that would justify a ceiling and
+tell you where to set it. Add the cutoff when that metric says what the number should be.
+
 ## The drift check
 
 The account pipeline's cost publisher reads the `PlatformId` tag off invoking roles, and its grant

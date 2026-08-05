@@ -145,10 +145,11 @@ with `Stat=Sum`. N copies means N times the real number, from N green applies.
 - **The baseline Guardrail** — [`bedrock`](../bedrock/), per cluster. A guardrail is a named
   resource, so an account holds many and each cluster gets its own. That asymmetry is the whole
   reason there are two Bedrock components.
-- **The `PlatformId` cost-allocation tag activation** — account-global, but part of the cost
-  pipeline, and it cannot happen in the apply that first stamps the key (AWS takes up to 24h to list
-  a newly observed one). Holding it here would gate the account's only Bedrock audit trail behind a
-  billing clock. It lives in [`cost-pipeline`](../cost-pipeline/) as an assertion.
+- **The `PlatformId` cost-allocation tag activation** — account-global, and it cannot happen in the
+  apply that first stamps the key (AWS takes up to 24h to list a newly observed one). Holding it
+  here would gate the account's only Bedrock audit trail behind a billing clock. It lives in
+  [`cost-pipeline`](../cost-pipeline/), which owns both the requirement and the `check` that warns
+  while it is unmet — including why activation is one-shot and not retroactive.
 - **Per-tenant Bedrock access policies** — created by the operator at reconcile time, bound to each
   tenant's IAM role, with model-ARN scoping.
 

@@ -51,8 +51,19 @@ primary signal, and the command above is the first thing to run.
 1. **Table missing or misnamed** — re-apply `terraform/components/cost-pipeline` (declares the
    table) and then `cost-access` for the cluster (republishes the name under its prefix). A stale
    per-cluster copy of the name is the one way the two can disagree.
-2. **Throttling** — bump the Athena workgroup concurrent query limit via
-   `terraform/components/cost-access` for that cluster.
+2. **Throttling** — there is no concurrency setting on an Athena workgroup, so this is not a
+   terraform change. `aws_athena_workgroup.cluster` configures three things and none of them is
+   a limit: `enforce_workgroup_configuration`, `publish_cloudwatch_metrics_enabled`, and
+   `result_configuration`. Active query concurrency is an **account-level service quota**. Either:
+   - stagger the reconcile interval so clusters do not tick together —
+     `--budget-requeue-interval` on the operator, surfaced as
+     `reconcilers.budget.requeueInterval` in the operator chart; or
+   - raise **Service Quotas → Amazon Athena → Active DML queries** for the account, which is a
+     support-backed request rather than an apply.
+
+   Diagnose step 3 above already says this. The two halves of this page used to disagree about
+   whether the lever existed, and an operator following the old mitigation opened `main.tf`
+   during a live incident and found nothing to change.
 3. **IAM regression** — rollback or patch the operator role policy.
 4. **Manual budget check** — if reconcile is broken but you need spend visibility now: run the rollup query manually in the AWS console with the workgroup + database from `kubectl get cm -n eks-agent-platform operator-config -o yaml`.
 
