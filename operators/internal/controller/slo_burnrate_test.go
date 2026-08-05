@@ -317,14 +317,17 @@ func TestEscapePromLabelValue(t *testing.T) {
 }
 
 func TestHoldGraceWindowDefaults(t *testing.T) {
+	// Pointers, not values: SLOReconciler carries a mutex guarding the AMP
+	// client it can resolve after startup, so copying one is a vet error and
+	// would copy a lock. Production always holds it by pointer.
 	cases := []struct {
 		name     string
-		r        SLOReconciler
+		r        *SLOReconciler
 		expected time.Duration
 	}{
-		{"explicit", SLOReconciler{RequeueInterval: time.Minute, HoldGraceIntervals: 4}, 4 * time.Minute},
-		{"default intervals", SLOReconciler{RequeueInterval: time.Minute}, 2 * time.Minute},
-		{"default interval too", SLOReconciler{}, 10 * time.Minute},
+		{"explicit", &SLOReconciler{RequeueInterval: time.Minute, HoldGraceIntervals: 4}, 4 * time.Minute},
+		{"default intervals", &SLOReconciler{RequeueInterval: time.Minute}, 2 * time.Minute},
+		{"default interval too", &SLOReconciler{}, 10 * time.Minute},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

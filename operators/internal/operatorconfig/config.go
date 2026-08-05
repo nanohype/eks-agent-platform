@@ -12,10 +12,12 @@ package operatorconfig
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
 	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
@@ -89,7 +91,7 @@ func Load(ctx context.Context, ssmClient awsclients.SSM, clusterName, environmen
 		return nil, fmt.Errorf("operatorconfig: cluster name is required")
 	}
 	cfg := &Config{ClusterName: clusterName, Environment: environment, Region: region}
-	prefix := "/eks-agent-platform/" + clusterName + "/"
+	prefix := clusterPrefix(clusterName)
 
 	var nextToken *string
 	for {
@@ -136,7 +138,7 @@ func (c *Config) assign(suffix, value string) {
 		c.BaselineGuardrailVersion = value
 	case "kill-switch/event_bus_name":
 		c.KillSwitchEventBusName = value
-	case "managed-monitoring/amp_endpoint":
+	case ampEndpointKey:
 		c.AMPEndpoint = value
 	case "cost-pipeline/athena_workgroup":
 		c.AthenaWorkgroup = value
@@ -175,6 +177,51 @@ func (c *Config) Validate() []string {
 		}
 	}
 	return missing
+}
+
+// ampEndpointKey is the SSM key, under the cluster prefix, that
+// managed-monitoring publishes the AMP workspace URL to. Named once because two
+// readers use it: Load's sweep at startup, and AMPEndpoint's single read when
+// the SLO reconciler re-resolves a client that was nil at boot.
+const ampEndpointKey = "managed-monitoring/amp_endpoint"
+
+// clusterPrefix is the SSM subtree this operator's substrate publishes under.
+// Keyed by the full cluster name so co-located sibling clusters stay isolated.
+func clusterPrefix(clusterName string) string {
+	return "/eks-agent-platform/" + clusterName + "/"
+}
+
+// AMPEndpoint reads just the managed-monitoring AMP endpoint.
+//
+// A parameter that does not exist yet is not an error: managed-monitoring is
+// opt-in, and it is applied after the cluster that hosts this operator, so
+// "absent" is both a normal steady state and the state a first install passes
+// through. It answers "" in that case and the caller decides what that means.
+//
+// Separate from Load because the SLO reconciler calls this on a timer while its
+// client is nil, and re-running the full sweep would re-read every parameter —
+// including the ones whose absence Validate treats as fatal — to answer a
+// question about one of them.
+func AMPEndpoint(ctx context.Context, ssmClient awsclients.SSM, clusterName, environment, region string) (string, error) {
+	if clusterName == "" {
+		return "", fmt.Errorf("operatorconfig: cluster name is required")
+	}
+	name := clusterPrefix(clusterName) + ampEndpointKey
+	out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           &name,
+		WithDecryption: ptrBool(true),
+	})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return "", nil
+		}
+		return "", fmt.Errorf("ssm GetParameter %s: %w", name, err)
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil {
+		return "", nil
+	}
+	return *out.Parameter.Value, nil
 }
 
 func ptrBool(b bool) *bool { return &b }

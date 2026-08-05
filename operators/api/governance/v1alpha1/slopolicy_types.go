@@ -85,8 +85,19 @@ type SLOPolicySpec struct {
 	//	              fix by hand. Reversed automatically once the burn clears.
 	//	None        — evaluate, publish, and page, but take no cluster action.
 	//
+	// The default is None because HoldRollout is only an action for a tenant
+	// that has its own AppProject. The hold is written to the AppProject named
+	// for the Platform, and a tenant synced under the shared `platform` project
+	// — which is every ApplicationSet on the default path — has nothing for it
+	// to write to. Such a policy reports RolloutHeld=Unknown/AppProjectAbsent,
+	// which is honest but arrives after the fact; defaulting to the action that
+	// cannot happen makes the API claim more than it delivers.
+	//
+	// Set HoldRollout deliberately, on a tenant whose Applications resolve to a
+	// per-Platform AppProject.
+	//
 	// +kubebuilder:validation:Enum=HoldRollout;None
-	// +kubebuilder:default=HoldRollout
+	// +kubebuilder:default=None
 	// +optional
 	OnPageTierBreach string `json:"onPageTierBreach,omitempty"`
 }

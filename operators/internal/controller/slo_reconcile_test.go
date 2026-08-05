@@ -8,6 +8,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
 
 // exprWindowRE pulls the range window back out of a generated query so the fake
@@ -537,5 +539,103 @@ func TestReconcileSLO_LastEvaluatedTracksRealReadingsOnly(t *testing.T) {
 	}
 	if h.sp.Status.LastEvaluated == nil || !h.sp.Status.LastEvaluated.Equal(&old) {
 		t.Error("LastEvaluated must NOT advance on a tick that obtained no reading — that is the whole reason it is a separate field")
+	}
+}
+
+// TestMetricStoreResolvesAfterStartup is the regression for the defect that made
+// the whole SLO tier unarmable on a first install.
+//
+// main.go builds the AMP client from an SSM parameter that managed-monitoring
+// publishes, and managed-monitoring is applied AFTER the cluster hosting the
+// operator. So the client is nil at boot. The endpoint is not a chart value, so
+// ArgoCD sees no manifest change when the parameter lands and nothing restarts
+// the pod — and every SLOPolicy reported MetricStoreUnavailable forever on a
+// cluster whose AMP workspace was up.
+func TestMetricStoreResolvesAfterStartup(t *testing.T) {
+	ctx := context.Background()
+	var calls int
+	want := &fakePrometheus{byWindow: map[string]float64{"5m": 0.01}}
+
+	r := &SLOReconciler{
+		ResolvePrometheus: func(context.Context) (awsclients.PrometheusQuery, error) {
+			calls++
+			if calls == 1 {
+				// managed-monitoring has not applied yet: no parameter, no error.
+				return nil, nil
+			}
+			return want, nil
+		},
+	}
+
+	if got := r.metricStore(ctx); got != nil {
+		t.Fatalf("first call: want nil while the parameter is absent, got %#v", got)
+	}
+	if calls != 1 {
+		t.Fatalf("first call: want 1 resolve attempt, got %d", calls)
+	}
+
+	// Still inside the backoff — absent is a normal steady state on a cluster
+	// without managed-monitoring, so it must not read SSM on every tick.
+	if got := r.metricStore(ctx); got != nil {
+		t.Fatalf("second call: want nil, got %#v", got)
+	}
+	if calls != 1 {
+		t.Fatalf("second call: want the backoff to suppress a re-read, got %d attempts", calls)
+	}
+
+	// The parameter lands. Nothing restarted the process.
+	r.promRetryAfter = time.Now().Add(-time.Second)
+	got := r.metricStore(ctx)
+	if got == nil {
+		t.Fatal("after the endpoint appears: want a resolved client, got nil — the tier can never arm")
+	}
+	if got != want {
+		t.Fatalf("resolved the wrong client: got %#v, want %#v", got, want)
+	}
+
+	// Resolved once and cached: no further SSM reads.
+	if got := r.metricStore(ctx); got != want {
+		t.Fatalf("after resolving: want the cached client, got %#v", got)
+	}
+	if calls != 2 {
+		t.Fatalf("want the resolved client cached after 2 attempts, got %d", calls)
+	}
+}
+
+// A reconciler with no resolver (envtest, and any path with no SSM) must answer
+// nil rather than panic, and must never be considered resolvable.
+func TestMetricStoreWithoutResolver(t *testing.T) {
+	r := &SLOReconciler{}
+	if got := r.metricStore(context.Background()); got != nil {
+		t.Fatalf("want nil with no resolver and no client, got %#v", got)
+	}
+
+	direct := &fakePrometheus{}
+	r = &SLOReconciler{Prometheus: direct}
+	if got := r.metricStore(context.Background()); got != direct {
+		t.Fatalf("want the directly-wired client returned unchanged, got %#v", got)
+	}
+}
+
+// A resolver that errors must not be retried on the next tick, and must not
+// poison the client — SSM throttling should degrade to "not yet", not to a
+// permanent failure.
+func TestMetricStoreResolveErrorBacksOff(t *testing.T) {
+	ctx := context.Background()
+	var calls int
+	r := &SLOReconciler{
+		ResolvePrometheus: func(context.Context) (awsclients.PrometheusQuery, error) {
+			calls++
+			return nil, errors.New("ssm throttled")
+		},
+	}
+	if got := r.metricStore(ctx); got != nil {
+		t.Fatalf("want nil on resolve error, got %#v", got)
+	}
+	if got := r.metricStore(ctx); got != nil {
+		t.Fatalf("want nil on resolve error, got %#v", got)
+	}
+	if calls != 1 {
+		t.Fatalf("want the error path to respect the backoff, got %d attempts", calls)
 	}
 }
