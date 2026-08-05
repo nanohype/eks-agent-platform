@@ -177,7 +177,12 @@ vcluster:
     repoURL: https://charts.loft.sh
     # Pinned chart version (targetRevision). Renovate proposes bumps; a human
     # reviews majors — the operator never auto-upgrades a running vcluster.
-    version: "0.35.2"
+    #
+    # scripts/check-vcluster-chart.py gates this pin: it renders the values the
+    # operator actually emits against this chart and diffs the resulting object
+    # set, so a bump that renames a values path fails, and one that silently
+    # drops an object fails too.
+    version: "0.36.1"
   # initCharts are deployed inside every per-Platform vcluster on startup
   # (experimental.deploy.vcluster.helm) — the placement for anything a fleet
   # needs that the virtual cluster does not ship with. KEDA is the only one:
