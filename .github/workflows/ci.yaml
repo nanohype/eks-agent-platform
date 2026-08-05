@@ -240,6 +240,19 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
+  # ── PROJECT parity ───────────────────────────────────────────────────────
+  # operators/PROJECT is kubebuilder's scaffolding record and nothing reads it at
+  # runtime, which is exactly why it drifts. Deleting the batch tier removed its
+  # types, controller, CRD and RBAC while PROJECT went on declaring a BatchJob
+  # API with a controller behind it — at the front door of the repo an agent
+  # reads to learn what this operator is, with every other gate green.
+  project-resources:
+    name: PROJECT matches the shipped CRDs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-project-resources.py
+
   # ── eval workflow gate ───────────────────────────────────────────────────
   # The eval pipeline was dead twice over, and both failures were invisible to
   # helm lint, helm template, kubeconform and trivy, because nothing was wrong
