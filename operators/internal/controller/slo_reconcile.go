@@ -689,7 +689,7 @@ func (r *SLOReconciler) applySLOStatus(ctx context.Context, sp *governancev1alph
 
 	upsertCondition(&sp.Status.Conditions, sloEvaluatedCondition(sp, reading, now))
 	upsertCondition(&sp.Status.Conditions, r.burnRateCondition(sp, reading, previousSeverity, now))
-	upsertCondition(&sp.Status.Conditions, rolloutHeldCondition(reading, now))
+	upsertCondition(&sp.Status.Conditions, rolloutHeldCondition(sp, reading, now))
 
 	return r.Status().Update(ctx, sp)
 }
@@ -765,8 +765,12 @@ func (r *SLOReconciler) burnRateCondition(sp *governancev1alpha1.SLOPolicy, read
 // decided but not landed yet" from "hold is broken" from "not held". Engaging a
 // hold is a decision; the AppProject carrying the deny window is the effect, and
 // only the effect stops a rollout.
-func rolloutHeldCondition(reading sloReading, now metav1.Time) metav1.Condition {
-	cond := metav1.Condition{Type: "RolloutHeld", LastTransitionTime: now}
+func rolloutHeldCondition(sp *governancev1alpha1.SLOPolicy, reading sloReading, now metav1.Time) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               "RolloutHeld",
+		LastTransitionTime: now,
+		ObservedGeneration: sp.Generation,
+	}
 	switch {
 	case !reading.holdEngaged:
 		cond.Status = metav1.ConditionFalse

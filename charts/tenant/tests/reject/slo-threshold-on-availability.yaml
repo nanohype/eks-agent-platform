@@ -1,0 +1,14 @@
+# expect: slo.sli.thresholdSeconds applies only to a latency SLI
+# The quieter of the two threshold mistakes: it is silently ignored, so the
+# author believes they narrowed an objective that is in fact measuring
+# everything.
+platform:
+  name: cover
+  tenant: coverco
+slo:
+  enabled: true
+  sli:
+    type: availability
+    metric: cover_api
+    thresholdSeconds: "0.5"
+  objective: "0.999"

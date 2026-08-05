@@ -133,3 +133,21 @@ evalSuite:
       input: "Reply with 'pong'."
       expectContains: ["pong"]
       maxLatencyMs: 5000
+
+# Enabled here and nowhere else. This render is what
+# scripts/check-crd-instantiation.py reads to prove every shipped CRD kind can
+# actually be authored, so the SLOPolicy has to appear in it. The chart default
+# stays off — see the comment on `slo` in values.yaml for why that default is
+# load-bearing rather than cautious.
+#
+# Exercises the availability branch with a selector, which is the shape that
+# carries the reserved-label rule.
+slo:
+  enabled: true
+  sli:
+    type: availability
+    metric: cover_api
+    selector:
+      route: /v1/chat
+  objective: "0.999"
+  onPageTierBreach: HoldRollout

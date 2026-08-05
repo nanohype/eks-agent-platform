@@ -240,6 +240,27 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
+  # ── CRD instantiation ────────────────────────────────────────────────────
+  # chart-crd-parity above holds the chart faithful to the Platform CRD, so it
+  # is blind to a kind the chart cannot emit at all. SLOPolicy shipped that way:
+  # a Go type, a generated CRD, a registered controller, conformance tests, a
+  # kube-state-metrics projection and three Grafana alerts, with no CR anywhere
+  # in the org. Every gate passed, because every gate asked whether the artifact
+  # was well-formed and none asked whether anything ever creates one.
+  #
+  # Also asserts each rendered platformRef resolves to a Platform in the same
+  # namespace of the same render, which is the half a `kind:` grep cannot do —
+  # the ref resolves same-namespace by name, so a CR in the workload namespace
+  # reports PlatformNotFound and nothing else.
+  crd-instantiation:
+    name: every shipped CRD kind is instantiated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: pip install pyyaml
+      - run: ./scripts/check-crd-instantiation.py
+
   # ── PROJECT parity ───────────────────────────────────────────────────────
   # operators/PROJECT is kubebuilder's scaffolding record and nothing reads it at
   # runtime, which is exactly why it drifts. Deleting the batch tier removed its
