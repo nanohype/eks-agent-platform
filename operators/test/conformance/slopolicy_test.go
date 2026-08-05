@@ -52,9 +52,32 @@ func TestSLOPolicy_CreateGetDelete(t *testing.T) {
 	if got.Spec.SLI.Selector["route"] != "/pay" {
 		t.Errorf("selector round-trip lost the route matcher: %v", got.Spec.SLI.Selector)
 	}
-	// The default is what makes a declared SLO act rather than just report.
+	// The default is None, and that is the point rather than an omission.
+	// HoldRollout writes a deny syncWindow to the AppProject named for the
+	// Platform; a tenant synced under the shared `platform` project — which is
+	// every ApplicationSet on the default path — has nothing for it to write
+	// to. Defaulting to an action that cannot happen makes the API claim more
+	// than it delivers, so holding is opt-in.
+	if got.Spec.OnPageTierBreach != "None" {
+		t.Errorf("onPageTierBreach defaulted to %q, want None", got.Spec.OnPageTierBreach)
+	}
+}
+
+// Holding is still reachable — the default moved, the capability did not.
+func TestSLOPolicy_AcceptsAnExplicitHold(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+
+	sp := newConformanceSLO(t)
+	sp.Spec.OnPageTierBreach = "HoldRollout"
+	mustCreate(ctx, t, sp)
+
+	var got governancev1alpha1.SLOPolicy
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: sp.Name, Namespace: testNs}, &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
 	if got.Spec.OnPageTierBreach != "HoldRollout" {
-		t.Errorf("onPageTierBreach defaulted to %q, want HoldRollout", got.Spec.OnPageTierBreach)
+		t.Errorf("an explicitly requested hold did not survive admission: got %q", got.Spec.OnPageTierBreach)
 	}
 }
 

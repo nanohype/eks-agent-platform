@@ -374,7 +374,28 @@ func main() {
 				sloReconciler.Prometheus = ampQuery
 			}
 		} else {
-			setupLog.Info("no managed-monitoring AMP endpoint published for this cluster; SLO burn-rate evaluation is disabled")
+			setupLog.Info("no managed-monitoring AMP endpoint published for this cluster; SLO burn-rate evaluation will retry from SSM")
+		}
+
+		// The endpoint can appear after this process starts, and on a first
+		// install it usually does: managed-monitoring publishes the parameter,
+		// and it is applied AFTER the cluster that hosts this operator. The
+		// endpoint is not a chart value, so ArgoCD sees no manifest change when
+		// it lands and nothing restarts the pod — which made a nil client at
+		// boot permanent, on a cluster whose AMP workspace was up.
+		//
+		// Re-reading only the one parameter, rather than calling
+		// operatorconfig.Load again, keeps this to a single SSM GetParameter and
+		// leaves every other startup-validated value exactly as validated.
+		sloReconciler.ResolvePrometheus = func(ctx context.Context) (awsclients.PrometheusQuery, error) {
+			endpoint, err := operatorconfig.AMPEndpoint(ctx, awsClients.SSM, clusterName, environment, region)
+			if err != nil {
+				return nil, err
+			}
+			if endpoint == "" {
+				return nil, nil
+			}
+			return awsclients.NewPrometheusQuery(awsClients.AWSConfig, endpoint)
 		}
 	}
 	if err := sloReconciler.SetupWithManager(mgr); err != nil {

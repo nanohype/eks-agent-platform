@@ -291,7 +291,8 @@ func queryWindows() []string {
 // Windows that returned no data are absent from the map rather than present as
 // zero, so the evaluator can refuse to act on a signal it does not have.
 func (r *SLOReconciler) queryErrorRatios(ctx context.Context, sli governancev1alpha1.SLI) (map[string]float64, error) {
-	if r.Prometheus == nil {
+	prom := r.metricStore(ctx)
+	if prom == nil {
 		return nil, errAMPNotConfigured
 	}
 	windows := queryWindows()
@@ -301,7 +302,7 @@ func (r *SLOReconciler) queryErrorRatios(ctx context.Context, sli governancev1al
 		if err != nil {
 			return nil, err
 		}
-		v, ok, err := r.Prometheus.QueryScalar(ctx, expr)
+		v, ok, err := prom.QueryScalar(ctx, expr)
 		if err != nil {
 			return nil, fmt.Errorf("query error ratio over %s: %w", w, err)
 		}

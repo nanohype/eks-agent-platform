@@ -80,14 +80,23 @@ spec:
                 pattern: ^0\.[0-9]{1,6}$
                 type: string
               onPageTierBreach:
-                default: HoldRollout
+                default: None
                 description: "OnPageTierBreach is the automated action taken when
                   a page-tier burn-rate\nwindow pair trips.\n\n\tHoldRollout — patch
                   a deny syncWindow onto the tenant's ArgoCD\n\t              AppProject
                   so a bad rollout stops advancing. The window\n\t              leaves
                   manualSync open, so an operator can still push a\n\t              fix
                   by hand. Reversed automatically once the burn clears.\n\tNone        —
-                  evaluate, publish, and page, but take no cluster action."
+                  evaluate, publish, and page, but take no cluster action.\n\nThe
+                  default is None because HoldRollout is only an action for a tenant\nthat
+                  has its own AppProject. The hold is written to the AppProject named\nfor
+                  the Platform, and a tenant synced under the shared `platform` project\n—
+                  which is every ApplicationSet on the default path — has nothing
+                  for it\nto write to. Such a policy reports RolloutHeld=Unknown/AppProjectAbsent,\nwhich
+                  is honest but arrives after the fact; defaulting to the action that\ncannot
+                  happen makes the API claim more than it delivers.\n\nSet HoldRollout
+                  deliberately, on a tenant whose Applications resolve to a\nper-Platform
+                  AppProject."
                 enum:
                 - HoldRollout
                 - None

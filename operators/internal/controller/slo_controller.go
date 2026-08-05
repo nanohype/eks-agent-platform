@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,8 +49,28 @@ type SLOReconciler struct {
 
 	// AWS — wired by main.go. Either may be nil in envtest paths, on a cluster
 	// with no AMP workspace, or before managed-monitoring has applied.
+	//
+	// Prometheus is read through metricStore() rather than directly, because it
+	// can arrive after startup: main.go builds it from an SSM parameter that
+	// managed-monitoring writes, and managed-monitoring is applied AFTER the
+	// cluster that hosts this operator. A nil client at boot was therefore
+	// permanent — the endpoint is not a chart value, so no GitOps change
+	// restarts the pod, and every SLOPolicy reported MetricStoreUnavailable
+	// forever on a cluster whose AMP workspace existed.
 	Prometheus  awsclients.PrometheusQuery
 	EventBridge awsclients.EventBridge
+
+	// ResolvePrometheus re-reads the AMP endpoint and builds a query client.
+	// Set by main.go when the operator has AWS clients; nil in envtest and in
+	// any path that has no SSM to read. metricStore() calls it at most once per
+	// promResolveBackoff while Prometheus is nil.
+	ResolvePrometheus func(ctx context.Context) (awsclients.PrometheusQuery, error)
+
+	// promMu guards Prometheus and promRetryAfter. Reconciles run concurrently
+	// (see Concurrency), so the late assignment is a write several goroutines
+	// can race on.
+	promMu         sync.RWMutex
+	promRetryAfter time.Time
 
 	// KillSwitchEventBusName is the bus BurnRateBreach events are published to.
 	// Empty means log-only: status still records the breach, and the hold still
@@ -60,6 +81,59 @@ type SLOReconciler struct {
 	// unobserved on the tenant's AppProject before the reconciler reports it as
 	// not landing (default 2).
 	HoldGraceIntervals int
+}
+
+// promResolveBackoff is the shortest interval between two attempts to resolve a
+// missing AMP client. Without it every tick of every SLOPolicy would read SSM on
+// a cluster that legitimately has no AMP workspace — enable_managed_monitoring
+// is opt-in, so "absent" is a normal steady state and must stay cheap.
+const promResolveBackoff = 5 * time.Minute
+
+// metricStore returns the AMP query client, resolving it if it is still nil and
+// the backoff has elapsed.
+//
+// The late resolve exists because the endpoint arrives after this process
+// starts. main.go reads it from an SSM parameter written by managed-monitoring,
+// which is applied after the cluster that hosts the operator, so on a first
+// install the client is nil at boot. Nothing later restarts the pod — the
+// endpoint is not a chart value, so ArgoCD sees no manifest change when the
+// parameter appears — and the reconciler reported MetricStoreUnavailable
+// forever on a cluster whose workspace was up.
+//
+// Returning nil is still a normal answer, not an error: a cluster without
+// managed-monitoring has no metric store, and the caller reports that as a
+// condition rather than failing the reconcile.
+func (r *SLOReconciler) metricStore(ctx context.Context) awsclients.PrometheusQuery {
+	r.promMu.RLock()
+	p := r.Prometheus
+	r.promMu.RUnlock()
+	if p != nil || r.ResolvePrometheus == nil {
+		return p
+	}
+
+	r.promMu.Lock()
+	defer r.promMu.Unlock()
+	// Re-check: another goroutine may have resolved it while this one waited.
+	if r.Prometheus != nil {
+		return r.Prometheus
+	}
+	if time.Now().Before(r.promRetryAfter) {
+		return nil
+	}
+	r.promRetryAfter = time.Now().Add(promResolveBackoff)
+
+	resolved, err := r.ResolvePrometheus(ctx)
+	if err != nil {
+		log.FromContext(ctx).V(1).Info("could not resolve the AMP endpoint; SLO evaluation stays disabled until the next attempt",
+			"error", err, "retryAfter", promResolveBackoff)
+		return nil
+	}
+	if resolved == nil {
+		return nil
+	}
+	log.FromContext(ctx).Info("resolved the AMP endpoint after startup; SLO burn-rate evaluation is now live")
+	r.Prometheus = resolved
+	return resolved
 }
 
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=slopolicies,verbs=get;list;watch;update;patch
