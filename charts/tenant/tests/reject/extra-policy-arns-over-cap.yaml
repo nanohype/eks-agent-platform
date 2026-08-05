@@ -1,0 +1,20 @@
+# expect: identity.extraPolicyArns holds at most 9 entries
+# AWS allows 10 managed policies per role by default (raisable to 25) and the
+# operator attaches the tenant baseline itself, so a tenth declared entry cannot be
+# satisfied without a quota increase.
+platform:
+  name: cover
+  tenant: coverco
+  persona: generic
+identity:
+  extraPolicyArns:
+    - arn:aws:iam::aws:policy/A1
+    - arn:aws:iam::aws:policy/A2
+    - arn:aws:iam::aws:policy/A3
+    - arn:aws:iam::aws:policy/A4
+    - arn:aws:iam::aws:policy/A5
+    - arn:aws:iam::aws:policy/A6
+    - arn:aws:iam::aws:policy/A7
+    - arn:aws:iam::aws:policy/A8
+    - arn:aws:iam::aws:policy/A9
+    - arn:aws:iam::aws:policy/A10

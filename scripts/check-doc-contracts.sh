@@ -211,6 +211,42 @@ if ! grep -qi 'not retroactive' terraform/components/cost-pipeline/README.md; th
   fail=1
 fi
 
+# ── the egress reference names the namespaces the operator actually names ────
+#
+# charts/bedrock-egress publishes a NetworkPolicy template as a readable
+# reference. The operator does not read it — it builds the real policies in Go —
+# so the two can diverge with nothing failing, and they did: the reference sent
+# OTLP egress to a namespace called `observability`, which nothing in the org
+# creates, while every policy the operator applies names `monitoring`.
+#
+# A reference that is wrong is worse than no reference: it is the thing someone
+# copies when writing a tenant's own policy, and a rule naming a namespace that
+# does not exist allows egress to nowhere — silently, since a NetworkPolicy that
+# matches no peer is indistinguishable from one whose peer is simply down.
+# `|| true` on both: the script runs under `set -euo pipefail`, so a grep that
+# matches nothing would abort here — exiting 1 with NO message, which is the same
+# silent-absence failure this gate exists to catch. Let the variable come back
+# empty and let the explicit branches below say which side went missing.
+collector_ns=$(grep -oE 'collectorNamespace = "[a-z0-9-]+"' \
+  operators/internal/controller/cilium_egress.go 2>/dev/null | head -1 \
+  | sed 's/.*"\(.*\)"/\1/' || true)
+chart_ns=$(grep -oE '^[[:space:]]*observabilityNamespace: [a-z0-9-]+' \
+  charts/bedrock-egress/values.yaml 2>/dev/null | head -1 | awk '{print $2}' || true)
+
+if [ -z "$collector_ns" ]; then
+  echo "cilium_egress.go declares no collectorNamespace; this gate cannot compare anything"
+  fail=1
+elif [ -z "$chart_ns" ]; then
+  echo "charts/bedrock-egress/values.yaml declares no observabilityNamespace"
+  fail=1
+elif [ "$collector_ns" != "$chart_ns" ]; then
+  echo "the egress reference names namespace '$chart_ns'; the operator applies '$collector_ns'."
+  echo "The operator's value is the one that governs — it builds the real policy in Go."
+  echo "A reference naming a different namespace is what someone copies into a tenant"
+  echo "policy, and a rule naming a namespace nothing creates allows egress to nowhere."
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

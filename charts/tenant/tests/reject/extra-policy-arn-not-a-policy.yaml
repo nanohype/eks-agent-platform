@@ -1,0 +1,11 @@
+# expect: is not an IAM policy ARN
+# The field is handed straight to AttachRolePolicy, so a role ARN, a bucket ARN or
+# a typo is not caught until reconcile — as a LimitExceeded-shaped failure on a
+# Platform that stays Provisioning, with nothing pointing at the line that caused it.
+platform:
+  name: cover
+  tenant: coverco
+  persona: generic
+identity:
+  extraPolicyArns:
+    - arn:aws:iam::123456789012:role/NotAPolicy

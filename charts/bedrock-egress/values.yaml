@@ -17,4 +17,11 @@ networkPolicy:
   #   - egress DNS
   #   - egress to the EKS Pod Identity credential endpoint (cilium only)
   tenantNamespaceLabel: "agents.nanohype.dev/tenant"
-  observabilityNamespace: observability
+  # Where the OTel collector gateway runs. MUST match the operator's
+  # collectorNamespace (cilium_egress.go), because the policy the operator
+  # actually applies is the one built in Go — this template is a readable
+  # reference, not the source. `observability` is a namespace nothing in the org
+  # creates, so a rule naming it allows egress to nowhere; the collector runs in
+  # `monitoring` on every cluster (eks-gitops addons-otel-agent, and kx).
+  # scripts/check-doc-contracts.sh pins the two together.
+  observabilityNamespace: monitoring

@@ -73,6 +73,13 @@
 {{- end }}
 {{- if eq $kind "queue" }}{{ $queueNames = append $queueNames $dsName }}{{ end }}
 {{- end }}
+{{- $extraArns := .Values.identity.extraPolicyArns | default list }}
+{{- if gt (len $extraArns) 9 }}{{ fail "identity.extraPolicyArns holds at most 9 entries" }}{{ end }}
+{{- range $arn := $extraArns }}
+{{- if not (regexMatch "^arn:aws[a-z-]*:iam::(aws|[0-9]{12}):policy/[A-Za-z0-9+=,.@_/-]+$" $arn) }}
+{{- fail (printf "identity.extraPolicyArns: %q is not an IAM policy ARN — expected arn:aws:iam::aws:policy/<name> or arn:aws:iam::<account>:policy/<path><name>. The operator hands this straight to AttachRolePolicy, so anything else fails at reconcile with the Platform stuck Provisioning" $arn) }}
+{{- end }}
+{{- end }}
 {{- $capabilities := .Values.identity.capabilities | default list }}
 {{- if gt (len $capabilities) 8 }}{{ fail "identity.capabilities holds at most 8 entries" }}{{ end }}
 {{- range $cap := $capabilities }}
