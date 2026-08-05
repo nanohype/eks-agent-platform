@@ -192,3 +192,47 @@ evalSuite:
       input: "Reply with 'pong'."
       expectContains: ["pong"]
       maxLatencyMs: 5000
+
+# Service-level objective for this tenant.
+#
+# OFF by default, and unlike evalSuite that default is load-bearing rather than
+# cautious. The SLO loop is only live once the tenant emits the series the SLI
+# names — the reconciler builds its PromQL from `sli.metric` plus the suffix
+# `sli.type` implies, so an objective over a series nothing publishes is
+# permanently unevaluated. kube-state-metrics projects `status.lastEvaluated`
+# with nilIsZero, and the AgentSLOEvaluationStale alert reads that projection,
+# so a policy that never evaluates trips a standing alert within the hour. That
+# is the correct behaviour for an objective that stopped being measured; it is
+# the wrong first impression of one that was never measurable.
+#
+# So: instrument the workload first, confirm the series is in the metric store,
+# then set enabled: true. The values below are the shape, not a default anyone
+# should adopt unread.
+slo:
+  enabled: false
+  # availability divides an errors counter by a requests counter; latency
+  # divides a duration histogram's under-threshold bucket by its count.
+  sli:
+    type: availability
+    # The base series name in Prometheus form, WITHOUT the suffix the type
+    # implies. For type=availability the reconciler queries
+    # <metric>_errors_total over <metric>_requests_total, so a workload whose
+    # counter is named `http_request_total` (singular) does not answer to
+    # `http` here.
+    metric: ""
+    # Exact-match label narrowing. `le` and `__name__` are reserved — the first
+    # is owned by the latency query's bucket boundary, the second would redirect
+    # the query at a different series entirely.
+    selector: {}
+    # Decimal seconds naming a bucket boundary the histogram actually
+    # publishes. Required for type=latency, rejected for type=availability.
+    thresholdSeconds: ""
+  # Target good-event ratio. The error budget is 1 - objective.
+  objective: "0.999"
+  # HoldRollout patches a deny syncWindow onto this tenant's ArgoCD AppProject
+  # so a bad rollout stops advancing, leaving manualSync open for a fix. It acts
+  # only on a per-Platform AppProject; a tenant synced under the shared
+  # `platform` project has nothing for the hold to write to, and the policy
+  # reports RolloutHeld=Unknown/AppProjectAbsent rather than holding anything.
+  # None evaluates, publishes and pages without touching the cluster.
+  onPageTierBreach: None

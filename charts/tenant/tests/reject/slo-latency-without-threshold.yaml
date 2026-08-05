@@ -1,0 +1,13 @@
+# expect: slo.sli.thresholdSeconds is required when slo.sli.type is latency
+# A latency SLI with no bucket boundary builds an invalid query on every tick,
+# forever, and the failure is a reconcile error rather than anything an author
+# would look at.
+platform:
+  name: cover
+  tenant: coverco
+slo:
+  enabled: true
+  sli:
+    type: latency
+    metric: cover_api
+  objective: "0.999"

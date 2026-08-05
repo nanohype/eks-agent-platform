@@ -1,0 +1,13 @@
+# expect: slo.objective must be a decimal string strictly between 0 and 1
+# An objective of 1 leaves a zero error budget, so every burn rate divides by
+# zero. The CRD's Pattern rejects it too; the chart says so with the values key
+# in the message rather than as a regex mismatch on a rendered field.
+platform:
+  name: cover
+  tenant: coverco
+slo:
+  enabled: true
+  sli:
+    type: availability
+    metric: cover_api
+  objective: "1.0"

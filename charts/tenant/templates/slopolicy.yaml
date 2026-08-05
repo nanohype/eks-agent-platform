@@ -1,0 +1,59 @@
+{{- if .Values.slo.enabled -}}
+{{- /*
+  The three shape rules are enforced here as well as in the CRD, for the same
+  reason budgetpolicy.yaml validates monthlyUsd: a chart that renders an invalid
+  CR turns a values typo into an ArgoCD sync failure on the cluster, where the
+  message is attached to an Application rather than to the person who wrote the
+  value. Failing the render says it at `helm template` time.
+*/ -}}
+{{- if not (regexMatch "^0\\.[0-9]{1,6}$" (toString .Values.slo.objective)) }}
+{{- fail "slo.objective must be a decimal string strictly between 0 and 1 (e.g. \"0.999\") — an objective of 1 leaves a zero error budget and an infinite burn rate" }}
+{{- end }}
+{{- if and (eq .Values.slo.sli.type "latency") (not .Values.slo.sli.thresholdSeconds) }}
+{{- fail "slo.sli.thresholdSeconds is required when slo.sli.type is latency — without it the objective can never be evaluated and every reconcile tick fails" }}
+{{- end }}
+{{- if and (eq .Values.slo.sli.type "availability") .Values.slo.sli.thresholdSeconds }}
+{{- fail "slo.sli.thresholdSeconds applies only to a latency SLI; on an availability SLI it is silently ignored, so the objective measures everything while the author believes it was narrowed" }}
+{{- end -}}
+{{- range $k, $_ := .Values.slo.sli.selector }}
+{{- if or (eq $k "le") (eq $k "__name__") }}
+{{- fail (printf "slo.sli.selector may not set %q — `le` is owned by the latency query's bucket boundary and `__name__` would redirect the query at a different series entirely" $k) }}
+{{- end }}
+{{- end -}}
+{{- /*
+  namespace is controlPlaneNamespace, not the workload namespace. platformRef
+  resolves same-namespace by name, so a SLOPolicy that lands beside the workload
+  finds no Platform and reports PlatformNotFound with no other signal.
+*/ -}}
+apiVersion: governance.nanohype.dev/v1alpha1
+kind: SLOPolicy
+metadata:
+  name: {{ .Values.platform.name }}-slo
+  namespace: {{ .Values.controlPlaneNamespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+    agents.nanohype.dev/tenant: {{ .Values.platform.tenant }}
+spec:
+  platformRef:
+    name: {{ .Values.platform.name }}
+  sli:
+    type: {{ .Values.slo.sli.type }}
+    {{- /*
+      The base series name, WITHOUT the suffix the type implies. The reconciler
+      appends _errors_total / _requests_total for availability and
+      _request_duration_seconds_{bucket,count} for latency, so a metric that
+      already carries a suffix here yields a query matching nothing.
+    */}}
+    metric: {{ .Values.slo.sli.metric | quote }}
+    {{- with .Values.slo.sli.selector }}
+    selector:
+      {{- range $k, $v := . }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+    {{- end }}
+    {{- with .Values.slo.sli.thresholdSeconds }}
+    thresholdSeconds: {{ . | quote }}
+    {{- end }}
+  objective: {{ .Values.slo.objective | quote }}
+  onPageTierBreach: {{ .Values.slo.onPageTierBreach }}
+{{- end }}

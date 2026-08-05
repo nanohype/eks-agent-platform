@@ -1,0 +1,16 @@
+# expect: slo.sli.selector may not set "le"
+# `le` is owned by the latency query's own bucket boundary and `__name__` would
+# redirect the query at an entirely different series. The reconciler rejects
+# both (slo_reconcile.go reservedSelectorLabels), but only after the CR is
+# admitted, so every tick fails until someone reads the status.
+platform:
+  name: cover
+  tenant: coverco
+slo:
+  enabled: true
+  sli:
+    type: availability
+    metric: cover_api
+    selector:
+      le: "0.5"
+  objective: "0.999"
