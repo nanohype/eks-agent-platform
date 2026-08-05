@@ -32,7 +32,21 @@ const evalFinalizer = "governance.nanohype.dev/eval-finalizer"
 // without an EvalRunnerNamespace override (envtest / dev paths). Production
 // resolves this from SSM via operatorconfig.EvalRunnerNamespace and the
 // value flows through EvalReconciler.RunnerNamespace.
-const defaultEvalRunnerNamespace = "eval-runner"
+const (
+	defaultEvalRunnerNamespace      = "eval-runner"
+	defaultEvalRunnerServiceAccount = "eval-runner"
+)
+
+// errNoReportsBucket is returned when the operator has no eval-reports bucket
+// to hand the workflow. Submitting anyway produces a run whose every upload
+// targets `s3:///<platform>/…` — the aws CLI rejects that, but only after the
+// cases have been executed against a live model, so the tenant pays for the
+// inference and gets no report.
+var errNoReportsBucket = errors.New(
+	"no eval-reports bucket configured: the operator resolves it from " +
+		"/eks-agent-platform/<cluster>/eval-runtime/eval_reports_bucket, which the " +
+		"eval-runtime terraform component publishes",
+)
 
 // evalRunnerNamespace returns the per-reconciler namespace where Workflows
 // land — RunnerNamespace if set, otherwise the default.
@@ -41,6 +55,15 @@ func (r *EvalReconciler) evalRunnerNamespace() string {
 		return r.RunnerNamespace
 	}
 	return defaultEvalRunnerNamespace
+}
+
+// evalRunnerServiceAccount returns the ServiceAccount the emitted Workflow
+// runs under — RunnerServiceAccount if set, otherwise the default.
+func (r *EvalReconciler) evalRunnerServiceAccount() string {
+	if r.RunnerServiceAccount != "" {
+		return r.RunnerServiceAccount
+	}
+	return defaultEvalRunnerServiceAccount
 }
 
 // argoWorkflowsGV is the GroupVersion the Argo Workflows controller
@@ -88,6 +111,14 @@ func evalWorkflowName(suite *governancev1alpha1.EvalSuite) string {
 // `eval-runner` WorkflowTemplate that terraform/components/eval-runtime
 // installs; this reconciler just references it via templateRef.
 func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governancev1alpha1.EvalSuite, platform *platformv1alpha1.Platform, fleet *agentsv1alpha1.AgentFleet) error {
+	// Refuse before submitting rather than after. A run with no bucket still
+	// executes every case against a live model and only fails at the upload,
+	// so the tenant is billed for the inference and gets nothing back — and
+	// the suite reports Running until the workflow times out.
+	if r.ReportsBucket == "" {
+		return errNoReportsBucket
+	}
+
 	kind := "Workflow"
 	if suite.Spec.Schedule != "" {
 		kind = "CronWorkflow"
@@ -111,21 +142,37 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		//   - platform / tenant / fleet → target the right tenant namespace
 		//   - cases-source → either inline JSON or s3://… manifest
 		//   - pass-threshold → AnalysisTemplate gate value
-		params := []map[string]any{
-			{"name": "platform", "value": platform.Name},
-			{"name": "tenant", "value": platform.Spec.Tenant},
-			{"name": "fleet", "value": fleet.Name},
+		// []any, not []map[string]any. This slice is handed to
+		// unstructured.SetNestedField, whose deep copy walks only the
+		// JSON-native shapes — map[string]interface{} and []interface{}. A
+		// []map[string]interface{} panics it ("cannot deep copy"), taking the
+		// operator down on every EvalSuite reconcile, and no compiler or vet
+		// pass sees it because the argument type is `any`.
+		params := []any{
+			map[string]any{"name": "platform", "value": platform.Name},
+			map[string]any{"name": "tenant", "value": platform.Spec.Tenant},
+			map[string]any{"name": "fleet", "value": fleet.Name},
+			// The namespace the EvalSuite itself lives in, which is where the
+			// writeback step patches its status. `tenant` is a tenant NAME and
+			// is not a namespace — patching there addresses a namespace that
+			// need not exist, so the run completes and the status it exists to
+			// write never lands.
+			map[string]any{"name": "suite-namespace", "value": suite.Namespace},
+			// The reports bucket the operator read from SSM. A workflow
+			// argument overrides the WorkflowTemplate's default, so this is
+			// what the run actually uploads to.
+			map[string]any{"name": "eval-reports-bucket", "value": r.ReportsBucket},
 			// Pass the bare EvalSuite resource name as a separate
 			// parameter so the workflow's writeback step doesn't have
 			// to derive it from workflow.name (which is platform-
 			// prefixed). Shell parameter expansion on a hyphenated
 			// platform name would strip the wrong segment.
-			{"name": "suite-name", "value": suite.Name},
-			{"name": "pass-threshold", "value": suite.Spec.PassThreshold},
+			map[string]any{"name": "suite-name", "value": suite.Name},
+			map[string]any{"name": "pass-threshold", "value": suite.Spec.PassThreshold},
 			// Each Platform runs its own gateway in its own namespace, so the
 			// eval run has to be told which one. A chart-level default would be
 			// wrong for every Platform but the first.
-			{"name": "gateway-url", "value": ModelGatewayEndpoint(platform)},
+			map[string]any{"name": "gateway-url", "value": ModelGatewayEndpoint(platform)},
 		}
 		if suite.Spec.CasesFromManifest != "" {
 			params = append(params, map[string]any{"name": "cases-manifest", "value": suite.Spec.CasesFromManifest})
@@ -140,7 +187,7 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		wfSpec := map[string]any{
 			"workflowTemplateRef": map[string]any{"name": "eval-runner"},
 			"arguments":           map[string]any{"parameters": params},
-			"serviceAccountName":  "eval-runner",
+			"serviceAccountName":  r.evalRunnerServiceAccount(),
 		}
 
 		if kind == "CronWorkflow" {
@@ -223,28 +270,42 @@ func (r *EvalReconciler) cleanupArgoWorkflow(ctx context.Context, suite *governa
 	return nil
 }
 
-// reconcileEval is the substantive body. Returns the phase to write
-// into status. Errors are real retries; missing-CRD + missing-ref are
-// surfaced as Pending so the reconciler doesn't burn on backoff.
-func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1alpha1.EvalSuite) (string, error) {
+// reconcileEval is the substantive body. Returns the phase to write into
+// status and the reason it is not progressing, if it is not. Errors are real
+// retries; missing-CRD + missing-ref are surfaced as Pending so the reconciler
+// doesn't burn on backoff.
+//
+// The reason is returned rather than derived, because every Pending used to
+// carry the same sentence — a suite blocked on an unconfigured reports bucket
+// read identically to one waiting on a Platform, and the operator was the only
+// thing that knew the difference.
+func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1alpha1.EvalSuite) (string, string, error) {
 	platform, fleet, err := r.resolveEvalRefs(ctx, suite)
 	if err != nil {
-		if errors.Is(err, errEvalPlatformNotFound) || errors.Is(err, errEvalFleetNotFound) {
-			return phasePending, nil
+		if errors.Is(err, errEvalPlatformNotFound) {
+			return phasePending, "platformRef " + suite.Spec.PlatformRef.Name + " not found", nil
 		}
-		return "", err
+		if errors.Is(err, errEvalFleetNotFound) {
+			return phasePending, "agentFleetRef " + suite.Spec.AgentFleetRef.Name + " not found", nil
+		}
+		return "", "", err
 	}
 	// Don't emit until both Platform AND AgentFleet are Ready — otherwise
 	// the Argo job would target a tenant namespace whose identity or fleet
 	// pods don't exist yet.
 	if platform.Status.Phase != phaseReady || fleet.Status.Phase != phaseReady {
-		return phasePending, nil
+		return phasePending, fmt.Sprintf(
+			"waiting on readiness: platform %s is %s, fleet %s is %s",
+			platform.Name, platform.Status.Phase, fleet.Name, fleet.Status.Phase), nil
 	}
 	if err := r.ensureArgoWorkflow(ctx, suite, platform, fleet); err != nil {
 		if errors.Is(err, errArgoNotInstalled) {
-			return phasePending, nil
+			return phasePending, errArgoNotInstalled.Error(), nil
 		}
-		return "", err
+		if errors.Is(err, errNoReportsBucket) {
+			return phasePending, errNoReportsBucket.Error(), nil
+		}
+		return "", "", err
 	}
 	// We don't watch the emitted Workflow's status here — the eval-runner
 	// template writes back to suite.status.lastScore + lastRunAt via the
@@ -252,13 +313,13 @@ func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1a
 	// phase is Provisioning (CronWorkflow installed, no completed run yet)
 	// or whatever the previous run left in status.
 	if suite.Status.LastRunAt == nil {
-		return phaseProvisioning, nil
+		return phaseProvisioning, "", nil
 	}
-	return suite.Status.Phase, nil
+	return suite.Status.Phase, "", nil
 }
 
 // applyEvalStatus writes the computed phase + condition.
-func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *governancev1alpha1.EvalSuite, phase string) error {
+func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *governancev1alpha1.EvalSuite, phase, reason string) error {
 	suite.Status.Phase = phase
 	cond := metav1.Condition{
 		Type:               "EvalReconciled",
@@ -278,7 +339,10 @@ func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *governancev
 	default:
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = phase
-		cond.Message = "waiting on Platform/AgentFleet readiness or Argo CRDs"
+		cond.Message = reason
+		if cond.Message == "" {
+			cond.Message = "not progressing, and the reconciler reported no reason"
+		}
 	}
 	// Surface the last observed mean score as an operator-emitted gauge (the
 	// eval-runner writes it back into status; we mirror it as a real series so

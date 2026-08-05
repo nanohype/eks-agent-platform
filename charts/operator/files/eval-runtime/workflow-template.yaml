@@ -5,8 +5,10 @@
 #     name: eval-runner
 #   arguments.parameters:
 #     - name: platform
-#     - name: tenant
+#     - name: tenant               (tenant NAME — telemetry attribution only)
 #     - name: fleet
+#     - name: suite-namespace      (where the EvalSuite lives; writeback target)
+#     - name: eval-reports-bucket  (supplied per run by the reconciler)
 #     - name: pass-threshold       (decimal-string 0..1, e.g. "0.85")
 #     - name: cases-inline  OR  cases-manifest   (mutually exclusive)
 #
@@ -40,6 +42,13 @@ spec:
       # parameter expansion breaks on hyphenated platform names).
       - name: suite-name
       - name: pass-threshold
+      # The namespace the EvalSuite lives in — where the writeback step patches
+      # its status. Distinct from `tenant`, which is a tenant NAME: patching in
+      # a namespace named after the tenant addresses one that need not exist,
+      # and kubectl reports success on a patch that lands nowhere useful.
+      # Supplied per run by the EvalSuite reconciler.
+      - name: suite-namespace
+        value: "REPLACE_BY_EVALSUITE"
       - name: cases-inline
         value: ""
       - name: cases-manifest
@@ -97,7 +106,7 @@ spec:
               parameters:
                 - { name: score-json, value: "{{tasks.score.outputs.parameters.score}}" }
                 - { name: suite-name, value: "{{workflow.parameters.suite-name}}" }
-                - { name: tenant, value: "{{workflow.parameters.tenant}}" }
+                - { name: suite-namespace, value: "{{workflow.parameters.suite-namespace}}" }
 
     # ─────────────── 1. resolve-cases ───────────────
     # Emits the case list to outputs.parameters.cases. One of the two
@@ -110,7 +119,13 @@ spec:
           - name: platform
           - name: bucket
       script:
-        image: amazon/aws-cli:2.17.0
+        # The eval-runner image, not amazon/aws-cli: this script pipes through
+        # `jq` to compact the case list, and the aws-cli image ships no jq —
+        # the step exited 127 on its first line that mattered. The eval-runner
+        # image carries aws, jq and kubectl together, which is why the other
+        # three steps already use it. The chart's string-replace rewrites this
+        # literal, so the tag stays pinned by .Values.evalRuntime.image.
+        image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
         source: |
           set -eu
@@ -227,11 +242,15 @@ spec:
         parameters:
           - name: score
             valueFrom: { path: /tmp/score.json }
-        artifacts:
-          - name: report
-            path: /tmp/report.html
-          - name: junit
-            path: /tmp/junit.xml
+        # No outputs.artifacts. Declaring one makes Argo push the file to the
+        # controller's configured artifact repository, and there is none on
+        # dev or staging — the step fails after the run, on a file it has
+        # already delivered. The script above uploads report.html and junit.xml
+        # to s3://<eval-reports>/<platform>/runs/<suite>/<runId>/ itself, which
+        # is the prefix the eval-runner role is granted and the one
+        # status.lastReportUrl points at. An artifact declaration here would
+        # be a second, differently-permissioned copy of a delivery that has
+        # already happened.
 
     # ─────────────── 4. writeback ───────────────
     # PATCH EvalSuite.status with the computed mean score + phase. Uses
@@ -242,7 +261,7 @@ spec:
         parameters:
           - name: score-json
           - name: suite-name
-          - name: tenant
+          - name: suite-namespace
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
@@ -260,7 +279,7 @@ spec:
           # from workflow.name (platform-prefixed; shell-strip breaks
           # on hyphenated platform names like 'acme-corp').
           kubectl patch evalsuite '{{inputs.parameters.suite-name}}' \
-            --namespace '{{inputs.parameters.tenant}}' \
+            --namespace '{{inputs.parameters.suite-namespace}}' \
             --subresource status \
             --type merge \
             --patch "$(jq -nc --arg ls "$mean" --arg lu "$url" --arg t "$now" --arg p "$phase" '{status:{lastScore:$ls,lastReportUrl:$lu,lastRunAt:$t,phase:$p}}')"

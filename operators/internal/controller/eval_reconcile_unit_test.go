@@ -97,7 +97,7 @@ func TestApplyEvalStatusEmitsScoreGauge(t *testing.T) {
 	suite.Status.LastScore = "0.91"
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(suite).WithStatusSubresource(suite).Build()
 	r := &EvalReconciler{Client: cl, Scheme: s}
-	if err := r.applyEvalStatus(ctx, suite, phaseReady); err != nil {
+	if err := r.applyEvalStatus(ctx, suite, phaseReady, ""); err != nil {
 		t.Fatalf("applyEvalStatus: %v", err)
 	}
 	g := evalSuiteScore.WithLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name)
@@ -113,7 +113,7 @@ func TestReconcileEval_PendingUntilBothReady(t *testing.T) {
 	// Missing refs → pending.
 	cl := fake.NewClientBuilder().WithScheme(s).Build()
 	r := &EvalReconciler{Client: cl, Scheme: s}
-	if phase, err := r.reconcileEval(context.Background(), evalSuite()); err != nil || phase != phasePending {
+	if phase, _, err := r.reconcileEval(context.Background(), evalSuite()); err != nil || phase != phasePending {
 		t.Fatalf("missing refs: got (%q, %v)", phase, err)
 	}
 
@@ -122,7 +122,7 @@ func TestReconcileEval_PendingUntilBothReady(t *testing.T) {
 	fleet := agentFleet() // no Ready status
 	cl2 := fake.NewClientBuilder().WithScheme(s).WithObjects(p, fleet).Build()
 	r2 := &EvalReconciler{Client: cl2, Scheme: s}
-	if phase, err := r2.reconcileEval(context.Background(), evalSuite()); err != nil || phase != phasePending {
+	if phase, _, err := r2.reconcileEval(context.Background(), evalSuite()); err != nil || phase != phasePending {
 		t.Fatalf("fleet not ready: got (%q, %v)", phase, err)
 	}
 }
