@@ -10,11 +10,12 @@ GetParametersByPath and ignores keys it does not recognise, so adding an output
 is non-breaking. The cost is that publishing an output nobody reads is also
 non-breaking, and looks identical.
 
-That is not hypothetical. `accelerator-pools` published a JSON catalog of
-accelerator node pools for `AcceleratorPool` CRs in the operator. There is no
-AcceleratorPool CRD. It published two IAM role ARNs beside it for consumers that
-use EKS Pod Identity and therefore never need an ARN. Three parameters, read by
-nothing, indistinguishable from a working contract for as long as anyone looked.
+That is not hypothetical. A component in this tree published a JSON catalog of
+accelerator node pools, keyed for a CRD the operator does not define, alongside
+two IAM role ARNs for consumers bound by EKS Pod Identity — which never need an
+ARN. Three parameters read by nothing, indistinguishable from a working contract
+for as long as anyone looked. The component has since been deleted along with
+the addons it served; this check is what makes the next one visible.
 
 So a published parameter has to name its consumer, and this checks that each one
 does. A parameter is consumed when any of these holds:
@@ -29,9 +30,9 @@ does. A parameter is consumed when any of these holds:
 
 The marker in (3) is a claim, not a proof, and it is meant to be: it costs one
 line to write and it puts the claim next to the resource, where the reviewer who
-would have asked "consumed by what?" can see it. `accelerator-pools` would have
-needed one saying "AcceleratorPool CRs", and that is the sentence somebody would
-have checked.
+would have asked "consumed by what?" can see it. The accelerator-pool catalog
+above would have needed one naming the CRD that reads it, and that is the
+sentence somebody would have checked.
 
 This checks one direction only — that what is written is read. The other
 direction (that what is read is written) spans repos: landing-zone publishes

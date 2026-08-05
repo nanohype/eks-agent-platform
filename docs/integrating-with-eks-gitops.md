@@ -3,7 +3,7 @@
 `eks-agent-platform` is the **product**. It builds two things:
 
 - **The operator** — a Helm chart at `charts/operator/` (CRDs + Deployment + RBAC), published to `ghcr.io/nanohype/eks-agent-platform/operator`.
-- **The terraform** — per-tenant AWS state under `terraform/components/` (agent IAM, Bedrock access, egress, kill-switch, eval-runtime, cost pipeline, batch runtime, model artifacts, accelerator pools).
+- **The terraform** — per-tenant AWS state under `terraform/components/` (agent IAM, Bedrock access, egress, kill-switch, eval-runtime, cost pipeline, batch runtime, model artifacts).
 
 It is not a deploy catalog. Nothing in this repo applies itself to a cluster.
 
@@ -14,7 +14,6 @@ It is not a deploy catalog. Nothing in this repo applies itself to a cluster.
 - **The operator** — `applicationsets/addons-agent-operator.yaml` git-sources `charts/operator`. It injects the per-cluster IRSA role ARNs and EKS OIDC wiring (provider ARN + issuer host) from the cluster-Secret annotations that `cluster-bootstrap` sets, so no account-specific values are ever committed to the chart. The same ApplicationSet injects the eval-runner role ARN and report bucket (see eval-runtime below).
 - **Envoy AI Gateway** — `applicationsets/addons-ai-platform.yaml`.
 - **Argo Workflows / Rollouts / Events** — `applicationsets/addons-argo-platform.yaml`. These are prerequisites for the operator's eval-runtime and SLO.
-- **Accelerators** — the GPU operator, NVIDIA DRA driver, and AWS Neuron device plugin land via the `accelerators` category: `applicationsets/addons-accelerators-{helm,kustomize}.yaml`, with values under `addons/accelerators/<addon>/` (gpu sync wave 6, dra wave 7, neuron wave 6).
 - **Dashboards** — the seven persona dashboards ship as `GrafanaDashboard` CRs under `dashboards/base/platform/agent-*.yaml`.
 
 eks-gitops also provides the substrate the operator assumes: ArgoCD, cert-manager, external-secrets, ALB Controller, External DNS, Cilium, Kyverno, the prometheus-operator CRDs, Loki, Tempo, Grafana, OpenCost, and the rest of the cluster addon catalog.
@@ -28,7 +27,7 @@ The operator owns its own runtime. Two subsystems ride along in `charts/operator
 
 ## How a cluster opts in
 
-A cluster joins the agent platform by carrying the label `eks-agent-platform/enabled=true`. `cluster-bootstrap` (in `landing-zone`) sets it, along with the cluster-Secret annotations that supply the per-cluster IRSA/OIDC values. The eks-gitops ApplicationSets select on that label, so once the cluster is bootstrapped the operator, AI platform, Argo platform, accelerators, and dashboards flow in automatically in sync-wave order.
+A cluster joins the agent platform by carrying the label `eks-agent-platform/enabled=true`. `cluster-bootstrap` (in `landing-zone`) sets it, along with the cluster-Secret annotations that supply the per-cluster IRSA/OIDC values. The eks-gitops ApplicationSets select on that label, so once the cluster is bootstrapped the operator, AI platform, Argo platform, and dashboards flow in automatically in sync-wave order.
 
 ## Validating before you ship
 

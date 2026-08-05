@@ -11,7 +11,7 @@ The system organizes around nine bounded contexts. Each gets a CRD, a reconciler
 | **Tenancy**       | `Tenant`       | `tenant`   | —                              | `tenant`         | Cluster-scoped aggregate of a team's `Platform`s; rolls up readiness, spend, and suspension into a single dashboard surface                                                                                                             |
 | **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IAM role + Pod Identity association + KMS grant + S3 bucket policy                                         |
 | **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | Envoy AI Gateway `AIGatewayRoute` rule per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attached as request headers, per-route rate limits                                                                             |
-| **Agent runtime** | `AgentFleet`   | `runtime`  | `accelerator-pools`            | —                | `Deployment` per agent running the tenant's own image, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, all under the tenant `ServiceAccount` bound to the tenant IAM role via EKS Pod Identity                       |
+| **Agent runtime** | `AgentFleet`   | `runtime`  | —                              | —                | `Deployment` per agent running the tenant's own image, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, all under the tenant `ServiceAccount` bound to the tenant IAM role via EKS Pod Identity                       |
 | **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                       |
 | **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`              | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore` |
 | **Observability** | —              | —          | —                              | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family` resource attrs (model id rides on the per-invocation span, not the pod resource); Bedrock invocation spans + per-invocation cost    |
@@ -43,10 +43,6 @@ OpenTofu owns: invocation logging buckets, base IAM, EventBridge bus, cost pipel
 That is an attribution decision before it is a packaging one. A tool server executes an agent's actions under its own service identity, so the audit log names the tool server rather than the agent that asked — and an agent's account of what it did cannot then be confirmed or refuted against the record. Tools in-process, as the tenant, make the two records name the same principal.
 
 Same with Envoy AI Gateway: `ModelGateway` reconciles into a Gateway-API `Gateway` plus upstream `AIGatewayRoute` / `AIServiceBackend` / `BackendSecurityPolicy` resources.
-
-### Accelerator node substrate
-
-`terraform/components/accelerator-pools` provisions the substrate for GPU/Neuron workloads: IRSA + EKS Pod Identity for the NVIDIA GPU Operator and the AWS Neuron device plugin, plus an SSM `pool_catalog` parameter enumerating the available pools by device class (`gpu.nvidia.com`, `neuron.aws.com`) and instance family (NVIDIA on `g6e`/`p5`, Neuron on `inf2`/`trn2`). The GPU operator, the NVIDIA DRA driver, and the AWS Neuron device plugin are installed by the eks-gitops accelerators addon group. Fleet-level scheduling onto these pools is out of scope for v1 — see [What this repo deliberately does NOT do](#what-this-repo-deliberately-does-not-do).
 
 ### The operator carries its own runtime
 
@@ -140,7 +136,7 @@ See [README.md](./README.md#what-you-get).
 
 ## What this repo deliberately does NOT do
 
-- **Not a model host.** Bedrock runs inference outside the cluster. This platform does not change that. Self-hosted models on Neuron/NVIDIA are out of scope for v1: the accelerator node substrate is provisioned (see [Accelerator node substrate](#accelerator-node-substrate)), but fleet-level accelerator scheduling — the AgentFleet API to request a device class and the reconcile path onto these pools — is tracked in [#106](https://github.com/nanohype/eks-agent-platform/issues/106).
+- **Not a model host.** Bedrock runs inference outside the cluster, including open-weight models through Custom Model Import. There is no accelerator substrate here and no GPU or Neuron node story: a fleet is a `Deployment` of the tenant's own image, and the model call leaves the cluster.
 - **Not multi-cloud.** EKS only.
 - **Not a replacement for Envoy AI Gateway.** It composes it. Nor an agent framework — the agent loop is the tenant's own code, and the platform's job is the boundary around it.
 - **Not a cluster bootstrap.** The cluster + ArgoCD must already exist (via `landing-zone` OpenTofu or equivalent).
