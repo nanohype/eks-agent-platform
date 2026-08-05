@@ -240,6 +240,32 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
+  # ── vcluster chart acceptance gate ───────────────────────────────────────
+  # buildVClusterValues returns a map[string]interface{} that nothing checks
+  # against the chart it is handed to. The unit tests assert what the operator
+  # EMITS; they pass just as happily against a chart version that renamed the
+  # path out from under them. So a bump could ship green and break the isolation
+  # tier at sync, on every vcluster-isolated tenant — and 0.36.0 really did
+  # remove sync.toHost.volumeSnapshots.
+  #
+  # A clean render is not sufficient either: 0.35.2 -> 0.36.1 drops the
+  # ClusterRole and ClusterRoleBinding with helm exiting 0. This renders the
+  # operator's own values (exported through buildVClusterValues, not restated)
+  # against the pinned chart and diffs the object set against a committed
+  # inventory, so a silent drop fails as loudly as a rejected key.
+  vcluster-chart:
+    name: the pinned vcluster chart accepts what the operator emits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - uses: azure/setup-helm@v4
+      - run: pip install pyyaml
+      - run: ./scripts/check-vcluster-chart.py
+
   # helm lint, template rendering and CRD parity all read the chart against
   # itself. None of them asks whether the image it tells a cluster to pull
   # exists — which is how appVersion sat eighty commits ahead of the newest

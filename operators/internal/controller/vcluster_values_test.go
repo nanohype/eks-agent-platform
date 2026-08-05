@@ -8,12 +8,14 @@ package controller
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/yaml"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
@@ -144,6 +146,44 @@ func TestCoreDNSKeepsNetBindService(t *testing.T) {
 	spCaps := nestedMap(t, values, "controlPlane", "statefulSet", "security", "containerSecurityContext", "capabilities")
 	if _, hasAdd := spCaps["add"]; hasAdd {
 		t.Error("the control-plane container added a capability back; only coredns needs one")
+	}
+}
+
+// TestExportVClusterValues is not an assertion — it is the export seam that
+// scripts/check-vcluster-chart.py renders against the pinned chart.
+//
+// Everything else in this file asserts what the operator EMITS. Nothing asserted
+// that the chart ACCEPTS it, and the two are different questions: the values are
+// a map[string]interface{} the compiler never checks against a schema, so a chart
+// bump that renamed a values path would keep every test in this package green and
+// break the isolation tier at sync, on every tenant.
+//
+// It goes through buildVClusterValues rather than restating the values, so the
+// thing rendered is the thing shipped. Without the env var it is a no-op, so a
+// normal `go test ./...` neither writes files nor needs helm.
+func TestExportVClusterValues(t *testing.T) {
+	out := os.Getenv("VCLUSTER_VALUES_OUT")
+	if out == "" {
+		t.Skip("VCLUSTER_VALUES_OUT unset — export seam for scripts/check-vcluster-chart.py")
+	}
+	// Init-charts included: they render into experimental.deploy.vcluster.helm,
+	// which is a values path like any other and would otherwise go unrendered.
+	values := buildVClusterValues(vclusterPlatform(), VClusterConfig{
+		InitCharts: []VClusterInitChart{{
+			ChartName:   "keda",
+			RepoURL:     "https://kedacore.github.io/charts",
+			Version:     "2.20.2",
+			ReleaseName: "keda",
+			Namespace:   "keda",
+			Values:      "replicas: 1",
+		}},
+	})
+	blob, err := yaml.Marshal(values)
+	if err != nil {
+		t.Fatalf("marshal vcluster values: %v", err)
+	}
+	if err := os.WriteFile(out, blob, 0o600); err != nil {
+		t.Fatalf("write %s: %v", out, err)
 	}
 }
 

@@ -1,0 +1,33 @@
+# The object set the pinned vcluster chart renders from the values
+# buildVClusterValues emits. Generated and checked by
+# scripts/check-vcluster-chart.py; refresh with --write after reviewing a diff.
+#
+# A DROPPED object is the dangerous direction: helm exits 0 and the isolation
+# tier quietly loses a resource or a permission at sync. Record here why the
+# current set is the right one.
+#
+# No ClusterRole / ClusterRoleBinding, deliberately.
+#   The chart emitted a cluster-scoped pair up to 0.35.2 granting get/list on
+#   persistentvolumes and CRUD on volumesnapshotcontents. This configuration
+#   enables neither: sync.toHost.persistentVolumes defaults false and the
+#   operator never sets it, and sync.toHost.volumeSnapshots was REMOVED
+#   upstream in 0.36.0 — the chart now fails the render outright if a values
+#   file still sets it. rbac.clusterRole.enabled is "auto" in both versions, so
+#   the pair disappearing is auto-detection reaching the right answer for a
+#   single-namespace vcluster that syncs only ServiceAccounts to the host.
+#
+#   Settled by running it rather than reading it: vcluster 0.36.1 installed in
+#   kind with exactly these values, under a namespace enforcing PSS restricted.
+#   The syncer logged no RBAC denial, CoreDNS reached Ready in 8s, a PVC bound
+#   and mounted, a restricted pod wrote and read the volume, and
+#   kubernetes.default.svc.cluster.local resolved to the vcluster's own API
+#   Service. Cluster-scoped storage permissions were dead weight for this tier.
+#
+apps/v1 StatefulSet vcluster
+rbac.authorization.k8s.io/v1 Role vc-vcluster
+rbac.authorization.k8s.io/v1 RoleBinding vc-vcluster
+v1 Secret vc-config-vcluster
+v1 Service vcluster
+v1 Service vcluster-headless
+v1 ServiceAccount vc-vcluster
+v1 ServiceAccount vc-workload-vcluster
