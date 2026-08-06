@@ -102,6 +102,35 @@ func countSid(sids []string, want string) int {
 	return n
 }
 
+// statementBySid returns the one statement carrying sid, failing if it is absent
+// or duplicated. The scope assertions below read fields off the statement rather
+// than its Sid, so they need the statement itself.
+func statementBySid(t *testing.T, raw, sid string) map[string]any {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("parse policy json: %v", err)
+	}
+	stmts, _ := doc["Statement"].([]any)
+	var found map[string]any
+	for _, s := range stmts {
+		m, ok := s.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["Sid"] == sid {
+			if found != nil {
+				t.Fatalf("statement %q appears more than once", sid)
+			}
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatalf("statement %q not found in policy %s", sid, raw)
+	}
+	return found
+}
+
 func TestEnsureBucketPolicy_AddsTenantStatementsToEmptyPolicy(t *testing.T) {
 	s := &fakeS3{} // nil => NoSuchBucketPolicy => starts from an empty doc
 	r := &PlatformReconciler{S3: s}
@@ -119,6 +148,52 @@ func TestEnsureBucketPolicy_AddsTenantStatementsToEmptyPolicy(t *testing.T) {
 	}
 	if countSid(sids, baselineDenyTLSSid) != 1 {
 		t.Fatalf("the TLS-deny baseline must be seeded on an empty policy, got sids=%v", sids)
+	}
+}
+
+// TestEnsureBucketPolicy_ScopesTenantAccessToItsOwnPrefix asserts the value that
+// is the entire tenant boundary on the shared artifacts bucket.
+//
+// Nothing else separates tenants there. The bucket is one bucket for the whole
+// cluster; tenant_baseline grants no s3: action at all, so a tenant role's only
+// object access is the Allow this function writes, and SSE-KMS cannot
+// discriminate because the bucket enables an S3 Bucket Key — the encryption
+// context is the bucket ARN, identical for every tenant. If the Resource here
+// widens to the bucket root, every tenant can read and overwrite every other
+// tenant's fine-tuned weights, and no second control notices.
+//
+// The sibling tests in this file assert statement lifecycle — added, preserved,
+// replaced, removed — all of which pass with the prefix collapsed to
+// "tenants/". These two assertions are what make that mutation fail.
+func TestEnsureBucketPolicy_ScopesTenantAccessToItsOwnPrefix(t *testing.T) {
+	s := &fakeS3{}
+	r := &PlatformReconciler{S3: s}
+	cfg := PlatformAWSConfig{ArtifactsBucketName: "artifacts"}
+
+	if err := r.ensureBucketPolicy(context.Background(), newPlatform("acme", "acme"), "role-arn", cfg); err != nil {
+		t.Fatalf("ensureBucketPolicy: %v", err)
+	}
+	doc := s.puts[len(s.puts)-1]
+
+	// Object access: exactly this tenant's prefix, never the bucket root.
+	const wantResource = "arn:aws:s3:::artifacts/tenants/acme/*"
+	if got := statementBySid(t, doc, "TenantAccess-acme")["Resource"]; got != wantResource {
+		t.Errorf("object-access Resource: got %v want %q — anything broader than the "+
+			"tenant's own prefix grants cross-tenant access to the shared bucket", got, wantResource)
+	}
+
+	// Listing: ListBucket is necessarily on the bucket ARN, so the prefix
+	// condition is what keeps one tenant from enumerating another's object keys.
+	list := statementBySid(t, doc, "TenantAccess-acme-List")
+	cond, ok := list["Condition"].(map[string]any)
+	if !ok {
+		t.Fatalf("list statement has no Condition — ListBucket is granted on the bucket ARN, "+
+			"so without an s3:prefix condition this enumerates every tenant's keys: %v", list)
+	}
+	like, _ := cond["StringLike"].(map[string]any)
+	prefixes, _ := like["s3:prefix"].([]any)
+	if len(prefixes) != 1 || prefixes[0] != "tenants/acme/*" {
+		t.Errorf("list s3:prefix condition: got %v want [tenants/acme/*]", prefixes)
 	}
 }
 
