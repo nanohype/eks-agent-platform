@@ -423,10 +423,17 @@ jobs:
         env:
           REQUIRE_PROMTOOL: "1"
         run: cd operators && make coverage-check
+      # verify: false because the JSONSchema check it performs by default is a
+      # network fetch of https://golangci-lint.run/jsonschema/... on every run,
+      # and that host timing out fails the job with nothing wrong in the tree.
+      # The linter still parses .golangci.yml and rejects an unusable config —
+      # what is given up is schema-level validation of a file this repo pins to
+      # one linter version anyway.
       - uses: golangci/golangci-lint-action@v7
         with:
           working-directory: operators
           version: v2.11.4
+          verify: false
 
   # ── Generated CRD reference drift gate ───────────────────────────────────
   # docs/crd-reference/v1alpha1.md, the CRD manifests under config/crd, the

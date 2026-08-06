@@ -178,10 +178,13 @@ jobs:
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
+      # verify: false — see the note in ci.yaml. The default schema check is a
+      # network fetch that fails the job when golangci-lint.run is unreachable.
       - uses: golangci/golangci-lint-action@v7
         with:
           working-directory: operators
           version: v2.11.4
+          verify: false
 
   # govulncheck complements the trivy dependency scan: it is Go-vulnerability-DB
   # aware and call-graph-driven, so it only reports advisories whose vulnerable
