@@ -204,18 +204,109 @@ jobs:
       - name: login
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: package + push
+        env:
+          REGISTRY: oci://ghcr.io/${{ github.repository }}/charts
         run: |
-          # Per-chart output dir so the glob expansion in helm push has
-          # exactly one match — sharing /tmp/charts/ across charts would
-          # let helm push see multiple .tgz files and fail with
-          # "exactly one positional argument expected".
+          set -euo pipefail
+
+          # A charts-v tag packages every chart in charts/ at whatever version
+          # its own Chart.yaml declares — the tag is only a trigger, it names no
+          # version. So most tags re-push charts that did not change, and an OCI
+          # tag is mutable: pushing 0.3.0 a second time replaces what every
+          # cluster already resolved. Identical content makes that a no-op, but
+          # a chart edited without a version bump would be swapped underneath
+          # running clusters with nothing to say so.
+          #
+          # So this refuses to overwrite. For each chart the published version
+          # is either absent (publish), byte-identical (skip), or different
+          # (fail — the chart changed and the version did not).
+          #
+          # The comparison packages the source and compares the extracted
+          # trees rather than the tarballs: helm rewrites Chart.yaml on package
+          # (keys reordered, comments dropped) and stamps mtimes, so source and
+          # registry only compare equal once both have been through
+          # `helm package`.
+          published=0
+          skipped=0
+
           for d in charts/*/; do
             name=$(basename "$d")
-            mkdir -p "/tmp/charts/${name}"
-            helm package "$d" -d "/tmp/charts/${name}"
-            tgz="$(ls "/tmp/charts/${name}/${name}"-*.tgz | head -1)"
-            helm push "$tgz" "oci://ghcr.io/${{ github.repository }}/charts"
+            version=$(helm show chart "$d" | awk '/^version:/ {print $2; exit}')
+            if [ -z "$version" ]; then
+              echo "::error::${name}/Chart.yaml declares no version"
+              exit 1
+            fi
+
+            # Per-chart output dir so the glob expansion in helm push has
+            # exactly one match — sharing /tmp/charts/ across charts would
+            # let helm push see multiple .tgz files and fail with
+            # "exactly one positional argument expected".
+            work="/tmp/charts/${name}"
+            mkdir -p "${work}/candidate"
+            helm package "$d" -d "$work"
+            tgz="${work}/${name}-${version}.tgz"
+            tar xzf "$tgz" -C "${work}/candidate"
+
+            # Three outcomes, and anything else stops the job. An unrecognized
+            # registry error must not fall through to a push — that is the one
+            # path that could overwrite a live version. Login runs as its own
+            # step above, so by here auth is established and `denied` means the
+            # package does not exist yet (GHCR does not distinguish an absent
+            # package from an unreadable one).
+            state=unknown
+            for attempt in 1 2 3; do
+              if err=$(helm show chart "${REGISTRY}/${name}" --version "$version" 2>&1); then
+                state=present
+                break
+              fi
+              case "$err" in
+                *"not found"*|*NAME_UNKNOWN*|*MANIFEST_UNKNOWN*|*denied*)
+                  state=absent
+                  break
+                  ;;
+              esac
+              echo "attempt ${attempt}: could not read ${name} ${version}: ${err}"
+              sleep 5
+            done
+
+            case "$state" in
+              present)
+                helm pull "${REGISTRY}/${name}" --version "$version" \
+                  -d "$work" --untar --untardir published
+                if diff -r "${work}/published/${name}" "${work}/candidate/${name}" >/dev/null; then
+                  echo "skip ${name} ${version} — already published, identical content"
+                  skipped=$((skipped + 1))
+                  continue
+                fi
+                echo "::error::${name} ${version} is already published with different content."
+                echo "The chart changed without a version bump. Bump ${name}/Chart.yaml"
+                echo "and tag again — overwriting a published version would swap the chart"
+                echo "underneath every cluster already resolving it."
+                diff -r "${work}/published/${name}" "${work}/candidate/${name}" || true
+                exit 1
+                ;;
+              absent)
+                helm push "$tgz" "$REGISTRY"
+                published=$((published + 1))
+                ;;
+              *)
+                echo "::error::could not determine whether ${name} ${version} is published."
+                echo "Refusing to push — the last error was: ${err}"
+                exit 1
+                ;;
+            esac
           done
+
+          echo "published=${published} skipped=${skipped}"
+
+          # A charts-v tag that publishes nothing is a tag pushed without a
+          # version bump. Passing green would report a release that did not
+          # happen — the same shape as the alerting path this repo just deleted.
+          if [ "$published" -eq 0 ]; then
+            echo "::error::this tag published no chart — every chart in charts/ is already"
+            echo "at its published version. Bump the chart you meant to release and tag again."
+            exit 1
+          fi
 
   sdk-npm:
     name: publish @eks-agent/* to npm
