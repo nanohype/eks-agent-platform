@@ -8,13 +8,18 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) and operator SLO (PrometheusRule/
 # AlertmanagerConfig/CR-state metrics) behind evalRuntime.* / slo.* toggles.
 #
-# 0.5.0 is a lockstep bump, and it has to be: the SLOPolicy CRD gained
+# 0.6.0 removes the prometheus-operator alerting path — the PrometheusRule, the
+# AlertmanagerConfig and the namespace that held them. The chart version moves
+# and appVersion does not: no Go changed, so the 0.5.0 image is still exactly
+# what this chart should run.
+#
+# 0.5.0 was a lockstep bump, and it had to be: the SLOPolicy CRD gained
 # sli.errorSelector and its onPageTierBreach default moved to None. An older
 # binary has no such field on its Go struct, so an errorSelector would be
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour.
-version: 0.5.0
+version: 0.6.0
 appVersion: "0.5.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).

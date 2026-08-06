@@ -16,6 +16,12 @@ That left two homes for the operator's own runtime pieces — the eval-runtime
 (`WorkflowTemplate` + `AnalysisTemplate` + Namespace/SA/RBAC) and the operator SLO
 (`PrometheusRule` + `AlertmanagerConfig` + the kube-state-metrics CR-state config):
 
+> **Amended.** The SLO half no longer exists in either home. The
+> `PrometheusRule` and `AlertmanagerConfig` were deleted — the catalog
+> installs the prometheus-operator CRDs and no ruler — and the CR-state
+> config always lived in the eks-gitops kube-state-metrics addon. The
+> decision below still governs the eval-runtime, which is what remains.
+
 1. **The eks-gitops catalog** as standalone addons (where the generic addons now live).
 2. **The operator Helm chart** (`charts/operator/`), shipped with the operator it observes.
 
