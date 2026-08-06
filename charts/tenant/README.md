@@ -7,6 +7,8 @@ Opinionated scaffold for a single tenant Platform. Renders:
 - `ModelGateway` — one default route, persona-tuned model family
 - `AgentFleet` — at least one agent, with KEDA scaling defaults
 - `EvalSuite` — daily smoke test by default
+- `SLOPolicy` — burn-rate objective over the workload's own series (off by default)
+- `SandboxPool` — self-hosted Managed Agents workers in the tenant namespace (off by default)
 
 Consumed by `agentctl platform new`. Can also be rendered directly:
 
@@ -55,6 +57,31 @@ key, an unquoted `type: N` (a YAML boolean), `eventBridgeScheduler` with no queu
 to send to, a secret read that already carries its own prefix.
 `scripts/check-chart-crd-parity.py` asserts both halves: that the chart can emit
 every field the CRD defines, and that it still refuses the ones it should.
+
+## Sandbox pool
+
+`sandboxPool` runs self-hosted Managed Agents workers in the tenant namespace,
+each claiming sessions from a `self_hosted` environment's work queue and
+executing the agent's tool calls in-cluster. It is off by default because it
+cannot be defaulted into usefulness — it needs a real `env_...` environment id
+and the key that authenticates workers against it.
+
+Two secrets, two different jobs, and the difference matters:
+
+- `environmentKeySecret` holds `ANTHROPIC_ENVIRONMENT_KEY` and is mounted into
+  every worker pod. It is the worker's own credential.
+- `apiKeySecret` holds the organization API key and is read **only** by the
+  queue-depth autoscaler's metrics bridge, never by a worker. The org key must
+  not be reachable from an agent's tool calls, and the operator enforces that by
+  giving it to a separate Deployment.
+
+The consequence is easy to miss: queue-depth autoscaling needs the org key,
+because the bridge is what calls the work-stats endpoint. Without it the
+operator removes the KEDA `ScaledObject` and pins the Deployment to
+`scaling.minReplicas` — no error, a healthy-looking pool sitting at a static
+count while the values file says it ranges. The chart refuses that combination
+at render time: name the Secret, or set `maxReplicas` to `minReplicas` to
+declare the static count you would actually get.
 
 ## Personas
 

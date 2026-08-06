@@ -1,6 +1,6 @@
 apiVersion: v2
 name: tenant
-description: Opinionated tenant scaffold — a Platform CR + ModelGateway + AgentFleet + BudgetPolicy + EvalSuite, parameterized by persona.
+description: Opinionated tenant scaffold — a Platform CR plus every declarative kind that hangs off it (ModelGateway, AgentFleet, BudgetPolicy, EvalSuite, SLOPolicy, SandboxPool, Tenant), parameterized by persona.
 type: application
 # 0.2.0 carried the full Platform vocabulary: spec.datastores,
 # identity.capabilities, identity.directSecretReads and spec.attribution, plus
@@ -8,7 +8,11 @@ type: application
 # 0.3.0 adds the SLOPolicy template — the seventh kind, and the one no vending
 # path could reach — off by default until the workload emits the series its SLI
 # names.
-version: 0.3.0
+# 0.4.0 adds the SandboxPool template, the last declarative kind the chart did
+# not reach. Off by default: it needs a real Managed Agents environment id and
+# the environment key that authenticates workers against it, and neither has a
+# sensible placeholder.
+version: 0.4.0
 appVersion: "0.1.0"
 maintainers:
   - name: stxkxs

@@ -11,6 +11,12 @@ eks-agent-platform tenant '{{ .Values.platform.name }}' rendered.
 {{- if .Values.evalSuite.enabled }}
   EvalSuite        {{ .Values.platform.name }}-eval         (schedule: {{ .Values.evalSuite.schedule | default "manual" }})
 {{- end }}
+{{- if .Values.slo.enabled }}
+  SLOPolicy        {{ .Values.platform.name }}-slo          ({{ .Values.slo.sli.type }} on {{ .Values.slo.sli.metric }}, objective: {{ .Values.slo.objective }})
+{{- end }}
+{{- if .Values.sandboxPool.enabled }}
+  SandboxPool      {{ .Values.platform.name }}-sandboxes    ({{ .Values.sandboxPool.environmentId }}, {{ if .Values.sandboxPool.apiKeySecret.name }}scaling {{ .Values.sandboxPool.scaling.minReplicas }}..{{ .Values.sandboxPool.scaling.maxReplicas }} on queue depth{{ else }}static {{ .Values.sandboxPool.scaling.minReplicas }} worker(s){{ end }})
+{{- end }}
 
 ──────────────────────────────────────────────────────────────────────────────
  What happens next

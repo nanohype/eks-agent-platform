@@ -245,3 +245,57 @@ slo:
   # reports RolloutHeld=Unknown/AppProjectAbsent rather than holding anything.
   # None evaluates, publishes and pages without touching the cluster.
   onPageTierBreach: None
+
+# ── Sandbox pool ────────────────────────────────────────────────────────────
+#
+# A pool of self-hosted Managed Agents workers. Each worker runs `ant
+# beta:worker`, claiming sessions from a `self_hosted` environment's work queue
+# and executing the agent's tool calls inside the cluster — agent code and its
+# filesystem never leave the tenant namespace.
+#
+# Off by default because it cannot be defaulted into usefulness: it needs a real
+# Managed Agents environment id and the environment key that authenticates
+# workers against it, and neither has a sensible placeholder.
+sandboxPool:
+  enabled: false
+  # The `self_hosted` environment whose work queue these workers drain, as an
+  # `env_...` id from the Managed Agents console.
+  environmentId: ""
+  # ANTHROPIC_ENVIRONMENT_KEY — the worker's own auth token, mounted into every
+  # worker pod. Create the Secret out of band (external-secrets, sealed-secrets)
+  # and name it here; the chart never carries the value.
+  environmentKeySecret:
+    name: ""
+    key: ANTHROPIC_ENVIRONMENT_KEY
+  # The organization API key, read ONLY by the queue-depth autoscaler so it can
+  # call the work-stats endpoint. It is never mounted into a worker pod —
+  # Anthropic's guidance is that the org key must not be reachable from agent
+  # tool calls, and the operator honours that by giving it only to the metrics
+  # bridge.
+  #
+  # Leave the name empty to run the pool at a static replica count. Queue-depth
+  # autoscaling needs this key: without it the operator tears down the KEDA
+  # ScaledObject and pins the Deployment to scaling.minReplicas.
+  apiKeySecret:
+    name: ""
+    key: ANTHROPIC_API_KEY
+  scaling:
+    minReplicas: 1
+    maxReplicas: 10
+    # Queued sessions per worker that KEDA scales toward.
+    queueDepthTarget: 5
+  # Per-worker resources. Agent tool calls run in this container, so size it for
+  # the workload's builds and tests rather than for a request handler.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  # Set to run workers under a hardened runtime (gVisor, Kata). Empty uses the
+  # cluster default.
+  runtimeClassName: ""
+  # Overrides the worker image. Empty uses the platform's published
+  # sandbox-worker, whose tag the operator pins in lockstep with its own
+  # release.
+  image: ""

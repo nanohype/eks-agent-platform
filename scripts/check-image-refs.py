@@ -56,18 +56,7 @@ GO_IMAGE_REF = re.compile(r'"(ghcr\.io/[^"\s]+:[^"\s]+)"')
 #
 # Keep it empty when you can. An unargued entry turns this gate into a list of
 # things it has agreed not to look at.
-UNPUBLISHED_BY_DESIGN: dict[str, str] = {
-    "ghcr.io/nanohype/eks-agent-platform/sandbox-worker:0.1.0": """
-        The SandboxPool tier is unfinished, and this is the same gap
-        check-crd-instantiation.py records from the other side: the CRD ships a
-        controller and no CR exists anywhere in the org, so nothing has ever
-        asked for this image. Its release job is tag-only and no
-        sandbox-worker-v* tag has ever been pushed.
-        Closing it means shipping the tier — a SandboxPool in charts/tenant and
-        a sandbox-worker-v0.1.0 release — at which point BOTH exception entries
-        go away together.
-    """,
-}
+UNPUBLISHED_BY_DESIGN: dict[str, str] = {}
 
 
 def sh(*args: str) -> tuple[int, str]:

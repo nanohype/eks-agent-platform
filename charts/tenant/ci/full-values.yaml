@@ -151,3 +151,22 @@ slo:
       route: /v1/chat
   objective: "0.999"
   onPageTierBreach: HoldRollout
+
+# The self-hosted worker pool. environmentId carries the `env_` prefix the
+# template requires, and apiKeySecret is named because the scaling range below
+# is wider than one replica — without the org key the operator would remove the
+# ScaledObject and hold the pool at minReplicas, which the render refuses.
+sandboxPool:
+  enabled: true
+  environmentId: env_coverage
+  environmentKeySecret:
+    name: cover-environment-key
+    key: ANTHROPIC_ENVIRONMENT_KEY
+  apiKeySecret:
+    name: cover-org-api-key
+    key: ANTHROPIC_API_KEY
+  scaling:
+    minReplicas: 2
+    maxReplicas: 8
+    queueDepthTarget: 4
+  runtimeClassName: gvisor
