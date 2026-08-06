@@ -35,7 +35,8 @@ type PlatformSpec struct {
 	// reachable.
 	Identity IdentitySpec `json:"identity"`
 
-	// Compliance flags drive stricter defaults across the Platform.
+	// Compliance is the posture this Platform declares, audited by
+	// `cloudgov platform audit` rather than enforced by this operator.
 	// +optional
 	Compliance ComplianceSpec `json:"compliance,omitempty"`
 
@@ -227,14 +228,26 @@ type IdentitySpec struct {
 	DirectSecretReads []string `json:"directSecretReads,omitempty"`
 }
 
-// ComplianceSpec enables stricter defaults.
+// ComplianceSpec is the compliance posture a Platform declares.
+//
+// These are declarations, not switches. This operator provisions nothing
+// differently because a flag here is set; `cloudgov platform audit` is what
+// reads them, checking the rest of the declaration is consistent with the
+// posture and reporting a finding where it is not.
+//
+// The controls themselves are substrate and run for every Platform regardless:
+// Bedrock invocation logging, the EventBridge archive, CloudTrail, CMK
+// encryption at rest, and per-tenant isolation. Running a regulated workload
+// takes more than a flag here — HIPAA in particular requires a BAA with AWS.
 type ComplianceSpec struct {
-	// HIPAA: object-lock compliance mode, no cross-region inference, PII detect
-	// required on Guardrails.
+	// HIPAA marks the Platform as handling PHI. One audited invariant: a
+	// Platform whose Tenant sets hipaa must set it too.
 	// +optional
 	HIPAA bool `json:"hipaa,omitempty"`
 
-	// SOC2: invocation logging required, kill-switch enabled.
+	// SOC2 marks the Platform as in SOC 2 audit scope. Two audited invariants:
+	// the referenced BudgetPolicy must have killSwitchEnabled, and a Platform
+	// whose Tenant sets soc2 must set it too.
 	// +optional
 	SOC2 bool `json:"soc2,omitempty"`
 }

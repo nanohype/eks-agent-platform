@@ -4,11 +4,12 @@
 agentctl platform new --name legal --tenant acme --persona legal --monthly-usd 1000
 ```
 
-**HIPAA defaults are ON** for this persona. The scaffold sets:
+**HIPAA is declared** for this persona. The scaffold sets:
 
-- `Platform.spec.compliance.hipaa = true` — Object Lock compliance mode on the artifacts bucket, no cross-region inference, mandatory PII Guardrail
-- `BudgetPolicy.spec.killSwitchEnabled = true` — non-negotiable
-- A mandatory guardrail on every route — `ModelGateway.spec.routes[].guardrailRef` (or the gateway's `defaultGuardrailRef`) — with PII detection set to block, not anonymize, on output
+- `Platform.spec.compliance.hipaa = true` — declares the Platform in HIPAA scope. `cloudgov platform audit` holds it to its Tenant's posture; it configures nothing on its own, and a HIPAA workload needs a BAA with AWS
+- `BudgetPolicy.spec.killSwitchEnabled = true` — non-negotiable, and the one thing `cloudgov platform audit` will fail a `soc2` Platform for
+
+Set the guardrail yourself before this persona handles anything real. The scaffold does not attach one: give every route a `ModelGateway.spec.routes[].guardrailRef` (or set the gateway's `defaultGuardrailRef`) pointing at a Guardrail with PII detection on output set to block rather than anonymize.
 
 Default agent `policy-reviewer` reads policy text and flags clauses that conflict with jurisdiction-specific requirements (configure jurisdiction in the system prompt).
 

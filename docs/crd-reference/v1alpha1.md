@@ -832,7 +832,17 @@ _Appears in:_
 
 
 
-ComplianceSpec enables stricter defaults.
+ComplianceSpec is the compliance posture a Platform declares.
+
+These are declarations, not switches. This operator provisions nothing
+differently because a flag here is set; `cloudgov platform audit` is what
+reads them, checking the rest of the declaration is consistent with the
+posture and reporting a finding where it is not.
+
+The controls themselves are substrate and run for every Platform regardless:
+Bedrock invocation logging, the EventBridge archive, CloudTrail, CMK
+encryption at rest, and per-tenant isolation. Running a regulated workload
+takes more than a flag here — HIPAA in particular requires a BAA with AWS.
 
 
 
@@ -842,8 +852,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `hipaa` _boolean_ | HIPAA: object-lock compliance mode, no cross-region inference, PII detect<br />required on Guardrails. |  | Optional: \{\} <br /> |
-| `soc2` _boolean_ | SOC2: invocation logging required, kill-switch enabled. |  | Optional: \{\} <br /> |
+| `hipaa` _boolean_ | HIPAA marks the Platform as handling PHI. One audited invariant: a<br />Platform whose Tenant sets hipaa must set it too. |  | Optional: \{\} <br /> |
+| `soc2` _boolean_ | SOC2 marks the Platform as in SOC 2 audit scope. Two audited invariants:<br />the referenced BudgetPolicy must have killSwitchEnabled, and a Platform<br />whose Tenant sets soc2 must set it too. |  | Optional: \{\} <br /> |
 
 
 #### ContactSpec
@@ -1085,7 +1095,7 @@ _Appears in:_
 | `tenant` _string_ | Tenant is the owning Tenant CR (one Tenant can own multiple Platforms). |  |  |
 | `budget` _[BudgetRef](#budgetref)_ | Budget references a BudgetPolicy CR in the same namespace. |  |  |
 | `identity` _[IdentitySpec](#identityspec)_ | Identity controls how the tenant role is named + which Bedrock models are<br />reachable. |  |  |
-| `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance flags drive stricter defaults across the Platform. |  | Optional: \{\} <br /> |
+| `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance is the posture this Platform declares, audited by<br />`cloudgov platform audit` rather than enforced by this operator. |  | Optional: \{\} <br /> |
 | `isolation` _string_ | Isolation is the workload-isolation tier:<br />  - namespace (default): namespace RBAC + default-deny NetworkPolicy +<br />    ResourceQuota + PSS-restricted, tenant workloads on the host API server.<br />  - vcluster: the same host-side containment PLUS a per-Platform virtual<br />    cluster, so tenant code that talks to the Kubernetes API talks to its own<br />    API server, not the host's (API-server-level isolation — NOT kernel/node<br />    isolation; see docs/adr/0009-vcluster-isolation-tier.md and SECURITY.md).<br />Immutable: switching tiers on a live Platform is a migration (it would strand<br />the virtual cluster and its synced host objects), so the tier is fixed at<br />create time. Re-declare the Platform to change it. Enforced at admission by<br />the CEL transition rule below — an invalid tier flip fails the apply rather<br />than silently half-reconciling. | namespace | Enum: [namespace vcluster] <br />Optional: \{\} <br /> |
 | `attribution` _[AttributionSpec](#attributionspec)_ | Attribution opts the Platform into per-session human attribution. When<br />set, the operator provisions a session role — assumable by the tenant<br />role with the operator carried as STS SourceIdentity, scoped to the<br />tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a<br />ClusterRole letting the tenant ServiceAccount impersonate the named<br />operators at the apiserver. fab's role-session entrypoint consumes both,<br />so an agent's AWS + Kubernetes actions attribute to a named human.<br />nil = unattributed (the default). |  | Optional: \{\} <br /> |
 | `datastores` _[DatastoreSpec](#datastorespec) array_ | Datastores declares the tenant's stateful substrate — the databases,<br />buckets, queues, caches, and streams it needs. Each entry is a declaration,<br />not a hand-written component: the tenant-substrate tofu module provisions<br />the heavy resource from this same list and the operator generates the<br />scoped IAM policy that reaches it, so adding a tenant never means authoring<br />a landing-zone component. Empty for a Platform with no stateful needs. |  | Optional: \{\} <br /> |
@@ -1226,7 +1236,7 @@ _Appears in:_
 | `displayName` _string_ | DisplayName is the human-readable tenant name shown in dashboards<br />and persona UX. |  | Optional: \{\} <br /> |
 | `primaryPersona` _string_ | PrimaryPersona drives default values for new Platforms onboarded<br />into this tenant. One of the standard persona names. | generic | Enum: [sales-ops support finance ops founder eng marketing legal generic] <br /> |
 | `contact` _[ContactSpec](#contactspec)_ | Contact carries human-readable owner info (Slack channel, on-call<br />rotation, billing email) for ops to reach. |  | Optional: \{\} <br /> |
-| `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance baseline applied to every Platform owned by this Tenant<br />unless the Platform itself sets a stricter value. |  | Optional: \{\} <br /> |
+| `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance is the posture expected of every Platform this Tenant owns. A<br />Platform may declare more than its Tenant, never less: `cloudgov platform<br />audit` reports a Platform declaring less than its Tenant as a finding.<br />Nothing copies this value down — each Platform declares its own. |  | Optional: \{\} <br /> |
 | `aggregateMonthlyBudgetUsd` _string_ | AggregateMonthlyBudgetUsd is the soft cap on the SUM of all owned<br />Platforms' BudgetPolicy.spec.monthlyUsd. Status reports whether the<br />sum exceeds this; the operator does not enforce — each Platform's<br />own BudgetPolicy is the enforcement layer. Modeled as a decimal-<br />string to mirror BudgetPolicy.monthlyUsd. |  | Pattern: `^[0-9]+(\.[0-9]\{1,2\})?$` <br />Optional: \{\} <br /> |
 
 

@@ -42,6 +42,10 @@ platform:
   # (one tenant = one Platform). Set false on additional Platforms that share an
   # already-created Tenant (one Tenant owns many Platforms).
   createTenant: true
+  # The compliance regimes this Platform is in scope for. A declaration, not a
+  # switch — nothing is provisioned differently from it. `cloudgov platform
+  # audit` checks the rest of the declaration lines up: soc2 requires the budget
+  # kill-switch, and a Platform must declare at least what its Tenant declares.
   compliance:
     hipaa: false
     soc2: true
