@@ -1,0 +1,93 @@
+{{- if .Values.sandboxPool.enabled -}}
+{{- /*
+  The SandboxPool CRD carries no x-kubernetes-validations at all, and its two
+  secret references are corev1.SecretKeySelector — whose `name` is documented as
+  "effectively required" but defaults to "" for backwards compatibility. So an
+  empty environmentId, an unnamed Secret, and minReplicas above maxReplicas are
+  all accepted by the API server. Each one then fails on the cluster, attached to
+  an Application rather than to whoever wrote the value. Failing the render says
+  it at `helm template` time, the same argument slopolicy.yaml and
+  budgetpolicy.yaml already make.
+*/ -}}
+{{- if not .Values.sandboxPool.environmentId }}
+{{- fail "sandboxPool.environmentId is required — it names the self_hosted environment whose work queue these workers drain, and an empty id leaves workers polling nothing" }}
+{{- end }}
+{{- if not (hasPrefix "env_" .Values.sandboxPool.environmentId) }}
+{{- fail (printf "sandboxPool.environmentId must be a Managed Agents environment id beginning `env_`, got %q — an api key or environment NAME here authenticates and then drains an empty queue forever" .Values.sandboxPool.environmentId) }}
+{{- end }}
+{{- if not .Values.sandboxPool.environmentKeySecret.name }}
+{{- fail "sandboxPool.environmentKeySecret.name is required — it holds ANTHROPIC_ENVIRONMENT_KEY, and an unnamed SecretKeySelector is accepted by the API and then leaves every worker pod stuck at CreateContainerConfigError" }}
+{{- end }}
+{{- if not .Values.sandboxPool.environmentKeySecret.key }}
+{{- fail "sandboxPool.environmentKeySecret.key is required — the Secret key holding the environment token" }}
+{{- end }}
+{{- $min := int .Values.sandboxPool.scaling.minReplicas }}
+{{- $max := int .Values.sandboxPool.scaling.maxReplicas }}
+{{- if gt $min $max }}
+{{- fail (printf "sandboxPool.scaling.minReplicas (%d) exceeds maxReplicas (%d) — KEDA takes maxReplicas as the ceiling, so the pool can never reach the floor it is told to hold" $min $max) }}
+{{- end }}
+{{- if lt $min 0 }}
+{{- fail (printf "sandboxPool.scaling.minReplicas may not be negative, got %d" $min) }}
+{{- end }}
+{{- if lt (int .Values.sandboxPool.scaling.queueDepthTarget) 1 }}
+{{- fail "sandboxPool.scaling.queueDepthTarget must be at least 1 — it is the queued-sessions-per-worker ratio KEDA scales toward, and zero has no meaning as a target" }}
+{{- end }}
+{{- /*
+  The one that is silent rather than loud. Queue-depth autoscaling needs the org
+  API key, because the metrics bridge — not the worker — calls the work-stats
+  endpoint with it. Without the key the operator tears the ScaledObject down and
+  pins the Deployment to minReplicas (reconcileAutoscaling -> teardownAutoscaling
+  -> resetWorkerReplicas). Nothing errors: the pool reports healthy and sits at a
+  static count while the scaling block says it ranges. Configuring a range and no
+  key is that mistake, so it fails here instead.
+*/ -}}
+{{- if and (gt $max $min) (not .Values.sandboxPool.apiKeySecret.name) }}
+{{- fail (printf "sandboxPool.scaling asks to range %d-%d but sandboxPool.apiKeySecret.name is empty — queue-depth autoscaling reads the work queue with the organization key, so without it the operator removes the ScaledObject and holds the pool at %d. Either name the Secret, or set maxReplicas to minReplicas to declare the static count you will actually get" $min $max $min) }}
+{{- end }}
+{{- if and .Values.sandboxPool.apiKeySecret.name (not .Values.sandboxPool.apiKeySecret.key) }}
+{{- fail "sandboxPool.apiKeySecret.key is required when apiKeySecret.name is set" }}
+{{- end -}}
+{{- /*
+  namespace is controlPlaneNamespace, not the workload namespace — platformRef
+  resolves same-namespace by name (sandboxpool_reconcile.go -> getReferencedPlatform),
+  so a pool beside the workload finds no Platform and reports PlatformNotFound.
+  The workers themselves land in the Platform's tenant namespace; the operator
+  places them, this CR does not.
+*/ -}}
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: SandboxPool
+metadata:
+  name: {{ .Values.platform.name }}-sandboxes
+  namespace: {{ .Values.controlPlaneNamespace | default .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: eks-agent-platform
+    agents.nanohype.dev/tenant: {{ .Values.platform.tenant }}
+spec:
+  platformRef:
+    name: {{ .Values.platform.name }}
+  environmentId: {{ .Values.sandboxPool.environmentId | quote }}
+  environmentKeySecret:
+    name: {{ .Values.sandboxPool.environmentKeySecret.name | quote }}
+    key: {{ .Values.sandboxPool.environmentKeySecret.key | quote }}
+  {{- with .Values.sandboxPool.apiKeySecret }}
+  {{- if .name }}
+  apiKeySecret:
+    name: {{ .name | quote }}
+    key: {{ .key | quote }}
+  {{- end }}
+  {{- end }}
+  scaling:
+    minReplicas: {{ $min }}
+    maxReplicas: {{ $max }}
+    queueDepthTarget: {{ int .Values.sandboxPool.scaling.queueDepthTarget }}
+  {{- with .Values.sandboxPool.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.sandboxPool.runtimeClassName }}
+  runtimeClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.sandboxPool.image }}
+  image: {{ . | quote }}
+  {{- end }}
+{{- end }}

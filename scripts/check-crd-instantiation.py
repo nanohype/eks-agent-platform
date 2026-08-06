@@ -68,16 +68,6 @@ INSTANTIATION_EXCEPTIONS: dict[str, str] = {
         "deploy-time declaration to render — a committed AgentSandbox would be "
         "a single session frozen into GitOps."
     ),
-    "SandboxPool": (
-        "NOT a clean exception, and recorded as a gap rather than a decision. "
-        "SandboxPool is declarative and Platform-scoped, so it belongs in this "
-        "chart on the same argument SLOPolicy did — but nothing in the org "
-        "instantiates one, and its worker image "
-        "(ghcr.io/nanohype/eks-agent-platform/sandbox-worker) has never been "
-        "published, so a rendered SandboxPool would reference a tag that does "
-        "not exist. Deleting this entry is the definition of done for that "
-        "work; it is not meant to live here."
-    ),
 }
 
 
