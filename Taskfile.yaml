@@ -66,6 +66,7 @@ tasks:
       - tofu fmt -check -recursive terraform/
       - pnpm format:check
       - cd operators && test -z "$(gofmt -l .)"
+      - pnpm editorconfig
 
   # === OpenTofu ===
 
