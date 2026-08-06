@@ -62,5 +62,7 @@ A `BudgetPolicy` breach at ≥120% publishes a `BudgetBreach` event that an Even
 This platform does not produce a compliance certification on its own. It exposes the controls needed for:
 
 - **SOC 2 Type II** — audit trail via Bedrock invocation logging + EventBridge archive, encrypted at rest with CMK, access-logged via CloudTrail.
-- **HIPAA** — requires a BAA with AWS; `Platform.spec.compliance.hipaa = true` enables stricter defaults (Object Lock compliance mode, no cross-region inference, mandatory Guardrails with PII detection enabled).
+- **HIPAA** — requires a BAA with AWS. The controls a HIPAA workload leans on are the same substrate every Platform gets: CMK encryption at rest, per-tenant isolation, invocation logging, and Guardrails where a route references one.
+
+`Platform.spec.compliance` declares which of these regimes a Platform is in scope for. It is a declaration, not a switch — the operator provisions nothing differently from it. `cloudgov platform audit` reads it and checks the rest of the declaration lines up: a `soc2` Platform must have `killSwitchEnabled` on its BudgetPolicy, and a Platform must declare at least what its owning Tenant declares. Anything stricter than that is a control you configure explicitly.
 - **CIS EKS** — baseline enforced upstream by `landing-zone` + `eks-gitops`.

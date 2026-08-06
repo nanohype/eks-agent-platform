@@ -109,15 +109,20 @@ spec:
                 - name
                 type: object
               compliance:
-                description: Compliance flags drive stricter defaults across the Platform.
+                description: |-
+                  Compliance is the posture this Platform declares, audited by
+                  `cloudgov platform audit` rather than enforced by this operator.
                 properties:
                   hipaa:
                     description: |-
-                      HIPAA: object-lock compliance mode, no cross-region inference, PII detect
-                      required on Guardrails.
+                      HIPAA marks the Platform as handling PHI. One audited invariant: a
+                      Platform whose Tenant sets hipaa must set it too.
                     type: boolean
                   soc2:
-                    description: 'SOC2: invocation logging required, kill-switch enabled.'
+                    description: |-
+                      SOC2 marks the Platform as in SOC 2 audit scope. Two audited invariants:
+                      the referenced BudgetPolicy must have killSwitchEnabled, and a Platform
+                      whose Tenant sets soc2 must set it too.
                     type: boolean
                 type: object
               datastores:

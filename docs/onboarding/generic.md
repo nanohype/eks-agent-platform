@@ -4,7 +4,7 @@ Use the `generic` persona when your team doesn't fit one of the seven role-speci
 
 You get a single agent (`assistant` on Sonnet, 30 rpm) with a vanilla "you are a helpful assistant" system prompt. Use this for prototypes, dev-environment scratch tenants, or as the starting point you'll mutate into a role-specific tenant once the workflow shape is clearer.
 
-Budget cap: **1000 USD/mo**. No compliance baseline enforced (override if your tenant needs SOC2 or HIPAA).
+Budget cap: **1000 USD/mo**. No compliance posture declared (set one if your tenant is in SOC 2 or HIPAA scope).
 
 ## 10-minute quickstart
 
@@ -23,7 +23,7 @@ Generic defaults are intentionally bland. The minimum-viable customization:
 
 1. **Replace the system prompt.** `"You are a helpful assistant"` is a placeholder. Write the actual instructions your agent needs (role, output format, constraints).
 2. **Pick a real model route name.** The default `primary` route works but a domain-meaningful name (`triage`, `research`, `incident`) is what you want once the use case is clear.
-3. **Set compliance flags** if your workload handles regulated data (SOC2 for audit-logged invocations; HIPAA for stricter object-lock + cross-region restrictions).
+3. **Declare a compliance posture** if your workload handles regulated data. The flags say which regime you are in scope for; `cloudgov platform audit` then holds the rest of your declaration to it — `soc2` requires the budget kill-switch, and either flag requires you to declare at least what your Tenant declares.
 4. **Tune the budget** based on actual usage. Default 1000 USD is conservative; sustained workloads typically need higher.
 
 If your customizations push the tenant toward a specific persona (e.g. the prompt becomes triage-shaped), consider re-scaffolding with the right persona for better defaults — `agentctl tenant init` is idempotent on the same name and will overwrite the scaffold.

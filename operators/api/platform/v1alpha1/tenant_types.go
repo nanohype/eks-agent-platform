@@ -32,8 +32,10 @@ type TenantSpec struct {
 	// +optional
 	Contact ContactSpec `json:"contact,omitempty"`
 
-	// Compliance baseline applied to every Platform owned by this Tenant
-	// unless the Platform itself sets a stricter value.
+	// Compliance is the posture expected of every Platform this Tenant owns. A
+	// Platform may declare more than its Tenant, never less: `cloudgov platform
+	// audit` reports a Platform declaring less than its Tenant as a finding.
+	// Nothing copies this value down — each Platform declares its own.
 	// +optional
 	Compliance ComplianceSpec `json:"compliance,omitempty"`
 
