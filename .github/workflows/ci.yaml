@@ -69,6 +69,16 @@ jobs:
       - run: tofu fmt -check -recursive terraform/
       - run: pnpm format:check
       - run: cd operators && test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      # The three formatters above each own a language: tofu fmt for Terraform,
+      # biome for TS and JSON, gofmt for Go. .editorconfig declares charset, LF
+      # endings, a final newline and no trailing whitespace for *every* file, and
+      # nothing observed those on the rest of the tree — YAML, HCL, Markdown,
+      # shell, the chart templates.
+      #
+      # Indentation checks stay off, because the three formatters above are the
+      # authority there and a Makefile needs tabs for its recipes and spaces for
+      # the continuation lines inside them. This takes the rules nothing else owns.
+      - run: pnpm editorconfig
 
   tofu:
     name: tofu validate
