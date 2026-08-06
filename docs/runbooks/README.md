@@ -1,6 +1,6 @@
 # Runbooks
 
-Operational playbooks for the eks-agent-platform. Each runbook is referenced by `runbook_url` in the operator chart's SLO PrometheusRule (`charts/operator/files/slo/prometheusrule.yaml`), so pages link directly to the relevant doc.
+Operational playbooks for the eks-agent-platform. Each is referenced by `runbook_url` on the Grafana-managed alert rules in `eks-gitops/dashboards/base/alerting/`, so a page links directly to the relevant doc. (They were previously referenced from a chart-shipped `PrometheusRule`, which was deleted — the catalog installs the prometheus-operator CRDs and no ruler, so it was applied everywhere and evaluated nowhere.)
 
 ## Alert-triggered
 
