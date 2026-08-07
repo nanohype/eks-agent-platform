@@ -260,6 +260,7 @@ func main() {
 		platformReconciler.EKS = awsClients.EKS
 		platformReconciler.S3 = awsClients.S3
 		platformReconciler.SSM = awsClients.SSM
+		platformReconciler.Scheduler = awsClients.Scheduler
 		platformReconciler.IAMCfg = controller.IAMConfig{
 			TenantIAMPath:                opConfig.TenantIAMPath,
 			TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,

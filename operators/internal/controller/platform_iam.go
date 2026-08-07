@@ -256,6 +256,12 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
 			return iamReconcileResult{RoleARN: arn}, err
 		}
+		// The group has to exist before the grant scoped to it means anything:
+		// a CreateSchedule into a missing group fails ResourceNotFound, which
+		// the tenant sees and nothing else does.
+		if err := r.ensureScheduleGroup(ctx, p, cfg.Environment); err != nil {
+			return iamReconcileResult{RoleARN: arn}, err
+		}
 		if err := r.ensureTenantSecretsPolicy(ctx, name, arn, p, cfg); err != nil {
 			return iamReconcileResult{RoleARN: arn}, err
 		}
@@ -299,6 +305,9 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
+		return iamReconcileResult{RoleARN: arn}, err
+	}
+	if err := r.ensureScheduleGroup(ctx, p, cfg.Environment); err != nil {
 		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureTenantSecretsPolicy(ctx, name, arn, p, cfg); err != nil {

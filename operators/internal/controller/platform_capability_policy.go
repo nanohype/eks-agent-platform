@@ -84,12 +84,22 @@ func schedulerInvokeRoleARN(clusterName string, p *platformv1alpha1.Platform, sc
 	return fmt.Sprintf("arn:%s:iam::%s:role/%s", scope.partition(), scope.account(), schedulerInvokeRoleName(clusterName, p))
 }
 
-// schedulerScheduleARN is the ARN pattern for the tenant's own schedules: the
-// default schedule group, scoped to the <env>-<platform>- name prefix. Both the
-// tenant-role grant and the invoke role's trust condition key on it, so a
-// tenant can only manage and fire its own schedules.
+// schedulerScheduleARN is the ARN pattern for the tenant's own schedules: every
+// schedule in the tenant's own group. Both the tenant-role grant and the invoke
+// role's trust condition key on it, so a tenant can only manage and fire its own
+// schedules.
+//
+// The group, not a name prefix, is what makes that true. A schedule ARN is
+// `schedule/<group>/<name>`, so naming the group is an exact match on that path
+// segment. The prefix form this replaced — `schedule/default/<env>-<platform>-*`
+// inside the shared default group — spanned whenever one Platform name was a
+// hyphen-prefix of another: `foo` reached every schedule belonging to `foo-bar`,
+// and Platform names are DNS-1123 labels with nothing forbidding that pair.
+//
+// ensureScheduleGroup creates the group, because a grant naming a group that
+// does not exist is not a narrower grant, it is a dead path.
 func schedulerScheduleARN(env string, p *platformv1alpha1.Platform, scope arnScope) string {
-	return fmt.Sprintf("arn:%s:scheduler:%s:%s:schedule/default/%s-%s-*", scope.partition(), scope.region(), scope.account(), env, p.Name)
+	return fmt.Sprintf("arn:%s:scheduler:%s:%s:schedule/%s/*", scope.partition(), scope.region(), scope.account(), scheduleGroupName(env, p))
 }
 
 // tenantQueueResources returns the exact SQS ARNs of the tenant's declared queue

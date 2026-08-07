@@ -63,13 +63,13 @@ func TestCapabilityPolicy_SES(t *testing.T) {
 }
 
 // TestCapabilityPolicy_Scheduler proves the eventBridgeScheduler capability
-// grants schedule management on the tenant's own schedule prefix plus a
+// grants schedule management on the tenant's own schedule GROUP plus a
 // service-capped PassRole on the minted invoke role.
 func TestCapabilityPolicy_Scheduler(t *testing.T) {
 	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), "development", capClusterName, testScope())
 
 	manage := findStmt(stmts, "schedulerManage")
-	if manage == nil || !hasResource(manage, "arn:aws:scheduler:us-west-2:123456789012:schedule/default/development-myplat-*") {
+	if manage == nil || !hasResource(manage, "arn:aws:scheduler:us-west-2:123456789012:schedule/development-myplat/*") {
 		t.Fatalf("schedulerManage missing or misscoped: %+v", manage)
 	}
 	pass := findStmt(stmts, "schedulerPassInvokeRole")
@@ -78,6 +78,56 @@ func TestCapabilityPolicy_Scheduler(t *testing.T) {
 	}
 	if got := pass.Condition["StringEquals"]["iam:PassedToService"]; got != "scheduler.amazonaws.com" {
 		t.Errorf("PassRole must be capped to the Scheduler service, got %q", got)
+	}
+}
+
+// TestSchedulerScheduleARN_DoesNotSpanAHyphenPrefixedSibling asserts the value
+// that is the entire tenant boundary on EventBridge Scheduler.
+//
+// The grant this replaced named a name PREFIX inside the shared `default`
+// group: `schedule/default/development-foo-*`. A schedule ARN is
+// `schedule/<group>/<name>`, and IAM's `*` spans `/`, so that pattern also
+// matched every schedule belonging to a Platform named `foo-bar` —
+// `schedule/default/development-foo-bar-nudge-1` — and Platform names are
+// DNS-1123 labels with nothing anywhere forbidding that pair.
+//
+// Naming the group instead makes the boundary an exact match on a path segment:
+// `schedule/development-foo/*` cannot reach `schedule/development-foo-bar/...`
+// because the character after `development-foo` is `-`, not `/`.
+func TestSchedulerScheduleARN_DoesNotSpanAHyphenPrefixedSibling(t *testing.T) {
+	foo := schedulerScheduleARN("development", platformWithCapabilities("foo", platformv1alpha1.CapabilityEventBridgeScheduler), testScope())
+	bar := schedulerScheduleARN("development", platformWithCapabilities("foo-bar", platformv1alpha1.CapabilityEventBridgeScheduler), testScope())
+
+	const wantFoo = "arn:aws:scheduler:us-west-2:123456789012:schedule/development-foo/*"
+	if foo != wantFoo {
+		t.Fatalf("foo's schedule ARN: got %q want %q", foo, wantFoo)
+	}
+
+	// The prefix of foo's pattern, up to its wildcard, must not be a prefix of
+	// any ARN in foo-bar's group. That is the property the group buys and the
+	// prefix form did not.
+	fooPrefix := strings.TrimSuffix(foo, "*")
+	barSchedule := strings.TrimSuffix(bar, "*") + "nudge-1"
+	if strings.HasPrefix(barSchedule, fooPrefix) {
+		t.Errorf("foo's grant %q spans foo-bar's schedule %q — the tenant boundary does not hold", foo, barSchedule)
+	}
+
+	// And a schedule genuinely inside foo's group must still be reachable, so
+	// the assertion above is not passing by making the grant match nothing.
+	fooSchedule := fooPrefix + "nudge-1"
+	if !strings.HasPrefix(fooSchedule, fooPrefix) {
+		t.Errorf("foo's own schedule %q is not covered by its grant %q", fooSchedule, foo)
+	}
+}
+
+// TestScheduleGroupName_ComposesLikeEveryOtherTenantName pins the name the
+// operator creates, the grant scopes to, and the tenant chart derives. All three
+// compose it independently; if they ever disagree the schedules fail at runtime
+// into the caller's own log, which is exactly how this path stayed dead.
+func TestScheduleGroupName_ComposesLikeEveryOtherTenantName(t *testing.T) {
+	got := scheduleGroupName("development", platformWithCapabilities("incident-response", platformv1alpha1.CapabilityEventBridgeScheduler))
+	if want := "development-incident-response"; got != want {
+		t.Errorf("schedule group name: got %q want %q", got, want)
 	}
 }
 
