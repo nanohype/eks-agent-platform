@@ -781,8 +781,8 @@ _Appears in:_
 
 
 
-CacheConfig tunes the ElastiCache cluster. Engine and node type are reported
-on drift (a resize is disruptive); replica count converges.
+CacheConfig tunes the ElastiCache cluster. Changing engine or node type on a
+live cluster is a disruptive replacement, so treat both as set-at-create.
 
 
 
@@ -791,9 +791,9 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `engine` _string_ | Engine of the cache. Valkey is the default going-forward OSS engine.<br />Drift: reported. | valkey | Enum: [valkey redis] <br />Optional: \{\} <br /> |
-| `nodeType` _string_ | NodeType sizes each node. Drift: reported — a node-type change is a<br />disruptive resize, surfaced as a condition rather than force-applied. | cache.t4g.micro | Optional: \{\} <br /> |
-| `replicas` _integer_ | Replicas is the number of read replicas per shard; 0 (default) is a<br />single-node cache for a young tenant. Drift: converged. | 0 | Maximum: 5 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `engine` _string_ | Engine of the cache. Valkey is the default going-forward OSS engine. | valkey | Enum: [valkey redis] <br />Optional: \{\} <br /> |
+| `nodeType` _string_ | NodeType sizes each node. Changing it on a live cluster is a disruptive<br />resize. | cache.t4g.micro | Optional: \{\} <br /> |
+| `replicas` _integer_ | Replicas is the number of read replicas per shard; 0 (default) is a<br />single-node cache for a young tenant. | 0 | Maximum: 5 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### Capability
@@ -922,6 +922,14 @@ here grants the operator delete on the store — deletion is governed by
 deletionPolicy and the per-kind deletion_protection backstop, not by the
 reconciling principal's IAM (T1/T2).
 
+Drift, stated once here rather than per field, because it is the same answer
+for every field: the operator does not observe it. It holds no AWS client for
+RDS, DynamoDB, ElastiCache, SQS or MSK, so it cannot read a live datastore's
+configuration, let alone converge one. Drift between this declaration and the
+provisioned resource is detected where the resource is owned — landing-zone's
+scheduled `tofu plan` (`drift.yml`), which opens a GitHub issue. It does not
+reach the CR, and no datastore status field reports it.
+
 
 
 _Appears in:_
@@ -943,9 +951,13 @@ _Appears in:_
 
 
 
-DatastoreStatus reports one datastore's observed state (T3/(a)). It lives
-under PlatformStatus.Datastores, separate from the top-level Phase so a
-still-creating datastore does not hold back the tenant's Ready (T6).
+DatastoreStatus reports the stable identity a tenant uses to reach one
+declared datastore. It lives under PlatformStatus.Datastores.
+
+It is an identity report, not a liveness report. Every value here is composed
+from the <env>-<platform>-<datastore> convention that the tenant-substrate
+module names by and the datastore-access policy scopes to, so it needs no AWS
+call — and makes no claim that the resource exists yet.
 
 
 
@@ -956,11 +968,10 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `name` _string_ | Name matches spec.datastores[].name. |  |  |
 | `kind` _[DatastoreKind](#datastorekind)_ | Kind echoes the declared kind. |  | Enum: [relational keyValue objectStore queue cache stream] <br />Optional: \{\} <br /> |
-| `phase` _string_ | Phase: Pending, Provisioning, Ready, Drifted, Failed. |  | Optional: \{\} <br /> |
-| `endpoint` _string_ | Endpoint is the connection address once available — Aurora/cache endpoint,<br />SQS queue URL, S3 bucket name, or MSK bootstrap brokers. |  | Optional: \{\} <br /> |
-| `arn` _string_ | ARN of the provisioned resource. |  | Optional: \{\} <br /> |
+| `phase` _string_ | Phase is the owning Platform's phase, copied. It reports identity and<br />access readiness, not the datastore's own state — the operator observes<br />no live datastore, so it has nothing else to derive a phase from, and<br />this can never hold a value the Platform cannot.<br />Phase: Pending, Provisioning, Ready, Suspended, Failed. |  | Optional: \{\} <br /> |
+| `endpoint` _string_ | Endpoint is the connection address, and only for the kinds whose name is<br />fully deterministic: the S3 bucket, the DynamoDB table, the SQS queue URL.<br />Aurora, ElastiCache and MSK endpoints carry an AWS-generated id, so this<br />is empty for those three and the address comes from the module's outputs. |  | Optional: \{\} <br /> |
+| `arn` _string_ | ARN of the datastore, composed from the naming convention. |  | Optional: \{\} <br /> |
 | `secretName` _string_ | SecretName is the resolved name of the credentials secret the datastore<br />publishes — the RDS-managed master secret for relational — so the tenant<br />chart reads one predictable place instead of hand-wiring it per app (T7). |  | Optional: \{\} <br /> |
-| `drift` _string array_ | Drift lists spec fields observed to differ from AWS that the operator<br />reports but does not converge (the destructive-to-correct fields per T3).<br />Empty when in sync. |  | Optional: \{\} <br /> |
 
 
 #### GlobalSecondaryIndex
@@ -968,7 +979,7 @@ _Appears in:_
 
 
 GlobalSecondaryIndex declares a DynamoDB GSI. The key schema is immutable
-(AWS recreates the index to change it); drift on projection is reported.
+(AWS recreates the index to change it).
 
 
 
@@ -1015,8 +1026,7 @@ _Appears in:_
 
 
 
-KeyValueConfig tunes the DynamoDB table. The key schema is immutable; billing
-mode, TTL, and point-in-time recovery converge on drift.
+KeyValueConfig tunes the DynamoDB table. The key schema is immutable.
 
 
 
@@ -1027,9 +1037,9 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `partitionKey` _[AttributeSchema](#attributeschema)_ | PartitionKey (hash key). Immutable after create. |  |  |
 | `sortKey` _[AttributeSchema](#attributeschema)_ | SortKey (range key). Immutable after create. |  | Optional: \{\} <br /> |
-| `billingMode` _string_ | BillingMode. PAY_PER_REQUEST (default) suits a young tenant with unknown<br />traffic; PROVISIONED is for steady, predictable load. Drift: converged. | PAY_PER_REQUEST | Enum: [PAY_PER_REQUEST PROVISIONED] <br />Optional: \{\} <br /> |
-| `ttlAttribute` _string_ | TTLAttribute names the item attribute holding an epoch expiry; empty<br />disables TTL. Drift: converged. |  | Optional: \{\} <br /> |
-| `pointInTimeRecovery` _boolean_ | PointInTimeRecovery enables continuous backups. Defaults on. Drift:<br />converged. | true | Optional: \{\} <br /> |
+| `billingMode` _string_ | BillingMode. PAY_PER_REQUEST (default) suits a young tenant with unknown<br />traffic; PROVISIONED is for steady, predictable load. | PAY_PER_REQUEST | Enum: [PAY_PER_REQUEST PROVISIONED] <br />Optional: \{\} <br /> |
+| `ttlAttribute` _string_ | TTLAttribute names the item attribute holding an epoch expiry; empty<br />disables TTL. |  | Optional: \{\} <br /> |
+| `pointInTimeRecovery` _boolean_ | PointInTimeRecovery enables continuous backups. Defaults on. | true | Optional: \{\} <br /> |
 | `globalSecondaryIndexes` _[GlobalSecondaryIndex](#globalsecondaryindex) array_ | GlobalSecondaryIndexes declared on the table. |  | Optional: \{\} <br /> |
 
 
@@ -1038,7 +1048,7 @@ _Appears in:_
 
 
 ObjectStoreConfig tunes the S3 bucket. Encryption and public-access blocking
-are always on and not configurable. Both fields converge on drift.
+are always on and not configurable.
 
 
 
@@ -1047,8 +1057,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `versioning` _boolean_ | Versioning keeps prior object versions. Defaults on; set false only for a<br />bucket of regenerable data where prior versions add cost with no recovery<br />value. Drift: converged. | true | Optional: \{\} <br /> |
-| `lifecycleExpireDays` _integer_ | LifecycleExpireDays expires objects after N days; 0 (default) keeps them<br />indefinitely. Drift: converged. | 0 | Minimum: 0 <br />Optional: \{\} <br /> |
+| `versioning` _boolean_ | Versioning keeps prior object versions. Defaults on; set false only for a<br />bucket of regenerable data where prior versions add cost with no recovery<br />value. | true | Optional: \{\} <br /> |
+| `lifecycleExpireDays` _integer_ | LifecycleExpireDays expires objects after N days; 0 (default) keeps them<br />indefinitely. | 0 | Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### Platform
@@ -1098,7 +1108,7 @@ _Appears in:_
 | `compliance` _[ComplianceSpec](#compliancespec)_ | Compliance is the posture this Platform declares, audited by<br />`cloudgov platform audit` rather than enforced by this operator. |  | Optional: \{\} <br /> |
 | `isolation` _string_ | Isolation is the workload-isolation tier:<br />  - namespace (default): namespace RBAC + default-deny NetworkPolicy +<br />    ResourceQuota + PSS-restricted, tenant workloads on the host API server.<br />  - vcluster: the same host-side containment PLUS a per-Platform virtual<br />    cluster, so tenant code that talks to the Kubernetes API talks to its own<br />    API server, not the host's (API-server-level isolation — NOT kernel/node<br />    isolation; see docs/adr/0009-vcluster-isolation-tier.md and SECURITY.md).<br />Immutable: switching tiers on a live Platform is a migration (it would strand<br />the virtual cluster and its synced host objects), so the tier is fixed at<br />create time. Re-declare the Platform to change it. Enforced at admission by<br />the CEL transition rule below — an invalid tier flip fails the apply rather<br />than silently half-reconciling. | namespace | Enum: [namespace vcluster] <br />Optional: \{\} <br /> |
 | `attribution` _[AttributionSpec](#attributionspec)_ | Attribution opts the Platform into per-session human attribution. When<br />set, the operator provisions a session role — assumable by the tenant<br />role with the operator carried as STS SourceIdentity, scoped to the<br />tenant baseline (Bedrock invoke) and NOT broad sts:AssumeRole — plus a<br />ClusterRole letting the tenant ServiceAccount impersonate the named<br />operators at the apiserver. fab's role-session entrypoint consumes both,<br />so an agent's AWS + Kubernetes actions attribute to a named human.<br />nil = unattributed (the default). |  | Optional: \{\} <br /> |
-| `datastores` _[DatastoreSpec](#datastorespec) array_ | Datastores declares the tenant's stateful substrate — the databases,<br />buckets, queues, caches, and streams it needs. Each entry is a declaration,<br />not a hand-written component: the tenant-substrate tofu module provisions<br />the heavy resource from this same list and the operator generates the<br />scoped IAM policy that reaches it, so adding a tenant never means authoring<br />a landing-zone component. Empty for a Platform with no stateful needs. |  | Optional: \{\} <br /> |
+| `datastores` _[DatastoreSpec](#datastorespec) array_ | Datastores declares the tenant's stateful substrate — the databases,<br />buckets, queues, caches, and streams it needs. Each entry is a declaration,<br />not a hand-written component: the tenant-substrate tofu module provisions<br />the heavy resource from this same list and the operator generates the<br />scoped IAM policy that reaches it, so adding a tenant never means authoring<br />a landing-zone component. Empty for a Platform with no stateful needs. |  | MaxItems: 24 <br />Optional: \{\} <br /> |
 
 
 #### PlatformStatus
@@ -1158,7 +1168,7 @@ _Appears in:_
 
 
 QueueConfig tunes the SQS queue. FIFO-ness is immutable (a FIFO and a standard
-queue are different resources); the remaining fields converge on drift.
+queue are different resources).
 
 
 
@@ -1168,9 +1178,9 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `fifo` _boolean_ | FIFO makes an exactly-once, ordered queue. Immutable after create. | false | Optional: \{\} <br /> |
-| `visibilityTimeoutSeconds` _integer_ | VisibilityTimeoutSeconds before a received-but-unacked message is<br />redelivered. Drift: converged. | 30 | Maximum: 43200 <br />Minimum: 0 <br />Optional: \{\} <br /> |
-| `messageRetentionSeconds` _integer_ | MessageRetentionSeconds a message is kept before it expires (default 4<br />days). Drift: converged. | 345600 | Maximum: 1.2096e+06 <br />Minimum: 60 <br />Optional: \{\} <br /> |
-| `maxReceiveCount` _integer_ | MaxReceiveCount, when > 0, provisions a dead-letter queue and redrives a<br />message to it after this many failed receives; 0 (default) means no DLQ.<br />Drift: converged. | 0 | Maximum: 1000 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `visibilityTimeoutSeconds` _integer_ | VisibilityTimeoutSeconds before a received-but-unacked message is<br />redelivered. | 30 | Maximum: 43200 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `messageRetentionSeconds` _integer_ | MessageRetentionSeconds a message is kept before it expires (default 4<br />days). | 345600 | Maximum: 1.2096e+06 <br />Minimum: 60 <br />Optional: \{\} <br /> |
+| `maxReceiveCount` _integer_ | MaxReceiveCount, when > 0, provisions a dead-letter queue and redrives a<br />message to it after this many failed receives; 0 (default) means no DLQ. | 0 | Maximum: 1000 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### RelationalConfig
@@ -1188,11 +1198,11 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `engineVersion` _string_ | EngineVersion of Aurora PostgreSQL. Drift: reported, never converged — an<br />out-of-band engine change is not force-corrected because a downgrade is<br />destructive; the operator raises a Drifted condition instead. | 16.6 | Optional: \{\} <br /> |
-| `minACU` _string_ | MinACU is the Serverless v2 floor in Aurora Capacity Units, in 0.5-ACU<br />steps (e.g. "0.5", "1", "8"). Serialized as a string, per the Kubernetes<br />convention for fractional values. The exact 0.5–256 range and the<br />maxACU >= minACU relation are enforced at the tenant-substrate module's<br />variable boundary. Drift: converged — the operator resets scaling bounds<br />to spec. | 0.5 | Pattern: `^([1-9][0-9]\{0,2\}(\.5)?\|0\.5)$` <br />Optional: \{\} <br /> |
-| `maxACU` _string_ | MaxACU is the Serverless v2 ceiling, in 0.5-ACU steps. Drift: converged. | 8 | Pattern: `^([1-9][0-9]\{0,2\}(\.5)?\|0\.5)$` <br />Optional: \{\} <br /> |
-| `backupRetentionDays` _integer_ | BackupRetentionDays for automated backups. Drift: converged. | 7 | Maximum: 35 <br />Minimum: 1 <br />Optional: \{\} <br /> |
-| `deletionProtection` _boolean_ | DeletionProtection is the AWS-level backstop (T2/(c)): with it on, the<br />cluster cannot be deleted even by an authorized principal until it is<br />cleared. Defaults on. Drift: converged. | true | Optional: \{\} <br /> |
+| `engineVersion` _string_ | EngineVersion of Aurora PostgreSQL. Auto-pause (minACU "0") needs 16.3 or<br />later, which the rule on this type enforces against the major version —<br />the minor is not machine-checkable here, so 16.0–16.2 is admitted and<br />fails at apply rather than at admission. | 16.6 | MaxLength: 10 <br />Pattern: `^[0-9]+\.[0-9]+$` <br />Optional: \{\} <br /> |
+| `minACU` _string_ | MinACU is the Serverless v2 floor in Aurora Capacity Units, in 0.5-ACU<br />steps (e.g. "0.5", "1", "8"). Serialized as a string, per the Kubernetes<br />convention for fractional values.<br />"0" is the auto-pause floor: the cluster scales to zero compute after five<br />idle minutes and a later connection resumes it, at the cost of roughly<br />fifteen seconds on that first connect. It pauses only while nothing is<br />connected, so a workload holding a pool open — or probing readiness with a<br />query — never reaches it and bills the same as "0.5". Storage, IO, backup<br />and KMS bill through a pause regardless; only compute stops. | 0.5 | MaxLength: 5 <br />Pattern: `^(0\|0\.5\|([1-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5])(\.5)?\|256)$` <br />Optional: \{\} <br /> |
+| `maxACU` _string_ | MaxACU is the Serverless v2 ceiling, in 0.5-ACU steps. Unlike the floor it<br />cannot be "0" — a ceiling of zero leaves no capacity to scale into. | 8 | MaxLength: 5 <br />Pattern: `^(0\.5\|([1-9]\|[1-9][0-9]\|1[0-9]\{2\}\|2[0-4][0-9]\|25[0-5])(\.5)?\|256)$` <br />Optional: \{\} <br /> |
+| `backupRetentionDays` _integer_ | BackupRetentionDays for automated backups. | 7 | Maximum: 35 <br />Minimum: 1 <br />Optional: \{\} <br /> |
+| `deletionProtection` _boolean_ | DeletionProtection is the AWS-level backstop (T2/(c)): with it on, the<br />cluster cannot be deleted even by an authorized principal until it is<br />cleared. Defaults on. | true | Optional: \{\} <br /> |
 
 
 #### Tenant

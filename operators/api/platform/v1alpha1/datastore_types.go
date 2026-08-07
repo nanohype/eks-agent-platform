@@ -43,6 +43,14 @@ const (
 // deletionPolicy and the per-kind deletion_protection backstop, not by the
 // reconciling principal's IAM (T1/T2).
 //
+// Drift, stated once here rather than per field, because it is the same answer
+// for every field: the operator does not observe it. It holds no AWS client for
+// RDS, DynamoDB, ElastiCache, SQS or MSK, so it cannot read a live datastore's
+// configuration, let alone converge one. Drift between this declaration and the
+// provisioned resource is detected where the resource is owned — landing-zone's
+// scheduled `tofu plan` (`drift.yml`), which opens a GitHub issue. It does not
+// reach the CR, and no datastore status field reports it.
+//
 // +kubebuilder:validation:XValidation:rule="(!has(self.relational) || self.kind == 'relational') && (!has(self.keyValue) || self.kind == 'keyValue') && (!has(self.objectStore) || self.kind == 'objectStore') && (!has(self.queue) || self.kind == 'queue') && (!has(self.cache) || self.kind == 'cache')",message="a datastore's config block must match its kind (e.g. kind=relational may only set the 'relational' block); kind=stream carries no block"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'keyValue' || has(self.keyValue)",message="kind=keyValue requires the 'keyValue' block: a DynamoDB table has no default partition key. Every other kind may omit its block to take the young/light defaults"
 type DatastoreSpec struct {
@@ -113,32 +121,45 @@ type DatastoreSpec struct {
 // RelationalConfig tunes the Aurora PostgreSQL Serverless v2 cluster. Omitting
 // the block provisions the young/light default: 0.5–8 ACU, 7-day backups,
 // deletion protection on.
+//
+// +kubebuilder:validation:XValidation:rule="double(self.maxACU) >= double(self.minACU)",message="maxACU must be >= minACU"
+// +kubebuilder:validation:XValidation:rule="self.minACU != '0' || int(self.engineVersion.split('.')[0]) >= 16",message="minACU '0' is Aurora Serverless v2 auto-pause, which requires Aurora PostgreSQL 16.3 or later; raise engineVersion or set a non-zero floor"
 type RelationalConfig struct {
-	// EngineVersion of Aurora PostgreSQL. Drift: reported, never converged — an
-	// out-of-band engine change is not force-corrected because a downgrade is
-	// destructive; the operator raises a Drifted condition instead.
+	// EngineVersion of Aurora PostgreSQL. Auto-pause (minACU "0") needs 16.3 or
+	// later, which the rule on this type enforces against the major version —
+	// the minor is not machine-checkable here, so 16.0–16.2 is admitted and
+	// fails at apply rather than at admission.
+	// +kubebuilder:validation:Pattern=`^[0-9]+\.[0-9]+$`
+	// +kubebuilder:validation:MaxLength=10
 	// +kubebuilder:default="16.6"
 	// +optional
 	EngineVersion string `json:"engineVersion,omitempty"`
 
 	// MinACU is the Serverless v2 floor in Aurora Capacity Units, in 0.5-ACU
 	// steps (e.g. "0.5", "1", "8"). Serialized as a string, per the Kubernetes
-	// convention for fractional values. The exact 0.5–256 range and the
-	// maxACU >= minACU relation are enforced at the tenant-substrate module's
-	// variable boundary. Drift: converged — the operator resets scaling bounds
-	// to spec.
-	// +kubebuilder:validation:Pattern=`^([1-9][0-9]{0,2}(\.5)?|0\.5)$`
+	// convention for fractional values.
+	//
+	// "0" is the auto-pause floor: the cluster scales to zero compute after five
+	// idle minutes and a later connection resumes it, at the cost of roughly
+	// fifteen seconds on that first connect. It pauses only while nothing is
+	// connected, so a workload holding a pool open — or probing readiness with a
+	// query — never reaches it and bills the same as "0.5". Storage, IO, backup
+	// and KMS bill through a pause regardless; only compute stops.
+	// +kubebuilder:validation:Pattern=`^(0|0\.5|([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\.5)?|256)$`
+	// +kubebuilder:validation:MaxLength=5
 	// +kubebuilder:default="0.5"
 	// +optional
 	MinACU string `json:"minACU,omitempty"`
 
-	// MaxACU is the Serverless v2 ceiling, in 0.5-ACU steps. Drift: converged.
-	// +kubebuilder:validation:Pattern=`^([1-9][0-9]{0,2}(\.5)?|0\.5)$`
+	// MaxACU is the Serverless v2 ceiling, in 0.5-ACU steps. Unlike the floor it
+	// cannot be "0" — a ceiling of zero leaves no capacity to scale into.
+	// +kubebuilder:validation:Pattern=`^(0\.5|([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\.5)?|256)$`
+	// +kubebuilder:validation:MaxLength=5
 	// +kubebuilder:default="8"
 	// +optional
 	MaxACU string `json:"maxACU,omitempty"`
 
-	// BackupRetentionDays for automated backups. Drift: converged.
+	// BackupRetentionDays for automated backups.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=35
 	// +kubebuilder:default=7
@@ -147,7 +168,7 @@ type RelationalConfig struct {
 
 	// DeletionProtection is the AWS-level backstop (T2/(c)): with it on, the
 	// cluster cannot be deleted even by an authorized principal until it is
-	// cleared. Defaults on. Drift: converged.
+	// cleared. Defaults on.
 	// +kubebuilder:default=true
 	// +optional
 	DeletionProtection *bool `json:"deletionProtection,omitempty"`
@@ -166,7 +187,7 @@ type AttributeSchema struct {
 }
 
 // GlobalSecondaryIndex declares a DynamoDB GSI. The key schema is immutable
-// (AWS recreates the index to change it); drift on projection is reported.
+// (AWS recreates the index to change it).
 type GlobalSecondaryIndex struct {
 	// Name of the index.
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_.-]{3,255}$`
@@ -186,8 +207,7 @@ type GlobalSecondaryIndex struct {
 	Projection string `json:"projection,omitempty"`
 }
 
-// KeyValueConfig tunes the DynamoDB table. The key schema is immutable; billing
-// mode, TTL, and point-in-time recovery converge on drift.
+// KeyValueConfig tunes the DynamoDB table. The key schema is immutable.
 type KeyValueConfig struct {
 	// PartitionKey (hash key). Immutable after create.
 	PartitionKey AttributeSchema `json:"partitionKey"`
@@ -197,19 +217,18 @@ type KeyValueConfig struct {
 	SortKey *AttributeSchema `json:"sortKey,omitempty"`
 
 	// BillingMode. PAY_PER_REQUEST (default) suits a young tenant with unknown
-	// traffic; PROVISIONED is for steady, predictable load. Drift: converged.
+	// traffic; PROVISIONED is for steady, predictable load.
 	// +kubebuilder:validation:Enum=PAY_PER_REQUEST;PROVISIONED
 	// +kubebuilder:default=PAY_PER_REQUEST
 	// +optional
 	BillingMode string `json:"billingMode,omitempty"`
 
 	// TTLAttribute names the item attribute holding an epoch expiry; empty
-	// disables TTL. Drift: converged.
+	// disables TTL.
 	// +optional
 	TTLAttribute string `json:"ttlAttribute,omitempty"`
 
-	// PointInTimeRecovery enables continuous backups. Defaults on. Drift:
-	// converged.
+	// PointInTimeRecovery enables continuous backups. Defaults on.
 	// +kubebuilder:default=true
 	// +optional
 	PointInTimeRecovery *bool `json:"pointInTimeRecovery,omitempty"`
@@ -222,17 +241,17 @@ type KeyValueConfig struct {
 }
 
 // ObjectStoreConfig tunes the S3 bucket. Encryption and public-access blocking
-// are always on and not configurable. Both fields converge on drift.
+// are always on and not configurable.
 type ObjectStoreConfig struct {
 	// Versioning keeps prior object versions. Defaults on; set false only for a
 	// bucket of regenerable data where prior versions add cost with no recovery
-	// value. Drift: converged.
+	// value.
 	// +kubebuilder:default=true
 	// +optional
 	Versioning *bool `json:"versioning,omitempty"`
 
 	// LifecycleExpireDays expires objects after N days; 0 (default) keeps them
-	// indefinitely. Drift: converged.
+	// indefinitely.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default=0
 	// +optional
@@ -240,7 +259,7 @@ type ObjectStoreConfig struct {
 }
 
 // QueueConfig tunes the SQS queue. FIFO-ness is immutable (a FIFO and a standard
-// queue are different resources); the remaining fields converge on drift.
+// queue are different resources).
 type QueueConfig struct {
 	// FIFO makes an exactly-once, ordered queue. Immutable after create.
 	// +kubebuilder:default=false
@@ -248,7 +267,7 @@ type QueueConfig struct {
 	FIFO *bool `json:"fifo,omitempty"`
 
 	// VisibilityTimeoutSeconds before a received-but-unacked message is
-	// redelivered. Drift: converged.
+	// redelivered.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=43200
 	// +kubebuilder:default=30
@@ -256,7 +275,7 @@ type QueueConfig struct {
 	VisibilityTimeoutSeconds int32 `json:"visibilityTimeoutSeconds,omitempty"`
 
 	// MessageRetentionSeconds a message is kept before it expires (default 4
-	// days). Drift: converged.
+	// days).
 	// +kubebuilder:validation:Minimum=60
 	// +kubebuilder:validation:Maximum=1209600
 	// +kubebuilder:default=345600
@@ -265,7 +284,6 @@ type QueueConfig struct {
 
 	// MaxReceiveCount, when > 0, provisions a dead-letter queue and redrives a
 	// message to it after this many failed receives; 0 (default) means no DLQ.
-	// Drift: converged.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=1000
 	// +kubebuilder:default=0
@@ -273,24 +291,23 @@ type QueueConfig struct {
 	MaxReceiveCount int32 `json:"maxReceiveCount,omitempty"`
 }
 
-// CacheConfig tunes the ElastiCache cluster. Engine and node type are reported
-// on drift (a resize is disruptive); replica count converges.
+// CacheConfig tunes the ElastiCache cluster. Changing engine or node type on a
+// live cluster is a disruptive replacement, so treat both as set-at-create.
 type CacheConfig struct {
 	// Engine of the cache. Valkey is the default going-forward OSS engine.
-	// Drift: reported.
 	// +kubebuilder:validation:Enum=valkey;redis
 	// +kubebuilder:default=valkey
 	// +optional
 	Engine string `json:"engine,omitempty"`
 
-	// NodeType sizes each node. Drift: reported — a node-type change is a
-	// disruptive resize, surfaced as a condition rather than force-applied.
+	// NodeType sizes each node. Changing it on a live cluster is a disruptive
+	// resize.
 	// +kubebuilder:default="cache.t4g.micro"
 	// +optional
 	NodeType string `json:"nodeType,omitempty"`
 
 	// Replicas is the number of read replicas per shard; 0 (default) is a
-	// single-node cache for a young tenant. Drift: converged.
+	// single-node cache for a young tenant.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=5
 	// +kubebuilder:default=0
@@ -298,9 +315,13 @@ type CacheConfig struct {
 	Replicas int32 `json:"replicas,omitempty"`
 }
 
-// DatastoreStatus reports one datastore's observed state (T3/(a)). It lives
-// under PlatformStatus.Datastores, separate from the top-level Phase so a
-// still-creating datastore does not hold back the tenant's Ready (T6).
+// DatastoreStatus reports the stable identity a tenant uses to reach one
+// declared datastore. It lives under PlatformStatus.Datastores.
+//
+// It is an identity report, not a liveness report. Every value here is composed
+// from the <env>-<platform>-<datastore> convention that the tenant-substrate
+// module names by and the datastore-access policy scopes to, so it needs no AWS
+// call — and makes no claim that the resource exists yet.
 type DatastoreStatus struct {
 	// Name matches spec.datastores[].name.
 	Name string `json:"name"`
@@ -309,16 +330,22 @@ type DatastoreStatus struct {
 	// +optional
 	Kind DatastoreKind `json:"kind,omitempty"`
 
-	// Phase: Pending, Provisioning, Ready, Drifted, Failed.
+	// Phase is the owning Platform's phase, copied. It reports identity and
+	// access readiness, not the datastore's own state — the operator observes
+	// no live datastore, so it has nothing else to derive a phase from, and
+	// this can never hold a value the Platform cannot.
+	// Phase: Pending, Provisioning, Ready, Suspended, Failed.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
-	// Endpoint is the connection address once available — Aurora/cache endpoint,
-	// SQS queue URL, S3 bucket name, or MSK bootstrap brokers.
+	// Endpoint is the connection address, and only for the kinds whose name is
+	// fully deterministic: the S3 bucket, the DynamoDB table, the SQS queue URL.
+	// Aurora, ElastiCache and MSK endpoints carry an AWS-generated id, so this
+	// is empty for those three and the address comes from the module's outputs.
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// ARN of the provisioned resource.
+	// ARN of the datastore, composed from the naming convention.
 	// +optional
 	ARN string `json:"arn,omitempty"`
 
@@ -327,10 +354,4 @@ type DatastoreStatus struct {
 	// chart reads one predictable place instead of hand-wiring it per app (T7).
 	// +optional
 	SecretName string `json:"secretName,omitempty"`
-
-	// Drift lists spec fields observed to differ from AWS that the operator
-	// reports but does not converge (the destructive-to-correct fields per T3).
-	// Empty when in sync.
-	// +optional
-	Drift []string `json:"drift,omitempty"`
 }

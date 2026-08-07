@@ -107,9 +107,15 @@ func TestPlatform_DatastoresValidVocabulary(t *testing.T) {
 	}
 }
 
-// TestPlatform_DatastoreStatusSubresource proves per-datastore observed state
-// (T3/(a), T6) writes through the status subresource independently of the
-// top-level phase.
+// TestPlatform_DatastoreStatusSubresource proves the per-datastore status
+// (T3/(a), T6) survives a write through the status subresource.
+//
+// Scope, because the distinction cost a real defect: this writes the status by
+// hand, so it proves the SCHEMA round-trips these fields — not that any
+// controller produces them. What the operator actually emits is asserted in
+// TestDatastoreStatuses_PhaseMirrorsPlatform and the datastoreStatuses unit
+// tests. A field that only ever appears in a test like this one is stored,
+// never written.
 func TestPlatform_DatastoreStatusSubresource(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
@@ -130,7 +136,7 @@ func TestPlatform_DatastoreStatusSubresource(t *testing.T) {
 
 	p.Status.Phase = phaseReady
 	p.Status.Datastores = []platformv1alpha1.DatastoreStatus{
-		{Name: "db", Kind: platformv1alpha1.DatastoreRelational, Phase: phaseProvisioning, SecretName: "db-master", Drift: []string{"engineVersion"}},
+		{Name: "db", Kind: platformv1alpha1.DatastoreRelational, Phase: phaseProvisioning, SecretName: "db-master"},
 	}
 	if err := k8sClient.Status().Update(ctx, p); err != nil {
 		t.Fatalf("status update: %v", err)
@@ -148,9 +154,6 @@ func TestPlatform_DatastoreStatusSubresource(t *testing.T) {
 	}
 	if got.Status.Datastores[0].SecretName != "db-master" {
 		t.Errorf("datastore secretName: got %q want db-master", got.Status.Datastores[0].SecretName)
-	}
-	if len(got.Status.Datastores[0].Drift) != 1 || got.Status.Datastores[0].Drift[0] != "engineVersion" {
-		t.Errorf("datastore drift: got %v", got.Status.Datastores[0].Drift)
 	}
 }
 
