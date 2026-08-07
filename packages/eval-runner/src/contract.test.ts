@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { parseCases } from './cases.js';
-import { KNOWN_FLAGS } from './cli.js';
+import { KNOWN_FLAGS, REQUIRED_FLAGS } from './cli.js';
 import { aggregate } from './score.js';
 import type { CaseResult } from './types.js';
 
@@ -51,6 +51,27 @@ describe('WorkflowTemplate ↔ CLI flag contract', () => {
       expect(KNOWN_FLAGS.score, `score rejects ${flag}`).toContain(flag);
     }
   });
+
+  // The reverse direction, which the forward check cannot see. A flag the
+  // template stops PASSING is not a flag the CLI does not KNOW — it is a
+  // `required()` throw at run time, so the eval pod exits 2 on every run while
+  // this file stays green.
+  it.each(['evaluate', 'score'] as const)(
+    'the %s step passes every flag the command requires',
+    (command) => {
+      const passed = flagsAfter(wf, command);
+      expect(
+        passed.length,
+        `no flags parsed for ${command}; this check would pass vacuously`,
+      ).toBeGreaterThan(0);
+      for (const flag of REQUIRED_FLAGS[command]) {
+        expect(
+          passed,
+          `${command} requires ${flag} and the WorkflowTemplate does not pass it`,
+        ).toContain(flag);
+      }
+    },
+  );
 });
 
 describe('cross-language golden fixtures', () => {

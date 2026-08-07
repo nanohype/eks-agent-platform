@@ -5,20 +5,29 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
 import { parseCases } from './cases.js';
-import { GatewayBackend } from './model.js';
+import { GatewayBackend, type RouteAPI } from './model.js';
 import { runCases } from './run.js';
 import { aggregate, renderHtml, renderJUnit } from './score.js';
 import type { CaseResult, ModelBackend } from './types.js';
 
 /**
- * The flags each subcommand accepts, byte-aligned with what the eval-runner
- * WorkflowTemplate passes. `contract.test.ts` reads the flags out of the
- * template and asserts they're all present here, so a template edit that adds
- * or renames a flag fails a test instead of the pod.
+ * The flags each subcommand REQUIRES — every one is read with `required()`
+ * below, so a template that stops passing one exits 2 on every run.
+ *
+ * Declared separately from KNOWN_FLAGS, and KNOWN_FLAGS is derived from it, so
+ * the two cannot drift. `contract.test.ts` checks both directions against the
+ * WorkflowTemplate: no flag the CLI does not accept, and no required flag the
+ * template does not pass.
  */
-export const KNOWN_FLAGS: Record<'evaluate' | 'score', readonly string[]> = {
-  evaluate: ['--cases', '--platform', '--fleet', '--gateway', '--output', '--timeout-ms'],
+export const REQUIRED_FLAGS: Record<'evaluate' | 'score', readonly string[]> = {
+  evaluate: ['--cases', '--base-url', '--route', '--route-api', '--output'],
   score: ['--results', '--pass-threshold', '--report', '--junit', '--score-out'],
+};
+
+/** The flags each subcommand accepts: the required set plus the optional ones. */
+export const KNOWN_FLAGS: Record<'evaluate' | 'score', readonly string[]> = {
+  evaluate: [...REQUIRED_FLAGS.evaluate, '--timeout-ms'],
+  score: [...REQUIRED_FLAGS.score],
 };
 
 export class UsageError extends Error {}
@@ -53,11 +62,30 @@ function required(flags: Map<string, string>, name: string): string {
 
 export interface EvaluateOptions {
   casesPath: string;
-  platform: string;
-  fleet: string;
-  gateway: string;
+  /** ModelGateway.status.routes[].baseURL — never status.endpoint. */
+  baseURL: string;
+  /** ModelGateway.status.routes[].name. */
+  route: string;
+  /** ModelGateway.status.routes[].api. */
+  api: RouteAPI;
   outputPath: string;
   timeoutMs?: number;
+}
+
+/**
+ * Parse the wire format the operator sent.
+ *
+ * Rejected rather than defaulted. The operator forwards the CRD's own value
+ * (`Anthropic` / `OpenAI`); anything else means the two sides disagree about
+ * the spelling, and falling back to a format would post one wire shape at the
+ * other's endpoint and fail every case against a healthy-looking gateway.
+ */
+export function parseRouteAPI(raw: string): RouteAPI {
+  if (raw === 'Anthropic' || raw === 'OpenAI') return raw;
+  throw new UsageError(
+    `--route-api ${JSON.stringify(raw)} is neither Anthropic nor OpenAI; the operator sends ` +
+      'ModelGateway.status.routes[].api verbatim, so this means the two sides disagree about the spelling',
+  );
 }
 
 /**
@@ -68,8 +96,7 @@ export interface EvaluateOptions {
 export async function runEvaluate(opts: EvaluateOptions, backend?: ModelBackend): Promise<void> {
   const cases = parseCases(await readFile(opts.casesPath, 'utf8'));
   const b =
-    backend ??
-    new GatewayBackend({ gateway: opts.gateway, platform: opts.platform, fleet: opts.fleet });
+    backend ?? new GatewayBackend({ baseURL: opts.baseURL, route: opts.route, api: opts.api });
   const results = await runCases(b, cases, {
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
   });
@@ -108,9 +135,9 @@ export async function run(argv: readonly string[]): Promise<number> {
     if (sub === 'evaluate') {
       await runEvaluate({
         casesPath: required(flags, '--cases'),
-        platform: required(flags, '--platform'),
-        fleet: required(flags, '--fleet'),
-        gateway: required(flags, '--gateway'),
+        baseURL: required(flags, '--base-url'),
+        route: required(flags, '--route'),
+        api: parseRouteAPI(required(flags, '--route-api')),
         outputPath: required(flags, '--output'),
         ...(flags.has('--timeout-ms')
           ? { timeoutMs: Number.parseInt(required(flags, '--timeout-ms'), 10) }

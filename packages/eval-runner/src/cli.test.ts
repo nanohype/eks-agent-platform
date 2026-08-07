@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { KNOWN_FLAGS, parseArgs, run, runEvaluate, runScore } from './cli.js';
+import { KNOWN_FLAGS, parseArgs, parseRouteAPI, run, runEvaluate, runScore } from './cli.js';
 import type { CaseResult, InvocationResult, ModelBackend } from './types.js';
 
 let dir: string;
@@ -52,7 +52,7 @@ describe('runEvaluate', () => {
     );
     const backend: ModelBackend = { invoke: (i) => Promise.resolve(ok(`re:${i.input}`)) };
     await runEvaluate(
-      { casesPath, platform: 'p', fleet: 'f', gateway: 'http://gw', outputPath },
+      { casesPath, baseURL: 'http://gw/anthropic', route: 'chat', api: 'Anthropic', outputPath },
       backend,
     );
     const results = JSON.parse(await readFile(outputPath, 'utf8')) as CaseResult[];
@@ -133,10 +133,10 @@ describe('run (dispatch)', () => {
         Promise.resolve(
           new Response(
             JSON.stringify({
-              output: 'hello world',
-              stopReason: 'end_turn',
-              modelId: 'anthropic.claude-sonnet-4-6',
-              usage: { inputTokens: 10, outputTokens: 5 },
+              model: 'anthropic.claude-sonnet-4-6',
+              stop_reason: 'end_turn',
+              content: [{ type: 'text', text: 'hello world' }],
+              usage: { input_tokens: 10, output_tokens: 5 },
             }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           ),
@@ -153,12 +153,12 @@ describe('run (dispatch)', () => {
       'evaluate',
       '--cases',
       casesPath,
-      '--platform',
-      'p',
-      '--fleet',
-      'f',
-      '--gateway',
-      'http://gw:8080',
+      '--base-url',
+      'http://gw:8080/anthropic',
+      '--route',
+      'chat',
+      '--route-api',
+      'Anthropic',
       '--output',
       outputPath,
       '--timeout-ms',
@@ -168,5 +168,35 @@ describe('run (dispatch)', () => {
     const results = JSON.parse(await readFile(outputPath, 'utf8')) as CaseResult[];
     expect(results[0]?.output).toBe('hello world');
     expect(results[0]?.unpriced).toBe(false);
+  });
+});
+
+describe('parseRouteAPI', () => {
+  // The operator sends ModelGateway.status.routes[].api verbatim, and the CRD
+  // enum is capitalised (Anthropic;OpenAI). A lowercase union on this side would
+  // typecheck, run, and pick the wrong request body and response parser against a
+  // gateway that reports healthy — the exact failure this whole change closes,
+  // reintroduced one layer down. So the rejection is asserted, not assumed.
+  it('accepts exactly the two spellings the CRD enum declares', () => {
+    expect(parseRouteAPI('Anthropic')).toBe('Anthropic');
+    expect(parseRouteAPI('OpenAI')).toBe('OpenAI');
+  });
+
+  it.each(['anthropic', 'openai', 'OPENAI', 'Bedrock', ''])(
+    'refuses %o rather than guessing a wire format',
+    (raw) => {
+      expect(() => parseRouteAPI(raw)).toThrow(/neither Anthropic nor OpenAI/);
+    },
+  );
+});
+
+describe('run', () => {
+  it('refuses an unknown subcommand instead of defaulting to one', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // 2, not 1 — this CLI reserves 2 for a usage error so a caller can tell
+    // 'you invoked me wrong' from 'the run failed'.
+    await expect(run(['wat'])).resolves.toBe(2);
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('unknown subcommand: wat'));
+    err.mockRestore();
   });
 });
