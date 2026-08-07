@@ -284,6 +284,21 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./scripts/check-project-resources.py
 
+  # ── chart args parity ────────────────────────────────────────────────────
+  # The other half of the same deletion. PROJECT kept declaring the batch API;
+  # the chart kept passing --batch-workers and --batch-poll-interval to a binary
+  # that no longer defines them. Go's flag package exits 2 on an unknown
+  # argument, so the operator pod CrashLoopBackOffs before the manager starts —
+  # and every existing gate stayed green, because the chart renders, lints and
+  # validates, the binary compiles and tests, and nothing joins the two until an
+  # install is already running.
+  chart-args:
+    name: chart passes only flags the binary defines
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-chart-args.py
+
   # ── eval workflow gate ───────────────────────────────────────────────────
   # The eval pipeline was dead twice over, and both failures were invisible to
   # helm lint, helm template, kubeconform and trivy, because nothing was wrong

@@ -53,9 +53,6 @@ reconcilers:
     holdGraceIntervals: 2
   eval:
     concurrent: 2
-  batch:
-    concurrent: 2
-    pollInterval: 2m
 
 config:
   environment: ""
