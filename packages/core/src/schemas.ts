@@ -162,7 +162,6 @@ export const DatastoreStatus = z.object({
   endpoint: z.string().optional(),
   arn: z.string().optional(),
   secretName: z.string().optional(),
-  drift: z.array(z.string()).optional(),
 });
 export type DatastoreStatus = z.infer<typeof DatastoreStatus>;
 

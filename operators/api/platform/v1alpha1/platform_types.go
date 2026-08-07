@@ -79,6 +79,7 @@ type PlatformSpec struct {
 	// +optional
 	// +listType=map
 	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=24
 	Datastores []DatastoreSpec `json:"datastores,omitempty"`
 }
 
