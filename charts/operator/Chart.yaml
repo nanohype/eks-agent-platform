@@ -8,6 +8,16 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) and operator SLO (PrometheusRule/
 # AlertmanagerConfig/CR-state metrics) behind evalRuntime.* / slo.* toggles.
 #
+# 0.6.3 is a lockstep bump for the same reason 0.5.0 was, one layer out. The
+# eval WorkflowTemplate's route contract is three parameters
+# (model-route-base-url / model-route / model-route-api) where it was one
+# (gateway-url), and only a 0.6.0 binary supplies them. 0.6.2 shipped that
+# template still naming appVersion 0.5.0, and the pairing fails quietly: the
+# three parameters carry REPLACE_BY_EVALSUITE defaults, so an older reconciler
+# does not crash the workflow, it lets the run POST to that literal string and
+# score every case zero. scripts/check-runtime-contract.py now asserts this
+# pairing so the next one cannot merge.
+#
 # 0.6.0 removes the prometheus-operator alerting path — the PrometheusRule, the
 # AlertmanagerConfig and the namespace that held them. The chart version moves
 # and appVersion does not: no Go changed, so the 0.5.0 image is still exactly
@@ -18,9 +28,9 @@ type: application
 # binary has no such field on its Go struct, so an errorSelector would be
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
-# honour.
-version: 0.6.2
-appVersion: "0.5.0"
+# honour — nor, as 0.6.3 records, a workflow parameter.
+version: 0.6.3
+appVersion: "0.6.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
 kubeVersion: ">=1.32.0-0"

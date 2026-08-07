@@ -321,6 +321,36 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-eval-workflow.py
 
+  # ── runtime contract gate ────────────────────────────────────────────────
+  # The chart and the binary are one contract in two files: the eval
+  # WorkflowTemplate DECLARES the parameters a run needs, the reconciler
+  # SUPPLIES them. They version separately, so a chart can name a binary from a
+  # different generation of that contract with every other gate still green.
+  #
+  # Chart 0.6.2 did exactly that — a three-parameter route contract
+  # (model-route-base-url / model-route / model-route-api) with appVersion still
+  # naming the 0.5.0 image, whose reconciler sent `gateway-url` and none of the
+  # three. check-image-refs asks whether the image RESOLVES, which it does;
+  # nothing asked whether it was the same generation as the templates beside it.
+  #
+  # It fails quietly rather than loudly, which is why it needs a gate: the three
+  # parameters carry REPLACE_BY_EVALSUITE defaults (Argo v4+ rejects a null
+  # value), so an old reconciler does not crash the run — it lets it POST to
+  # that literal string and score every case zero, reading as a failed model
+  # rather than a mispaired release.
+  #
+  # fetch-depth: 0 because the check resolves appVersion to source through the
+  # release tag, and a shallow checkout has no tags to resolve it with.
+  runtime-contract:
+    name: the chart names an image that honours its contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: pip install pyyaml
+      - run: ./scripts/check-runtime-contract.py --list
+
   # ── vcluster chart acceptance gate ───────────────────────────────────────
   # buildVClusterValues returns a map[string]interface{} that nothing checks
   # against the chart it is handed to. The unit tests assert what the operator
