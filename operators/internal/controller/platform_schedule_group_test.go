@@ -170,3 +170,49 @@ func TestEnsureScheduleGroup_RealFailuresSurface(t *testing.T) {
 		}
 	})
 }
+
+// The two paths through ensureIamRole — role already exists, role freshly
+// created — each reconcile the schedule group, and each must fail the whole IAM
+// reconcile if it cannot. Both branches are asserted because platform_iam.go
+// carries a 100% floor as a security-critical file, and because a swallowed
+// failure here is the exact defect this change closes: a tenant would be told
+// its role reconciled while the group its schedules need did not exist.
+func TestEnsureIamRole_ScheduleGroupFailureFailsTheReconcile(t *testing.T) {
+	cfg := IAMConfig{
+		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
+		Environment:             "development",
+		ClusterName:             "development-platform",
+	}
+	p := platformWithCapabilities("incident-response", platformv1alpha1.CapabilityEventBridgeScheduler)
+	p.Spec.Tenant = "reliability"
+
+	t.Run("role already exists", func(t *testing.T) {
+		fi := newFakeIAM()
+		fi.seedRole(tenantRoleName(cfg.ClusterName, p), "arn:aws:iam::123456789012:role/"+tenantRoleName(cfg.ClusterName, p))
+		fs := newFakeScheduler()
+		fs.createErr = errors.New("AccessDeniedException: not authorized to CreateScheduleGroup")
+
+		r := &PlatformReconciler{IAM: fi, Scheduler: fs}
+		got, err := r.ensureIamRole(context.Background(), p, cfg)
+		if err == nil {
+			t.Fatal("a schedule group that cannot be created must fail the IAM reconcile")
+		}
+		if got.RoleARN == "" {
+			t.Error("the partially-reconciled role ARN must still be reported, matching every sibling failure path")
+		}
+	})
+
+	t.Run("role freshly created", func(t *testing.T) {
+		fs := newFakeScheduler()
+		fs.createErr = errors.New("AccessDeniedException: not authorized to CreateScheduleGroup")
+
+		r := &PlatformReconciler{IAM: newFakeIAM(), Scheduler: fs}
+		got, err := r.ensureIamRole(context.Background(), p, cfg)
+		if err == nil {
+			t.Fatal("a schedule group that cannot be created must fail the IAM reconcile on the create path too")
+		}
+		if got.RoleARN == "" {
+			t.Error("the newly-created role ARN must still be reported")
+		}
+	})
+}
