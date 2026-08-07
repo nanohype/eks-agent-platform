@@ -49,8 +49,6 @@ spec:
             - --slo-requeue-interval={{ .Values.reconcilers.slo.requeueInterval }}
             - --slo-hold-grace-intervals={{ .Values.reconcilers.slo.holdGraceIntervals }}
             - --eval-workers={{ .Values.reconcilers.eval.concurrent }}
-            - --batch-workers={{ .Values.reconcilers.batch.concurrent }}
-            - --batch-poll-interval={{ .Values.reconcilers.batch.pollInterval }}
             - --environment={{ .Values.config.environment }}
             - --region={{ .Values.config.region }}
             - --network-engine={{ .Values.networkPolicy.engine }}

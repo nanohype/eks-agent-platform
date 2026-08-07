@@ -19,7 +19,7 @@ type: application
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour.
-version: 0.6.0
+version: 0.6.1
 appVersion: "0.5.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
