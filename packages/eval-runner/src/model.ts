@@ -1,38 +1,88 @@
-import { AgentError, type ErrorClass, type Message } from '@eks-agent/core';
+import { AgentError, type ErrorClass } from '@eks-agent/core';
 import { priceModel } from '@eks-agent/pricing';
 
 import type { InvocationResult, ModelBackend, StopReason } from './types.js';
 
 /**
- * The JSON shape the runner expects back from the tenant gateway's
- * Anthropic-format endpoint. The gateway proxies
- * to Bedrock and echoes token usage + the resolved model id, which is what lets
- * the runner price each call. Every field is optional so a thin gateway that
- * only returns text still yields a usable (unpriced) result rather than
- * throwing.
+ * The wire format the route is served under, spelled exactly as the CRD spells
+ * it — `RouteAPI` in operators/api/agents/v1alpha1/modelgateway_types.go, whose
+ * kubebuilder Enum is `Anthropic;OpenAI`.
+ *
+ * The operator forwards `string(route.API)` verbatim, so a lowercase union here
+ * would match nothing the operator can send: the runner would fall through to
+ * the other branch and post an OpenAI body at the Anthropic endpoint, against a
+ * gateway that reports healthy. scripts/check-route-api-parity.py is what holds
+ * the two spellings together, because no type system spans this seam.
  */
-export interface GatewayResponse {
-  /** Model text. `output` is preferred; `content` is accepted as an alias. */
-  output?: string;
-  content?: string;
-  stopReason?: string;
-  /** Resolved Bedrock model id, used to price the call. */
-  modelId?: string;
+export type RouteAPI = 'Anthropic' | 'OpenAI';
+
+/**
+ * Output ceiling per call. Both wire formats require one and reject a request
+ * without it before the model is reached.
+ */
+const DEFAULT_MAX_TOKENS = 1024;
+
+/** The native Anthropic Messages response, for a route published as Anthropic. */
+interface AnthropicResponse {
+  model?: string;
+  stop_reason?: string | null;
+  /** Content is a BLOCK ARRAY, not a string. */
+  content?: { type?: string; text?: string }[];
   usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    cacheReadTokens?: number;
-    cacheWriteTokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+  /** Bedrock stamps this on a response its guardrail acted on. */
+  'amazon-bedrock-guardrailAction'?: string;
+}
+
+/** The OpenAI chat-completions response, for a route published as OpenAI. */
+interface OpenAIResponse {
+  model?: string;
+  choices?: { message?: { content?: string | null }; finish_reason?: string | null }[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
+}
+
+/** What both parsers reduce to, so invoke() below is format-agnostic. */
+interface NormalizedResponse {
+  output: string;
+  guardrailBlocked: boolean;
+  modelId?: string;
+  stopReason?: StopReason;
+  tokens?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
   };
 }
 
 export interface GatewayBackendOptions {
-  /** Base URL published on the route's status, e.g. http://<platform>-gateway.tenants-<platform>.svc.cluster.local:8080/anthropic */
-  gateway: string;
-  /** Platform name — the first half of the agent route id. */
-  platform: string;
-  /** Fleet name — the second half of the agent route id. */
-  fleet: string;
+  /**
+   * The base URL published on ModelGateway.status.routes[].baseURL, e.g.
+   * http://<platform>-gateway.tenants-<platform>.svc.cluster.local:8080/anthropic
+   *
+   * Not status.endpoint. The gateway serves each wire format under its own
+   * prefix, and a request to the bare root reaches no body processor, gets no
+   * x-ai-eg-model header and matches no route rule.
+   */
+  baseURL: string;
+  /**
+   * The route name published on status.routes[].name. This is what goes in the
+   * body's `model` field — a Bedrock model id there matches no rule, because
+   * the gateway's own modelNameOverride does that substitution upstream.
+   */
+  route: string;
+  /** The wire format published on status.routes[].api. */
+  api: RouteAPI;
+  /** Output ceiling per call. Defaults to DEFAULT_MAX_TOKENS. */
+  maxTokens?: number;
   /** Injectable fetch, defaulting to the global. Tests pass a stub. */
   fetchImpl?: typeof fetch;
 }
@@ -71,20 +121,39 @@ export function classifyStatus(status: number): ErrorClass {
  * AgentError, a guardrail intervention becomes a normal (blocked) result.
  */
 export class GatewayBackend implements ModelBackend {
-  private readonly gateway: string;
-  private readonly platform: string;
-  private readonly fleet: string;
+  private readonly baseURL: string;
+  private readonly route: string;
+  private readonly api: RouteAPI;
+  private readonly maxTokens: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: GatewayBackendOptions) {
-    this.gateway = trimTrailingSlashes(opts.gateway);
-    this.platform = opts.platform;
-    this.fleet = opts.fleet;
+    this.baseURL = trimTrailingSlashes(opts.baseURL);
+    this.route = opts.route;
+    this.api = opts.api;
+    this.maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
   private url(): string {
-    return `${this.gateway}/v1/agents/${this.platform}-${this.fleet}/messages`;
+    // The path each wire format is served at, appended to the published base —
+    // the same suffixes RouteStatus.BaseURL documents and the official SDKs
+    // append.
+    return this.api === 'Anthropic'
+      ? `${this.baseURL}/v1/messages`
+      : `${this.baseURL}/chat/completions`;
+  }
+
+  private requestBody(input: string): unknown {
+    // `model` is the ROUTE NAME. Envoy AI Gateway's extproc reads it out of the
+    // body to derive x-ai-eg-model, which is the header the AIGatewayRoute rule
+    // matches; modelNameOverride swaps in the Bedrock identifier upstream.
+    // Both wire formats accept this same envelope.
+    return {
+      model: this.route,
+      max_tokens: this.maxTokens,
+      messages: [{ role: 'user', content: input }],
+    };
   }
 
   async invoke(inv: {
@@ -94,7 +163,6 @@ export class GatewayBackend implements ModelBackend {
     signal: AbortSignal;
   }): Promise<InvocationResult> {
     const started = Date.now();
-    const messages: Message[] = [{ role: 'user', content: inv.input }];
     let res: Response;
     try {
       res = await this.fetchImpl(this.url(), {
@@ -103,7 +171,7 @@ export class GatewayBackend implements ModelBackend {
           'content-type': 'application/json',
           'x-correlation-id': inv.correlationId,
         },
-        body: JSON.stringify({ messages, correlationId: inv.correlationId }),
+        body: JSON.stringify(this.requestBody(inv.input)),
         signal: inv.signal,
       });
     } catch (err) {
@@ -119,41 +187,114 @@ export class GatewayBackend implements ModelBackend {
       });
     }
 
-    const body = (await res.json()) as GatewayResponse;
-    const output = body.output ?? body.content ?? '';
-    const stopReason = coerceStopReason(body.stopReason);
-    const guardrailBlocked = stopReason === 'guardrail_intervened';
+    const raw = (await res.json()) as unknown;
+    const norm =
+      this.api === 'Anthropic'
+        ? parseAnthropic(raw as AnthropicResponse)
+        : parseOpenAI(raw as OpenAIResponse);
 
-    // Price the call when the gateway reported both a model id and usage.
+    // Price the call when the response carried both a resolved model and usage.
     // Anything short of that is unpriced — surfaced, never silently $0.
     let costUsd = 0;
     let unpriced = true;
-    let modelId: string | undefined;
-    if (body.modelId !== undefined && body.usage !== undefined) {
-      modelId = body.modelId;
-      const priced = priceModel({
-        modelId: body.modelId,
-        tokens: {
-          inputTokens: body.usage.inputTokens ?? 0,
-          outputTokens: body.usage.outputTokens ?? 0,
-          cacheReadTokens: body.usage.cacheReadTokens ?? 0,
-          cacheWriteTokens: body.usage.cacheWriteTokens ?? 0,
-        },
-      });
+    if (norm.modelId !== undefined && norm.tokens !== undefined) {
+      const priced = priceModel({ modelId: norm.modelId, tokens: norm.tokens });
       costUsd = priced.costUsd;
       unpriced = !priced.priced;
     }
 
     return {
-      output,
+      output: norm.output,
       latencyMs: Date.now() - started,
       costUsd,
       unpriced,
-      guardrailBlocked,
-      ...(stopReason !== undefined ? { stopReason } : {}),
-      ...(modelId !== undefined ? { modelId } : {}),
+      guardrailBlocked: norm.guardrailBlocked,
+      ...(norm.stopReason !== undefined ? { stopReason: norm.stopReason } : {}),
+      ...(norm.modelId !== undefined ? { modelId: norm.modelId } : {}),
     };
   }
+}
+
+/**
+ * Read the native Anthropic Messages response.
+ *
+ * Bedrock reports a guardrail intervention on the response body rather than as
+ * a stop reason, so it is checked first — the platform's StopReason union has
+ * `guardrail_intervened` and nothing in this repo was producing it, which left
+ * every expectRefusal case graded on refusal-phrase matching alone.
+ */
+function parseAnthropic(body: AnthropicResponse): NormalizedResponse {
+  const output = (body.content ?? [])
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text ?? '')
+    .join('');
+  const intervened = body['amazon-bedrock-guardrailAction'] === 'INTERVENED';
+  const stopReason: StopReason | undefined = intervened
+    ? 'guardrail_intervened'
+    : coerceStopReason(body.stop_reason ?? undefined);
+  const u = body.usage;
+  return {
+    output,
+    guardrailBlocked: intervened,
+    ...(body.model !== undefined ? { modelId: body.model } : {}),
+    ...(stopReason !== undefined ? { stopReason } : {}),
+    ...(u !== undefined
+      ? {
+          tokens: {
+            inputTokens: u.input_tokens ?? 0,
+            outputTokens: u.output_tokens ?? 0,
+            cacheReadTokens: u.cache_read_input_tokens ?? 0,
+            cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * OpenAI finish reasons, mapped onto the platform's StopReason union. A Map
+ * rather than an object literal: a keyed object read with a response-supplied
+ * string is an injection shape the linter is right to flag.
+ */
+const OPENAI_FINISH = new Map<string, StopReason>([
+  ['stop', 'end_turn'],
+  ['length', 'max_tokens'],
+  ['tool_calls', 'tool_use'],
+  ['function_call', 'tool_use'],
+  ['content_filter', 'guardrail_intervened'],
+]);
+
+/**
+ * Read the OpenAI chat-completions response.
+ *
+ * `usage.prompt_tokens` is the TOTAL prompt count and already includes
+ * `prompt_tokens_details.cached_tokens`. Anthropic's fields are disjoint —
+ * `input_tokens` excludes both cache counters — and priceModel sums its four
+ * terms, so the cached count is subtracted here and not in parseAnthropic.
+ * Getting this wrong inflates every cost, which is what `maxCostUsd` grades.
+ */
+function parseOpenAI(body: OpenAIResponse): NormalizedResponse {
+  const choice = body.choices?.[0];
+  const finish = choice?.finish_reason ?? undefined;
+  const stopReason = finish === undefined ? undefined : (OPENAI_FINISH.get(finish) ?? 'other');
+  const u = body.usage;
+  const cached = u?.prompt_tokens_details?.cached_tokens ?? 0;
+  return {
+    output: choice?.message?.content ?? '',
+    guardrailBlocked: stopReason === 'guardrail_intervened',
+    ...(body.model !== undefined ? { modelId: body.model } : {}),
+    ...(stopReason !== undefined ? { stopReason } : {}),
+    ...(u !== undefined
+      ? {
+          tokens: {
+            inputTokens: Math.max(0, (u.prompt_tokens ?? 0) - cached),
+            outputTokens: u.completion_tokens ?? 0,
+            cacheReadTokens: cached,
+            cacheWriteTokens: 0,
+          },
+        }
+      : {}),
+  };
 }
 
 /**

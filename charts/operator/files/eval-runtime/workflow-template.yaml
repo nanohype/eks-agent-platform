@@ -86,10 +86,18 @@ spec:
         # Quoted so an empty substitution stays an empty string, not YAML null —
         # Argo Workflows v4.0+ rejects a null parameter value (must be a string).
         value: "REPLACE_BY_APPLICATIONSET"
-      # The Platform's own ModelGateway endpoint. Each Platform runs its own
-      # gateway in its own namespace, so the EvalSuite reconciler supplies this
-      # per run; the value here is only what an unparameterised manual run sees.
-      - name: gateway-url
+      # The route contract the Platform's ModelGateway published, supplied per
+      # run by the EvalSuite reconciler. Three values, not one: the gateway
+      # serves each wire format under its own prefix, so the endpoint alone is
+      # not a usable base for any client; the route name is what goes in the
+      # request body's `model` field, which is where the gateway reads it to
+      # derive x-ai-eg-model; and the wire format decides which body to build
+      # and which response shape comes back.
+      - name: model-route-base-url
+        value: "REPLACE_BY_EVALSUITE"
+      - name: model-route
+        value: "REPLACE_BY_EVALSUITE"
+      - name: model-route-api
         value: "REPLACE_BY_EVALSUITE"
 
   entrypoint: pipeline
@@ -113,9 +121,9 @@ spec:
             arguments:
               parameters:
                 - { name: cases-json, value: "{{tasks.resolve.outputs.parameters.cases}}" }
-                - { name: platform, value: "{{workflow.parameters.platform}}" }
-                - { name: fleet, value: "{{workflow.parameters.fleet}}" }
-                - { name: gateway, value: "{{workflow.parameters.gateway-url}}" }
+                - { name: base-url, value: "{{workflow.parameters.model-route-base-url}}" }
+                - { name: route, value: "{{workflow.parameters.model-route}}" }
+                - { name: route-api, value: "{{workflow.parameters.model-route-api}}" }
           - name: score
             template: score
             depends: run
@@ -205,9 +213,9 @@ spec:
       inputs:
         parameters:
           - name: cases-json
-          - name: platform
-          - name: fleet
-          - name: gateway
+          - name: base-url
+          - name: route
+          - name: route-api
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
@@ -231,23 +239,26 @@ spec:
         # attributes to the owning tenant, same as any other operator-run pod.
         env:
           - name: OTEL_RESOURCE_ATTRIBUTES
-            value: "agents.tenant={{workflow.parameters.tenant}},agents.platform={{workflow.parameters.platform}}"
+            value: "agents.tenant={{workflow.parameters.tenant}},agents.platform={{workflow.parameters.platform}},agents.fleet={{workflow.parameters.fleet}}"
         source: |
           set -eu
           echo '{{inputs.parameters.cases-json}}' > /tmp/cases.json
           # eval-runner is the @eks-agent/eval-runner Node CLI (packages/
-          # eval-runner). The 'evaluate' command reads /tmp/cases.json, POSTs
-          # each case to {gateway}/v1/agents/{platform}-{fleet}/messages, prices
-          # the call, and writes /tmp/results.json — one record per case:
+          # eval-runner). The 'evaluate' command reads /tmp/cases.json and POSTs
+          # each case to the route's published base URL — {base-url}/v1/messages
+          # for an Anthropic route, {base-url}/chat/completions for an OpenAI
+          # one — with the ROUTE NAME in the body's `model` field, which is where
+          # the gateway reads it to derive x-ai-eg-model. It prices the call and
+          # writes /tmp/results.json — one record per case:
           #   {name, input, output, latency_ms, cost_usd, error?}
           # plus the case's echoed assertion criteria (expectContains,
           # expectNotContains, expectRefusal, maxLatencyMs, maxCostUsd) so the
           # score step can grade without re-reading the source suite.
           evaluate \
             --cases /tmp/cases.json \
-            --platform '{{inputs.parameters.platform}}' \
-            --fleet '{{inputs.parameters.fleet}}' \
-            --gateway '{{inputs.parameters.gateway}}' \
+            --base-url '{{inputs.parameters.base-url}}' \
+            --route '{{inputs.parameters.route}}' \
+            --route-api '{{inputs.parameters.route-api}}' \
             --output /tmp/results.json
         resources:
           requests: { cpu: 500m, memory: 512Mi }

@@ -74,8 +74,17 @@ func evalFixtures() (*governancev1alpha1.EvalSuite, *platformv1alpha1.Platform, 
 		ObjectMeta: metav1.ObjectMeta{Name: "analytics", Namespace: testSuiteNamespace},
 		Spec:       platformv1alpha1.PlatformSpec{Tenant: testTenant},
 	}
+	// One agent, on a route the gateway publishes. A fleet with no agents cannot
+	// exist through the API server (AgentFleetSpec.Agents carries MinItems=1),
+	// so a fixture without one tests a state production never reaches.
 	fleet := &agentsv1alpha1.AgentFleet{
 		ObjectMeta: metav1.ObjectMeta{Name: "triage", Namespace: testSuiteNamespace},
+		Spec: agentsv1alpha1.AgentFleetSpec{
+			PlatformRef: commonv1alpha1.LocalRef{Name: platform.Name},
+			Agents: []agentsv1alpha1.AgentSpec{
+				{Name: "triage", SystemPrompt: "you triage", ModelRoute: "chat", Image: "ghcr.io/acme/agent:v1"},
+			},
+		},
 	}
 	return suite, platform, fleet
 }
@@ -86,7 +95,8 @@ func submitEvalWorkflow(t *testing.T, r *EvalReconciler) *unstructured.Unstructu
 	t.Helper()
 	suite, platform, fleet := evalFixtures()
 
-	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).Build()
+	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(publishedGateway(platform, "chat")).Build()
 	r.Client = c
 
 	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
@@ -224,7 +234,8 @@ func TestSubmittedWorkflowCarriesTheValuesTheOperatorHolds(t *testing.T) {
 // only fails at the upload, so the refusal has to happen before submission.
 func TestReconcilerRefusesWithoutAReportsBucket(t *testing.T) {
 	suite, platform, fleet := evalFixtures()
-	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).Build()
+	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(publishedGateway(platform, "chat")).Build()
 	r := &EvalReconciler{Client: c, RunnerNamespace: "eval-runner"}
 
 	err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet)
@@ -271,7 +282,10 @@ func TestWorkflowTemplateConsumesEveryParameterTheOperatorSends(t *testing.T) {
 
 	// The reverse: a template parameter with no default and no sender resolves
 	// to the empty string mid-run.
-	for _, required := range []string{"suite-namespace", "eval-reports-bucket", "gateway-url", "suite-name"} {
+	for _, required := range []string{
+		"suite-namespace", "eval-reports-bucket", "suite-name",
+		"model-route-base-url", "model-route", "model-route-api",
+	} {
 		if _, ok := params[required]; !ok {
 			t.Errorf("the WorkflowTemplate consumes %q but the reconciler never sends it", required)
 		}

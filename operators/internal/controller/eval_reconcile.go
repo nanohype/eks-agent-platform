@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -97,6 +99,36 @@ func (r *EvalReconciler) resolveEvalRefs(ctx context.Context, suite *governancev
 	return &p, &fleet, nil
 }
 
+// errEvalRouteAmbiguous is a fleet whose agents do not agree on one route.
+var errEvalRouteAmbiguous = errors.New("the fleet's agents span more than one model route, so the suite has no single route to exercise")
+
+// errEvalFleetHasNoAgents is a fleet with no agents at all.
+var errEvalFleetHasNoAgents = errors.New("the fleet declares no agents, so there is no route to exercise")
+
+// fleetModelRoute is the route an eval run drives: the one the fleet's agents
+// are configured with.
+//
+// Ambiguity is refused rather than resolved. Taking the first agent's route
+// would report a score under the suite's name for a route nobody asked about,
+// and the reader has no way to tell which one was measured. Same call the
+// gateway makes on two ModelGateways over one Platform.
+func fleetModelRoute(fleet *agentsv1alpha1.AgentFleet) (string, error) {
+	names := make([]string, 0, 1)
+	for i := range fleet.Spec.Agents {
+		if !slices.Contains(names, fleet.Spec.Agents[i].ModelRoute) {
+			names = append(names, fleet.Spec.Agents[i].ModelRoute)
+		}
+	}
+	switch len(names) {
+	case 1:
+		return names[0], nil
+	case 0:
+		return "", errEvalFleetHasNoAgents
+	default:
+		return "", fmt.Errorf("%w: %s", errEvalRouteAmbiguous, strings.Join(names, ", "))
+	}
+}
+
 // evalWorkflowName is the deterministic name for the Argo object emitted
 // for a suite. CronWorkflow when spec.Schedule is set, Workflow
 // otherwise. Either way the name is platform-prefixed so two suites
@@ -119,6 +151,25 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		return errNoReportsBucket
 	}
 
+	// The route contract, read before anything is submitted. Same reason the
+	// fleet reads it before writing a Deployment: a run that cannot be given a
+	// working base URL should not be submitted at all, because it executes every
+	// case against a live model and reports a score for a path that was never
+	// reachable.
+	routeName, err := fleetModelRoute(fleet)
+	if err != nil {
+		return err
+	}
+	routes, err := publishedRoutes(ctx, r.Client, platform)
+	if err != nil {
+		return err
+	}
+	route, ok := routes[routeName]
+	if !ok {
+		return fmt.Errorf("%w: fleet %q runs on route %q; gateway publishes %s",
+			errRouteNotPublished, fleet.Name, routeName, strings.Join(routeNames(routes), ", "))
+	}
+
 	kind := "Workflow"
 	if suite.Spec.Schedule != "" {
 		kind = "CronWorkflow"
@@ -128,7 +179,7 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 	obj.SetName(evalWorkflowName(suite))
 	obj.SetNamespace(r.evalRunnerNamespace())
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
 		obj.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  platform.Name,
@@ -169,10 +220,10 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 			// platform name would strip the wrong segment.
 			map[string]any{"name": "suite-name", "value": suite.Name},
 			map[string]any{"name": "pass-threshold", "value": suite.Spec.PassThreshold},
-			// Each Platform runs its own gateway in its own namespace, so the
-			// eval run has to be told which one. A chart-level default would be
-			// wrong for every Platform but the first.
-			map[string]any{"name": "gateway-url", "value": ModelGatewayEndpoint(platform)},
+			// The route contract the gateway published, carried whole.
+			map[string]any{"name": "model-route-base-url", "value": route.BaseURL},
+			map[string]any{"name": "model-route", "value": route.Name},
+			map[string]any{"name": "model-route-api", "value": string(route.API)},
 		}
 		if suite.Spec.CasesFromManifest != "" {
 			params = append(params, map[string]any{"name": "cases-manifest", "value": suite.Spec.CasesFromManifest})
@@ -304,6 +355,13 @@ func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1a
 		}
 		if errors.Is(err, errNoReportsBucket) {
 			return phasePending, errNoReportsBucket.Error(), nil
+		}
+		if errors.Is(err, errGatewayNotFound) || errors.Is(err, errGatewayNotPublished) {
+			return phasePending, err.Error(), nil
+		}
+		if errors.Is(err, errRouteNotPublished) || errors.Is(err, errEvalRouteAmbiguous) ||
+			errors.Is(err, errEvalFleetHasNoAgents) || errors.Is(err, errGatewayAmbiguous) {
+			return phaseFailed, err.Error(), nil
 		}
 		return "", "", err
 	}
