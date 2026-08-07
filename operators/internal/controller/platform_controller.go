@@ -58,6 +58,11 @@ type PlatformReconciler struct {
 	IAM awsclients.IAM
 	EKS awsclients.EKS
 	S3  awsclients.S3
+	// Scheduler creates the per-tenant EventBridge Scheduler group a
+	// Platform declaring eventBridgeScheduler owns. Nil where the capability
+	// is unused or AWS is not wired; ensureScheduleGroup no-ops rather than
+	// failing, matching every other client on this struct.
+	Scheduler awsclients.Scheduler
 	// SSM resolves the per-tenant master-secret ARNs the tenant-substrate
 	// component publishes. Read per reconcile rather than at startup: a tenant's
 	// Aurora cluster can be created after the operator boots, and a stale

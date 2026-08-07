@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	smithymiddleware "github.com/aws/smithy-go/middleware"
 )
@@ -37,6 +38,7 @@ type Clients struct {
 	Athena      Athena
 	CloudWatch  CloudWatch
 	EventBridge EventBridge
+	Scheduler   Scheduler
 
 	// AWSConfig is the resolved SDK config the clients above were built from.
 	// Retained because not every dependency can be constructed at startup: the
@@ -103,6 +105,7 @@ func New(ctx context.Context, region string) (*Clients, error) {
 		Athena:      athena.NewFromConfig(cfg),
 		CloudWatch:  cloudwatch.NewFromConfig(cfg),
 		EventBridge: eventbridge.NewFromConfig(cfg),
+		Scheduler:   scheduler.NewFromConfig(cfg),
 		AWSConfig:   cfg,
 	}, nil
 }
