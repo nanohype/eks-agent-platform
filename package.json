@@ -11,10 +11,10 @@
   },
   "license": "Apache-2.0",
   "author": "stxkxs",
-  "packageManager": "pnpm@11.1.1",
+  "packageManager": "pnpm@11.8.0",
   "engines": {
     "node": ">=24.14.0",
-    "pnpm": ">=11.0.0"
+    "pnpm": ">=11.8.0"
   },
   "scripts": {
     "build": "turbo run build",
