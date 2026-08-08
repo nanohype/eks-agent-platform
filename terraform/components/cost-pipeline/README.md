@@ -93,7 +93,7 @@ Three things about that query are load-bearing:
   real consumption and hold a runaway tenant under its cap. The switch exists to stop consumption,
   so it counts consumption.
 
-## Both tag keys must be ACTIVATED, and activation is not retroactive
+## Both tag keys must be ACTIVATED, and the tag must already be on the resource
 
 The query above reads a cost-allocation tag key. It does not appear in the CUR at all until
 the key is **activated in Cost Explorer** — stamping the tag on a resource is not enough. This
@@ -108,13 +108,23 @@ Two properties make the warning worth acting on the day you see it:
 
 - **Activation is payer-level and account-global.** It is not per-cluster, not per-environment, and
   not something a second apply of this component can fix.
-- **It is not retroactive.** Every hour before activation is permanently NULL for that key. There is
-  no backfill. A tag activated a week after a tenant starts running produces a budget report that is
-  simply missing that week, and the gap is invisible in the query result — it reads as low spend.
+- **Late activation is repairable; a missing resource tag is not.** A management account can request
+  a backfill of up to twelve months, which retroactively applies the tags' *current* activation
+  status and updates Cost Explorer, Data Exports and the CUR automatically — on their own 24h
+  refresh, so not the moment it succeeds. One request at a time, and one per 24 hours.
 
-AWS can take up to 24 hours to *list* a newly observed key, so the key has to be stamped before it
-can be activated, and activated before the numbers mean anything. The cost of missing this is paid a
-month later, on a partial-month budget report nobody can explain.
+  What backfill cannot manufacture is a tag that was never there: *"the resource tag must be
+  historically assigned to the AWS Resource for the backfilled cost data to be available"*. Activate
+  in November and backfill to January, and a tag first applied in June yields values from June
+  onward and nothing before it.
+
+  So the irreversible half is **stamping**, not activating. A tenant that runs untagged for a week
+  has a week that no backfill will ever recover, and the gap is invisible in the query result — it
+  reads as low spend.
+
+AWS can take up to 24 hours to *list* a newly observed key, and up to 24 hours more to activate it.
+The key has to be stamped before it can be activated, and activated before the numbers mean
+anything. Missing the activation costs a backfill request; missing the stamp costs the data.
 
 `bedrock-account` stamps `PlatformId` and is where the clock starts; see its "Not here" section.
 

@@ -772,8 +772,9 @@ resource "aws_glue_catalog_table" "estimates" {
 #     `bedrock-runtime` spend requires invoking through a per-tenant *application
 #     inference profile* whose tags flow to CUR, in place of the raw model or
 #     cross-region profile ID.
-#  2. `platformid` must be activated as a cost allocation tag in Billing.
-#     Activation is not retroactive, so nothing before it is ever attributed.
+#  2. `platformid` must be activated as a cost allocation tag in Billing. Late
+#     activation is repairable by a backfill (twelve months, management account);
+#     spend from before the tag was on the resource is not.
 #
 # Until both land, `cur_truth_usd` is NULL for every row. That is reported as
 # `match_state = 'no_cur_row'` rather than as a NULL delta, because a
@@ -1091,8 +1092,8 @@ resource "aws_ssm_parameter" "reconciliation_view" {
 }
 
 ################################################################################
-# PlatformId cost-allocation tag — account-global, not retroactive, and the reason
-# the CUR leg of every budget can read zero while every query succeeds.
+# PlatformId cost-allocation tag — account-global, and the reason the CUR leg of
+# every budget can read zero while every query succeeds.
 #
 # Activating this key is what puts it into the report at all. CUR 2.0 carries one
 # `tags` column of type map<string,string> holding every tag source at once, and a key
@@ -1199,9 +1200,12 @@ check "the_cost_allocation_tags_are_active" {
       tenant arrives. For iamPrincipal/PlatformId the trigger is a call, not a resource: the
       key appears once a role carrying the tag has invoked Bedrock at least once.
 
-      Activation is NOT retroactive. Spend inside that window is unattributable permanently,
-      which is why this is loud on every plan rather than a silence you have to know to look
-      for.
+      Activating late is repairable: a management account can backfill up to twelve months,
+      and that updates Cost Explorer, Data Exports and the CUR on their next refresh. What no
+      backfill recovers is spend from before the tag was ON the resource — backfill applies an
+      activation status to history, it does not invent tag values. So the loud warning is about
+      the stamp, not the switch, and it stays loud because a missing stamp reads as low spend
+      rather than as an error.
     EOT
 }
 }

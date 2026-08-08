@@ -140,8 +140,10 @@ fi
 #
 # cost-pipeline declares `check "the_cost_allocation_tags_are_active"`, which
 # warns on every plan while either tag key is inactive. The requirement it warns
-# about — activation is payer-level, account-global, and NOT retroactive, so
-# every hour before it is permanently NULL — was documented only in
+# about — activation is payer-level and account-global, and while activating late
+# can be repaired by a twelve-month backfill, a resource that ran untagged cannot
+# be, because backfill applies an activation status and invents no tag values —
+# was documented only in
 # bedrock-account's "Not here" section, a page whose whole job is to say what it
 # does not own. An operator who applied cost-pipeline and read its README learned
 # nothing about a warning they were about to see, or about a gap they would
@@ -204,10 +206,12 @@ elif ! grep -qi 'PROVENANCE' terraform/components/cost-pipeline/cur-export-schem
   fail=1
 fi
 
-if ! grep -qi 'not retroactive' terraform/components/cost-pipeline/README.md; then
-  echo "cost-pipeline/README.md does not state that tag activation is not retroactive."
-  echo "That is the property that makes the cost of missing it unrecoverable: every hour"
-  echo "before activation is permanently NULL, and it reads as low spend rather than as a gap."
+if ! grep -qi 'backfill' terraform/components/cost-pipeline/README.md; then
+  echo "cost-pipeline/README.md does not state which half of this is recoverable."
+  echo "Late activation is: a management account can backfill twelve months. A resource"
+  echo "that ran untagged is not, because backfill applies an activation status to history"
+  echo "and does not invent tag values. Saying only 'not retroactive' points the urgency at"
+  echo "the switch when it belongs to the stamp."
   fail=1
 fi
 
