@@ -5,7 +5,6 @@
     ":semanticCommits",
     ":semanticCommitTypeAll(deps)",
     ":dependencyDashboard",
-    ":automergeMinor",
     "schedule:weekly",
     "group:allNonMajor"
   ],
@@ -21,10 +20,10 @@
   },
   "packageRules": [
     {
-      "description": "Auto-merge patch + minor when CI passes. The vulnerability-alert override at the end of this array re-disables automerge for CVE-triggered PRs (Renovate evaluates packageRules in order; later rules win).",
+      "description": "Patch + minor open a PR and wait for a human. Renovate has never executed in this org, so nothing here has been observed doing what it claims; automerge stays off until a few cycles of real PRs have been reviewed. automergeType is 'pr' rather than 'branch' for when it is re-enabled: 'branch' commits straight to the base branch without ever opening a PR, which this org does not do.",
       "matchUpdateTypes": ["patch", "minor"],
-      "automerge": true,
-      "automergeType": "branch"
+      "automerge": false,
+      "automergeType": "pr"
     },
     {
       "description": "Major upgrades always need review",
@@ -35,38 +34,38 @@
     {
       "description": "Group AWS SDK v2 (go) — they release together",
       "matchManagers": ["gomod"],
-      "matchPackagePatterns": ["^github.com/aws/aws-sdk-go-v2"],
-      "groupName": "aws-sdk-go-v2"
+      "groupName": "aws-sdk-go-v2",
+      "matchPackageNames": ["/^github.com/aws/aws-sdk-go-v2/"]
     },
     {
       "description": "Group @aws-sdk/* (npm) — they release together",
       "matchManagers": ["npm"],
-      "matchPackagePatterns": ["^@aws-sdk/"],
-      "groupName": "aws-sdk-js"
+      "groupName": "aws-sdk-js",
+      "matchPackageNames": ["/^@aws-sdk//"]
     },
     {
       "description": "Group k8s.io/* — they must move together",
       "matchManagers": ["gomod"],
-      "matchPackagePatterns": ["^k8s.io/"],
-      "groupName": "k8s-io"
+      "groupName": "k8s-io",
+      "matchPackageNames": ["/^k8s.io//"]
     },
     {
       "description": "Group sigs.k8s.io/* — controller-runtime + tooling",
       "matchManagers": ["gomod"],
-      "matchPackagePatterns": ["^sigs.k8s.io/"],
-      "groupName": "sigs-k8s"
+      "groupName": "sigs-k8s",
+      "matchPackageNames": ["/^sigs.k8s.io//"]
     },
     {
       "description": "Group typescript-eslint plugins",
       "matchManagers": ["npm"],
-      "matchPackagePatterns": ["^@typescript-eslint/", "^typescript-eslint$", "^eslint-plugin-"],
-      "groupName": "eslint-stack"
+      "groupName": "eslint-stack",
+      "matchPackageNames": ["/^@typescript-eslint//", "/^typescript-eslint$/", "/^eslint-plugin-/"]
     },
     {
       "description": "Group vitest core + coverage",
       "matchManagers": ["npm"],
-      "matchPackagePatterns": ["^vitest$", "^@vitest/"],
-      "groupName": "vitest"
+      "groupName": "vitest",
+      "matchPackageNames": ["/^vitest$/", "/^@vitest//"]
     },
     {
       "description": "@eks-agent/pricing dep refresh — fast pickup on its small dep surface (@eks-agent/core via workspace:* + the standard devDeps). The PRICES table itself is NOT Renovate-managed; scripts/refresh-pricing.mjs (Phase 2) handles that via a separate AWS Pricing API workflow on its own cron schedule. The accelerated schedule here is for the package.json deps, not the PRICES content.",
