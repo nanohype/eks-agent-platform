@@ -299,6 +299,33 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./scripts/check-chart-args.py
 
+  # ── Chart version bump gate ──────────────────────────────────────────────
+  # An OCI tag is mutable, so republishing a version replaces the bytes every
+  # cluster already resolved. The release job refuses to do that — but it runs
+  # on a charts-v tag, which is after the merge, so the defect presents as
+  # "every future chart release is blocked" rather than "this PR may not merge".
+  # It happened twice that way: charts/tenant at 0.4.0, then charts/operator at
+  # 0.6.3, where values.schema.json and a README correction landed under a
+  # version that was already published without them. The schema existed in
+  # source and in no artifact while eks-gitops pinned that exact version.
+  #
+  # This asks the same question at the merge boundary. It compares PACKAGED
+  # trees, not the working tree: helm drops Chart.yaml's comments on package, so
+  # a comment-only edit changes nothing that ships and must not demand a bump —
+  # the self-test holds that line with a case that has to stay green.
+  chart-version-bump:
+    name: a changed chart carries a version bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The comparison needs the merge base. Without full history there is no
+          # left-hand side, and the gate refuses to run rather than pass vacuously.
+          fetch-depth: 0
+      - uses: azure/setup-helm@v4
+      - run: ./scripts/check-chart-version-bump.py --self-test
+      - run: ./scripts/check-chart-version-bump.py --base origin/${{ github.base_ref || 'main' }}
+
   # ── eval workflow gate ───────────────────────────────────────────────────
   # The eval pipeline was dead twice over, and both failures were invisible to
   # helm lint, helm template, kubeconform and trivy, because nothing was wrong
@@ -604,6 +631,7 @@ jobs:
         crd-instantiation,
         project-resources,
         chart-args,
+        chart-version-bump,
         eval-workflow,
         runtime-contract,
         vcluster-chart,

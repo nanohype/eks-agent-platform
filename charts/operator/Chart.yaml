@@ -8,6 +8,14 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) and operator SLO (PrometheusRule/
 # AlertmanagerConfig/CR-state metrics) behind evalRuntime.* / slo.* toggles.
 #
+# 0.6.4 carries values.schema.json and the README's Pod Identity correction.
+# Both landed while Chart.yaml still said 0.6.3, which was already published —
+# so for the whole time in between, the schema existed in source and in no
+# artifact, and every cluster resolving the 0.6.3 pin got a chart that had none.
+# The release job compares published bytes against source and would have refused
+# the next charts-v tag on it. scripts/check-chart-version-bump.py now asks the
+# same question at the merge boundary, where the answer can still prevent it.
+#
 # 0.6.3 is a lockstep bump for the same reason 0.5.0 was, one layer out. The
 # eval WorkflowTemplate's route contract is three parameters
 # (model-route-base-url / model-route / model-route-api) where it was one
@@ -29,7 +37,7 @@ type: application
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour — nor, as 0.6.3 records, a workflow parameter.
-version: 0.6.3
+version: 0.6.4
 appVersion: "0.6.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
