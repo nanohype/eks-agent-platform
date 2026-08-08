@@ -78,6 +78,18 @@ jobs:
   trivy-fs:
     name: trivy (filesystem vuln scan — go + npm deps)
     runs-on: ubuntu-latest
+    env:
+      # trivy's pnpm parser drops dev dependencies unless told otherwise, and the
+      # job name above claims npm coverage it therefore did not have: it reported
+      # zero while the lockfile carried two fixable HIGHs. A build-time package
+      # still executes in CI holding this repo's credentials, which is squarely
+      # the surface this job exists to watch, and the repos scanning the same
+      # trees with osv-scanner have always counted dev dependencies — the two
+      # tools returned opposite verdicts on one advisory in one org.
+      #
+      # Set as an env var because trivy-action exposes no input for the flag.
+      # Job-level so both invocations below inherit it and cannot drift apart.
+      TRIVY_INCLUDE_DEV_DEPS: "true"
     steps:
       - uses: actions/checkout@v4
       # Two invocations on purpose, because one cannot do both jobs.

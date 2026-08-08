@@ -10,6 +10,11 @@ allowBuilds:
 # ip-address ship at runtime via @kubernetes/client-node inside @eks-agent/client;
 # the rest are dev-tree (vitest/tsx, changesets). read-yaml-file is bumped to v2 so
 # it pulls js-yaml 4 and the vulnerable js-yaml 3.x line drops out entirely.
+#
+# The dev-tree entries are load-bearing rather than cosmetic: a build-time package
+# executes in CI with this repo's credentials, so it is in scope for the same gate
+# the runtime tree is. Until the trivy job was told to include dev dependencies it
+# could not see them, and the last two below sat unreported in a green build.
 overrides:
   vite: "^8.0.16" # GHSA-v6wh-96g9-6wx3, GHSA-fx2h-pf6j-xcff
   esbuild: "^0.28.1" # GHSA-g7r4-m6w7-qqqr
@@ -19,6 +24,12 @@ overrides:
   js-yaml: "^4.3.1" # CVE-2026-53550 (merge-key quadratic DoS), CVE-2026-59869 (crafted-document DoS), CVE-2026-59870 (!!omap quadratic DoS)
   read-yaml-file: "^2.1.0"
   fast-uri: "^3.1.5" # GHSA-7p8r-x3mc-p8w7 (backslash authority introducer parsed as host)
+  brace-expansion: "^5.0.9" # CVE-2026-69152 (quadratic blowup on a crafted brace pattern)
+  # CVE-2026-67213 (a custom generator loops forever when size is zero), reached
+  # through postcss. The caret is load-bearing and must not be widened to `>=`:
+  # the open-ended form resolves to nanoid 6, which is ESM-only and is not the
+  # API postcss calls.
+  nanoid: "^3.3.17"
 
 peerDependencyRules:
   allowedVersions:
