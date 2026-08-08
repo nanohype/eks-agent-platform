@@ -5,8 +5,16 @@ type: application
 # appVersion tracks the operator binary's EKS Pod Identity tenant-runtime model
 # (assumeRolePolicyForPodIdentity + PodIdentityAssociation; ClusterName replaces the
 # OIDC provider/issuer inputs). The chart folds the eval-runtime (Argo
-# WorkflowTemplate/AnalysisTemplate) and operator SLO (PrometheusRule/
-# AlertmanagerConfig/CR-state metrics) behind evalRuntime.* / slo.* toggles.
+# WorkflowTemplate/AnalysisTemplate) behind evalRuntime.*. It ships no SLO
+# manifests — see 0.6.0 below, which removed them.
+#
+# 0.6.5 is documentation only. The README described an `slo.*` values block that
+# 0.6.0 had removed and that values.schema.json now rejects outright, so a reader
+# following it got `additional properties 'slo' not allowed` rather than the
+# alerting it promised. Chart.yaml's own description asserted the same thing
+# three lines above the entry recording the removal. No template, CRD or default
+# changed; the version moves because README.md is packaged content and the
+# published 0.6.4 would otherwise be overwritten with different bytes.
 #
 # 0.6.4 carries values.schema.json and the README's Pod Identity correction.
 # Both landed while Chart.yaml still said 0.6.3, which was already published —
@@ -37,7 +45,7 @@ type: application
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour — nor, as 0.6.3 records, a workflow parameter.
-version: 0.6.4
+version: 0.6.5
 appVersion: "0.6.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
