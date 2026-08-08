@@ -415,14 +415,17 @@ jobs:
                 --set platform.name=ci-smoke \
                 --set platform.tenant=ci-smoke >/dev/null
             elif [[ "$name" == "operator" ]]; then
-              # Default state, then the gated eval/slo paths so the Files.Get-wrapped
-              # Argo/Prometheus/Alertmanager CRs are exercised (they don't render at
-              # the defaults — rollouts + alerting are off).
+              # Default state, then the gated eval path so the Files.Get-wrapped
+              # Argo CRs are exercised (they don't render at the defaults —
+              # rollouts is off). Only flags the chart actually reads: `slo.*`
+              # exists on charts/tenant, not here, and this chart has no
+              # evalRuntime.serviceAccount.roleArn — Pod Identity binds the role
+              # in AWS, so no ARN is injected. Both were passed here for a while
+              # and set nothing, while the comment claimed they exercised the
+              # alerting CRs.
               helm template "$name" "$d" >/dev/null
               helm template "$name" "$d" \
                 --set evalRuntime.rollouts.enabled=true \
-                --set slo.alerting.enabled=true \
-                --set evalRuntime.serviceAccount.roleArn=ci-smoke-role \
                 --set evalRuntime.evalReportsBucket=ci-smoke-bucket >/dev/null
             else
               helm template "$name" "$d" >/dev/null

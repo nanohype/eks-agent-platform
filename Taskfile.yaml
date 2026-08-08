@@ -134,12 +134,13 @@ tasks:
             # tenant requires platform.name + platform.tenant
             helm template "$name" "$d" --set platform.name=ci-smoke --set platform.tenant=ci-smoke >/dev/null || exit 1
           elif [ "$name" = "operator" ]; then
-            # default state, then the gated eval/slo paths so the Files.Get-wrapped
-            # Argo/Prometheus/Alertmanager CRs get exercised
+            # default state, then the gated eval path so the Files.Get-wrapped
+            # Argo CRs get exercised. Only flags this chart reads: slo.* belongs
+            # to charts/tenant and there is no evalRuntime.serviceAccount.roleArn
+            # (Pod Identity binds the role in AWS).
             helm template "$name" "$d" >/dev/null || exit 1
             helm template "$name" "$d" \
-              --set evalRuntime.rollouts.enabled=true --set slo.alerting.enabled=true \
-              --set evalRuntime.serviceAccount.roleArn=ci-smoke-role \
+              --set evalRuntime.rollouts.enabled=true \
               --set evalRuntime.evalReportsBucket=ci-smoke-bucket >/dev/null || exit 1
           else
             helm template "$name" "$d" >/dev/null || exit 1

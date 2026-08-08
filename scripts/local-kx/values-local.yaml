@@ -21,9 +21,10 @@ leaderElection:
 config:
   environment: local
   region: us-west-2
-  oidc:
-    providerArn: "" # no OIDC on kind
-    issuerHost: ""
+  # Required by the chart, and it is not decorative here: it keys the
+  # per-cluster SSM subtree the operator sweeps and prefixes the roles it mints.
+  # Left unset, the operator installs and reads /eks-agent-platform//.
+  clusterName: kx-local
 
 serviceAccount:
   create: true
