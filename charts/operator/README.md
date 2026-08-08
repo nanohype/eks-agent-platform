@@ -34,8 +34,8 @@ See [`values.yaml`](./values.yaml). Highlights:
 
 The Argo Workflows runtime the operator submits EvalSuite runs to (WorkflowTemplate `eval-runner` + the gating AnalysisTemplate + SA/RBAC). Enabled by default; needs the Argo Workflows CRD.
 
-- `evalRuntime.namespace` / `serviceAccount.name` — byte-pinned to the `terraform/components/eval-runtime` IRSA trust (`eval-runner`/`eval-runner`); change both together or IRSA breaks
-- `evalRuntime.serviceAccount.roleArn` — embeds the AWS account id, so it is injected per-cluster by the eks-gitops `addons-agent-operator` ApplicationSet from the `eks-agent-platform/eval-runner-role-arn` cluster-Secret annotation, never committed here
+- `evalRuntime.namespace` / `serviceAccount.name` — byte-pinned to the `aws_eks_pod_identity_association` in `terraform/components/eval-runtime` (`eval-runner`/`eval-runner`), which binds the role to that exact namespace/SA pair; change both together or the association matches nothing and the runner gets no credentials
+- No role ARN is passed to this chart. Pod Identity binds the role to the ServiceAccount in AWS, so nothing needs injecting into the manifest — there is no `evalRuntime.serviceAccount.roleArn` value and the ApplicationSet sets none
 - `evalRuntime.evalReportsBucket` — S3 bucket for eval reports (terraform output, injected per-cluster)
 - `evalRuntime.rollouts.enabled` — the AnalysisTemplate; **off by default** (needs the Argo Rollouts CRD)
 
