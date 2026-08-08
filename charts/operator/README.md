@@ -1,6 +1,6 @@
 # charts/operator
 
-Helm chart for the eks-agent-platform operator: CRDs + Deployment + RBAC + Service + ServiceMonitor + NetworkPolicy + PDB, plus the operator's own runtime — the eval-runtime (Argo WorkflowTemplate/AnalysisTemplate) and SLO (PrometheusRule/AlertmanagerConfig/CR-state metrics), behind `evalRuntime.*` / `slo.*` toggles.
+Helm chart for the eks-agent-platform operator: CRDs + Deployment + RBAC + Service + ServiceMonitor + NetworkPolicy + PDB, plus the eval-runtime (Argo WorkflowTemplate/AnalysisTemplate) behind `evalRuntime.*`.
 
 ## Install
 
@@ -39,12 +39,18 @@ The Argo Workflows runtime the operator submits EvalSuite runs to (WorkflowTempl
 - `evalRuntime.evalReportsBucket` — S3 bucket for eval reports (terraform output, injected per-cluster)
 - `evalRuntime.rollouts.enabled` — the AnalysisTemplate; **off by default** (needs the Argo Rollouts CRD)
 
-### operator SLO (`slo.*`)
+### operator SLO — not in this chart
 
-The operator's own observability: recording rules + alerts and persona alert routing. Enabled by default; needs the prometheus-operator CRDs. The kube-state-metrics CustomResourceState config that makes the `kube_customresource_*` metrics exist lives in the eks-gitops kube-state-metrics addon (the single source — it's what KSM actually loads); this chart consumes those metrics, it doesn't define them.
+There are no `slo.*` values. The PrometheusRule, the AlertmanagerConfig and the
+namespace that held them were removed at chart 0.6.0, and `values.schema.json`
+now closes the top level, so setting one is not merely ignored — `helm template
+--set slo.enabled=true` fails with `additional properties 'slo' not allowed`.
 
-- `slo.operatorNamespace` — the namespace the operator runs in, used in the PromQL metric selectors
-- `slo.alerting.enabled` — the AlertmanagerConfig persona routing; **off by default** — its receivers reference six Secrets (`pagerduty-platform`, `slack-webhook-{incidents,finance,ops,eng,platform}`) that must pre-exist; enable per-env in production once provisioned
+The operator's alert rules live in eks-gitops as Grafana-managed rules
+(`dashboards/base/alerting/agent-operator.yaml`), evaluated against AMP rather
+than by a prometheus-operator in-cluster. The `slo:` key that does exist here is
+`reconcilers.slo`, which toggles the SLOPolicy reconciler in the binary and is
+unrelated.
 
 ## Required cluster capabilities
 
