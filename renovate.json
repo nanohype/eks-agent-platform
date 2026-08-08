@@ -1,119 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    ":semanticCommits",
-    ":semanticCommitTypeAll(deps)",
-    ":dependencyDashboard",
-    "schedule:weekly",
-    "group:allNonMajor"
-  ],
-  "timezone": "America/Los_Angeles",
-  "labels": ["deps"],
-  "prHourlyLimit": 4,
-  "prConcurrentLimit": 8,
-  "rebaseWhen": "behind-base-branch",
-  "semanticCommitScope": "deps",
-  "lockFileMaintenance": {
-    "enabled": true,
-    "schedule": ["before 6am on monday"]
-  },
+  "extends": ["github>nanohype/.github"],
   "packageRules": [
-    {
-      "description": "Patch + minor open a PR and wait for a human. Renovate has never executed in this org, so nothing here has been observed doing what it claims; automerge stays off until a few cycles of real PRs have been reviewed. automergeType is 'pr' rather than 'branch' for when it is re-enabled: 'branch' commits straight to the base branch without ever opening a PR, which this org does not do.",
-      "matchUpdateTypes": ["patch", "minor"],
-      "automerge": false,
-      "automergeType": "pr"
-    },
-    {
-      "description": "Major upgrades always need review",
-      "matchUpdateTypes": ["major"],
-      "automerge": false,
-      "labels": ["deps", "major"]
-    },
-    {
-      "description": "Group AWS SDK v2 (go) — they release together",
-      "matchManagers": ["gomod"],
-      "groupName": "aws-sdk-go-v2",
-      "matchPackageNames": ["/^github.com/aws/aws-sdk-go-v2/"]
-    },
-    {
-      "description": "Group @aws-sdk/* (npm) — they release together",
-      "matchManagers": ["npm"],
-      "groupName": "aws-sdk-js",
-      "matchPackageNames": ["/^@aws-sdk//"]
-    },
-    {
-      "description": "Group k8s.io/* — they must move together",
-      "matchManagers": ["gomod"],
-      "groupName": "k8s-io",
-      "matchPackageNames": ["/^k8s.io//"]
-    },
-    {
-      "description": "Group sigs.k8s.io/* — controller-runtime + tooling",
-      "matchManagers": ["gomod"],
-      "groupName": "sigs-k8s",
-      "matchPackageNames": ["/^sigs.k8s.io//"]
-    },
-    {
-      "description": "Group typescript-eslint plugins",
-      "matchManagers": ["npm"],
-      "groupName": "eslint-stack",
-      "matchPackageNames": ["/^@typescript-eslint//", "/^typescript-eslint$/", "/^eslint-plugin-/"]
-    },
-    {
-      "description": "Group vitest core + coverage",
-      "matchManagers": ["npm"],
-      "groupName": "vitest",
-      "matchPackageNames": ["/^vitest$/", "/^@vitest//"]
-    },
     {
       "description": "@eks-agent/pricing dep refresh — fast pickup on its small dep surface (@eks-agent/core via workspace:* + the standard devDeps). The PRICES table itself is NOT Renovate-managed; scripts/refresh-pricing.mjs (Phase 2) handles that via a separate AWS Pricing API workflow on its own cron schedule. The accelerated schedule here is for the package.json deps, not the PRICES content.",
       "matchFileNames": ["packages/pricing/package.json"],
       "schedule": ["before 6am every weekday"],
       "groupName": "pricing-deps"
-    },
-    {
-      "description": "GitHub Actions — group minor + patch into one PR",
-      "matchManagers": ["github-actions"],
-      "groupName": "github-actions",
-      "schedule": ["before 6am on monday"]
-    },
-    {
-      "description": "Helm chart versions (charts/* dependencies)",
-      "matchManagers": ["argocd", "helm-values", "helmv3"],
-      "groupName": "helm-charts",
-      "schedule": ["before 6am on monday"]
-    },
-    {
-      "description": "Docker base images (operator Dockerfile)",
-      "matchManagers": ["dockerfile"],
-      "groupName": "docker-base",
-      "schedule": ["before 6am on monday"]
-    },
-    {
-      "description": "OpenTofu provider versions",
-      "matchManagers": ["terraform"],
-      "groupName": "terraform-providers",
-      "schedule": ["before 6am on monday"]
-    },
-    {
-      "description": "Pin GitHub Actions to commit SHAs (supply-chain hardening)",
-      "matchManagers": ["github-actions"],
-      "pinDigests": true
-    },
-    {
-      "description": "Security/CVE updates: ALWAYS human review. This rule is intentionally LAST in packageRules — Renovate evaluates rules in order with later rules winning, so without this entry the earlier 'auto-merge patch + minor' rule would silently auto-merge CVE-triggered patches. The vulnerabilityAlerts top-level block ALSO sets automerge: false, but per-package rules override top-level settings — hence the explicit packageRule here.",
-      "matchUpdateTypes": ["patch", "minor", "major"],
-      "isVulnerabilityAlert": true,
-      "automerge": false,
-      "labels": ["security", "deps", "needs-review"]
     }
-  ],
-  "vulnerabilityAlerts": {
-    "labels": ["security", "deps"],
-    "automerge": false,
-    "schedule": ["at any time"]
-  },
-  "osvVulnerabilityAlerts": true
+  ]
 }
