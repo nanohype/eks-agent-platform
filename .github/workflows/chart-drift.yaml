@@ -1,0 +1,40 @@
+# Does the registry still serve what this repo says it publishes?
+#
+# The blocking half of this question lives in ci.yaml as `chart-version-bump`:
+# a chart whose packaged content changes in a PR must move its version. That is
+# a function of the commit, so it belongs on the merge path.
+#
+# This half is not. A chart can be correct at every merge and still drift from
+# the registry — the version-bump gate compares against the merge base, so a PR
+# that does not touch an already-drifted chart is not wrong about it and cannot
+# be failed for it. charts/operator sat drifted at 0.6.3 for exactly that
+# reason: the PR that introduced it was the last one that could have caught it.
+#
+# So this runs on a schedule and reports the drift the next morning, instead of
+# leaving it for whoever next tries to cut a release and finds it blocked on
+# something they did not do.
+#
+# It lives in its own file rather than as a job in ci.yaml because the merge
+# gate refuses any workflow containing a job it does not watch, and counts a
+# skipped dependency as a failure — a schedule-only job cannot live there.
+name: chart drift
+
+on:
+  schedule:
+    # Monday 07:00 UTC, before the week's first release would be cut.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  published:
+    name: source and registry agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: ./scripts/check-chart-version-bump.py --self-test
+      - run: ./scripts/check-chart-version-bump.py --published
