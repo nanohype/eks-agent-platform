@@ -48,6 +48,17 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-workflow-triggers.py --list
 
+  # Three environments run the same component on the same substrate shape, so a
+  # decision one of them had to make is a decision all of them have to make. The
+  # value may differ; whether the question was asked may not.
+  leaf-input-parity:
+    name: leaf input parity gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-leaf-input-parity.py --self-test
+      - run: ./scripts/check-leaf-input-parity.py --list
+
   format:
     name: format check
     runs-on: ubuntu-latest
@@ -624,6 +635,7 @@ jobs:
         doc-contracts,
         ssm-contract,
         workflow-triggers,
+        leaf-input-parity,
         format,
         tofu,
         chart-rbac,
