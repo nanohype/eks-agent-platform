@@ -257,12 +257,20 @@ def walk_admissibility(value, schema, path, kind, source, problems):
         return
 
     for name in schema.get("required") or []:
-        if name not in value:
-            problems.append(
-                f"{source}: {kind} {path}.{name} is REQUIRED by the CRD and the chart does"
-                f" not emit it — the API server rejects the whole release with"
-                f" `{path.lstrip('.')}.{name}: Required value`"
-            )
+        if name in value:
+            continue
+        # A required property carrying a `default` is NOT a rejection.
+        # Structural-schema defaulting runs BEFORE validation, so the API server
+        # fills the value in and admits the object. Reading `required` alone
+        # reports Tenant.spec.primaryPersona — which defaults to `generic` — as
+        # refused, on a chart that has been vending tenants successfully.
+        if "default" in (props.get(name) or {}):
+            continue
+        problems.append(
+            f"{source}: {kind} {path}.{name} is REQUIRED by the CRD, carries no default,"
+            f" and the chart does not emit it — the API server rejects the whole release"
+            f" with `{path.lstrip('.')}.{name}: Required value`"
+        )
 
     for name, child in value.items():
         child_schema = props.get(name)
