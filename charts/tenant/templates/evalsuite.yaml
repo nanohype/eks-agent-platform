@@ -1,4 +1,7 @@
 {{- if .Values.evalSuite.enabled -}}
+{{- if not .Values.agentFleet.enabled }}
+{{- fail "evalSuite.enabled requires agentFleet.enabled: spec.agentFleetRef names the fleet this suite evaluates, and with no AgentFleet rendered it points at nothing. The suite would be admitted, never evaluate, and trip AgentEvalNeverRan after 24h. Enable the fleet (with an image), or set evalSuite.enabled: false." }}
+{{- end }}
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite
 metadata:

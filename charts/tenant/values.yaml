@@ -201,8 +201,14 @@ agentFleet:
       modelRoute: primary
       # image: ghcr.io/<org>/<tenant>/agent:1.2.3
 
+# Scheduled quality evaluation of this tenant's agent fleet.
+#
+# OFF by default because agentFleet is, and the two cannot disagree:
+# spec.agentFleetRef names the fleet this suite evaluates, so an EvalSuite over an
+# absent fleet is admitted, never evaluates, and trips AgentEvalNeverRan after 24
+# hours. The chart fails the render rather than letting that ship.
 evalSuite:
-  enabled: true
+  enabled: false
   schedule: "0 6 * * *" # daily 06:00 UTC
   passThreshold: "0.85"
   casesFromManifest: "" # empty = inline default cases below
