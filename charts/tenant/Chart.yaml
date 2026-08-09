@@ -12,7 +12,7 @@ type: application
 # not reach. Off by default: it needs a real Managed Agents environment id and
 # the environment key that authenticates workers against it, and neither has a
 # sensible placeholder.
-version: 0.4.1
+version: 0.5.0
 appVersion: "0.1.0"
 maintainers:
   - name: stxkxs

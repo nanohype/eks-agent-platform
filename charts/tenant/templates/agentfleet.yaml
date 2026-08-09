@@ -1,3 +1,12 @@
+{{- if .Values.agentFleet.enabled }}
+{{- range .Values.agentFleet.agents }}
+{{- if not .image }}
+{{- fail (printf "agentFleet.agents[%s].image is required: AgentFleet's CRD requires spec.agents[].image, and the chart cannot invent one — it is the tenant's own build, the container the agent actually runs. Set it, or leave agentFleet.enabled false to vend the tenant without a fleet." .name) }}
+{{- end }}
+{{- if .tools }}
+{{- fail (printf "agentFleet.agents[%s].tools is not a field of the AgentFleet CRD. It was rendered into the manifest and pruned at admission, so a tool list set here has never reached a cluster. Remove it." .name) }}
+{{- end }}
+{{- end }}
 apiVersion: agents.nanohype.dev/v1alpha1
 kind: AgentFleet
 metadata:
@@ -22,10 +31,12 @@ spec:
     - name: {{ .name }}
       systemPrompt: {{ tpl .systemPrompt $ | quote }}
       modelRoute: {{ .modelRoute }}
-      {{- with .tools }}
-      tools: {{- toYaml . | nindent 8 }}
-      {{- end }}
+      image: {{ .image | quote }}
       {{- with .replicas }}
       replicas: {{ . }}
       {{- end }}
+      {{- with .resources }}
+      resources: {{- toYaml . | nindent 8 }}
+      {{- end }}
     {{- end }}
+{{- end }}

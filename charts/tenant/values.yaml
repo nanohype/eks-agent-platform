@@ -175,7 +175,21 @@ modelGateway:
     modelId: us.anthropic.claude-sonnet-4-6
     rateLimit: 60
 
+# The tenant's agent workloads.
+#
+# OFF by default, and that default is load-bearing rather than cautious. The
+# AgentFleet CRD requires spec.agents[].image — the container the agent actually
+# runs, which is the tenant's own build — and a generic chart has nothing
+# truthful to put there. Rendered without it the manifest is valid YAML, valid
+# Helm, and rejected by the API server: `spec.agents[0].image: Required value`.
+# Every default `helm install` of this chart failed at admission, which also took
+# the Platform, BudgetPolicy and ModelGateway in the same release with it.
+#
+# So vending a tenant no longer implies declaring its fleet. Turn this on when
+# there is an image to name; the chart fails the render, with the reason, if it
+# is on and an agent has no image.
 agentFleet:
+  enabled: false
   scaling:
     enabled: true
     min: 1
@@ -185,6 +199,7 @@ agentFleet:
     - name: assistant
       systemPrompt: "You are a helpful assistant for the {{ .Values.platform.persona }} persona."
       modelRoute: primary
+      # image: ghcr.io/<org>/<tenant>/agent:1.2.3
 
 evalSuite:
   enabled: true

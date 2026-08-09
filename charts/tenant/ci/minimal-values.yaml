@@ -1,0 +1,19 @@
+# A vend with nothing but the identity fields — the chart's own defaults for
+# everything else.
+#
+# This is the shape every automated vending path actually uses: rackctl's
+# first-tenant smoke, agentctl, and the portal's create form before an operator
+# fills anything in. It is also the render that had never been validated against
+# the CRDs, which is how the chart came to emit an AgentFleet with no
+# spec.agents[].image — valid YAML, valid Helm, `Required value` at admission,
+# taking the Platform and BudgetPolicy in the same release down with it.
+#
+# Keep this minimal. Its job is to be the least a caller can supply, so anything
+# added here weakens the thing it tests.
+platform:
+  name: minimal
+  tenant: minimalco
+  persona: generic
+
+budget:
+  monthlyUsd: 100
