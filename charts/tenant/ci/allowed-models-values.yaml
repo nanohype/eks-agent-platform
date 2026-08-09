@@ -21,5 +21,16 @@ identity:
 budget:
   monthlyUsd: 100
 
+# The suite evaluates a fleet, so the fleet has to exist. This render's job is
+# spec.identity.allowedModels coverage, and it carries the pair only because a
+# dangling agentFleetRef is not a shape worth committing as an example.
+agentFleet:
+  enabled: true
+  agents:
+    - name: assistant
+      systemPrompt: "You are a helpful assistant."
+      modelRoute: primary
+      image: ghcr.io/nanohype/example/agent:0.1.0
+
 evalSuite:
   enabled: true
