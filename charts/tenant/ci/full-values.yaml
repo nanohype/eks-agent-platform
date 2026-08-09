@@ -114,6 +114,7 @@ modelGateway:
     rateLimit: 60
 
 agentFleet:
+  enabled: true
   scaling:
     enabled: true
     min: 1
@@ -123,6 +124,7 @@ agentFleet:
     - name: assistant
       systemPrompt: "You are a helpful assistant."
       modelRoute: primary
+      image: ghcr.io/nanohype/example/agent:0.1.0
 
 evalSuite:
   enabled: true

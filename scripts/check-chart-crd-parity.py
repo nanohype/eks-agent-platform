@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert charts/tenant stays faithful to the Platform CRD, in both directions.
+"""Assert charts/tenant renders only CRs the API server will accept.
 
 WHY THIS EXISTS
 
@@ -34,7 +34,19 @@ WHAT IT CHECKS
    mistyped key in a template renders perfectly valid YAML and is dropped (or
    rejected) at admission; this names it at build time.
 
-3. REJECTION. Every values file under charts/tenant/tests/reject/ must make
+3. ADMISSIBILITY, for EVERY kind the chart emits — not just Platform. Each
+   rendered document is walked against its own CRD schema: every `required`
+   property must be present at every level, and no property may be absent from
+   the schema.
+
+   Checks 1 and 2 read the Platform document alone, which is how the chart came
+   to render an AgentFleet with no `spec.agents[].image` while every gate in
+   this repo passed. `image` is required by the AgentFleet CRD, so the API
+   server answered `spec.agents[0].image: Required value` and refused the whole
+   release — Platform, BudgetPolicy and ModelGateway with it. The chart emits
+   seven kinds; one of them was gated.
+
+4. REJECTION. Every values file under charts/tenant/tests/reject/ must make
    `helm template` fail, with the message its `# expect:` header names. These
    are the CRD constraints the chart enforces early — CEL rules, required
    fields, MaxItems caps, and the AWS naming limits the CRD's own ceiling does
@@ -192,13 +204,117 @@ def check_rejections(problems):
     return len(fixtures)
 
 
+ALL_CRDS = ROOT / "charts" / "operator" / "crds"
+
+
+def crd_schemas():
+    """kind -> the CRD's spec schema, for every CRD the operator chart ships.
+
+    Keyed by kind rather than by file, because a rendered document names its
+    kind and nothing else that would let us find its schema.
+    """
+    out = {}
+    for f in sorted(ALL_CRDS.glob("*.yaml")):
+        doc = yaml.safe_load(f.read_text())
+        if not doc or doc.get("kind") != "CustomResourceDefinition":
+            continue
+        kind = doc["spec"]["names"]["kind"]
+        for version in doc["spec"]["versions"]:
+            if version["name"] != CRD_VERSION:
+                continue
+            schema = version["schema"]["openAPIV3Schema"]["properties"].get("spec")
+            if schema:
+                out[kind] = schema
+    if not out:
+        sys.exit(f"no {CRD_VERSION} CRD schemas found under {ALL_CRDS}")
+    return out
+
+
+def walk_admissibility(value, schema, path, kind, source, problems):
+    """Required present, nothing excess — recursively, arrays transparent.
+
+    Stops descending wherever the schema declines to describe the shape
+    (x-kubernetes-preserve-unknown-fields, or a bare object with no properties):
+    the API server does not prune there, so neither may this.
+    """
+    if not isinstance(schema, dict):
+        return
+
+    if isinstance(value, list):
+        items = schema.get("items")
+        if isinstance(items, dict):
+            for i, item in enumerate(value):
+                walk_admissibility(item, items, f"{path}[{i}]", kind, source, problems)
+        return
+
+    if not isinstance(value, dict):
+        return
+
+    if schema.get("x-kubernetes-preserve-unknown-fields"):
+        return
+    props = schema.get("properties")
+    if props is None:
+        return
+
+    for name in schema.get("required") or []:
+        if name not in value:
+            problems.append(
+                f"{source}: {kind} {path}.{name} is REQUIRED by the CRD and the chart does"
+                f" not emit it — the API server rejects the whole release with"
+                f" `{path.lstrip('.')}.{name}: Required value`"
+            )
+
+    for name, child in value.items():
+        child_schema = props.get(name)
+        if child_schema is None:
+            problems.append(
+                f"{source}: {kind} {path}.{name} is emitted by the chart but is not in the"
+                " CRD — it is pruned at admission, so setting it has never reached a cluster"
+            )
+            continue
+        walk_admissibility(child, child_schema, f"{path}.{name}", kind, source, problems)
+
+
+def check_admissibility(problems):
+    """Every rendered document, against its own CRD.
+
+    Runs over the same ci/ renders as coverage, which is deliberate: those files
+    are the committed worked examples, so a shape nobody renders is a shape
+    nobody has to keep admissible. ci/minimal-values.yaml is the important one —
+    the chart's own defaults, which is what every automated vending path sends.
+    """
+    schemas = crd_schemas()
+    files = sorted((CHART / "ci").glob("*-values.yaml"))
+    checked = 0
+    for f in files:
+        ok, out = render([f])
+        if not ok:
+            # check_coverage reports the render failure; do not duplicate it.
+            continue
+        for doc in yaml.safe_load_all(out):
+            if not doc:
+                continue
+            kind = doc.get("kind")
+            schema = schemas.get(kind)
+            if schema is None:
+                problems.append(
+                    f"{f.name}: the chart emits kind {kind}, which the operator chart ships no"
+                    f" {CRD_VERSION} CRD for — nothing can validate it and no cluster can accept it"
+                )
+                continue
+            walk_admissibility(doc.get("spec") or {}, schema, "spec", kind, f.name, problems)
+            checked += 1
+    return checked
+
+
 def main():
     problems: list[str] = []
     renders = check_coverage(problems)
+    documents = check_admissibility(problems)
     rejections = check_rejections(problems)
 
     if problems:
-        print("charts/tenant has drifted from the Platform CRD:\n", file=sys.stderr)
+        print("charts/tenant renders something no cluster will accept:\n", file=sys.stderr)
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         print(
@@ -212,7 +328,8 @@ def main():
 
     print(
         f"charts/tenant covers every Platform CRD spec field across {renders}"
-        f" render(s), emits nothing outside the CRD, and rejects all"
+        f" render(s), emits nothing outside the CRD, renders {documents} document(s)"
+        f" every one of which its own CRD would admit, and rejects all"
         f" {rejections} invalid declaration(s)."
     )
 
