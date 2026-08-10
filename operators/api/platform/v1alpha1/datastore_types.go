@@ -125,13 +125,30 @@ type DatastoreSpec struct {
 // +kubebuilder:validation:XValidation:rule="double(self.maxACU) >= double(self.minACU)",message="maxACU must be >= minACU"
 // +kubebuilder:validation:XValidation:rule="self.minACU != '0' || int(self.engineVersion.split('.')[0]) >= 16",message="minACU '0' is Aurora Serverless v2 auto-pause, which requires Aurora PostgreSQL 16.3 or later; raise engineVersion or set a non-zero floor"
 type RelationalConfig struct {
-	// EngineVersion of Aurora PostgreSQL. Auto-pause (minACU "0") needs 16.3 or
-	// later, which the rule on this type enforces against the major version —
-	// the minor is not machine-checkable here, so 16.0–16.2 is admitted and
-	// fails at apply rather than at admission.
-	// +kubebuilder:validation:Pattern=`^[0-9]+\.[0-9]+$`
+	// EngineVersion of Aurora PostgreSQL, as a major line ("16") or a full
+	// version ("16.14").
+	//
+	// The major line is the default and the one to reach for. RDS resolves it to
+	// the newest minor the region offers, so there is no patch number left to go
+	// stale — and a stale one is not a theoretical cost. Pinned at "16.6", every
+	// apply of a relational datastore failed with `Cannot find version 16.6 for
+	// aurora-postgresql` once AWS withdrew it, after the VPC and the EKS cluster
+	// were already built and billing. A withdrawn version is a fact about the
+	// region rather than a change to any manifest, so nothing in CI can see it
+	// coming.
+	//
+	// Pin a full version only to hold a tenant on one deliberately, and expect
+	// to move it when AWS retires that version too.
+	//
+	// Auto-pause (minACU "0") needs 16.3 or later, which the rule on this type
+	// enforces against the major. A major-only value satisfies it: every 16.x
+	// AWS still offers is past the floor, so "whatever is current" cannot
+	// resolve below it. A full version below the floor on the same major —
+	// 16.0 to 16.2 — is still admitted and still fails at apply, because the
+	// minor is not machine-checkable here.
+	// +kubebuilder:validation:Pattern=`^[0-9]+(\.[0-9]+)?$`
 	// +kubebuilder:validation:MaxLength=10
-	// +kubebuilder:default="16.6"
+	// +kubebuilder:default="16"
 	// +optional
 	EngineVersion string `json:"engineVersion,omitempty"`
 

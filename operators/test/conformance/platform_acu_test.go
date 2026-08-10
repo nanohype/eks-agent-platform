@@ -62,32 +62,37 @@ func TestPlatform_ACUBounds(t *testing.T) {
 		accept  bool
 		because string
 	}{
-		{"auto-pause floor", "0", "8", "16.6", true,
+		{"auto-pause floor", "0", "8", "16", true,
 			"0 is scale-to-zero and must be expressible — the old pattern could not say it"},
-		{"half-ACU floor", "0.5", "8", "16.6", true, "the documented young/light default"},
-		{"whole ACU", "2", "16", "16.6", true, "ordinary case"},
-		{"half step", "1.5", "2.5", "16.6", true, "0.5 steps are legal throughout the range"},
-		{"ceiling", "0.5", "256", "16.6", true, "256 ACU is Aurora's documented maximum"},
-		{"floor equals ceiling", "4", "4", "16.6", true, "a fixed-capacity cluster is legal"},
+		{"half-ACU floor", "0.5", "8", "16", true, "the documented young/light default"},
+		{"whole ACU", "2", "16", "16", true, "ordinary case"},
+		{"half step", "1.5", "2.5", "16", true, "0.5 steps are legal throughout the range"},
+		{"ceiling", "0.5", "256", "16", true, "256 ACU is Aurora's documented maximum"},
+		{"floor equals ceiling", "4", "4", "16", true, "a fixed-capacity cluster is legal"},
 
-		{"past Aurora's cap", "0.5", "257", "16.6", false,
+		{"past Aurora's cap", "0.5", "257", "16", false,
 			"the old pattern admitted up to 999; AWS rejects anything over 256 at apply"},
-		{"257 as a floor", "257", "512", "16.6", false, "same cap on the floor"},
-		{"non-half step", "1.25", "8", "16.6", false, "capacity moves in 0.5 increments only"},
-		{"256.5", "0.5", "256.5", "16.6", false, "there is no half step above the cap"},
-		{"zero ceiling", "0", "0", "16.6", false,
+		{"257 as a floor", "257", "512", "16", false, "same cap on the floor"},
+		{"non-half step", "1.25", "8", "16", false, "capacity moves in 0.5 increments only"},
+		{"256.5", "0.5", "256.5", "16", false, "there is no half step above the cap"},
+		{"zero ceiling", "0", "0", "16", false,
 			"a ceiling of zero leaves no capacity to scale into; only the floor may be 0"},
-		{"negative", "-1", "8", "16.6", false, "not a capacity"},
+		{"negative", "-1", "8", "16", false, "not a capacity"},
 
-		{"ceiling below floor", "8", "0.5", "16.6", false,
+		{"ceiling below floor", "8", "0.5", "16", false,
 			"maxACU >= minACU — CEL, unreachable from a unit test"},
-		{"ceiling just below floor", "2.5", "2", "16.6", false, "the relation is strict about halves too"},
+		{"ceiling just below floor", "2.5", "2", "16", false, "the relation is strict about halves too"},
 
 		{"auto-pause on an engine too old", "0", "8", "15.4", false,
 			"scale-to-zero needs Aurora PostgreSQL 16.3+; 15.4 would silently never pause"},
 		{"non-zero floor on an old engine", "0.5", "8", "15.4", true,
 			"the engine bound applies only to the auto-pause floor"},
 		{"auto-pause on a future major", "0", "8", "17.2", true, "17.x is past the 16.3 bar"},
+		{"auto-pause on a major-only version", "0", "8", "16", true,
+			"the default is major-only; RDS resolves the newest minor and every 16.x AWS still " +
+				"offers is past 16.3, so the CEL split's first element carries the whole decision"},
+		{"a major-only version below the bar", "0", "8", "15", false,
+			"the rule reads the major, so 15 is refused with or without a minor"},
 	}
 
 	for i, tc := range cases {
@@ -139,7 +144,10 @@ func TestPlatform_ACUDefaults(t *testing.T) {
 	if got.Relational.MinACU != "0.5" || got.Relational.MaxACU != "8" {
 		t.Errorf("ACU defaults: got %s–%s, want 0.5–8", got.Relational.MinACU, got.Relational.MaxACU)
 	}
-	if got.Relational.EngineVersion != "16.6" {
-		t.Errorf("engineVersion default: got %q want 16.6", got.Relational.EngineVersion)
+	if got.Relational.EngineVersion != "16" {
+		t.Errorf("engineVersion default: got %q want 16 — the default is a major line so RDS "+
+			"resolves the newest minor; a patch default goes stale the moment AWS retires it, "+
+			"and then every relational apply fails after the cluster is already built",
+			got.Relational.EngineVersion)
 	}
 }
