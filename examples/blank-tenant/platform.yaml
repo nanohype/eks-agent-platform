@@ -87,6 +87,13 @@ spec:
     - name: assistant
       systemPrompt: "You are a helpful assistant."
       modelRoute: primary
+      # Required by the CRD, and the field a blank tenant is most likely to skip
+      # because the other three read like the whole agent. There is no
+      # platform-supplied runtime to fall back to: the image IS the agent, and
+      # its tools run inside it under the tenant's identity. Omit it and the API
+      # server refuses the whole AgentFleet with `spec.agents[0].image: Required
+      # value`, so nothing is created and the Application never reaches Healthy.
+      image: ghcr.io/example-org/blank-assistant:v0.1.0
 ---
 apiVersion: governance.nanohype.dev/v1alpha1
 kind: EvalSuite
