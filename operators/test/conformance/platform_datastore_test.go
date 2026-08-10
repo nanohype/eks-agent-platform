@@ -80,8 +80,8 @@ func TestPlatform_DatastoresValidVocabulary(t *testing.T) {
 	if db.Relational.MinACU != "0.5" || db.Relational.MaxACU != "8" {
 		t.Errorf("relational ACU defaults: got min=%q max=%q want 0.5/8", db.Relational.MinACU, db.Relational.MaxACU)
 	}
-	if db.Relational.EngineVersion != "16.6" {
-		t.Errorf("relational engineVersion default: got %q want 16.6", db.Relational.EngineVersion)
+	if db.Relational.EngineVersion != "16" {
+		t.Errorf("relational engineVersion default: got %q want 16", db.Relational.EngineVersion)
 	}
 	if db.Relational.BackupRetentionDays != 7 {
 		t.Errorf("relational backupRetentionDays default: got %d want 7", db.Relational.BackupRetentionDays)
