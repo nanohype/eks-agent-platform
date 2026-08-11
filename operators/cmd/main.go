@@ -301,6 +301,7 @@ func main() {
 		Scheme:        mgr.GetScheme(),
 		Concurrency:   runtimeWorkers,
 		NetworkEngine: networkEngine,
+		Region:        region,
 		VCluster:      vclusterFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "AgentFleet")

@@ -158,7 +158,7 @@ func TestGatewayEgressReachesTheCollector(t *testing.T) {
 // with no collector is what this regression is for.
 func TestTenantEgressReachesTheCollector(t *testing.T) {
 	var found bool
-	for _, rule := range tenantEgressCiliumRules() {
+	for _, rule := range tenantEgressCiliumRules(nil, nil) {
 		r, _ := rule.(map[string]interface{})
 		eps, ok, _ := unstructured.NestedSlice(r, "toEndpoints")
 		if !ok || len(eps) == 0 {

@@ -51,7 +51,7 @@ func getCNP(t *testing.T, cl client.Client, namespace, name string) *unstructure
 // 80 — a vanilla NetworkPolicy ipBlock cannot match it.
 func TestTenantEgressCiliumRules_AllowsPodIdentityCreds(t *testing.T) {
 	found := false
-	for _, raw := range tenantEgressCiliumRules() {
+	for _, raw := range tenantEgressCiliumRules(nil, nil) {
 		rule := raw.(map[string]interface{})
 		ents, ok := rule["toEntities"].([]interface{})
 		if !ok {
@@ -146,7 +146,7 @@ func TestEnsureFleetCiliumEgress_DeniesIngressAndSelectsFleet(t *testing.T) {
 // gateway. Nothing else in the suite would notice: every CR still applies, the
 // Platform still reports Ready, and only real inference traffic fails.
 func TestTenantEgressCiliumRules_ReachesTheModelGateway(t *testing.T) {
-	for _, raw := range tenantEgressCiliumRules() {
+	for _, raw := range tenantEgressCiliumRules(nil, nil) {
 		rule, ok := raw.(map[string]interface{})
 		if !ok {
 			continue
@@ -214,7 +214,7 @@ func TestGatewayEgress_ReachesBedrockAndTenantsDoNot(t *testing.T) {
 	if !tlsFrom(gatewayEgressCiliumRules()) {
 		t.Error("the gateway must be allowed outbound TLS — without it every model call is denied at the network while the Gateway reports healthy")
 	}
-	if tlsFrom(tenantEgressCiliumRules()) {
+	if tlsFrom(tenantEgressCiliumRules(nil, nil)) {
 		t.Error("the shared tenant allow-list must not carry 443: that hands every application pod a direct path to Bedrock and demotes the gateway to a convention")
 	}
 }

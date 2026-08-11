@@ -42,6 +42,13 @@ type AgentFleetReconciler struct {
 	// CiliumNetworkPolicy vs a vanilla NetworkPolicy for fleet egress.
 	NetworkEngine string
 
+	// Region is the AWS region this cluster runs in, used to name the AWS
+	// service endpoints a fleet's egress policy allows on 443 (see
+	// datastoreFQDNs). Empty means those hostnames are omitted and the fleet
+	// reaches no AWS API — the deliberate fail-closed, since the alternative
+	// bound (a bare 443 allow) would also open the model plane.
+	Region string
+
 	// VCluster resolves the per-Platform virtual-cluster client for the vcluster
 	// isolation tier. nil in the namespace tier and k8s-only test paths. When the
 	// owning Platform is vcluster-tier, the fleet's agent Deployments and

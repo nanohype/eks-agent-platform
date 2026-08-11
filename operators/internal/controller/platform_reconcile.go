@@ -204,6 +204,22 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 	otlpHTTP := intstr.FromInt(otlpHTTPPort)
 	gatewayPort := intstr.FromInt(8080)
 	credsPort := intstr.FromInt(80)
+	// The tenant's own declared datastores. Built before the spec so the rule
+	// can be appended below only when the Platform asked for one.
+	var datastoreRule []networkingv1.NetworkPolicyEgressRule
+	if ports := datastoreEgressPorts(p); len(ports) > 0 {
+		npPorts := make([]networkingv1.NetworkPolicyPort, 0, len(ports))
+		for _, prt := range ports {
+			pp := intstr.FromInt(prt)
+			npPorts = append(npPorts, networkingv1.NetworkPolicyPort{Protocol: &tcp, Port: &pp})
+		}
+		// No `To`, which in a NetworkPolicy means any destination on these
+		// ports. Aurora and ElastiCache get their addresses from the substrate
+		// at provision time and the operator does not know them; the port is
+		// the bound that holds without guessing a CIDR. Mirrors the cilium
+		// twin's toEntities "all" so the two engines enforce the same thing.
+		datastoreRule = append(datastoreRule, networkingv1.NetworkPolicyEgressRule{Ports: npPorts})
+	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = labelsForPlatform(p)
 		np.Spec = networkingv1.NetworkPolicySpec{
@@ -274,6 +290,7 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 				},
 			},
 		}
+		np.Spec.Egress = append(np.Spec.Egress, datastoreRule...)
 		return nil
 	})
 	return err
@@ -375,7 +392,7 @@ func (r *PlatformReconciler) ensureTenantCiliumEgress(ctx context.Context, p *pl
 	if r.NetworkEngine != NetworkEngineCilium {
 		return nil
 	}
-	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "tenant-egress", map[string]interface{}{}, labelsForPlatform(p), false)
+	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "tenant-egress", map[string]interface{}{}, labelsForPlatform(p), false, datastoreEgressPorts(p), datastoreFQDNs(p, r.IAMCfg.Region))
 }
 
 // ensureAppProject creates an ArgoCD AppProject scoped to the tenant
