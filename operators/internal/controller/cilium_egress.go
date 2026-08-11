@@ -34,6 +34,105 @@ const (
 	otlpHTTPPort = 4318
 )
 
+// The wire ports of the datastore kinds that speak their own protocol.
+//
+// A tenant declares its stateful substrate in spec.datastores, the
+// tenant-substrate module provisions it, and the operator grants IAM to reach
+// it — and then default-deny egress drops the packets, because the tenant
+// boundary was built without reference to the tenant's own declaration. The
+// symptom is the worst kind: the Platform is Ready, the datastore is available,
+// the credential is valid, and the connection simply times out.
+const (
+	postgresPort = 5432 // relational — Aurora PostgreSQL
+	redisPort    = 6379 // cache — ElastiCache (Valkey/Redis)
+	kafkaIAMPort = 9098 // stream — MSK Serverless, IAM auth
+)
+
+// datastoreEgressPorts returns the TCP ports this Platform's declared
+// datastores need, deduplicated and in ascending order. Empty when a tenant
+// declares no datastore that speaks its own protocol, so a tenant without one
+// gains no egress it did not previously have.
+//
+// The ports come from the SAME declaration the substrate and the IAM policy are
+// generated from. Deriving all three from spec.datastores is what keeps them
+// from disagreeing — a hand-maintained port list is a fourth copy that drifts
+// the first time a kind is added.
+//
+// Covers only the kinds that speak their own protocol. objectStore, keyValue
+// and queue reach AWS over 443 — the same port the model plane answers on — so
+// a port bound cannot express them safely; those go through datastoreFQDNs,
+// which bounds by hostname instead.
+func datastoreEgressPorts(p *platformv1alpha1.Platform) []int {
+	var pg, redis, kafka bool
+	for _, d := range p.Spec.Datastores {
+		switch d.Kind {
+		case platformv1alpha1.DatastoreRelational:
+			pg = true
+		case platformv1alpha1.DatastoreCache:
+			redis = true
+		case platformv1alpha1.DatastoreStream:
+			kafka = true
+		}
+	}
+	ports := make([]int, 0, 3)
+	if pg {
+		ports = append(ports, postgresPort)
+	}
+	if redis {
+		ports = append(ports, redisPort)
+	}
+	if kafka {
+		ports = append(ports, kafkaIAMPort)
+	}
+	return ports
+}
+
+// datastoreFQDNs returns the AWS service hostnames this Platform's declared
+// datastores need on 443, for the kinds that speak the AWS API rather than their
+// own protocol: objectStore (S3), keyValue (DynamoDB) and queue (SQS).
+//
+// Hostnames rather than a port bound, because 443 is also how the model plane
+// answers. Bedrock is reached over PrivateLink and resolves to an in-VPC
+// address, so no CIDR separates it from S3 either — a port-scoped or
+// CIDR-scoped rule would hand every application pod a direct route to Bedrock
+// and reduce the model gateway (see gatewayEgressCiliumRules) from a
+// network-enforced boundary to a convention. An FQDN allow-list is the only
+// bound that admits the datastore and still excludes the model.
+//
+// Exact names, never a *.amazonaws.com pattern: that pattern matches
+// bedrock-runtime.<region>.amazonaws.com and gives away the whole boundary.
+//
+// Empty when the region is unknown, which fails CLOSED. A tenant reaching
+// nothing is a visible outage; a tenant reaching everything on 443 is a silent
+// hole in the model boundary, and only one of those gets noticed.
+func datastoreFQDNs(p *platformv1alpha1.Platform, region string) []string {
+	if region == "" {
+		return nil
+	}
+	var s3, ddb, sqs bool
+	for _, d := range p.Spec.Datastores {
+		switch d.Kind {
+		case platformv1alpha1.DatastoreObjectStore:
+			s3 = true
+		case platformv1alpha1.DatastoreKeyValue:
+			ddb = true
+		case platformv1alpha1.DatastoreQueue:
+			sqs = true
+		}
+	}
+	names := make([]string, 0, 3)
+	if s3 {
+		names = append(names, "s3."+region+".amazonaws.com")
+	}
+	if ddb {
+		names = append(names, "dynamodb."+region+".amazonaws.com")
+	}
+	if sqs {
+		names = append(names, "sqs."+region+".amazonaws.com")
+	}
+	return names
+}
+
 // Where Envoy Gateway's control plane runs, and the xDS port its data plane
 // dials — `envoy-gateway.envoy-gateway-system.svc.cluster.local:18000`, from
 // the bootstrap Envoy Gateway writes into every proxy it renders.
@@ -80,17 +179,42 @@ func envoyProxyPodLabels() map[string]interface{} {
 // tenant-runtime pod bound by a Pod Identity association gets NO AWS
 // credentials without this rule. Mirrors the operator's own
 // charts/operator/templates/networkpolicy.yaml cilium idiom.
-func tenantEgressCiliumRules() []interface{} {
-	return []interface{}{
+//
+// datastorePorts opens the tenant's own declared datastores (see
+// datastoreEgressPorts). Empty for a tenant that declares none, which is why
+// this takes a parameter rather than reading a constant: the allow-list is a
+// function of what the Platform asked for.
+func tenantEgressCiliumRules(datastorePorts []int, datastoreFQDNs []string) []interface{} {
+	rules := []interface{}{
 		map[string]interface{}{ // DNS
 			"toEndpoints": []interface{}{map[string]interface{}{"matchLabels": map[string]interface{}{
 				"k8s:io.kubernetes.pod.namespace": "kube-system",
 				"k8s:k8s-app":                     "kube-dns",
 			}}},
-			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
-				map[string]interface{}{"port": "53", "protocol": "UDP"},
-				map[string]interface{}{"port": "53", "protocol": "TCP"},
-			}}},
+			"toPorts": []interface{}{map[string]interface{}{
+				"ports": []interface{}{
+					map[string]interface{}{"port": "53", "protocol": "UDP"},
+					map[string]interface{}{"port": "53", "protocol": "TCP"},
+				},
+				// L7 DNS visibility, and toFQDNs below does not work without it.
+				//
+				// Cilium resolves an FQDN rule by watching the tenant's DNS
+				// answers through its proxy and pinning the returned addresses.
+				// With no `rules.dns` on the DNS rule the proxy never sees the
+				// response, the FQDN cache stays empty, and the toFQDNs rule
+				// matches nothing — the policy is accepted, reports Valid, and
+				// silently denies every packet. Failing that way is the reason
+				// this is spelled out here rather than assumed.
+				//
+				// matchPattern "*" observes without restricting: the tenant may
+				// resolve any name, and what it may CONNECT to is still bounded
+				// by the allow-list. Narrowing this to the datastore names would
+				// also break resolution of the cluster-internal Services the
+				// rules above depend on.
+				"rules": map[string]interface{}{
+					"dns": []interface{}{map[string]interface{}{"matchPattern": "*"}},
+				},
+			}},
 		},
 		map[string]interface{}{ // the Platform's model gateway
 			// The gateway's Envoy runs in this same namespace, so the selector
@@ -119,6 +243,42 @@ func tenantEgressCiliumRules() []interface{} {
 			}}},
 		},
 	}
+	// The tenant's own datastores. Appended rather than declared above because
+	// the set is per-Platform: a tenant with no relational/cache/stream store
+	// gets no rule and no new reach.
+	//
+	// toEntities "all" scoped to these ports, not a CIDR: Aurora and
+	// ElastiCache resolve to addresses the substrate assigns at provision
+	// time, which the operator does not know and must not guess. The port is
+	// the bound that holds without that knowledge, and 5432/6379/9098 are
+	// datastore protocols — unlike 443, nothing else in the tenant's world
+	// answers on them.
+	if len(datastorePorts) > 0 {
+		ports := make([]interface{}, 0, len(datastorePorts))
+		for _, p := range datastorePorts {
+			ports = append(ports, map[string]interface{}{"port": strconv.Itoa(p), "protocol": "TCP"})
+		}
+		rules = append(rules, map[string]interface{}{
+			"toEntities": []interface{}{"all"},
+			"toPorts":    []interface{}{map[string]interface{}{"ports": ports}},
+		})
+	}
+	// The AWS-API datastores, by hostname on 443. See datastoreFQDNs for why
+	// this cannot be a port or CIDR bound: Bedrock answers on the same port from
+	// the same VPC, and only the name separates them.
+	if len(datastoreFQDNs) > 0 {
+		names := make([]interface{}, 0, len(datastoreFQDNs))
+		for _, n := range datastoreFQDNs {
+			names = append(names, map[string]interface{}{"matchName": n})
+		}
+		rules = append(rules, map[string]interface{}{
+			"toFQDNs": names,
+			"toPorts": []interface{}{map[string]interface{}{"ports": []interface{}{
+				map[string]interface{}{"port": "443", "protocol": "TCP"},
+			}}},
+		})
+	}
+	return rules
 }
 
 // gatewayEgressCiliumRules is the extra egress the model gateway's Envoy needs
@@ -198,7 +358,7 @@ func (r *PlatformReconciler) ensureGatewayCiliumEgress(ctx context.Context, p *p
 // selected pods (the per-fleet policy denies all ingress, matching its k8s NP
 // twin). Returns nil on a non-cilium cluster (the CRD is absent →
 // isNoKindMatch) so a kubernetes-engine deployment is unaffected.
-func ensureCiliumEgress(ctx context.Context, c client.Client, namespace, name string, endpointMatch map[string]interface{}, labels map[string]string, denyIngress bool) error {
+func ensureCiliumEgress(ctx context.Context, c client.Client, namespace, name string, endpointMatch map[string]interface{}, labels map[string]string, denyIngress bool, datastorePorts []int, datastoreFQDNs []string) error {
 	cnp := &unstructured.Unstructured{}
 	cnp.SetGroupVersionKind(ciliumNetworkPolicyGVK)
 	cnp.SetName(name)
@@ -207,7 +367,7 @@ func ensureCiliumEgress(ctx context.Context, c client.Client, namespace, name st
 		cnp.SetLabels(labels)
 		spec := map[string]interface{}{
 			"endpointSelector": map[string]interface{}{"matchLabels": endpointMatch},
-			"egress":           tenantEgressCiliumRules(),
+			"egress":           tenantEgressCiliumRules(datastorePorts, datastoreFQDNs),
 		}
 		if denyIngress {
 			spec["ingress"] = []interface{}{}

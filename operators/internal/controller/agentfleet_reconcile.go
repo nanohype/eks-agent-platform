@@ -168,7 +168,7 @@ func (r *AgentFleetReconciler) ensureFleetCiliumEgress(ctx context.Context, flee
 		LabelPlatform:                  p.Name,
 		LabelFleet:                     fleet.Name,
 	}
-	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "fleet-"+fleet.Name, map[string]interface{}{LabelFleet: fleet.Name}, labels, true)
+	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "fleet-"+fleet.Name, map[string]interface{}{LabelFleet: fleet.Name}, labels, true, datastoreEgressPorts(p), datastoreFQDNs(p, r.Region))
 }
 
 // ensureAgentDeployments emits one Deployment per AgentSpec: the tenant's own
