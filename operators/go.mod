@@ -12,9 +12,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.73.4
 	github.com/aws/smithy-go v1.27.6
-	k8s.io/api v0.36.2
-	k8s.io/apimachinery v0.36.2
-	k8s.io/client-go v0.36.2
+	k8s.io/api v0.36.3
+	k8s.io/apimachinery v0.36.3
+	k8s.io/client-go v0.36.3
 	sigs.k8s.io/controller-runtime v0.24.1
 )
 
@@ -50,7 +50,7 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 	k8s.io/apiserver v0.36.2 // indirect
 	k8s.io/component-base v0.36.2 // indirect
-	k8s.io/streaming v0.36.2 // indirect
+	k8s.io/streaming v0.36.3 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.34.0 // indirect
 )
 
