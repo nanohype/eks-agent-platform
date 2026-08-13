@@ -118,24 +118,62 @@ func tenantQueueResources(p *platformv1alpha1.Platform, env string, scope arnSco
 	return res
 }
 
+// sesDomainParamPath is where the substrate publishes the verified sending
+// domain bound to a tenant. landing-zone owns the SES identity — verifying a
+// domain is account-level mail infra, and an identity is single-owner — so the
+// binding is written there and only read here.
+func sesDomainParamPath(clusterName, platform string) string {
+	return fmt.Sprintf("/eks-agent-platform/%s/%s/ses/domain", clusterName, platform)
+}
+
+// resolveSESDomain returns the sending domain bound to this Platform, or the
+// empty string when nothing is bound.
+//
+// A missing parameter is not an error, matching how the tenant-substrate secret
+// lookups behave: the substrate applies independently of the operator, so a
+// Platform can exist before its binding does. The consequence of an absent
+// binding is a narrower policy, never a broader one — no domain means no SES
+// statement, so the failure mode is a tenant that cannot send rather than one
+// that can send as somebody else.
+func (r *PlatformReconciler) resolveSESDomain(ctx context.Context, p *platformv1alpha1.Platform, clusterName string) (string, error) {
+	if !hasCapability(p, platformv1alpha1.CapabilitySES) {
+		return "", nil
+	}
+	if r.SSM == nil || clusterName == "" {
+		return "", nil
+	}
+	return r.readSSMParameter(ctx, sesDomainParamPath(clusterName, p.Name))
+}
+
 // capabilityPolicyStatements builds the tenant-role grant statements for a
-// Platform's declared capabilities. ses is scoped by a ses:FromAddress condition
-// to the tenant's sending domain (the verified identity itself is account-level
-// mail infra, not provisioned here); eventBridgeScheduler grants schedule
+// Platform's declared capabilities. eventBridgeScheduler grants schedule
 // management on the tenant's own schedules plus iam:PassRole on the minted
 // invoke role, capped to the Scheduler service. clusterName scopes the invoke
 // role; env scopes the schedule ARN prefix (schedules are env-keyed resources).
-func capabilityPolicyStatements(p *platformv1alpha1.Platform, env, clusterName string, scope arnScope) []policyStatement {
+//
+// sesDomain is the verified sending domain bound to this tenant, read from SSM
+// by the caller. It is a parameter rather than something derived here because a
+// verified identity is account-level mail infra owned by landing-zone, and the
+// tenant must not be able to influence which one it reaches. An empty value
+// means the binding does not exist, and no SES statement is emitted at all —
+// declaring the capability grants nothing until the substrate binds a domain to
+// it.
+func capabilityPolicyStatements(p *platformv1alpha1.Platform, env, clusterName, sesDomain string, scope arnScope) []policyStatement {
 	stmts := make([]policyStatement, 0, 4)
 
-	if hasCapability(p, platformv1alpha1.CapabilitySES) {
+	if hasCapability(p, platformv1alpha1.CapabilitySES) && sesDomain != "" {
 		stmts = append(stmts,
 			policyStatement{
 				Sid: "sesSend", Effect: "Allow",
 				Action:   capabilitySESSendActions,
 				Resource: []string{"*"},
+				// Anchored at the domain: the wildcard covers the local part only.
+				// A trailing wildcard would make the domain a prefix match, so a
+				// tenant bound to "example.com" would also reach "example.com.evil"
+				// — and one bound to a name that merely prefixes another tenant's
+				// verified domain would inherit sending rights over it, silently.
 				Condition: map[string]map[string]string{
-					"StringLike": {"ses:FromAddress": fmt.Sprintf("*@%s.*", p.Name)},
+					"StringLike": {"ses:FromAddress": fmt.Sprintf("*@%s", sesDomain)},
 				},
 			},
 			policyStatement{
@@ -268,7 +306,14 @@ func (r *PlatformReconciler) ensureCapabilityPolicy(ctx context.Context, roleNam
 		return err
 	}
 
-	stmts := capabilityPolicyStatements(p, cfg.Environment, cfg.ClusterName, scope)
+	// The sending domain is resolved here rather than inside the policy builder
+	// because it is a lookup against the substrate, not a property of the CR.
+	sesDomain, err := r.resolveSESDomain(ctx, p, cfg.ClusterName)
+	if err != nil {
+		return err
+	}
+
+	stmts := capabilityPolicyStatements(p, cfg.Environment, cfg.ClusterName, sesDomain, scope)
 	desired, err := capabilityPolicyDoc(stmts)
 	if err != nil {
 		return err //coverage:ignore only reachable if json.Marshal fails, which it cannot for this document
