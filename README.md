@@ -7,7 +7,7 @@
 ![ArgoCD](https://img.shields.io/badge/ArgoCD-GitOps-EF7B4D?logo=argo)
 ![License](https://img.shields.io/badge/License-Apache--2.0-green)
 
-A Kubernetes-native, AWS-native **platform-of-platforms**. Each team's agent workloads are declared as a `Tenant` CR; the operator provisions the per-tenant IAM identity, KMS grants, S3 prefixes, model gateway, agent Deployments, KEDA scaling, budget kill-switch, and Argo-Workflows eval pipeline. Eight personas (sales-ops, support, finance, ops, founder, eng, marketing, legal) are first-class users with their own onboarding playbooks + agentctl scaffolding.
+A Kubernetes-native, AWS-native **platform-of-platforms**. Each team's agent workloads are declared as a `Platform` CR; the operator provisions the per-tenant workload namespace, IAM identity, KMS grants, S3 bucket policy, model gateway, agent Deployments, KEDA scaling, budget kill-switch, and Argo-Workflows eval pipeline. A `Tenant` sits above one or more Platforms as the cluster-scoped owner, aggregating their budget and readiness. Eight personas (sales-ops, support, finance, ops, founder, eng, marketing, legal) are first-class users with their own onboarding playbooks + agentctl scaffolding.
 
 **AI clients / agents start here:** [`AGENTS.md`](AGENTS.md). For the stack-wide view, see the [Platform Reference](https://github.com/nanohype/nanohype/blob/main/docs/platform-reference.md).
 
@@ -39,7 +39,7 @@ Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragr
 
 ## CRDs
 
-Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite). Agents are plain Deployments running the tenant's own image under the tenant's identity.
+Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite, SLOPolicy). Agents are plain Deployments running the tenant's own image under the tenant's identity.
 
 | Kind           | Scope      | Owns                                                                                     |
 | -------------- | ---------- | ---------------------------------------------------------------------------------------- |
@@ -47,8 +47,11 @@ Split across three capability groups under the `nanohype.dev` domain (version `v
 | `Platform`     | Namespaced | Tenant workload namespace, IAM role + Pod Identity association, KMS grant, S3 bucket policy, ArgoCD AppProject |
 | `ModelGateway` | Namespaced | Envoy AI Gateway route per ModelRoute (Bedrock backend + Guardrail attachment)          |
 | `AgentFleet`   | Namespaced | Deployment per agent (tenant image, tenant identity), KEDA ScaledObject (SQS or CPU), NetworkPolicy |
+| `SandboxPool`  | Namespaced | Pull-based pool of always-on Managed Agents sandbox workers, on the dedicated tainted node pool behind a default-deny NetworkPolicy |
+| `AgentSandbox` | Namespaced | Single-use isolated pod for one agent role-session — same hardening as the pool, push-dispatched and run-once |
 | `BudgetPolicy` | Namespaced | Hourly Athena CUR aggregation + CloudWatch in-flight estimate; kill-switch event at 120% |
 | `EvalSuite`    | Namespaced | Argo Workflow/CronWorkflow against the fleet; status writeback by the runner template    |
+| `SLOPolicy`    | Namespaced | Burn-rate alerting on the Platform's objective; page-tier burn raises a kill-switch event and holds the tenant's rollout |
 
 ## Quickstart
 
