@@ -34,7 +34,7 @@ jobs:
     name: source and registry agree
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
       - run: ./scripts/check-chart-version-bump.py --self-test
       - run: ./scripts/check-chart-version-bump.py --published
