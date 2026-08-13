@@ -39,18 +39,42 @@ func capCfg() IAMConfig {
 	return IAMConfig{Environment: "development", Region: "us-west-2", ClusterName: capClusterName}
 }
 
+// boundSES stands in for the substrate having published a sending domain for a
+// tenant. The operator reads this binding rather than deriving a domain from the
+// Platform, so every test that expects an SES grant has to establish it — which
+// is the point: without it there is no grant to assert on.
+func boundSES(cluster, platform string) *stubSSM {
+	return &stubSSM{params: map[string]string{
+		sesDomainParamPath(cluster, platform): "example.com",
+	}}
+}
+
 // TestCapabilityPolicy_SES proves the ses capability grants scoped SendEmail
 // (FromAddress-conditioned to the tenant's domain) plus the unconditioned
 // account-global GetSendQuota, and nothing else.
 func TestCapabilityPolicy_SES(t *testing.T) {
-	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), "development", capClusterName, testScope())
+	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), "development", capClusterName, "example.com", testScope())
 
 	send := findStmt(stmts, "sesSend")
 	if send == nil || !hasResource(send, "*") {
 		t.Fatalf("sesSend statement missing or misscoped: %+v", send)
 	}
-	if got := send.Condition["StringLike"]["ses:FromAddress"]; got != "*@myplat.*" {
-		t.Errorf("ses:FromAddress condition: got %q want %q", got, "*@myplat.*")
+	if got := send.Condition["StringLike"]["ses:FromAddress"]; got != "*@example.com" {
+		t.Errorf("ses:FromAddress condition: got %q want %q", got, "*@example.com")
+	}
+	// The wildcard covers the local part and nothing else. A trailing wildcard
+	// would make the domain a prefix match, so a tenant bound to example.com
+	// would also reach example.com.evil — and a Platform whose name merely
+	// prefixed another tenant's verified domain would inherit its sending
+	// rights, silently.
+	if strings.HasSuffix(send.Condition["StringLike"]["ses:FromAddress"], "*") {
+		t.Errorf("ses:FromAddress must be anchored at the domain, got %q",
+			send.Condition["StringLike"]["ses:FromAddress"])
+	}
+	// The Platform's own name must not reach the condition at all.
+	if strings.Contains(send.Condition["StringLike"]["ses:FromAddress"], "myplat") {
+		t.Errorf("the tenant must not influence its own sending domain, got %q",
+			send.Condition["StringLike"]["ses:FromAddress"])
 	}
 	quota := findStmt(stmts, "sesQuota")
 	if quota == nil || len(quota.Condition) != 0 {
@@ -62,11 +86,107 @@ func TestCapabilityPolicy_SES(t *testing.T) {
 	}
 }
 
+// TestCapabilityPolicy_SESUnbound proves that declaring the capability grants
+// nothing on its own. The sending domain comes from the substrate, so until
+// landing-zone binds one there is no identity to scope a grant to — and the
+// safe answer to "which domain?" is none, not a guess derived from the CR.
+//
+// This is the case that made the old behaviour dangerous: the domain used to be
+// built from the Platform's own name, so a capability declaration was also a
+// domain claim, and the tenant wrote both.
+func TestCapabilityPolicy_SESUnbound(t *testing.T) {
+	stmts := capabilityPolicyStatements(
+		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES),
+		"development", capClusterName, "", testScope())
+
+	if findStmt(stmts, "sesSend") != nil {
+		t.Error("an unbound tenant must get no sesSend statement")
+	}
+	if findStmt(stmts, "sesQuota") != nil {
+		t.Error("an unbound tenant must get no sesQuota statement either")
+	}
+}
+
+// TestResolveSESDomain_NoLookupPossible covers the two states in which there is
+// nothing to read: no SSM client, and no cluster name to build a path from. Both
+// answer "unbound" rather than erroring, because the reconcile has to keep
+// running — the rest of a Platform's identity does not depend on mail.
+//
+// Both are also lookup-suppressed rather than lookup-failed, which is why they
+// are asserted separately from the not-found case: a path built from an empty
+// cluster name would collide across clusters, so the guard has to come first.
+func TestResolveSESDomain_NoLookupPossible(t *testing.T) {
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
+
+	for _, tc := range []struct {
+		name    string
+		ssm     *stubSSM
+		cluster string
+	}{
+		{"no ssm client", nil, capClusterName},
+		{"no cluster name", boundSES(capClusterName, "myplat"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &PlatformReconciler{}
+			if tc.ssm != nil {
+				r.SSM = tc.ssm
+			}
+			got, err := r.resolveSESDomain(context.Background(), p, tc.cluster)
+			if err != nil {
+				t.Fatalf("resolveSESDomain: %v", err)
+			}
+			if got != "" {
+				t.Errorf("domain: got %q want empty", got)
+			}
+			if tc.ssm != nil && len(tc.ssm.calls) != 0 {
+				t.Errorf("must not read SSM at all, called: %v", tc.ssm.calls)
+			}
+		})
+	}
+}
+
+// TestEnsureCapabilityPolicy_SESLookupFailurePropagates proves a broken SSM read
+// fails the reconcile instead of resolving to "unbound".
+//
+// The distinction matters because unbound is a legitimate state that quietly
+// drops the SES statement. If a transport error took that same path, an outage
+// in the parameter store would silently strip sending rights from every bound
+// tenant and the policy would still be written — a converged-looking reconcile
+// over a grant that had been revoked by accident.
+func TestEnsureCapabilityPolicy_SESLookupFailurePropagates(t *testing.T) {
+	f := newFakeIAM()
+	f.seedRole("test-role", capRoleARN)
+	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("ssm unavailable")}}
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
+
+	err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg())
+	if err == nil {
+		t.Fatal("a failed domain lookup must fail the reconcile")
+	}
+	if !strings.Contains(err.Error(), "ssm unavailable") {
+		t.Errorf("error must carry the cause: %v", err)
+	}
+	if puts := putsFor(f, capabilityPolicyName); len(puts) != 0 {
+		t.Errorf("no policy may be written when the binding is unknown: %d put(s)", len(puts))
+	}
+}
+
+// TestSESDomainParamPath pins the contract with landing-zone. The operator only
+// reads this path; the substrate writes it. Changing the shape here silently
+// unbinds every tenant, since a missing parameter is not an error.
+func TestSESDomainParamPath(t *testing.T) {
+	got := sesDomainParamPath("dev-cluster", "myplat")
+	want := "/eks-agent-platform/dev-cluster/myplat/ses/domain"
+	if got != want {
+		t.Errorf("ses domain parameter path: got %q want %q", got, want)
+	}
+}
+
 // TestCapabilityPolicy_Scheduler proves the eventBridgeScheduler capability
 // grants schedule management on the tenant's own schedule GROUP plus a
 // service-capped PassRole on the minted invoke role.
 func TestCapabilityPolicy_Scheduler(t *testing.T) {
-	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), "development", capClusterName, testScope())
+	stmts := capabilityPolicyStatements(platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), "development", capClusterName, "", testScope())
 
 	manage := findStmt(stmts, "schedulerManage")
 	if manage == nil || !hasResource(manage, "arn:aws:scheduler:us-west-2:123456789012:schedule/development-myplat/*") {
@@ -137,7 +257,7 @@ func TestScheduleGroupName_ComposesLikeEveryOtherTenantName(t *testing.T) {
 func TestCapabilityPolicy_BothAndNone(t *testing.T) {
 	both := capabilityPolicyStatements(
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES, platformv1alpha1.CapabilityEventBridgeScheduler),
-		"development", capClusterName, testScope(),
+		"development", capClusterName, "example.com", testScope(),
 	)
 	for _, sid := range []string{"sesSend", "sesQuota", "schedulerManage", "schedulerPassInvokeRole"} {
 		if findStmt(both, sid) == nil {
@@ -152,7 +272,7 @@ func TestCapabilityPolicy_BothAndNone(t *testing.T) {
 		t.Errorf("both capabilities must yield a non-empty document")
 	}
 
-	none := capabilityPolicyStatements(platformWithCapabilities("myplat"), "development", capClusterName, testScope())
+	none := capabilityPolicyStatements(platformWithCapabilities("myplat"), "development", capClusterName, "", testScope())
 	if len(none) != 0 {
 		t.Errorf("no capability must yield no statements, got %d", len(none))
 	}
@@ -245,7 +365,7 @@ func TestTenantQueueResources(t *testing.T) {
 func TestEnsureCapabilityPolicy_SESWritesAndConverges(t *testing.T) {
 	f := newFakeIAM()
 	f.seedRole("test-role", capRoleARN)
-	r := &PlatformReconciler{IAM: f}
+	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
 	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
@@ -368,7 +488,7 @@ func TestEnsureCapabilityPolicy_GetErrorPropagates(t *testing.T) {
 	f := newFakeIAM()
 	f.seedRole("test-role", capRoleARN)
 	f.getInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
-	r := &PlatformReconciler{IAM: f}
+	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
 		t.Fatalf("expected the GetRolePolicy error to propagate")
@@ -381,7 +501,7 @@ func TestEnsureCapabilityPolicy_PutErrorPropagates(t *testing.T) {
 	f := newFakeIAM()
 	f.seedRole("test-role", capRoleARN)
 	f.putInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
-	r := &PlatformReconciler{IAM: f}
+	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
 		t.Fatalf("expected the PutRolePolicy error to propagate")
@@ -476,7 +596,7 @@ func TestDeleteSchedulerInvokeRole_NilIAM(t *testing.T) {
 func TestEnsureIamRole_CapabilityPolicyError_CreatePath(t *testing.T) {
 	f := newFakeIAM()
 	f.putInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
-	r := &PlatformReconciler{IAM: f}
+	r := &PlatformReconciler{IAM: f, SSM: boundSES("production-cluster", "app")}
 	p := newPlatform("app", "tenant")
 	p.Spec.Identity.Capabilities = []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES}
 
@@ -490,7 +610,7 @@ func TestEnsureIamRole_CapabilityPolicyError_CreatePath(t *testing.T) {
 func TestEnsureIamRole_CapabilityPolicyError_ExistingRolePath(t *testing.T) {
 	f := newFakeIAM()
 	cfg := datastoreErrCfg()
-	r := &PlatformReconciler{IAM: f}
+	r := &PlatformReconciler{IAM: f, SSM: boundSES(cfg.ClusterName, "app")}
 	p := newPlatform("app", "tenant")
 	p.Spec.Identity.Capabilities = []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES}
 
