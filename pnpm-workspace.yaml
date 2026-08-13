@@ -29,7 +29,7 @@ overrides:
   # through postcss. The caret is load-bearing and must not be widened to `>=`:
   # the open-ended form resolves to nanoid 6, which is ESM-only and is not the
   # API postcss calls.
-  nanoid: "^3.3.17"
+  nanoid: "^6.0.0"
 
 peerDependencyRules:
   allowedVersions:
