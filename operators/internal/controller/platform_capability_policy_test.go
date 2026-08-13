@@ -107,6 +107,70 @@ func TestCapabilityPolicy_SESUnbound(t *testing.T) {
 	}
 }
 
+// TestResolveSESDomain_NoLookupPossible covers the two states in which there is
+// nothing to read: no SSM client, and no cluster name to build a path from. Both
+// answer "unbound" rather than erroring, because the reconcile has to keep
+// running — the rest of a Platform's identity does not depend on mail.
+//
+// Both are also lookup-suppressed rather than lookup-failed, which is why they
+// are asserted separately from the not-found case: a path built from an empty
+// cluster name would collide across clusters, so the guard has to come first.
+func TestResolveSESDomain_NoLookupPossible(t *testing.T) {
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
+
+	for _, tc := range []struct {
+		name    string
+		ssm     *stubSSM
+		cluster string
+	}{
+		{"no ssm client", nil, capClusterName},
+		{"no cluster name", boundSES(capClusterName, "myplat"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &PlatformReconciler{}
+			if tc.ssm != nil {
+				r.SSM = tc.ssm
+			}
+			got, err := r.resolveSESDomain(context.Background(), p, tc.cluster)
+			if err != nil {
+				t.Fatalf("resolveSESDomain: %v", err)
+			}
+			if got != "" {
+				t.Errorf("domain: got %q want empty", got)
+			}
+			if tc.ssm != nil && len(tc.ssm.calls) != 0 {
+				t.Errorf("must not read SSM at all, called: %v", tc.ssm.calls)
+			}
+		})
+	}
+}
+
+// TestEnsureCapabilityPolicy_SESLookupFailurePropagates proves a broken SSM read
+// fails the reconcile instead of resolving to "unbound".
+//
+// The distinction matters because unbound is a legitimate state that quietly
+// drops the SES statement. If a transport error took that same path, an outage
+// in the parameter store would silently strip sending rights from every bound
+// tenant and the policy would still be written — a converged-looking reconcile
+// over a grant that had been revoked by accident.
+func TestEnsureCapabilityPolicy_SESLookupFailurePropagates(t *testing.T) {
+	f := newFakeIAM()
+	f.seedRole("test-role", capRoleARN)
+	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("ssm unavailable")}}
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
+
+	err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg())
+	if err == nil {
+		t.Fatal("a failed domain lookup must fail the reconcile")
+	}
+	if !strings.Contains(err.Error(), "ssm unavailable") {
+		t.Errorf("error must carry the cause: %v", err)
+	}
+	if puts := putsFor(f, capabilityPolicyName); len(puts) != 0 {
+		t.Errorf("no policy may be written when the binding is unknown: %d put(s)", len(puts))
+	}
+}
+
 // TestSESDomainParamPath pins the contract with landing-zone. The operator only
 // reads this path; the substrate writes it. Changing the shape here silently
 // unbinds every tenant, since a missing parameter is not an error.
