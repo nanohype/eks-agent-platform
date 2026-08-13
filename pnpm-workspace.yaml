@@ -23,7 +23,7 @@ overrides:
   ip-address: "^10.3.1" # CVE-2026-69192 (leading-zero octets parsed as decimal, splitting SSRF filters from resolvers)
   js-yaml: "^4.3.1" # CVE-2026-53550 (merge-key quadratic DoS), CVE-2026-59869 (crafted-document DoS), CVE-2026-59870 (!!omap quadratic DoS)
   read-yaml-file: "^2.1.0"
-  fast-uri: "^3.1.5" # GHSA-7p8r-x3mc-p8w7 (backslash authority introducer parsed as host)
+  fast-uri: "^4.0.0" # GHSA-7p8r-x3mc-p8w7 (backslash authority introducer parsed as host)
   brace-expansion: "^5.0.9" # CVE-2026-69152 (quadratic blowup on a crafted brace pattern)
   # CVE-2026-67213 (a custom generator loops forever when size is zero), reached
   # through postcss. The caret is load-bearing and must not be widened to `>=`:
