@@ -8,14 +8,21 @@ indent_size = 2
 insert_final_newline = true
 trim_trailing_whitespace = true
 
-[*.{go,mk,Makefile}]
+[*.py]
+indent_size = 4
+
+[*.go]
 indent_style = tab
 
-[Makefile]
+# Braces at the start of a pattern match a whole filename, which is the only
+# form that catches a file named exactly `Makefile`. A `*.Makefile` entry in a
+# brace list matches nothing, since the name carries no dot.
+[{Makefile,*.mk}]
 indent_style = tab
 
+# Two trailing spaces are markdown's hard-break idiom, and lines across this org
+# rely on it — metadata blocks that would reflow into a single paragraph if the
+# whitespace were stripped. This is the one place the "no trailing whitespace"
+# style rule does not apply.
 [*.md]
 trim_trailing_whitespace = false
-
-[*.{tf,hcl}]
-indent_size = 2
