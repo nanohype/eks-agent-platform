@@ -57,6 +57,83 @@ func TestCapabilityGrantSidsCoversEveryCapability(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesGrantedCondition(t *testing.T) {
+	ses := platformv1alpha1.CapabilitySES
+	sched := platformv1alpha1.CapabilityEventBridgeScheduler
+
+	tests := []struct {
+		name         string
+		declared     []platformv1alpha1.Capability
+		ungranted    []platformv1alpha1.Capability
+		wantStatus   metav1.ConditionStatus
+		wantReason   string
+		wantInMsg    []string
+		wantNotInMsg []string
+	}{
+		{
+			name:       "nothing declared is true, not vacuously false",
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "NoCapabilitiesDeclared",
+		},
+		{
+			name:       "all declared capabilities granted",
+			declared:   []platformv1alpha1.Capability{ses, sched},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "AllGranted",
+		},
+		{
+			name:       "ungranted capability is named, not counted",
+			declared:   []platformv1alpha1.Capability{ses, sched},
+			ungranted:  []platformv1alpha1.Capability{ses},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "SubstrateBindingMissing",
+			wantInMsg:  []string{"ses"},
+			// The operator's next question is which one; naming only the
+			// ungranted capability is the whole point of the message.
+			wantNotInMsg: []string{"eventBridgeScheduler"},
+		},
+		{
+			name:       "several ungranted are all named",
+			declared:   []platformv1alpha1.Capability{ses, sched},
+			ungranted:  []platformv1alpha1.Capability{ses, sched},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "SubstrateBindingMissing",
+			wantInMsg:  []string{"ses", "eventBridgeScheduler"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := platformWithCapabilities("myplat", tc.declared...)
+			p.Generation = 7
+			got := capabilitiesGrantedCondition(p, tc.ungranted)
+
+			if got.Type != "CapabilitiesGranted" {
+				t.Errorf("Type = %q, want CapabilitiesGranted", got.Type)
+			}
+			if got.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", got.Status, tc.wantStatus)
+			}
+			if got.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", got.Reason, tc.wantReason)
+			}
+			if got.ObservedGeneration != 7 {
+				t.Errorf("ObservedGeneration = %d, want 7", got.ObservedGeneration)
+			}
+			for _, want := range tc.wantInMsg {
+				if !strings.Contains(got.Message, want) {
+					t.Errorf("Message %q does not name %q", got.Message, want)
+				}
+			}
+			for _, notWant := range tc.wantNotInMsg {
+				if strings.Contains(got.Message, notWant) {
+					t.Errorf("Message %q names %q, which was granted", got.Message, notWant)
+				}
+			}
+		})
+	}
+}
+
 func TestUngrantedCapabilities(t *testing.T) {
 	sesGranted := []policyStatement{{Sid: "sesSend"}, {Sid: "sesQuota"}}
 	schedGranted := []policyStatement{{Sid: "schedulerManage"}, {Sid: "schedulerPassInvokeRole"}}
