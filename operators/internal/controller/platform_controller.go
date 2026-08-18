@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -384,6 +385,18 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				ObservedGeneration: platform.Generation,
 			})
 		}
+		// Report declared capabilities that granted nothing. Written only when the
+		// IAM client is wired, for the same reason as ModelAccessScoped: with no
+		// capability policy built on any role, "all granted" would overclaim.
+		//
+		// This is the difference between a Platform that is Ready and a Platform
+		// whose declarations are all in force. Phase stays Ready — the reconcile
+		// succeeded and the policy is correct for the substrate that exists — but
+		// an operator who asked for a capability and silently did not get it can
+		// now see that from the CR instead of from a tenant's failing workload.
+		if r.IAM != nil {
+			upsertCondition(&platform.Status.Conditions, capabilitiesGrantedCondition(platform, susp.UngrantedCapabilities))
+		}
 		upsertCondition(&platform.Status.Conditions, metav1.Condition{
 			Type:               "NamespaceReady",
 			Status:             metav1.ConditionTrue,
@@ -464,6 +477,48 @@ func setVClusterReady(p *platformv1alpha1.Platform, status metav1.ConditionStatu
 
 // upsertCondition adds or replaces a Condition by Type, preserving
 // LastTransitionTime when Status hasn't changed (standard k8s pattern).
+// capabilitiesGrantedCondition reports whether every capability the Platform
+// declares is actually in force.
+//
+// False is not a failure. A capability resolves to no grant when its substrate
+// precondition is absent — SES declared with no sending domain bound to the
+// tenant is the case this was written for — and the fail-closed resolve that
+// produces a narrower policy rather than a broader one is correct. What is
+// wrong is doing that silently: without this the Platform reports Ready, the
+// grant is absent, and the first symptom is a tenant workload failing with an
+// AccessDenied that names nothing about the declaration.
+//
+// The message names the capabilities rather than counting them, because the
+// operator's next question is always which one.
+func capabilitiesGrantedCondition(p *platformv1alpha1.Platform, ungranted []platformv1alpha1.Capability) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               "CapabilitiesGranted",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: p.Generation,
+	}
+	switch {
+	case len(p.Spec.Identity.Capabilities) == 0:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "NoCapabilitiesDeclared"
+		cond.Message = "no capabilities declared"
+	case len(ungranted) == 0:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "AllGranted"
+		cond.Message = "every declared capability is granted on the tenant role"
+	default:
+		names := make([]string, 0, len(ungranted))
+		for _, c := range ungranted {
+			names = append(names, string(c))
+		}
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "SubstrateBindingMissing"
+		cond.Message = fmt.Sprintf(
+			"declared but granted nothing: %s — the capability is accepted and the tenant role carries no permission for it; the substrate binding it depends on does not exist",
+			strings.Join(names, ", "))
+	}
+	return cond
+}
+
 func upsertCondition(conditions *[]metav1.Condition, cond metav1.Condition) {
 	for i, existing := range *conditions {
 		if existing.Type == cond.Type {
