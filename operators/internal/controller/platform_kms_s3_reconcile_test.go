@@ -254,6 +254,16 @@ func TestRemoveBucketPolicyStatements_DropsOwnKeepsForeign(t *testing.T) {
 	if err := r.removeBucketPolicyStatements(context.Background(), newPlatform("acme", "acme"), cfg); err != nil {
 		t.Fatalf("removeBucketPolicyStatements: %v", err)
 	}
+	// No Put means the finalizer matched none of the seeded Sids and returned on
+	// its !changed path — which is what a teardown that silently leaves a deleted
+	// tenant's grant in place looks like from here. Asserted rather than indexed
+	// into, so that failure reads as itself instead of as an index-out-of-range
+	// panic from s.puts[-1].
+	if len(s.puts) == 0 {
+		t.Fatalf("teardown wrote no policy: the finalizer matched none of the seeded Sids %q/%q — "+
+			"it and ensureBucketPolicy have drifted apart on how the tenant Sid is built",
+			"TenantAccess-acme", "TenantAccess-acme-List")
+	}
 	sids := sidsOf(t, s.puts[len(s.puts)-1])
 	if countSid(sids, "TenantAccess-acme") != 0 || countSid(sids, "TenantAccess-acme-List") != 0 {
 		t.Errorf("own statements must be removed on teardown, sids=%v", sids)
