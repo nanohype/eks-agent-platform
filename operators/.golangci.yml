@@ -6,6 +6,32 @@ run:
 
 linters:
   default: none
+  # goconst is deliberately absent. From goconst v1.10.0 (bundled by
+  # golangci-lint v2.12.0) the checker descends into composite literals and
+  # counts the key *and* the value of every map or struct entry. This operator
+  # builds IAM policy documents and unstructured Kubernetes objects as
+  # map[string]any literals, so every "Effect", "Allow", "2012-10-17" and
+  # "argoproj.io" in a document meant to be read against the AWS and Kubernetes
+  # references becomes a finding: 456 of them on an unchanged tree, against 0
+  # under v2.11.4. Excluding that one AST context yields 0 — every finding comes
+  # from it, and none from the assignment, case, return and comparison contexts
+  # where goconst has real signal.
+  #
+  # Suppression cannot be scoped. There is no setting to restore the old
+  # contexts; min-occurrences cannot help because the counts run 3-42 and the
+  # single true positive of the sweep sat at 3, the floor; and an ignore list
+  # would need ~112 patterns, among them "name", "type", "value" and "true" —
+  # broad enough to swallow a future real defect while looking targeted.
+  #
+  # The one defect it did find is fixed and pinned by a test that compares the
+  # two rendered documents rather than the literal (see aiGatewayModelHeader in
+  # modelgateway_reconcile.go). In this codebase a repeated string is usually
+  # the payload, not a magic number: its correctness is enforced by a remote
+  # schema — a wrong Effect returns MalformedPolicyDocument, a wrong API group
+  # fails admission — and hoisting it into a Go constant only makes the document
+  # harder to diff against the reference it mirrors.
+  #
+  # Revisit if upstream exposes a knob to scope the checker back.
   enable:
     - errcheck
     - govet
@@ -18,7 +44,6 @@ linters:
     - revive
     - bodyclose
     - dupl
-    - goconst
     - prealloc
     - unconvert
     - unparam
