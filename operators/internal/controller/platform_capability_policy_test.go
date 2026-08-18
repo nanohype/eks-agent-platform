@@ -29,6 +29,187 @@ func platformWithCapabilities(name string, caps ...platformv1alpha1.Capability) 
 	}
 }
 
+// TestCapabilityGrantSidsCoversEveryCapability keeps the Sid table in step with
+// the API. A capability missing from the table reports as permanently
+// ungranted, which would put a false warning on every Platform declaring it —
+// so a newly added capability has to fail here rather than in a tenant's status.
+func TestCapabilityGrantSidsCoversEveryCapability(t *testing.T) {
+	// The CRD enum on IdentitySpec.Capabilities is the authority for what may be
+	// set; this mirrors it. Adding a capability there without adding it here is
+	// exactly the drift this test exists to catch.
+	all := []platformv1alpha1.Capability{
+		platformv1alpha1.CapabilitySES,
+		platformv1alpha1.CapabilityEventBridgeScheduler,
+	}
+	for _, c := range all {
+		sids, ok := capabilityGrantSids[c]
+		if !ok {
+			t.Errorf("capability %q has no entry in capabilityGrantSids", c)
+			continue
+		}
+		if len(sids) == 0 {
+			t.Errorf("capability %q maps to no Sids", c)
+		}
+	}
+	if len(capabilityGrantSids) != len(all) {
+		t.Errorf("capabilityGrantSids has %d entries, API declares %d capabilities",
+			len(capabilityGrantSids), len(all))
+	}
+}
+
+func TestCapabilitiesGrantedCondition(t *testing.T) {
+	ses := platformv1alpha1.CapabilitySES
+	sched := platformv1alpha1.CapabilityEventBridgeScheduler
+
+	tests := []struct {
+		name         string
+		declared     []platformv1alpha1.Capability
+		ungranted    []platformv1alpha1.Capability
+		wantStatus   metav1.ConditionStatus
+		wantReason   string
+		wantInMsg    []string
+		wantNotInMsg []string
+	}{
+		{
+			name:       "nothing declared is true, not vacuously false",
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "NoCapabilitiesDeclared",
+		},
+		{
+			name:       "all declared capabilities granted",
+			declared:   []platformv1alpha1.Capability{ses, sched},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "AllGranted",
+		},
+		{
+			name:       "ungranted capability is named, not counted",
+			declared:   []platformv1alpha1.Capability{ses, sched},
+			ungranted:  []platformv1alpha1.Capability{ses},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "SubstrateBindingMissing",
+			wantInMsg:  []string{"ses"},
+			// The operator's next question is which one; naming only the
+			// ungranted capability is the whole point of the message.
+			wantNotInMsg: []string{"eventBridgeScheduler"},
+		},
+		{
+			name:       "several ungranted are all named",
+			declared:   []platformv1alpha1.Capability{ses, sched},
+			ungranted:  []platformv1alpha1.Capability{ses, sched},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "SubstrateBindingMissing",
+			wantInMsg:  []string{"ses", "eventBridgeScheduler"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := platformWithCapabilities("myplat", tc.declared...)
+			p.Generation = 7
+			got := capabilitiesGrantedCondition(p, tc.ungranted)
+
+			if got.Type != "CapabilitiesGranted" {
+				t.Errorf("Type = %q, want CapabilitiesGranted", got.Type)
+			}
+			if got.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", got.Status, tc.wantStatus)
+			}
+			if got.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", got.Reason, tc.wantReason)
+			}
+			if got.ObservedGeneration != 7 {
+				t.Errorf("ObservedGeneration = %d, want 7", got.ObservedGeneration)
+			}
+			for _, want := range tc.wantInMsg {
+				if !strings.Contains(got.Message, want) {
+					t.Errorf("Message %q does not name %q", got.Message, want)
+				}
+			}
+			for _, notWant := range tc.wantNotInMsg {
+				if strings.Contains(got.Message, notWant) {
+					t.Errorf("Message %q names %q, which was granted", got.Message, notWant)
+				}
+			}
+		})
+	}
+}
+
+func TestUngrantedCapabilities(t *testing.T) {
+	sesGranted := []policyStatement{{Sid: "sesSend"}, {Sid: "sesQuota"}}
+	schedGranted := []policyStatement{{Sid: "schedulerManage"}, {Sid: "schedulerPassInvokeRole"}}
+
+	tests := []struct {
+		name  string
+		caps  []platformv1alpha1.Capability
+		stmts []policyStatement
+		want  []platformv1alpha1.Capability
+	}{
+		{
+			name: "no capabilities declared reports none",
+		},
+		{
+			name:  "ses declared and granted reports none",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			stmts: sesGranted,
+		},
+		{
+			// The shape this exists for: the capability is declared, the policy
+			// built cleanly, and no SES statement was emitted because no domain
+			// is bound to the tenant.
+			name: "ses declared but unbound reports ses",
+			caps: []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			want: []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+		},
+		{
+			name:  "scheduler declared and granted reports none",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilityEventBridgeScheduler},
+			stmts: schedGranted,
+		},
+		{
+			name: "scheduler declared but ungranted reports scheduler",
+			caps: []platformv1alpha1.Capability{platformv1alpha1.CapabilityEventBridgeScheduler},
+			want: []platformv1alpha1.Capability{platformv1alpha1.CapabilityEventBridgeScheduler},
+		},
+		{
+			name:  "partial emission still counts as granted",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			stmts: []policyStatement{{Sid: "sesSend"}},
+		},
+		{
+			name:  "mixed reports only the ungranted one, in declaration order",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES, platformv1alpha1.CapabilityEventBridgeScheduler},
+			stmts: schedGranted,
+			want:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+		},
+		{
+			// A capability outside the table is the CRD enum's problem, not a
+			// per-tenant status message.
+			name: "capability absent from the table is not reported",
+			caps: []platformv1alpha1.Capability{platformv1alpha1.Capability("notAThing")},
+		},
+		{
+			name:  "unrelated statements do not count as a grant",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			stmts: []policyStatement{{Sid: "bedrockInvoke"}, {Sid: "datastoreS3"}},
+			want:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ungrantedCapabilities(platformWithCapabilities("myplat", tc.caps...), tc.stmts)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 const (
 	capRoleARN     = "arn:aws:iam::123456789012:role/test-role"
 	capClusterName = "development-platform"
@@ -159,7 +340,7 @@ func TestEnsureCapabilityPolicy_SESLookupFailurePropagates(t *testing.T) {
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("ssm unavailable")}}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
-	err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg())
+	_, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg())
 	if err == nil {
 		t.Fatal("a failed domain lookup must fail the reconcile")
 	}
@@ -368,7 +549,7 @@ func TestEnsureCapabilityPolicy_SESWritesAndConverges(t *testing.T) {
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	puts := putsFor(f, capabilityPolicyName)
@@ -379,7 +560,7 @@ func TestEnsureCapabilityPolicy_SESWritesAndConverges(t *testing.T) {
 		t.Errorf("capability policy must grant ses:SendEmail: %s", *puts[0].PolicyDocument)
 	}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
 		t.Fatalf("re-run: %v", err)
 	}
 	if got := len(putsFor(f, capabilityPolicyName)); got != 1 {
@@ -394,7 +575,7 @@ func TestEnsureCapabilityPolicy_RemovesWhenEmpty(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if len(putsFor(f, capabilityPolicyName)) != 0 {
@@ -409,7 +590,7 @@ func TestEnsureCapabilityPolicy_RemovesWhenEmpty(t *testing.T) {
 // client.
 func TestEnsureCapabilityPolicy_NilIAM(t *testing.T) {
 	r := &PlatformReconciler{}
-	if err := r.ensureCapabilityPolicy(context.Background(), "role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), IAMConfig{}); err != nil {
 		t.Fatalf("nil IAM must no-op: %v", err)
 	}
@@ -427,7 +608,7 @@ func TestEnsureCapabilityPolicy_SchedulerMintsInvokeRole(t *testing.T) {
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
 	p.Spec.Datastores = []platformv1alpha1.DatastoreSpec{{Name: "nudges", Kind: platformv1alpha1.DatastoreQueue}}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, cfg); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, cfg); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if len(f.createCalls) != 1 || *f.createCalls[0].RoleName != invokeRoleName {
@@ -454,7 +635,7 @@ func TestEnsureCapabilityPolicy_SchedulerNoQueueRemovesSendPolicy(t *testing.T) 
 	r := &PlatformReconciler{IAM: f}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if len(putsFor(f, schedulerInvokeSendPolicyName)) != 0 {
@@ -474,7 +655,7 @@ func TestEnsureCapabilityPolicy_SchedulerRemovedDeletesInvokeRole(t *testing.T) 
 	f.seedRole(invoke, "arn:aws:iam::123456789012:role/"+invoke)
 	r := &PlatformReconciler{IAM: f}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if _, ok := f.roles[invoke]; ok {
@@ -489,7 +670,7 @@ func TestEnsureCapabilityPolicy_GetErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.getInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
 		t.Fatalf("expected the GetRolePolicy error to propagate")
 	}
@@ -502,7 +683,7 @@ func TestEnsureCapabilityPolicy_PutErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.putInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
 		t.Fatalf("expected the PutRolePolicy error to propagate")
 	}
@@ -516,7 +697,7 @@ func TestEnsureCapabilityPolicy_DeleteErrorPropagates(t *testing.T) {
 	f.inline["test-role"] = map[string]string{capabilityPolicyName: "{}"}
 	f.deleteInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat"), capCfg()); err == nil {
 		t.Fatalf("expected the DeleteRolePolicy error to propagate")
 	}
@@ -529,7 +710,7 @@ func TestEnsureCapabilityPolicy_InvokeRoleGetErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.getReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), capCfg()); err == nil {
 		t.Fatalf("expected the invoke-role GetRole error to propagate")
 	}
@@ -542,7 +723,7 @@ func TestEnsureCapabilityPolicy_InvokeRoleCreateErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.createReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), capCfg()); err == nil {
 		t.Fatalf("expected the invoke-role CreateRole error to propagate")
 	}
@@ -555,7 +736,7 @@ func TestEnsureCapabilityPolicy_InvokeRoleDeleteErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.listReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat"), capCfg()); err == nil {
 		t.Fatalf("expected the invoke-role teardown error to propagate")
 	}

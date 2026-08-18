@@ -68,6 +68,13 @@ type iamReconcileResult struct {
 	// any AWS write. Callers preserve the last published binding on nil rather
 	// than clearing it.
 	PodIdentity *platformv1alpha1.PodIdentityStatus
+
+	// UngrantedCapabilities lists capabilities the Platform declares that this
+	// pass granted nothing for — a declaration whose substrate precondition is
+	// absent. Empty on every path that returns before the capability policy is
+	// built, including the suspended short-circuit, so callers distinguish "none
+	// ungranted" from "not evaluated" by whether the pass reached that step.
+	UngrantedCapabilities []platformv1alpha1.Capability
 }
 
 // tenantRoleName returns the IAM role name minted for a Platform. Matches
@@ -253,7 +260,8 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err := r.ensureDatastorePolicy(ctx, name, arn, p, cfg); err != nil {
 			return iamReconcileResult{RoleARN: arn}, err
 		}
-		if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
+		ungranted, err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg)
+		if err != nil {
 			return iamReconcileResult{RoleARN: arn}, err
 		}
 		// The group has to exist before the grant scoped to it means anything:
@@ -272,7 +280,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err != nil {
 			return iamReconcileResult{RoleARN: arn}, err
 		}
-		return iamReconcileResult{RoleARN: arn, PodIdentity: binding}, nil
+		return iamReconcileResult{RoleARN: arn, PodIdentity: binding, UngrantedCapabilities: ungranted}, nil
 	}
 	if !isIAMNotFound(getErr) {
 		return iamReconcileResult{}, fmt.Errorf("iam GetRole: %w", getErr)
@@ -304,7 +312,8 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	if err := r.ensureDatastorePolicy(ctx, name, arn, p, cfg); err != nil {
 		return iamReconcileResult{RoleARN: arn}, err
 	}
-	if err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg); err != nil {
+	ungranted, err := r.ensureCapabilityPolicy(ctx, name, arn, p, cfg)
+	if err != nil {
 		return iamReconcileResult{RoleARN: arn}, err
 	}
 	if err := r.ensureScheduleGroup(ctx, p, cfg.Environment); err != nil {
@@ -320,7 +329,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	if err != nil {
 		return iamReconcileResult{RoleARN: arn}, err
 	}
-	return iamReconcileResult{RoleARN: arn, PodIdentity: binding}, nil
+	return iamReconcileResult{RoleARN: arn, PodIdentity: binding, UngrantedCapabilities: ungranted}, nil
 }
 
 // ensureTenantPodIdentity binds the Platform's IAM role to the ServiceAccount
