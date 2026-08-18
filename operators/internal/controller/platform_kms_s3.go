@@ -33,6 +33,22 @@ type PlatformAWSConfig struct {
 // Sids so the per-tenant rewrite and the finalizer both preserve it.
 const baselineDenyTLSSid = "DenyInsecureTransport"
 
+// tenantAccessSid and tenantAccessListSid name the two statements the operator
+// owns on the artifacts bucket policy for one Platform. Three call sites select
+// statements by these names — the writer emitting them, the writer's own
+// rewrite filter, and the finalizer's teardown — and a name is the only thing
+// joining them, since a bucket policy is one shared document with no per-tenant
+// structure to key on. Built here so the three cannot be composed differently,
+// matching baselineDenyTLSSid above rather than recomposing the affix at each
+// use.
+func tenantAccessSid(p *platformv1alpha1.Platform) string {
+	return "TenantAccess-" + p.Name
+}
+
+func tenantAccessListSid(p *platformv1alpha1.Platform) string {
+	return tenantAccessSid(p) + "-List"
+}
+
 // baselineDenyInsecureTransport is the operator-owned in-transit-TLS guard for
 // the artifacts bucket. terraform does not own this bucket's policy (the
 // operator does), so the baseline lives here rather than in agent-iam.
@@ -61,7 +77,7 @@ func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platform
 		return nil
 	}
 	bucket := cfg.ArtifactsBucketName
-	sid := "TenantAccess-" + p.Name
+	sid := tenantAccessSid(p)
 	prefix := "tenants/" + p.Name + "/"
 	tenantStmt := map[string]any{
 		"Sid":       sid,
@@ -77,7 +93,7 @@ func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platform
 		"Resource": "arn:aws:s3:::" + bucket + "/" + prefix + "*",
 	}
 	listStmt := map[string]any{
-		"Sid":       sid + "-List",
+		"Sid":       tenantAccessListSid(p),
 		"Effect":    "Allow",
 		"Principal": map[string]any{"AWS": roleARN},
 		"Action":    "s3:ListBucket",
@@ -108,7 +124,7 @@ func (r *PlatformReconciler) ensureBucketPolicy(ctx context.Context, p *platform
 	for _, s := range statements {
 		if m, ok := s.(map[string]any); ok {
 			existingSid, _ := m["Sid"].(string)
-			if existingSid == sid || existingSid == sid+"-List" {
+			if existingSid == sid || existingSid == tenantAccessListSid(p) {
 				continue
 			}
 			if existingSid == baselineDenyTLSSid {
@@ -151,7 +167,7 @@ func (r *PlatformReconciler) removeBucketPolicyStatements(ctx context.Context, p
 		return nil
 	}
 	bucket := cfg.ArtifactsBucketName
-	sid := "TenantAccess-" + p.Name
+	sid := tenantAccessSid(p)
 	// Same shared-document serialization as ensureBucketPolicy: a finalizer
 	// teardown must not interleave with a peer tenant's reconcile write.
 	r.bucketPolicyMu.Lock()
@@ -168,7 +184,7 @@ func (r *PlatformReconciler) removeBucketPolicyStatements(ctx context.Context, p
 	changed := false
 	for _, s := range statements {
 		if m, ok := s.(map[string]any); ok {
-			if existingSid, _ := m["Sid"].(string); existingSid == sid || existingSid == sid+"-List" {
+			if existingSid, _ := m["Sid"].(string); existingSid == sid || existingSid == tenantAccessListSid(p) {
 				changed = true
 				continue
 			}
