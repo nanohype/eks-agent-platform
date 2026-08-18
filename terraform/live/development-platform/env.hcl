@@ -1,6 +1,7 @@
 locals {
-  environment  = "development"
-  region       = "us-west-2"
+  environment = "development"
+  # SCP-constrained; see the region note in ../root.hcl before changing.
+  region       = "us-east-1"
   cluster_name = "development-platform"
   # account_id resolves at parse time from AWS_ACCOUNT_ID — it names the state
   # bucket in root.hcl before any AWS call, so it can't arrive as a TF_VAR_. The

@@ -58,6 +58,23 @@ provider "aws" {
 EOF
 }
 
+# The region every root declares — and therefore the region of the state bucket
+# named below — is fixed to us-east-1 by organization policy, not by preference.
+# The Ventures OU carries an SCP (`guardrail-region-lock`, declared in
+# landing-zone's `organization` component) that denies every non-global action
+# whose `aws:RequestedRegion` is anything else. Only the global services are
+# carved out: iam, route53, cloudfront, acm, sts, organizations, billing.
+#
+# S3 is not among them, which is what makes this a backend concern rather than a
+# resource concern. `bucket` below is interpolated from `local.region`, so a root
+# that declares another region does not deploy to that region — it fails at
+# backend init, before a single resource is planned, with an SCP deny on the
+# state bucket itself. That failure names S3 and not the region, so it reads as a
+# credentials or bucket-policy problem; hence this note.
+#
+# `live/org` is the one root that reads its region from AWS_REGION rather than
+# pinning it, because its two objects are account+region singletons. Point it at
+# us-east-1 for the same reason.
 remote_state {
   backend = "s3"
 
