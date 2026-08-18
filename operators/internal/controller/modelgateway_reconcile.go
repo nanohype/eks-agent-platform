@@ -78,6 +78,16 @@ const (
 	guardrailVersionHeader = "X-Amzn-Bedrock-GuardrailVersion"
 )
 
+// aiGatewayModelHeader is the header Envoy AI Gateway derives from the request
+// body's model id, and the only thing tying a route's match rule to that same
+// route's rate limit. Both are built here, in separate literals, and nothing in
+// Go compares them: the match rule selects the backend, the BackendTrafficPolicy
+// clientSelector decides which requests the limit counts. Spelled differently in
+// one of the two places, routing still works and the limit silently matches zero
+// requests — a tenant's declared rpm cap becomes no cap at all, with the CR still
+// reporting Ready. One name, used twice, is what makes that undrifted.
+const aiGatewayModelHeader = "x-ai-eg-model"
+
 // resolvePlatform fetches the Platform a ModelGateway references and
 // returns the resolved tenant namespace + readiness. Returns nil platform
 // + ErrPlatformNotFound when the ref is dangling so the reconciler can
@@ -485,7 +495,7 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 			"matches": []any{
 				map[string]any{
 					"headers": []any{
-						map[string]any{"type": "Exact", "name": "x-ai-eg-model", "value": route.Name},
+						map[string]any{"type": "Exact", "name": aiGatewayModelHeader, "value": route.Name},
 					},
 				},
 			},
@@ -497,7 +507,7 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 				"clientSelectors": []any{
 					map[string]any{
 						"headers": []any{
-							map[string]any{"name": "x-ai-eg-model", "value": route.Name},
+							map[string]any{"name": aiGatewayModelHeader, "value": route.Name},
 						},
 					},
 				},

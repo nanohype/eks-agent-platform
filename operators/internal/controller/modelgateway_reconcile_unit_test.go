@@ -346,6 +346,41 @@ func TestModelGatewayRateLimit(t *testing.T) {
 		t.Errorf("limit unit: got %q want Minute — the CRD field is requests per minute", unit)
 	}
 
+	// The selector has to name the same header the route match names, or the
+	// limit counts nothing. Both documents are built here from separate literals
+	// and nothing in Go compares them, so compare the rendered output: a limit
+	// that attaches to no request is invisible — routing still works, Envoy
+	// accepts the policy, the CR reports Ready, and the tenant's declared cap
+	// silently stops applying. Asserted against the route rule rather than
+	// against the constant, so re-inlining the header on either side fails here.
+	selectors, _, _ := unstructured.NestedSlice(rule, "clientSelectors")
+	if len(selectors) != 1 {
+		t.Fatalf("want one clientSelector, got %d", len(selectors))
+	}
+	sel, _ := selectors[0].(map[string]any)
+	selHeaders, _, _ := unstructured.NestedSlice(sel, "headers")
+	if len(selHeaders) != 1 {
+		t.Fatalf("want one clientSelector header, got %d", len(selHeaders))
+	}
+	selHeader, _ := selHeaders[0].(map[string]any)
+	selName, _ := selHeader["name"].(string)
+	selValue, _ := selHeader["value"].(string)
+
+	matchRule := ruleFor(t, renderedRouteRules(t, cl), "chat")
+	matchHeaders, _, _ := unstructured.NestedSlice(matchRule, "matches")
+	firstMatch, _ := matchHeaders[0].(map[string]any)
+	mHeaders, _, _ := unstructured.NestedSlice(firstMatch, "headers")
+	mHeader, _ := mHeaders[0].(map[string]any)
+	matchName, _ := mHeader["name"].(string)
+
+	if selName != matchName {
+		t.Errorf("rate-limit selector header %q != route match header %q — the limit would match no request",
+			selName, matchName)
+	}
+	if selValue != "chat" {
+		t.Errorf("rate-limit selector value: got %q want the route name %q", selValue, "chat")
+	}
+
 	// Clearing the limit must retract the policy.
 	cleared := twoRouteGateway()
 	cleared.Spec.Routes[0].RateLimit = 0
