@@ -69,7 +69,7 @@ jobs:
           # falls over on required values without overrides — those
           # errors aren't security findings.
           skip-dirs: "charts"
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         if: always()
         with:
           sarif_file: trivy-config.sarif
@@ -114,7 +114,7 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
           skip-dirs: "node_modules,**/.terraform"
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         if: always()
         with:
           sarif_file: trivy-fs.sarif
@@ -172,10 +172,10 @@ jobs:
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
-      - uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889 # v2.27.1
+      - uses: securego/gosec@9e75c0576c9878035d4221392108d458abe10fc3 # v2.28.0
         with:
           args: -severity medium -fmt sarif -out gosec.sarif ./operators/...
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         if: always()
         with:
           sarif_file: gosec.sarif
@@ -195,7 +195,7 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           working-directory: operators
-          version: v2.11.4
+          version: v2.12.2
           verify: false
 
   # govulncheck complements the trivy dependency scan: it is Go-vulnerability-DB
@@ -241,7 +241,7 @@ jobs:
     # merges come from pull requests; on push it is skipped and gates nothing.
     if: always() && github.event_name == 'pull_request'
     steps:
-      - uses: nanohype/.github/actions/merge-gate@6ec6c5b3e6c4a8b15e12da4afd7ac4870a630092 # main
+      - uses: nanohype/.github/actions/merge-gate@90af851a854ca24dd6626ccc660b0b1b245c406a # main
         with:
           needs: ${{ toJSON(needs) }}
           gate-job-id: merge-gate-security
