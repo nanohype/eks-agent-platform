@@ -53,6 +53,68 @@ func hasCapability(p *platformv1alpha1.Platform, c platformv1alpha1.Capability) 
 	return false
 }
 
+// capabilityGrantSids names the statement Sids capabilityPolicyStatements emits
+// for each capability.
+//
+// It exists because a capability that grants nothing is indistinguishable, in
+// the finished policy document, from a capability that was never declared: both
+// contribute zero statements. Only the declaration and the document read
+// together can tell them apart, and this is the mapping that joins them.
+//
+// Every Capability in the API belongs here. One missing would report as
+// permanently ungranted, so the vocabulary test asserts this table and the API's
+// capability constants are the same set — the table cannot silently fall behind
+// a newly added capability.
+var capabilityGrantSids = map[platformv1alpha1.Capability][]string{
+	platformv1alpha1.CapabilitySES:                  {"sesSend", "sesQuota"},
+	platformv1alpha1.CapabilityEventBridgeScheduler: {"schedulerManage", "schedulerPassInvokeRole"},
+}
+
+// ungrantedCapabilities returns the capabilities a Platform declares that
+// produced no statement in the policy built for it, in declaration order.
+//
+// A capability resolves to nothing when its precondition is absent rather than
+// when something failed — SES with no domain bound to the tenant is the shape
+// this was written for. That is deliberate fail-closed behaviour (an absent
+// binding must narrow the policy, never widen it), so it is not an error and
+// must not fail the reconcile. But it is also not nothing: the operator asked
+// for a capability and did not get it, and without this the Platform reports
+// Ready while the grant is silently absent.
+func ungrantedCapabilities(p *platformv1alpha1.Platform, stmts []policyStatement) []platformv1alpha1.Capability {
+	granted := make(map[string]struct{}, len(stmts))
+	for _, s := range stmts {
+		granted[s.Sid] = struct{}{}
+	}
+
+	var ungranted []platformv1alpha1.Capability
+	for _, c := range p.Spec.Identity.Capabilities {
+		sids, known := capabilityGrantSids[c]
+		if !known {
+			// An undeclared-in-table capability is not reported: the CRD enum is
+			// the gate on what may be set, and guessing here would turn a schema
+			// problem into a per-tenant status message.
+			continue
+		}
+		if !anySidPresent(sids, granted) {
+			ungranted = append(ungranted, c)
+		}
+	}
+	return ungranted
+}
+
+// anySidPresent reports whether any of sids appears in the built document.
+// A capability counts as granted when it contributed any of its statements;
+// partial emission is still a grant, and the policy builder never emits a
+// strict subset by choice.
+func anySidPresent(sids []string, granted map[string]struct{}) bool {
+	for _, sid := range sids {
+		if _, ok := granted[sid]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // schedulerInvokeRoleName is the EventBridge Scheduler invoke role the operator
 // mints for a Platform declaring eventBridgeScheduler. The -scheduler-invoke
 // suffix is what the agent-iam SchedulerInvokeRolePass boundary keys its
@@ -290,9 +352,13 @@ func (r *PlatformReconciler) reconcileInlinePolicy(ctx context.Context, roleName
 // NOT invoke this on a suspended role — ensureIamRole's suspension
 // short-circuit returns first, keeping the operator observe-only under the
 // kill-switch.
-func (r *PlatformReconciler) ensureCapabilityPolicy(ctx context.Context, roleName, roleARN string, p *platformv1alpha1.Platform, cfg IAMConfig) error {
+// The returned capabilities are those declared but granted nothing — see
+// ungrantedCapabilities. They are a status signal, not an error: the reconcile
+// succeeded and the policy on the role is correct for what the substrate
+// currently supports.
+func (r *PlatformReconciler) ensureCapabilityPolicy(ctx context.Context, roleName, roleARN string, p *platformv1alpha1.Platform, cfg IAMConfig) ([]platformv1alpha1.Capability, error) {
 	if r.IAM == nil {
-		return nil
+		return nil, nil
 	}
 	scope := arnScopeFromRole(roleARN, cfg.Region)
 
@@ -300,25 +366,28 @@ func (r *PlatformReconciler) ensureCapabilityPolicy(ctx context.Context, roleNam
 	// tenant's queues; mint or remove it to match the declaration.
 	if hasCapability(p, platformv1alpha1.CapabilityEventBridgeScheduler) {
 		if err := r.ensureSchedulerInvokeRole(ctx, p, cfg, scope); err != nil {
-			return err
+			return nil, err
 		}
 	} else if err := r.deleteSchedulerInvokeRole(ctx, p, cfg); err != nil {
-		return err
+		return nil, err
 	}
 
 	// The sending domain is resolved here rather than inside the policy builder
 	// because it is a lookup against the substrate, not a property of the CR.
 	sesDomain, err := r.resolveSESDomain(ctx, p, cfg.ClusterName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	stmts := capabilityPolicyStatements(p, cfg.Environment, cfg.ClusterName, sesDomain, scope)
 	desired, err := capabilityPolicyDoc(stmts)
 	if err != nil {
-		return err //coverage:ignore only reachable if json.Marshal fails, which it cannot for this document
+		return nil, err //coverage:ignore only reachable if json.Marshal fails, which it cannot for this document
 	}
-	return r.reconcileInlinePolicy(ctx, roleName, capabilityPolicyName, desired)
+	if err := r.reconcileInlinePolicy(ctx, roleName, capabilityPolicyName, desired); err != nil {
+		return nil, err
+	}
+	return ungrantedCapabilities(p, stmts), nil
 }
 
 // ensureSchedulerInvokeRole mints (idempotently) the

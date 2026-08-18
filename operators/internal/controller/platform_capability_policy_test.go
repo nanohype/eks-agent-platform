@@ -159,7 +159,7 @@ func TestEnsureCapabilityPolicy_SESLookupFailurePropagates(t *testing.T) {
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("ssm unavailable")}}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
-	err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg())
+	_, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg())
 	if err == nil {
 		t.Fatal("a failed domain lookup must fail the reconcile")
 	}
@@ -368,7 +368,7 @@ func TestEnsureCapabilityPolicy_SESWritesAndConverges(t *testing.T) {
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	puts := putsFor(f, capabilityPolicyName)
@@ -379,7 +379,7 @@ func TestEnsureCapabilityPolicy_SESWritesAndConverges(t *testing.T) {
 		t.Errorf("capability policy must grant ses:SendEmail: %s", *puts[0].PolicyDocument)
 	}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
 		t.Fatalf("re-run: %v", err)
 	}
 	if got := len(putsFor(f, capabilityPolicyName)); got != 1 {
@@ -394,7 +394,7 @@ func TestEnsureCapabilityPolicy_RemovesWhenEmpty(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if len(putsFor(f, capabilityPolicyName)) != 0 {
@@ -409,7 +409,7 @@ func TestEnsureCapabilityPolicy_RemovesWhenEmpty(t *testing.T) {
 // client.
 func TestEnsureCapabilityPolicy_NilIAM(t *testing.T) {
 	r := &PlatformReconciler{}
-	if err := r.ensureCapabilityPolicy(context.Background(), "role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), IAMConfig{}); err != nil {
 		t.Fatalf("nil IAM must no-op: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestEnsureCapabilityPolicy_SchedulerMintsInvokeRole(t *testing.T) {
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
 	p.Spec.Datastores = []platformv1alpha1.DatastoreSpec{{Name: "nudges", Kind: platformv1alpha1.DatastoreQueue}}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, cfg); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, cfg); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if len(f.createCalls) != 1 || *f.createCalls[0].RoleName != invokeRoleName {
@@ -454,7 +454,7 @@ func TestEnsureCapabilityPolicy_SchedulerNoQueueRemovesSendPolicy(t *testing.T) 
 	r := &PlatformReconciler{IAM: f}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if len(putsFor(f, schedulerInvokeSendPolicyName)) != 0 {
@@ -474,7 +474,7 @@ func TestEnsureCapabilityPolicy_SchedulerRemovedDeletesInvokeRole(t *testing.T) 
 	f.seedRole(invoke, "arn:aws:iam::123456789012:role/"+invoke)
 	r := &PlatformReconciler{IAM: f}
 
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
 	if _, ok := f.roles[invoke]; ok {
@@ -489,7 +489,7 @@ func TestEnsureCapabilityPolicy_GetErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.getInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
 		t.Fatalf("expected the GetRolePolicy error to propagate")
 	}
@@ -502,7 +502,7 @@ func TestEnsureCapabilityPolicy_PutErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.putInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
 		t.Fatalf("expected the PutRolePolicy error to propagate")
 	}
@@ -516,7 +516,7 @@ func TestEnsureCapabilityPolicy_DeleteErrorPropagates(t *testing.T) {
 	f.inline["test-role"] = map[string]string{capabilityPolicyName: "{}"}
 	f.deleteInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat"), capCfg()); err == nil {
 		t.Fatalf("expected the DeleteRolePolicy error to propagate")
 	}
@@ -529,7 +529,7 @@ func TestEnsureCapabilityPolicy_InvokeRoleGetErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.getReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), capCfg()); err == nil {
 		t.Fatalf("expected the invoke-role GetRole error to propagate")
 	}
@@ -542,7 +542,7 @@ func TestEnsureCapabilityPolicy_InvokeRoleCreateErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.createReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), capCfg()); err == nil {
 		t.Fatalf("expected the invoke-role CreateRole error to propagate")
 	}
@@ -555,7 +555,7 @@ func TestEnsureCapabilityPolicy_InvokeRoleDeleteErrorPropagates(t *testing.T) {
 	f.seedRole("test-role", capRoleARN)
 	f.listReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
-	if err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
+	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat"), capCfg()); err == nil {
 		t.Fatalf("expected the invoke-role teardown error to propagate")
 	}
