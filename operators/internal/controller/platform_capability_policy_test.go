@@ -29,6 +29,110 @@ func platformWithCapabilities(name string, caps ...platformv1alpha1.Capability) 
 	}
 }
 
+// TestCapabilityGrantSidsCoversEveryCapability keeps the Sid table in step with
+// the API. A capability missing from the table reports as permanently
+// ungranted, which would put a false warning on every Platform declaring it —
+// so a newly added capability has to fail here rather than in a tenant's status.
+func TestCapabilityGrantSidsCoversEveryCapability(t *testing.T) {
+	// The CRD enum on IdentitySpec.Capabilities is the authority for what may be
+	// set; this mirrors it. Adding a capability there without adding it here is
+	// exactly the drift this test exists to catch.
+	all := []platformv1alpha1.Capability{
+		platformv1alpha1.CapabilitySES,
+		platformv1alpha1.CapabilityEventBridgeScheduler,
+	}
+	for _, c := range all {
+		sids, ok := capabilityGrantSids[c]
+		if !ok {
+			t.Errorf("capability %q has no entry in capabilityGrantSids", c)
+			continue
+		}
+		if len(sids) == 0 {
+			t.Errorf("capability %q maps to no Sids", c)
+		}
+	}
+	if len(capabilityGrantSids) != len(all) {
+		t.Errorf("capabilityGrantSids has %d entries, API declares %d capabilities",
+			len(capabilityGrantSids), len(all))
+	}
+}
+
+func TestUngrantedCapabilities(t *testing.T) {
+	sesGranted := []policyStatement{{Sid: "sesSend"}, {Sid: "sesQuota"}}
+	schedGranted := []policyStatement{{Sid: "schedulerManage"}, {Sid: "schedulerPassInvokeRole"}}
+
+	tests := []struct {
+		name  string
+		caps  []platformv1alpha1.Capability
+		stmts []policyStatement
+		want  []platformv1alpha1.Capability
+	}{
+		{
+			name: "no capabilities declared reports none",
+		},
+		{
+			name:  "ses declared and granted reports none",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			stmts: sesGranted,
+		},
+		{
+			// The shape this exists for: the capability is declared, the policy
+			// built cleanly, and no SES statement was emitted because no domain
+			// is bound to the tenant.
+			name: "ses declared but unbound reports ses",
+			caps: []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			want: []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+		},
+		{
+			name:  "scheduler declared and granted reports none",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilityEventBridgeScheduler},
+			stmts: schedGranted,
+		},
+		{
+			name: "scheduler declared but ungranted reports scheduler",
+			caps: []platformv1alpha1.Capability{platformv1alpha1.CapabilityEventBridgeScheduler},
+			want: []platformv1alpha1.Capability{platformv1alpha1.CapabilityEventBridgeScheduler},
+		},
+		{
+			name:  "partial emission still counts as granted",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			stmts: []policyStatement{{Sid: "sesSend"}},
+		},
+		{
+			name:  "mixed reports only the ungranted one, in declaration order",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES, platformv1alpha1.CapabilityEventBridgeScheduler},
+			stmts: schedGranted,
+			want:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+		},
+		{
+			// A capability outside the table is the CRD enum's problem, not a
+			// per-tenant status message.
+			name: "capability absent from the table is not reported",
+			caps: []platformv1alpha1.Capability{platformv1alpha1.Capability("notAThing")},
+		},
+		{
+			name:  "unrelated statements do not count as a grant",
+			caps:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+			stmts: []policyStatement{{Sid: "bedrockInvoke"}, {Sid: "datastoreS3"}},
+			want:  []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ungrantedCapabilities(platformWithCapabilities("myplat", tc.caps...), tc.stmts)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 const (
 	capRoleARN     = "arn:aws:iam::123456789012:role/test-role"
 	capClusterName = "development-platform"
