@@ -30,12 +30,19 @@ import (
 //     declarations + a constructor); there is no branching logic to exercise
 //     without a live AWS endpoint, so it carries a floor matching that reality.
 //
-// On top of the package floors, four security-critical files carry a per-file
-// 100% override (the rubric's security-critical-100 rule): the tenant/session
-// IAM role reconcilers, the KMS-grant + bucket-policy reconciler, and the
-// datastore-access policy generator. These mint the IAM roles, KMS grants, S3
-// policies, and per-datastore grants that are the tenant isolation boundary; a
-// single uncovered branch there is an unproven security control.
+// On top of the package floors, seven security-critical files carry a per-file
+// 100% override (the rubric's security-critical-100 rule): the tenant and
+// session IAM role reconcilers, the KMS-grant + bucket-policy reconciler, and
+// the four policy generators — datastore access, capability grants, tenant
+// secrets, and the tenant key policy. These mint the IAM roles, KMS grants, S3
+// policies, and per-datastore, per-capability and per-secret grants that are the
+// tenant isolation boundary; a single uncovered branch there is an unproven
+// security control.
+//
+// The list below is the authority. Keep this paragraph counting the same files
+// it does — a comment that undercounts the gate reads as though the newer
+// entries were added without the same deliberation, which is the opposite of
+// what an auditor should conclude from them.
 var floors = config{
 	packageFloors: map[string]float64{
 		"internal/controller":     75,
