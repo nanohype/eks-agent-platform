@@ -82,12 +82,14 @@ Consumers:
 
 Each component writes to `s3://eks-agent-platform-tfstate-<account-id>-<region>` with native S3 locking (no DynamoDB table — `use_lockfile = true`). Create the bucket per environment before the first `apply`:
 
+`<region>` is `us-east-1` everywhere. The Ventures OU's `guardrail-region-lock` SCP denies non-global actions in every other region, and S3 is not one of its global carve-outs — so a root pinned elsewhere fails at backend init on the state bucket, before any resource is planned. See the region note in `live/root.hcl`.
+
 ```bash
-aws s3api create-bucket --bucket "eks-agent-platform-tfstate-${ACCOUNT_ID}-us-west-2" \
-  --region us-west-2 --create-bucket-configuration LocationConstraint=us-west-2
-aws s3api put-bucket-versioning --bucket "eks-agent-platform-tfstate-${ACCOUNT_ID}-us-west-2" \
+aws s3api create-bucket --bucket "eks-agent-platform-tfstate-${ACCOUNT_ID}-us-east-1" \
+  --region us-east-1
+aws s3api put-bucket-versioning --bucket "eks-agent-platform-tfstate-${ACCOUNT_ID}-us-east-1" \
   --versioning-configuration Status=Enabled
-aws s3api put-bucket-encryption --bucket "eks-agent-platform-tfstate-${ACCOUNT_ID}-us-west-2" \
+aws s3api put-bucket-encryption --bucket "eks-agent-platform-tfstate-${ACCOUNT_ID}-us-east-1" \
   --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"aws:kms"}}]}'
 ```
 

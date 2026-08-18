@@ -1,6 +1,7 @@
 locals {
-  environment   = "production"
-  region        = "us-west-2"
+  environment = "production"
+  # SCP-constrained; see the region note in ../root.hcl before changing.
+  region        = "us-east-1"
   cluster_name  = "production-platform"
   cost_center   = "engineering"
   business_unit = "platform"
