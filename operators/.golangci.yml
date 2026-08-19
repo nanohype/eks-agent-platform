@@ -23,15 +23,46 @@ linters:
   # would need ~112 patterns, among them "name", "type", "value" and "true" —
   # broad enough to swallow a future real defect while looking targeted.
   #
-  # The one defect it did find is fixed and pinned by a test that compares the
-  # two rendered documents rather than the literal (see aiGatewayModelHeader in
-  # modelgateway_reconcile.go). In this codebase a repeated string is usually
-  # the payload, not a magic number: its correctness is enforced by a remote
-  # schema — a wrong Effect returns MalformedPolicyDocument, a wrong API group
-  # fails admission — and hoisting it into a Go constant only makes the document
-  # harder to diff against the reference it mirrors.
+  # In this codebase a repeated string is usually the payload, not a magic
+  # number: its correctness is enforced by a remote schema — a wrong Effect
+  # returns MalformedPolicyDocument, a wrong API group fails admission — and
+  # hoisting it into a Go constant only makes the document harder to diff
+  # against the reference it mirrors.
   #
-  # Revisit if upstream exposes a knob to scope the checker back.
+  # WHAT GUARDS THE CLASS INSTEAD
+  #
+  # goconst was looking for one thing worth finding: a value written twice that
+  # has to stay the same. Occurrence count is the wrong proxy for it. Of 456
+  # findings exactly one was a real defect — a rate-limit selector and a route
+  # match naming the same header through separate literals — and a coupling
+  # written at only two sites never reaches the threshold at all, so tuning it
+  # cannot help either.
+  #
+  # The replacement is an assertion at each site that matters, comparing the two
+  # RENDERED outputs rather than either against a constant. A test that asserts
+  # a value equals the constant that produced it holds for whatever the constant
+  # says; comparing what the two halves actually emit is what makes drift
+  # visible. Those live beside the code they pin:
+  #
+  #   modelgateway_reconcile_unit_test.go   the rate-limit selector against the
+  #                                         route match; both policies' targetRefs
+  #                                         against the rendered Gateway; the
+  #                                         Bedrock port against the egress rule
+  #   platform_kms_s3_reconcile_test.go     the tenant Sid seeded and asserted as
+  #                                         a fixed literal, so the test file is
+  #                                         the third statement of the format and
+  #                                         either side drifting from it fails
+  #   platform_capability_policy_test.go    the Sid table against the API's
+  #                                         capability constants
+  #   internal/metricsbridge                the shim's JSON key and port, shared
+  #                                         as one symbol so the two halves
+  #                                         cannot disagree at all
+  #
+  # The last of those is the shape to prefer where it is available: a coupling
+  # that cannot drift beats one that is checked.
+  #
+  # Revisit if upstream exposes a knob to scope the checker back. That one
+  # setting would make goconst useful here again immediately.
   enable:
     - errcheck
     - govet
