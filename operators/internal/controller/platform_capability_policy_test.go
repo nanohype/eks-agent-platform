@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
@@ -55,6 +56,44 @@ func TestCapabilityGrantSidsCoversEveryCapability(t *testing.T) {
 		t.Errorf("capabilityGrantSids has %d entries, API declares %d capabilities",
 			len(capabilityGrantSids), len(all))
 	}
+}
+
+// TestRecordWarning covers the event path the CapabilitiesGranted condition
+// pairs with. The condition is the durable record; the event is what reaches an
+// operator running `kubectl describe platform` after their agent fails, and
+// anything watching events that never reads the CR.
+//
+// The nil case is not defensive filler: unit tests construct PlatformReconciler
+// directly and most do not wire a recorder, so the no-op is what keeps the
+// recorder from becoming a construction requirement across the suite.
+func TestRecordWarning(t *testing.T) {
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
+
+	t.Run("emits a warning naming the capability", func(t *testing.T) {
+		rec := events.NewFakeRecorder(4)
+		r := &PlatformReconciler{Recorder: rec}
+		r.recordWarning(p, "CapabilityNotGranted", "ReconcileCapabilityPolicy", "declared but granted nothing: %s", "ses")
+
+		select {
+		case ev := <-rec.Events:
+			if !strings.Contains(ev, "Warning") {
+				t.Errorf("event %q is not a Warning — an Normal event would not surface in describe's tail", ev)
+			}
+			if !strings.Contains(ev, "CapabilityNotGranted") {
+				t.Errorf("event %q does not carry the reason", ev)
+			}
+			if !strings.Contains(ev, "ses") {
+				t.Errorf("event %q does not name the capability — naming it is the point", ev)
+			}
+		default:
+			t.Fatal("no event recorded")
+		}
+	})
+
+	t.Run("no recorder wired is a no-op, not a panic", func(t *testing.T) {
+		r := &PlatformReconciler{}
+		r.recordWarning(p, "CapabilityNotGranted", "ReconcileCapabilityPolicy", "declared but granted nothing: %s", "ses")
+	})
 }
 
 func TestCapabilitiesGrantedCondition(t *testing.T) {
