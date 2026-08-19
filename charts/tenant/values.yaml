@@ -36,7 +36,7 @@ platform:
   #     not the host's (API-server-level isolation — NOT kernel/node isolation).
   #     Requires ArgoCD on the cluster (the operator declares the vcluster as an
   #     ArgoCD Application); the tier fails closed if ArgoCD is absent. See
-  #     docs/adr/0009-vcluster-isolation-tier.md and docs/architecture/tenant-isolation-tiers.md.
+  #     docs/adr/0008-vcluster-isolation-tier.md and docs/architecture/tenant-isolation-tiers.md.
   isolation: namespace # namespace | vcluster
   # Emit the cluster-scoped Tenant CR this Platform belongs to. Default true
   # (one tenant = one Platform). Set false on additional Platforms that share an

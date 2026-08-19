@@ -33,7 +33,7 @@ Replace `founder-personal` with whatever names you actually want (e.g. your own 
 ```
 Slack DM → /agent <prompt> → SQS → AgentFleet → Slack reply
    OR
-agentctl chat (CLI) → direct gateway call
+kubectl run (direct gateway call)
 ```
 
 The Slack integration is a few-line Lambda; out of scope for the platform itself. The simplest path is direct CLI via `kubectl run -n tenants-founder-personal chat ...`.

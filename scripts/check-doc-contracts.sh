@@ -43,7 +43,15 @@ fi
 # Allow model-import docs (environment-keyed by design in landing-zone) and this
 # script. Everything else that pastes /eks-agent-platform/<env>/ is lying to
 # the on-call engineer.
-hits=$(grep -rnE '/eks-agent-platform/<env>(/|$|\*)' \
+#
+# Both spellings have to be caught. The metasyntactic `<env>` is the harmless
+# one — a reader retypes it. The dangerous one is a real environment token,
+# because it copy-pastes into a shell and returns ParameterNotFound against a
+# path that never existed. Matching only the placeholder is a gate that fires
+# on the form nobody runs. The terminator class is what keeps the real cluster
+# names out of the alternation: `development-platform` continues past `dev`
+# with a hyphen, so it does not match.
+hits=$(grep -rnE '/eks-agent-platform/(<env>|dev|prod|stage|staging|test|qa|production|development|sandbox|uat)(/|$|\*|`|")' \
   --include='*.md' --include='*.yaml' --include='*.yml' --include='*.ts' \
   --include='*.mts' --include='*.go' --include='*.tf' --include='*.hcl' \
   --include='*.txt' --include='*.tpl' \
@@ -57,7 +65,7 @@ hits=$(grep -rnE '/eks-agent-platform/<env>(/|$|\*)' \
   || true)
 
 if [ -n "$hits" ]; then
-  echo "SSM contract is cluster-keyed — use /eks-agent-platform/<cluster>/… not <env>:"
+  echo "SSM contract is cluster-keyed — use the EKS cluster name, not an environment:"
   echo "$hits"
   echo
   echo "Operator + agent-iam + kill-switch + bedrock + … all key on cluster name."

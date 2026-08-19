@@ -7,7 +7,7 @@ Helm chart for the eks-agent-platform operator: CRDs + Deployment + RBAC + Servi
 ```bash
 # OCI (once published)
 helm install operator oci://ghcr.io/nanohype/eks-agent-platform/charts/operator \
-  --version 0.2.0 \
+  --version 0.6.8 \
   --namespace eks-agent-platform --create-namespace \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::<acct>:role/<env>-<cluster>-eks-agent-platform-operator" \
   --set config.environment=dev \
@@ -19,7 +19,7 @@ helm install operator ./charts/operator -n eks-agent-platform --create-namespace
 
 ## CRDs
 
-CRDs are bundled in `crds/` and populated by `make manifests` in `operators/`. Helm install/upgrade does **not** modify existing CRDs (this is Helm's default; safe for re-installs). Use the `chart` CLI helper if you need to upgrade CRDs in place: `helm upgrade --install operator ... --set crds.upgrade=true`.
+CRDs are bundled in `crds/` and populated by `make manifests` in `operators/`. Helm install/upgrade does **not** modify existing CRDs (this is Helm's default; safe for re-installs). To roll a CRD change, apply `crds/` directly: `kubectl apply -f charts/operator/crds/`.
 
 ## Values
 
@@ -54,7 +54,7 @@ unrelated.
 
 ## Required cluster capabilities
 
-- Kubernetes 1.32+ (DRA + structured authentication config)
+- Kubernetes 1.32+ (structured authentication config)
 - Prometheus operator CRDs (for ServiceMonitor)
 - ArgoCD CRDs (`AppProject`) — operator reconciles these for tenant scoping
 

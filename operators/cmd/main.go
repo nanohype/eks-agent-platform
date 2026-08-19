@@ -105,7 +105,7 @@ func main() {
 	// vcluster hard-isolation tier config. The operator declares a per-Platform
 	// vcluster as an ArgoCD Application pinned to this chart version; the
 	// init-charts JSON bootstraps KEDA inside each vcluster. See
-	// docs/adr/0009-vcluster-isolation-tier.md.
+	// docs/adr/0008-vcluster-isolation-tier.md.
 	var vclusterChartRepo string
 	var vclusterChartVersion string
 	var vclusterInitChartsJSON string

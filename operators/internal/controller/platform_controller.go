@@ -94,7 +94,7 @@ type PlatformReconciler struct {
 	// VCluster builds the per-Platform virtual-cluster client for the vcluster
 	// isolation tier. nil in the namespace tier and in k8s-only test paths; the
 	// vcluster tier fails closed when it's nil (never silently downgrades). See
-	// docs/adr/0009-vcluster-isolation-tier.md.
+	// docs/adr/0008-vcluster-isolation-tier.md.
 	VCluster VClusterClientFactory
 	// VClusterCfg pins the vcluster chart coordinates + in-vcluster init-charts.
 	VClusterCfg VClusterConfig
@@ -245,7 +245,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// the host-side provisioning above (which stays intact and load-bearing as the
 	// containment layer). Fails closed and requeues while converging, so the IAM
 	// binding below targets the syncer-created host ServiceAccount only once it
-	// actually exists. See docs/adr/0009-vcluster-isolation-tier.md.
+	// actually exists. See docs/adr/0008-vcluster-isolation-tier.md.
 	if platform.Spec.Isolation == isolationVCluster {
 		ready, verr := r.reconcileVClusterTier(ctx, platform)
 		switch {

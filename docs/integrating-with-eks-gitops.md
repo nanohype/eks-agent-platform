@@ -3,7 +3,7 @@
 `eks-agent-platform` is the **product**. It builds two things:
 
 - **The operator** — a Helm chart at `charts/operator/` (CRDs + Deployment + RBAC), published to `ghcr.io/nanohype/eks-agent-platform/operator`.
-- **The terraform** — per-tenant AWS state under `terraform/components/` (agent IAM, Bedrock access, egress, kill-switch, eval-runtime, cost pipeline, batch runtime, model artifacts).
+- **The terraform** — the platform's AWS substrate under `terraform/components/` (`bedrock`, `bedrock-account`, `agent-egress`, `kill-switch`, `cost-pipeline`, `cost-access`, `eval-runtime`).
 
 It is not a deploy catalog. Nothing in this repo applies itself to a cluster.
 
@@ -20,10 +20,10 @@ eks-gitops also provides the substrate the operator assumes: ArgoCD, cert-manage
 
 ## What ships inside the operator chart
 
-The operator owns its own runtime. Two subsystems ride along in `charts/operator/` (chart 0.2.0), each behind a values toggle:
+The operator owns its own runtime. What rides along in `charts/operator/`, and what deliberately does not:
 
 - **eval-runtime** (`evalRuntime.*`, on by default) — the Argo `WorkflowTemplate` (eval-runner) the operator submits `EvalSuite` runs to, the gating `AnalysisTemplate`, and the `eval-runner` namespace + ServiceAccount + RBAC the workflow pods run under. Source: `charts/operator/{files,templates}/eval-runtime/`. Needs the Argo Workflows CRD (from `addons-argo-platform`). The eval-runner IRSA role ARN and the S3 report bucket carry the AWS account id, so eks-gitops injects them per-cluster via `addons-agent-operator.yaml`; they're empty in the base chart. The Rollouts `AnalysisTemplate` (`evalRuntime.rollouts.enabled`) is off by default since it needs the Argo Rollouts CRD.
-- **operator SLO** — not shipped by this chart. Burn-rate evaluation is the SLO reconciler's own control loop, which writes its verdict to `SLOPolicy.status`; kube-state-metrics projects that status (config lives in the eks-gitops kube-state-metrics addon, the single source), and the paging alerts are Grafana-managed against AMP in `eks-gitops/dashboards/base/alerting/`. The chart previously also shipped a `PrometheusRule` and an `AlertmanagerConfig`; the catalog installs `prometheus-operator-crds` and no operator, server or Alertmanager, so both were applied and evaluated by nothing.
+- **operator SLO** — not shipped by this chart. Burn-rate evaluation is the SLO reconciler's own control loop, which writes its verdict to `SLOPolicy.status`; kube-state-metrics projects that status (config lives in the eks-gitops kube-state-metrics addon, the single source), and the paging alerts are Grafana-managed against AMP in `eks-gitops/dashboards/base/alerting/`. A chart-shipped `PrometheusRule` or `AlertmanagerConfig` would be applied and evaluated by nothing: the catalog installs `prometheus-operator-crds` and no operator, server or Alertmanager.
 
 ## How a cluster opts in
 

@@ -30,7 +30,7 @@ tiers are not "wrong" — they're the right default until a need forces the next
 | **vcluster** [†](#the-vcluster-rung-adr-0009) | `eap-tenant-<name>`                                              | `vcluster`                      | API-server isolation for tenant code with a k8s token (untrusted logic, tool servers) without a new cluster.                    |
 | **Dedicated cluster**                         | (that cluster's mgmt ns)                                         | n/a                             | Regulated / air-gapped / sovereignty. The cluster-scoped `Tenant` + the portal's multi-cluster watcher already anticipate this. |
 
-### The vcluster rung (ADR 0009)
+### The vcluster rung (ADR 0008)
 
 `isolation: vcluster` is a real, reconciled tier. When set, the operator layers a
 per-Platform virtual cluster on top of the unchanged host-side provisioning:
@@ -79,7 +79,7 @@ rather than removing it. It is **not** kernel or node isolation — synced pods 
 the same nodes and kernel as every other tenant's, so a container escape is exactly as
 available as in the namespace tier. For compute isolation, pair it with the tainted
 `AgentSandbox` node pool (an orthogonal dial) or climb to a dedicated cluster. Full
-threat delta and the syncer trust boundary: [ADR 0009](../adr/0009-vcluster-isolation-tier.md).
+threat delta and the syncer trust boundary: [ADR 0008](../adr/0008-vcluster-isolation-tier.md).
 
 ## Why control-plane CRs default to the _shared management_ namespace
 

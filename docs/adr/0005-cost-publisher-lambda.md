@@ -35,12 +35,12 @@ A 24h breach-detection lag is the difference between "kill-switch fires when the
 
 Acceptable in dev where budgets are small ($1500/mo for the example tenants); unacceptable in production where a tenant could burn 7 figures in 24h on a misconfigured loop.
 
-## Why "conservative-rounded" pricing in the Lambda
+## Where the Lambda's pricing table comes from
 
-The pricing table inside the Lambda is hand-maintained from public Bedrock pricing pages, rounded _upward_ (the comment in `invocation_cost_publisher.py` calls this out). Two reasons:
+The pricing table inside the Lambda is generated from `packages/pricing/src/data/bedrock-pricing.json` by `scripts/gen-lambda-pricing.mjs` — the same file the TypeScript `@eks-agent/pricing` package imports — with a CI drift gate (`gen-lambda-pricing.mjs --check`) holding the two in lockstep. Change a price in the JSON and regenerate; never hand-edit `pricing_data.py`. Two properties follow:
 
-1. The metric is for alerting, not invoicing. CUR remains authoritative for the actual bill. An estimate that's slightly high trips alerts slightly early — desired behavior.
-2. Pricing changes (AWS price reductions, new models added with default pricing unknown to the Lambda) get a sensible fallback (`FALLBACK_PRICING` is mid-range Sonnet pricing) so unknown models alert at the conservative end.
+1. The metric is for alerting, not invoicing. CUR remains authoritative for the actual bill, and the estimate exists to close the ~24h partition lag rather than to reproduce it.
+2. A model with no row in the table is not priced against a borrowed rate — that would silently undercount spend on a new or mistyped model id. It is published as an explicit `UnpricedInvocations` count dimensioned by PlatformId + ModelId, so unpriced traffic is observable and the table can be extended before the next billing cycle.
 
 ## Trade-offs
 
@@ -57,5 +57,5 @@ The pricing table inside the Lambda is hand-maintained from public Bedrock prici
 - Implementation: `terraform/components/cost-pipeline/lambda/invocation_cost_publisher.py`.
 - IAM scope: cloudwatch:PutMetricData conditioned on `namespace = agents/Bedrock`.
 - Consumer: `operators/internal/controller/budget_reconcile.go` (`queryInflightCost`).
-- Pricing table source: AWS Bedrock pricing page; manual quarterly review.
+- Pricing table source: `packages/pricing/src/data/bedrock-pricing.json`, refreshed by `scripts/refresh-pricing.mjs` from the AWS Price List API (weekly); `scripts/gen-lambda-pricing.mjs --check` is the CI drift gate against the Lambda's copy.
 - Flow diagram: [`docs/architecture/budget-reconcile-flow.md`](../architecture/budget-reconcile-flow.md).

@@ -1,6 +1,6 @@
 # operators/
 
-The platform's Kubernetes operator. Single Go binary, six reconcilers, per-reconciler leader election. Built with kubebuilder v4 against controller-runtime v0.24.
+The platform's Kubernetes operator. Single Go binary, nine reconcilers, one shared leader-election lease. Built with kubebuilder v4 against controller-runtime v0.24.
 
 ## What it owns
 
