@@ -255,6 +255,53 @@ func TestEnsureAppProjectScopesTheTenant(t *testing.T) {
 			t.Errorf("sourceRepos contains \"*\" — a tenant could sync manifests from any repository")
 		}
 	}
+	// namespaceResourceBlacklist — the deny half. The whitelist above stays
+	// {*,*} because a tenant deploys arbitrary application resources; what it
+	// must not deploy is the gateway data plane. Without this a tenant's
+	// Application can create a route kind in its own namespace naming another
+	// tenant's Gateway as parentRef, which the destination scoping does not stop
+	// because the object never leaves the tenant's namespace.
+	//
+	// Asserted by group, matching how the deny is written: these groups are
+	// entirely operator-owned, so a new route type in Gateway API is covered
+	// without editing anything.
+	denied, _, _ := unstructured.NestedSlice(ap.Object, "spec", "namespaceResourceBlacklist")
+	deniedGroups := map[string]string{}
+	for _, raw := range denied {
+		e, _ := raw.(map[string]interface{})
+		g, _ := e["group"].(string)
+		k, _ := e["kind"].(string)
+		deniedGroups[g] = k
+	}
+	for _, g := range []string{
+		"gateway.networking.k8s.io",
+		"aigateway.envoyproxy.io",
+		"gateway.envoyproxy.io",
+	} {
+		kind, ok := deniedGroups[g]
+		if !ok {
+			t.Errorf("namespaceResourceBlacklist does not deny %s — a tenant Application could create a "+
+				"route there naming another tenant's Gateway as parentRef", g)
+			continue
+		}
+		if kind != "*" {
+			t.Errorf("blacklist for %s denies kind %q, want * — denying single kinds leaves the rest of "+
+				"an operator-owned group creatable", g, kind)
+		}
+	}
+
+	// The whitelist must NOT be narrowed to a kind list: that is the option that
+	// breaks ordinary app deployment, and it fails at admission naming a kind
+	// rather than a policy.
+	allowed, _, _ := unstructured.NestedSlice(ap.Object, "spec", "namespaceResourceWhitelist")
+	if len(allowed) != 1 {
+		t.Fatalf("namespaceResourceWhitelist should be the single {*,*} entry, got %v", allowed)
+	}
+	if a, _ := allowed[0].(map[string]interface{}); a["group"] != "*" || a["kind"] != "*" {
+		t.Errorf("namespaceResourceWhitelist = %v, want {*,*} — tenants deploy arbitrary app resources "+
+			"and the deny list is what carries the boundary", allowed)
+	}
+
 	wantRepos := map[string]bool{
 		"https://github.com/nanohype/*":                      true,
 		"oci://ghcr.io/nanohype/eks-agent-platform/charts/*": true,
