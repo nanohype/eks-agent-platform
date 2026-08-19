@@ -62,6 +62,16 @@ const gatewayListenerPort = 8080
 // it is Bedrock's own constant, not a model or SDK version.
 const bedrockAnthropicVersion = "bedrock-2023-05-31"
 
+// bedrockHTTPSPort is the port the Bedrock Backend dials, and the same number
+// gatewayEgressCiliumRules binds for the gateway's Envoy pods — where the
+// comment notes that the port bound plus the pod selector *is* the model
+// boundary, since PrivateLink makes FQDN matching depend on cilium's DNS proxy.
+// The two are separate documents that must agree: dial a port egress does not
+// allow and the gateway hangs until the connection times out, which surfaces as
+// a slow model call rather than as a misconfiguration. Named here, and the
+// agreement asserted in TestModelGatewayBedrockBackendEndpoint.
+const bedrockHTTPSPort = 443
+
 // clientBufferLimit raises Envoy's request buffer from its 32KiB default.
 // Upstream calls this out directly: the default "is not sufficient for AI
 // workloads". A long prompt exceeds it, so leaving it unset fails on real
@@ -384,8 +394,21 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 				"name":     "http",
 				"protocol": "HTTP",
 				"port":     int64(gatewayListenerPort),
+				// Same, not All. Every object this reconciler renders — the
+				// Gateway, its AIGatewayRoute, the AIServiceBackends and the
+				// Backend — is created in the tenant's own namespace, so Same
+				// admits every route the platform legitimately serves.
+				//
+				// All would let a Route in any namespace on the cluster attach
+				// here: Gateway API allows a cross-namespace parentRef, and
+				// ReferenceGrant gates backendRefs, not attachment. Anything that
+				// attached would be proxied by this tenant's Envoy, which runs
+				// under the tenant ServiceAccount and therefore the tenant's IAM
+				// role — inheriting its Bedrock model scoping, its quota and its
+				// cost attribution — while carrying neither the guardrail
+				// headerMutation nor a rate-limit clientSelector that matches it.
 				"allowedRoutes": map[string]any{
-					"namespaces": map[string]any{"from": "All"},
+					"namespaces": map[string]any{"from": "Same"},
 				},
 			},
 		},
@@ -414,7 +437,7 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 	if err := r.ensureUnstructured(ctx, envoyGatewayGV, "Backend", n.namespace, n.backend, labels, map[string]any{
 		"endpoints": []any{
 			map[string]any{
-				"fqdn": map[string]any{"hostname": bedrockHost, "port": int64(443)},
+				"fqdn": map[string]any{"hostname": bedrockHost, "port": int64(bedrockHTTPSPort)},
 			},
 		},
 	}); err != nil {

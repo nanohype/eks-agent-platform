@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -207,6 +208,173 @@ func TestModelGatewayEnvoyProxyIdentityAndService(t *testing.T) {
 	limit, _, _ := unstructured.NestedString(buf.Object, "spec", "connection", "bufferLimit")
 	if limit != clientBufferLimit {
 		t.Errorf("bufferLimit: got %q want %q", limit, clientBufferLimit)
+	}
+}
+
+// TestModelGatewayAttachment pins the references that put the rendered data
+// plane into force, as distinct from its contents.
+//
+// Every assertion in TestModelGatewayEnvoyProxyIdentityAndService — the tenant
+// ServiceAccount that carries Pod Identity, the ClusterIP that avoids an idle
+// per-Platform load balancer, the raised request buffer — reads objects that
+// only take effect because something points at them. Drop the Gateway's
+// parametersRef and every one of those assertions still passes while Envoy
+// Gateway provisions from GatewayClass defaults instead: the proxy runs under
+// the default controller ServiceAccount rather than the tenant's, losing the
+// tenant's Bedrock identity and cost attribution, and gets a LoadBalancer
+// Service. Nothing errors — the Gateway applies, and the ModelGateway reports
+// Ready.
+//
+// The policies are the same shape one level further out. A BackendTrafficPolicy
+// whose targetRefs do not name the Gateway is structurally valid and enforces
+// nothing; Envoy Gateway reports non-attachment only in the policy's own
+// status.ancestors, which this operator never reads. That is the failure the
+// rate-limit selector fix closed, arriving through the join above it.
+func TestModelGatewayAttachment(t *testing.T) {
+	s := mgwScheme(t)
+	cl := readyPlatform(t, s)
+	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
+	if _, err := r.reconcileSelf(context.Background(), twoRouteGateway()); err != nil {
+		t.Fatalf("reconcileSelf: %v", err)
+	}
+	gwName := ctrlTestPlatform + "-gateway"
+
+	// The Gateway must name the EnvoyProxy that was actually rendered, so the
+	// reference is checked against the object rather than against a literal.
+	proxy := getRendered(t, cl, envoyGatewayGV, "EnvoyProxy", gwName)
+	gw := getRendered(t, cl, gatewayAPIGV, "Gateway", gwName)
+
+	refKind, _, _ := unstructured.NestedString(gw.Object, "spec", "infrastructure", "parametersRef", "kind")
+	refName, _, _ := unstructured.NestedString(gw.Object, "spec", "infrastructure", "parametersRef", "name")
+	refGroup, _, _ := unstructured.NestedString(gw.Object, "spec", "infrastructure", "parametersRef", "group")
+	if refKind != "EnvoyProxy" || refGroup != envoyGatewayGV.Group {
+		t.Errorf("Gateway parametersRef: got %s/%s want %s/EnvoyProxy — the EnvoyProxy is inert unless referenced",
+			refGroup, refKind, envoyGatewayGV.Group)
+	}
+	if refName != proxy.GetName() {
+		t.Errorf("Gateway parametersRef name %q != rendered EnvoyProxy %q — the proxy settings do not apply",
+			refName, proxy.GetName())
+	}
+
+	// A listener open to All admits a Route from any namespace onto this
+	// tenant's Envoy, under the tenant's ServiceAccount and IAM role. Every
+	// object this reconciler renders is same-namespace, so Same is sufficient.
+	listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+	if len(listeners) != 1 {
+		t.Fatalf("want one listener, got %d", len(listeners))
+	}
+	l, _ := listeners[0].(map[string]any)
+	from, _, _ := unstructured.NestedString(l, "allowedRoutes", "namespaces", "from")
+	if from != "Same" {
+		t.Errorf("listener allowedRoutes.namespaces.from = %q, want Same — All lets a foreign Route attach "+
+			"and be proxied under this tenant's identity, bypassing its guardrail and rate limit", from)
+	}
+
+	// Both policies must target the Gateway by name, or they attach to nothing.
+	for _, tc := range []struct{ kind, name string }{
+		{"BackendTrafficPolicy", gwName + "-ratelimit"},
+		{"ClientTrafficPolicy", gwName + "-buffer"},
+	} {
+		pol := getRendered(t, cl, envoyGatewayGV, tc.kind, tc.name)
+		refs, _, _ := unstructured.NestedSlice(pol.Object, "spec", "targetRefs")
+		if len(refs) != 1 {
+			t.Errorf("%s targetRefs: got %d, want one naming the Gateway", tc.kind, len(refs))
+			continue
+		}
+		ref, _ := refs[0].(map[string]any)
+		kind, _ := ref["kind"].(string)
+		name, _ := ref["name"].(string)
+		if kind != "Gateway" || name != gw.GetName() {
+			t.Errorf("%s targetRefs[0] = %s/%q, want Gateway/%q — a policy that targets nothing is valid "+
+				"and enforces nothing", tc.kind, kind, name, gw.GetName())
+		}
+	}
+}
+
+// TestModelGatewayRouteMatchIsExact pins the match semantics the rate limit
+// depends on.
+//
+// The route match emits an explicit type; the rate-limit clientSelector emits
+// name and value only and relies on Envoy Gateway's exact default. Widening the
+// match to a regular expression makes the route value an unanchored pattern, so
+// a request whose model id merely contains a route name is routed and served
+// while the selector — still exact — counts none of it. The route names in
+// twoRouteGateway are chosen so one is a prefix of nothing, but a real tenant
+// naming routes "chat" and "chat-pro" would silently uncap the wider one.
+func TestModelGatewayRouteMatchIsExact(t *testing.T) {
+	s := mgwScheme(t)
+	cl := readyPlatform(t, s)
+	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
+	if _, err := r.reconcileSelf(context.Background(), twoRouteGateway()); err != nil {
+		t.Fatalf("reconcileSelf: %v", err)
+	}
+	for _, rule := range renderedRouteRules(t, cl) {
+		m, _ := rule.(map[string]any)
+		matches, _, _ := unstructured.NestedSlice(m, "matches")
+		first, _ := matches[0].(map[string]any)
+		headers, _, _ := unstructured.NestedSlice(first, "headers")
+		h, _ := headers[0].(map[string]any)
+		typ, _ := h["type"].(string)
+		name, _ := h["name"].(string)
+		if typ != "Exact" {
+			t.Errorf("route match on %q has type %q, want Exact — a pattern match routes requests the "+
+				"rate-limit selector will not count", name, typ)
+		}
+	}
+}
+
+// TestModelGatewayBedrockBackendEndpoint pins the upstream the gateway dials.
+//
+// The port is a second construction of a number that lives in cilium_egress.go,
+// where the gateway's Envoy pods are allowed egress on TCP/443 and nothing else
+// — that rule plus the pod selector is the model boundary. Nothing in Go
+// compares the two, so they are compared here.
+func TestModelGatewayBedrockBackendEndpoint(t *testing.T) {
+	s := mgwScheme(t)
+	cl := readyPlatform(t, s)
+	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
+	if _, err := r.reconcileSelf(context.Background(), twoRouteGateway()); err != nil {
+		t.Fatalf("reconcileSelf: %v", err)
+	}
+	be := getRendered(t, cl, envoyGatewayGV, "Backend", ctrlTestPlatform+"-bedrock")
+	eps, _, _ := unstructured.NestedSlice(be.Object, "spec", "endpoints")
+	if len(eps) != 1 {
+		t.Fatalf("want one Bedrock endpoint, got %d", len(eps))
+	}
+	ep, _ := eps[0].(map[string]any)
+	host, _, _ := unstructured.NestedString(ep, "fqdn", "hostname")
+	port, _, _ := unstructured.NestedInt64(ep, "fqdn", "port")
+	if want := "bedrock-runtime.us-west-2.amazonaws.com"; host != want {
+		t.Errorf("Bedrock hostname: got %q want %q", host, want)
+	}
+	if port != int64(bedrockHTTPSPort) {
+		t.Errorf("Bedrock port: got %d want %d", port, bedrockHTTPSPort)
+	}
+
+	// The egress policy is the other half: the Backend names a port, and
+	// gatewayEgressCiliumRules decides whether the gateway may dial it. Compared
+	// as rendered, because nothing in Go relates them — dial a port egress does
+	// not allow and the call hangs to a timeout, which reads as a slow model
+	// rather than as a misconfiguration.
+	wantPort := strconv.Itoa(bedrockHTTPSPort)
+	allowed := false
+	for _, rule := range gatewayEgressCiliumRules() {
+		m, _ := rule.(map[string]interface{})
+		toPorts, _ := m["toPorts"].([]interface{})
+		for _, tp := range toPorts {
+			pm, _ := tp.(map[string]interface{})
+			ports, _ := pm["ports"].([]interface{})
+			for _, p := range ports {
+				e, _ := p.(map[string]interface{})
+				if e["port"] == wantPort && e["protocol"] == "TCP" {
+					allowed = true
+				}
+			}
+		}
+	}
+	if !allowed {
+		t.Errorf("gateway egress policy allows no TCP/%s rule, but the Bedrock Backend dials that port — "+
+			"the gateway would hang until the connection times out", wantPort)
 	}
 }
 
