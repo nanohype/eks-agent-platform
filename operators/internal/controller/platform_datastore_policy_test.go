@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -56,26 +57,23 @@ func hasResource(s *policyStatement, want string) bool {
 	return false
 }
 
-// TestDatastorePolicy_ScopesEachKind proves every datastore kind is granted its
-// minimal actions scoped to the tenant-substrate naming convention
-// (<env>-<platform>-<datastore>, S3 account-qualified), cache contributes no
-// statement, and no Resource is a bare wildcard.
 // TestDatastoreActionsAreDataPlaneOnly pins the verbs a tenant gets on its own
 // datastores. Nothing referenced any of these six lists — the Resource scoping
 // is covered elsewhere and is what keeps a tenant inside its own stores, but
 // what it may *do* there was unobserved.
 //
-// The invariant is that every action is data-plane. A tenant reads and writes
-// its own data; it does not create, delete or reconfigure the store itself.
-// That line matters because the control-plane verbs are the ones that escape
-// the Resource scoping's intent: DeleteTable destroys the store the scoping was
-// protecting, PutBucketPolicy rewrites the rule that does the protecting, and
-// SetQueueAttributes can repoint a queue's redrive at another tenant's.
+// The intent is that every action is data-plane: a tenant reads and writes its
+// own data and does not create, delete or reconfigure the store itself. Control-
+// plane verbs are the ones that escape the Resource scoping's purpose rather
+// than its letter — DeleteTable destroys the store the scoping was protecting,
+// PutBucketPolicy and sqs:AddPermission rewrite the rule that does the
+// protecting, and SetQueueAttributes can repoint a queue's redrive at another
+// tenant's.
 //
-// Asserted two ways on purpose. The literal sets catch a removal — a dropped
-// verb is a tenant that silently cannot use its own store — while the
-// forbidden-prefix scan catches an addition nobody thought to update a literal
-// for, which is the direction a list like this actually drifts.
+// Two mechanisms, and they are not equals. The literal sets are the check that
+// converges: DeepEqual fails on any addition and any removal. The scan below is
+// a tripwire for the case the sets cannot see, and it cannot express the intent
+// above — see the comment where it is defined.
 func TestDatastoreActionsAreDataPlaneOnly(t *testing.T) {
 	lists := map[string][]string{
 		"dynamo":   datastoreDynamoActions,
@@ -112,23 +110,53 @@ func TestDatastoreActionsAreDataPlaneOnly(t *testing.T) {
 		}
 	}
 
-	// Control-plane verbs, by the shape of their name. kafka-cluster:CreateTopic
-	// is the deliberate exception: topics are the tenant's own namespace on a
-	// shared cluster, and the Resource scoping confines it to their prefix —
-	// creating one is closer to writing a key than to provisioning a store.
-	forbidden := []string{
-		"Delete Table", "Delete Bucket", "Delete Queue", "Delete Secret", "Delete Cluster",
-		"Create Table", "Create Bucket", "Create Queue", "Create Secret", "Create Cluster",
-		"Put Bucket", "Set Queue", "Update Table", "Update Secret", "Put Resource",
-		"Tag ", "Untag ",
+	// The literal sets above are the converging check: DeepEqual fails on any
+	// addition and any removal, so nothing gets past them on its own.
+	//
+	// What follows is a tripwire for the one case they cannot see — someone adds
+	// a verb to the production list AND updates the `want` literal here to match,
+	// which is the ordinary way a test gets "fixed". Then the sets agree and the
+	// change is unreviewed. This fires on the shapes below regardless.
+	//
+	// It is a tripwire, not a proof. A denylist cannot express "every verb is
+	// data-plane" — it expresses "these shapes are known-bad", and AWS adds verbs
+	// faster than any such list converges. Anyone adding a verb here should read
+	// it as a prompt to think, not as a clearance.
+	//
+	// Two rules rather than a longer list of names, because these two generalise:
+	// anything touching Policy or Permission is access-control manipulation, and
+	// anything that Creates or Deletes a store noun is provisioning.
+	// kafka-cluster:CreateTopic is the deliberate exception — a topic is the
+	// tenant's own namespace on a shared cluster, confined by the same prefix
+	// scoping, closer to writing a key than to provisioning a store.
+	accessControl := regexp.MustCompile(`Policy|Permission`)
+	provisioning := regexp.MustCompile(`^(Create|Delete)(Table|Bucket|Queue|Secret|Cluster|Stream|DB)`)
+	// Named shapes the two rules above do not cover. Not exhaustive by
+	// construction — each entry is one that escaped, kept so it cannot escape
+	// twice.
+	knownBad := []string{
+		"SetQueueAttributes", "UpdateTable", "UpdateSecret",
+		"UpdateContinuousBackups", "UpdateTimeToLive",
+		"TagResource", "UntagResource", "PutLifecycleConfiguration",
 	}
+
 	for kind, actions := range lists {
 		for _, a := range actions {
 			verb := a[strings.Index(a, ":")+1:]
-			for _, f := range forbidden {
-				if strings.HasPrefix(verb, strings.ReplaceAll(f, " ", "")) {
-					t.Errorf("%s grants %q — control-plane verbs let a tenant reconfigure or destroy the "+
-						"store the Resource scoping exists to protect, not just use it", kind, a)
+			switch {
+			case verb == "CreateTopic":
+				// documented exception, see above
+			case accessControl.MatchString(verb):
+				t.Errorf("%s grants %q — it edits the store's own access policy, which rewrites the rule "+
+					"the Resource scoping relies on rather than operating within it", kind, a)
+			case provisioning.MatchString(verb):
+				t.Errorf("%s grants %q — it creates or destroys the store the Resource scoping exists to "+
+					"protect, rather than using it", kind, a)
+			default:
+				for _, bad := range knownBad {
+					if verb == bad {
+						t.Errorf("%s grants %q — it reconfigures the store rather than using it", kind, a)
+					}
 				}
 			}
 		}
@@ -139,6 +167,10 @@ func TestDatastoreActionsAreDataPlaneOnly(t *testing.T) {
 	}
 }
 
+// TestDatastorePolicy_ScopesEachKind proves every datastore kind is granted its
+// minimal actions scoped to the tenant-substrate naming convention
+// (<env>-<platform>-<datastore>, S3 account-qualified), cache contributes no
+// statement, and no Resource is a bare wildcard.
 func TestDatastorePolicy_ScopesEachKind(t *testing.T) {
 	p := platformWithDatastores("myplat",
 		platformv1alpha1.DatastoreSpec{Name: "db", Kind: platformv1alpha1.DatastoreRelational},
