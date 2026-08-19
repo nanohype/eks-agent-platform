@@ -210,20 +210,12 @@ func TestRequeueJitter(t *testing.T) {
 // its own credentials and either cannot see the tenant's queue or reads it
 // under a shared identity.
 //
-// identityOwner is asserted too, but deliberately NOT as the control, because
-// it is not one:
-//
-//   - "pod" is KEDA's own default, so setting it changes nothing by itself
-//   - it is deprecated as of KEDA v2.13 and slated for removal in v3; this repo
-//     pins the KEDA chart at 2.20.2 (charts/operator/values.yaml), so the
-//     deprecation is already live
-//   - KEDA documents it as applying only under aws-eks authentication, and the
-//     TriggerAuthentication above uses provider "aws"
-//
-// So the assertion holds the value against an upstream default change and
-// nothing more. It is left in place with this note so that whoever bumps KEDA
-// past v3 finds the reason here rather than a green test pinning a field the
-// API no longer has.
+// identityOwner is deliberately absent from the trigger and asserted absent
+// here. In KEDA 2.20.2's pkg/scalers/aws/aws_common.go the provider is checked
+// first and the function returns before the legacy identityOwner switch, so
+// under provider "aws" that field is never read. It is also deprecated as of
+// v2.13 and slated for removal in v3. Emitting it would be a field that does
+// nothing, carrying a comment claiming it does something.
 func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
 	ctx := context.Background()
 	s := fleetScheme(t)
@@ -272,10 +264,11 @@ func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
 			}
 			checked++
 			meta, _ := trig["metadata"].(map[string]any)
-			// Pins the current default; see the note above for why this is not
-			// the control.
-			if got := meta["identityOwner"]; got != "pod" {
-				t.Errorf("ScaledObject %s trigger identityOwner = %v, want \"pod\"", name, got)
+			// Absent, not "pod": see the note above. Asserted rather than
+			// ignored so that re-adding it has to come with a reason.
+			if got, present := meta["identityOwner"]; present {
+				t.Errorf("ScaledObject %s trigger sets identityOwner = %v — under podIdentity provider "+
+					"\"aws\" KEDA never reads that field, and it is deprecated as of v2.13", name, got)
 			}
 			// Without a resolvable authenticationRef the podIdentity provider
 			// above never reaches the trigger, and the scaler has no credential.
