@@ -199,3 +199,95 @@ func TestRequeueJitter(t *testing.T) {
 		}
 	}
 }
+
+// TestScaledObjectTriggerUsesPodIdentity pins how the SQS scaler gets its
+// credentials.
+//
+// What actually binds the scaler to the tenant's identity is the
+// TriggerAuthentication's podIdentity.provider. The existing SQS test fetches
+// that object and asserts only that it exists; its provider — the field the
+// whole mechanism rests on — was unread. Dropped or changed, KEDA falls back to
+// its own credentials and either cannot see the tenant's queue or reads it
+// under a shared identity.
+//
+// identityOwner is asserted too, but deliberately NOT as the control, because
+// it is not one:
+//
+//   - "pod" is KEDA's own default, so setting it changes nothing by itself
+//   - it is deprecated as of KEDA v2.13 and slated for removal in v3; this repo
+//     pins the KEDA chart at 2.20.2 (charts/operator/values.yaml), so the
+//     deprecation is already live
+//   - KEDA documents it as applying only under aws-eks authentication, and the
+//     TriggerAuthentication above uses provider "aws"
+//
+// So the assertion holds the value against an upstream default change and
+// nothing more. It is left in place with this note so that whoever bumps KEDA
+// past v3 finds the reason here rather than a green test pinning a field the
+// API no longer has.
+func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
+	ctx := context.Background()
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	// A real queue URL: with an empty one the reconciler renders a CPU trigger
+	// instead, and this test would assert nothing.
+	fleet := scalingFleet("https://sqs.us-west-2.amazonaws.com/123456789012/acme-work")
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
+	r := &AgentFleetReconciler{Client: cl, Scheme: s}
+
+	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
+		t.Fatalf("reconcileFleetSelf: %v", err)
+	}
+	ns := PlatformNamespace(p)
+
+	// The live mechanism.
+	ta := &unstructured.Unstructured{}
+	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "TriggerAuthentication"})
+	taName := "fleet-" + fleet.Name + "-aws"
+	if err := cl.Get(ctx, types.NamespacedName{Name: taName, Namespace: ns}, ta); err != nil {
+		t.Fatalf("TriggerAuthentication not created: %v", err)
+	}
+	if got, _, _ := unstructured.NestedString(ta.Object, "spec", "podIdentity", "provider"); got != "aws" {
+		t.Errorf("TriggerAuthentication podIdentity.provider = %q, want \"aws\" — this is what makes KEDA "+
+			"poll as the tenant ServiceAccount rather than with its own credentials", got)
+	}
+
+	soGVK := schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"}
+	checked := 0
+
+	for _, agent := range fleet.Spec.Agents {
+		so := &unstructured.Unstructured{}
+		so.SetGroupVersionKind(soGVK)
+		name := agentDeploymentName(fleet, agent.Name)
+		if err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, so); err != nil {
+			continue // agents without a queue trigger render no ScaledObject
+		}
+		triggers, found, _ := unstructured.NestedSlice(so.Object, "spec", "triggers")
+		if !found {
+			continue
+		}
+		for _, raw := range triggers {
+			trig, _ := raw.(map[string]any)
+			if trig["type"] != "aws-sqs-queue" {
+				continue
+			}
+			checked++
+			meta, _ := trig["metadata"].(map[string]any)
+			// Pins the current default; see the note above for why this is not
+			// the control.
+			if got := meta["identityOwner"]; got != "pod" {
+				t.Errorf("ScaledObject %s trigger identityOwner = %v, want \"pod\"", name, got)
+			}
+			// Without a resolvable authenticationRef the podIdentity provider
+			// above never reaches the trigger, and the scaler has no credential.
+			ref, _ := trig["authenticationRef"].(map[string]any)
+			if ref == nil || ref["name"] != taName {
+				t.Errorf("ScaledObject %s authenticationRef = %v, want name %q — the trigger reaches its "+
+					"podIdentity only through this reference", name, ref, taName)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no aws-sqs-queue trigger was rendered — this test asserted nothing, which is not the " +
+			"same as passing")
+	}
+}
