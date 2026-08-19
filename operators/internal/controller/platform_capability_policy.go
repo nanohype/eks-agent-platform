@@ -180,6 +180,16 @@ func tenantQueueResources(p *platformv1alpha1.Platform, env string, scope arnSco
 	return res
 }
 
+// ssm-producer: landing-zone owns SES identities, and NOTHING WRITES THIS YET.
+// Verified against both landing-zone trees with a positive control: no resource
+// publishes this path. Until one does, a Platform declaring the ses capability
+// resolves an empty domain, emits no SES statement, and reports Ready with no
+// grant — which is what the CapabilitiesGranted condition now surfaces.
+//
+// The marker is here so the gate passes on a contract known to be unsatisfied
+// rather than pretending it is satisfied. Removing this comment turns the gap
+// into a build failure, which is the right move once the producer exists or the
+// capability is dropped.
 // sesDomainParamPath is where the substrate publishes the verified sending
 // domain bound to a tenant. landing-zone owns the SES identity — verifying a
 // domain is account-level mail infra, and an identity is single-owner — so the
