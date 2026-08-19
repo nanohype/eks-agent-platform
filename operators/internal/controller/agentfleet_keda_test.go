@@ -199,3 +199,74 @@ func TestRequeueJitter(t *testing.T) {
 		}
 	}
 }
+
+// TestScaledObjectTriggerUsesPodIdentity pins identityOwner on the SQS trigger.
+//
+// KEDA's default is the operator's own identity. This sets "pod", which makes
+// the scaler poll the queue as the tenant ServiceAccount — bound to the tenant
+// role by EKS Pod Identity — per ADR 0006. Nothing asserted it.
+//
+// Losing it does not fail: the ScaledObject is valid and KEDA accepts it. What
+// changes is who reads the queue. Either KEDA's operator role has no access and
+// autoscaling silently stops for that tenant, or it has been granted broad SQS
+// access to make polling work — in which case one shared identity reads every
+// tenant's queue, which is the per-tenant boundary ADR 0006 exists to draw
+// dissolved into a single credential.
+//
+// The authenticationRef is asserted alongside it: identityOwner "pod" with a
+// missing or misnamed TriggerAuthentication leaves KEDA with no credential to
+// resolve at all, and the two are only correct together.
+func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
+	ctx := context.Background()
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	// A real queue URL: with an empty one the reconciler renders a CPU trigger
+	// instead, and this test would assert nothing.
+	fleet := scalingFleet("https://sqs.us-west-2.amazonaws.com/123456789012/acme-work")
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
+	r := &AgentFleetReconciler{Client: cl, Scheme: s}
+
+	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
+		t.Fatalf("reconcileFleetSelf: %v", err)
+	}
+
+	ns := PlatformNamespace(p)
+	soGVK := schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"}
+	checked := 0
+
+	for _, agent := range fleet.Spec.Agents {
+		so := &unstructured.Unstructured{}
+		so.SetGroupVersionKind(soGVK)
+		name := agentDeploymentName(fleet, agent.Name)
+		if err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, so); err != nil {
+			continue // agents without a queue trigger render no ScaledObject
+		}
+		triggers, found, _ := unstructured.NestedSlice(so.Object, "spec", "triggers")
+		if !found {
+			continue
+		}
+		for _, raw := range triggers {
+			trig, _ := raw.(map[string]any)
+			if trig["type"] != "aws-sqs-queue" {
+				continue
+			}
+			checked++
+			meta, _ := trig["metadata"].(map[string]any)
+			if got := meta["identityOwner"]; got != "pod" {
+				t.Errorf("ScaledObject %s trigger identityOwner = %v, want \"pod\" — the default is KEDA's "+
+					"own identity, which either cannot read the tenant's queue or reads every tenant's "+
+					"queue under one shared credential", name, got)
+			}
+			ref, _ := trig["authenticationRef"].(map[string]any)
+			wantRef := "fleet-" + fleet.Name + "-aws"
+			if ref == nil || ref["name"] != wantRef {
+				t.Errorf("ScaledObject %s authenticationRef = %v, want name %q — identityOwner \"pod\" "+
+					"with no resolvable TriggerAuthentication leaves KEDA without a credential", name, ref, wantRef)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no aws-sqs-queue trigger was rendered — this test asserted nothing, which is not the " +
+			"same as passing")
+	}
+}
