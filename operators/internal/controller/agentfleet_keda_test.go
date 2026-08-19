@@ -200,22 +200,30 @@ func TestRequeueJitter(t *testing.T) {
 	}
 }
 
-// TestScaledObjectTriggerUsesPodIdentity pins identityOwner on the SQS trigger.
+// TestScaledObjectTriggerUsesPodIdentity pins how the SQS scaler gets its
+// credentials.
 //
-// KEDA's default is the operator's own identity. This sets "pod", which makes
-// the scaler poll the queue as the tenant ServiceAccount — bound to the tenant
-// role by EKS Pod Identity — per ADR 0006. Nothing asserted it.
+// What actually binds the scaler to the tenant's identity is the
+// TriggerAuthentication's podIdentity.provider. The existing SQS test fetches
+// that object and asserts only that it exists; its provider — the field the
+// whole mechanism rests on — was unread. Dropped or changed, KEDA falls back to
+// its own credentials and either cannot see the tenant's queue or reads it
+// under a shared identity.
 //
-// Losing it does not fail: the ScaledObject is valid and KEDA accepts it. What
-// changes is who reads the queue. Either KEDA's operator role has no access and
-// autoscaling silently stops for that tenant, or it has been granted broad SQS
-// access to make polling work — in which case one shared identity reads every
-// tenant's queue, which is the per-tenant boundary ADR 0006 exists to draw
-// dissolved into a single credential.
+// identityOwner is asserted too, but deliberately NOT as the control, because
+// it is not one:
 //
-// The authenticationRef is asserted alongside it: identityOwner "pod" with a
-// missing or misnamed TriggerAuthentication leaves KEDA with no credential to
-// resolve at all, and the two are only correct together.
+//   - "pod" is KEDA's own default, so setting it changes nothing by itself
+//   - it is deprecated as of KEDA v2.13 and slated for removal in v3; this repo
+//     pins the KEDA chart at 2.20.2 (charts/operator/values.yaml), so the
+//     deprecation is already live
+//   - KEDA documents it as applying only under aws-eks authentication, and the
+//     TriggerAuthentication above uses provider "aws"
+//
+// So the assertion holds the value against an upstream default change and
+// nothing more. It is left in place with this note so that whoever bumps KEDA
+// past v3 finds the reason here rather than a green test pinning a field the
+// API no longer has.
 func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
 	ctx := context.Background()
 	s := fleetScheme(t)
@@ -229,8 +237,20 @@ func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
 	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
 		t.Fatalf("reconcileFleetSelf: %v", err)
 	}
-
 	ns := PlatformNamespace(p)
+
+	// The live mechanism.
+	ta := &unstructured.Unstructured{}
+	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "TriggerAuthentication"})
+	taName := "fleet-" + fleet.Name + "-aws"
+	if err := cl.Get(ctx, types.NamespacedName{Name: taName, Namespace: ns}, ta); err != nil {
+		t.Fatalf("TriggerAuthentication not created: %v", err)
+	}
+	if got, _, _ := unstructured.NestedString(ta.Object, "spec", "podIdentity", "provider"); got != "aws" {
+		t.Errorf("TriggerAuthentication podIdentity.provider = %q, want \"aws\" — this is what makes KEDA "+
+			"poll as the tenant ServiceAccount rather than with its own credentials", got)
+	}
+
 	soGVK := schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"}
 	checked := 0
 
@@ -252,16 +272,17 @@ func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
 			}
 			checked++
 			meta, _ := trig["metadata"].(map[string]any)
+			// Pins the current default; see the note above for why this is not
+			// the control.
 			if got := meta["identityOwner"]; got != "pod" {
-				t.Errorf("ScaledObject %s trigger identityOwner = %v, want \"pod\" — the default is KEDA's "+
-					"own identity, which either cannot read the tenant's queue or reads every tenant's "+
-					"queue under one shared credential", name, got)
+				t.Errorf("ScaledObject %s trigger identityOwner = %v, want \"pod\"", name, got)
 			}
+			// Without a resolvable authenticationRef the podIdentity provider
+			// above never reaches the trigger, and the scaler has no credential.
 			ref, _ := trig["authenticationRef"].(map[string]any)
-			wantRef := "fleet-" + fleet.Name + "-aws"
-			if ref == nil || ref["name"] != wantRef {
-				t.Errorf("ScaledObject %s authenticationRef = %v, want name %q — identityOwner \"pod\" "+
-					"with no resolvable TriggerAuthentication leaves KEDA without a credential", name, ref, wantRef)
+			if ref == nil || ref["name"] != taName {
+				t.Errorf("ScaledObject %s authenticationRef = %v, want name %q — the trigger reaches its "+
+					"podIdentity only through this reference", name, ref, taName)
 			}
 		}
 	}
