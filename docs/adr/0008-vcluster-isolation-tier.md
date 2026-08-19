@@ -99,7 +99,7 @@ The operator has one consistent way of standing up Kubernetes objects it owns: i
 renders them programmatically — typed client-go objects for the resources it knows
 (`Namespace`, `ResourceQuota`, `NetworkPolicy`), `unstructured.Unstructured` for
 foreign CRDs it deliberately keeps out of its dependency graph (the `AppProject`,
-`operators/internal/controller/platform_reconcile.go:286`), and verbatim
+`ensureAppProject` in `operators/internal/controller/platform_reconcile.go`), and verbatim
 `.Files.Get` emission from `charts/operator/files/` for CR-heavy static manifests it
 does not want Helm to evaluate (the eval-runtime bundle, ADR 0007). It does
 **not** shell out to the Helm CLI anywhere, and it does not embed Helm's Go SDK.
@@ -458,9 +458,10 @@ client → the AgentFleet/AgentSandbox/etc. reconcile returns an error →
 controller-runtime requeues with backoff. Host-side Platform reconciliation
 (namespace, quota, netpol, IAM, KMS) is **independent** and keeps succeeding — the
 containment layer stays intact even while the virtual cluster is down. The Platform
-surfaces a new `VClusterReady=False` condition so the degradation is observable and
-alertable (a `PrometheusRule` on that condition is wired when the tier is
-implemented). Already-running synced pods on the host **keep running** — a
+surfaces a `VClusterReady=False` condition so the degradation is observable. No
+alert rule is wired on it; one belongs with the other Grafana-managed rules in
+eks-gitops, never as a chart-shipped `PrometheusRule` this catalog would apply
+everywhere and evaluate nowhere. Already-running synced pods on the host **keep running** — a
 control-plane blip does not evict the data plane; only new reconciles into the
 vcluster block until it recovers. A `docs/runbooks/vcluster-down.md` runbook documents
 recovery and is authored with the implementation.
