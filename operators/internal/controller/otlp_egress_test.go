@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -217,4 +218,137 @@ func TestGatewayEgressPolicy_AllowsXDS(t *testing.T) {
 	t.Fatalf("gateway egress opens no path to xDS (TCP %d in %q) — the proxy would never "+
 		"program, while the ModelGateway CR still reported Ready",
 		envoyGatewayXDSPort, envoyGatewayNamespace)
+}
+
+// TestGatewayEgressPolicySelectsOnlyTheProxy pins the podSelector on the
+// gateway-egress NetworkPolicy.
+//
+// That policy grants what the Envoy proxy needs and nothing else needs: TCP/443
+// to any destination, xDS to Envoy Gateway's namespace, and OTLP to the
+// collector. The ports are asserted next door; the selector deciding WHO gets
+// them was not.
+//
+// An empty LabelSelector is not "no pods" in Kubernetes — it selects every pod
+// in the namespace. So dropping the matchLabels turns a proxy-scoped allowance
+// into a namespace-wide one: every tenant agent pod gains unrestricted TCP/443
+// egress, which is the tenant's whole outbound story and is meant to be
+// constrained by the tenant egress policy rather than opened here. Nothing
+// errors — the policy is valid, the proxy still works, and the blast radius is
+// every workload beside it.
+func TestGatewayEgressPolicySelectsOnlyTheProxy(t *testing.T) {
+	ctx := context.Background()
+	p := newPlatform(ctrlTestPlatform, "team")
+	scheme := runtime.NewScheme()
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register networking/v1: %v", err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &PlatformReconciler{Client: cl, NetworkEngine: "kubernetes"}
+
+	if err := r.ensureGatewayEgressPolicy(ctx, p); err != nil {
+		t.Fatalf("ensureGatewayEgressPolicy: %v", err)
+	}
+	np := &networkingv1.NetworkPolicy{}
+	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: "gateway-egress"}
+	if err := cl.Get(ctx, key, np); err != nil {
+		t.Fatalf("gateway-egress NetworkPolicy not created: %v", err)
+	}
+
+	sel := np.Spec.PodSelector
+	if len(sel.MatchLabels) == 0 && len(sel.MatchExpressions) == 0 {
+		t.Fatal("podSelector is empty — an empty selector matches EVERY pod in the tenant namespace, " +
+			"so every agent workload would inherit the proxy's TCP/443-to-anywhere egress")
+	}
+	for k, want := range map[string]string{
+		"app.kubernetes.io/name":       "envoy",
+		"app.kubernetes.io/component":  "proxy",
+		"app.kubernetes.io/managed-by": "envoy-gateway",
+	} {
+		if got := sel.MatchLabels[k]; got != want {
+			t.Errorf("podSelector[%s] = %q, want %q — the selector has to name the Envoy proxy, since "+
+				"anything broader hands these egress rules to workloads that should not have them", k, got, want)
+		}
+	}
+
+	// Egress-only. Adding PolicyTypeIngress with no ingress rules would make this
+	// a default-deny for inbound on the pods it selects, silently cutting the
+	// gateway off from the tenant workloads that call it.
+	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
+		t.Errorf("policyTypes = %v, want [Egress] only — an Ingress type here with no ingress rules "+
+			"default-denies inbound to the proxy", np.Spec.PolicyTypes)
+	}
+}
+
+// TestEnsureQuotaBoundsEveryDimension pins the ResourceQuota's hard limits.
+//
+// The conformance suite asserts Pods() is non-zero. That is one of eight keys,
+// and the check it performs — non-zero — is satisfied by any value, so the CPU
+// and memory ceilings that actually bound a tenant's spend were unobserved.
+//
+// A ResourceQuota only constrains the dimensions it names. Dropping a key does
+// not fail, does not warn, and does not show up anywhere except as a tenant with
+// no ceiling on that resource: no limits.memory means one agent pod can request
+// the whole node's memory, and on a cluster with Karpenter that provisions
+// capacity to satisfy it. The failure is a bill, not an error.
+//
+// Values are asserted exactly rather than as "non-zero", because the realistic
+// mistake is a wrong unit or a stray zero — 16Gi becoming 16G, or 8 becoming
+// 80 — and every one of those passes a non-zero check.
+func TestEnsureQuotaBoundsEveryDimension(t *testing.T) {
+	ctx := context.Background()
+	p := newPlatform(ctrlTestPlatform, "team")
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register core/v1: %v", err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &PlatformReconciler{Client: cl}
+
+	if err := r.ensureQuota(ctx, p); err != nil {
+		t.Fatalf("ensureQuota: %v", err)
+	}
+	q := &corev1.ResourceQuota{}
+	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: "tenant-default"}
+	if err := cl.Get(ctx, key, q); err != nil {
+		t.Fatalf("ResourceQuota not created: %v", err)
+	}
+
+	want := map[corev1.ResourceName]string{
+		corev1.ResourceRequestsCPU:    "4",
+		corev1.ResourceRequestsMemory: "16Gi",
+		corev1.ResourceLimitsCPU:      "8",
+		corev1.ResourceLimitsMemory:   "32Gi",
+		corev1.ResourcePods:           "50",
+		corev1.ResourceServices:       "20",
+		corev1.ResourceSecrets:        "50",
+		corev1.ResourceConfigMaps:     "50",
+	}
+	for name, wantStr := range want {
+		got, ok := q.Spec.Hard[name]
+		if !ok {
+			t.Errorf("quota does not bound %s — a ResourceQuota constrains only the dimensions it names, "+
+				"so an absent key is no ceiling at all on that resource", name)
+			continue
+		}
+		if got.String() != wantStr {
+			t.Errorf("quota %s = %s, want %s", name, got.String(), wantStr)
+		}
+	}
+	if len(q.Spec.Hard) != len(want) {
+		t.Errorf("quota bounds %d dimensions, expected %d — an added key is not wrong, but it is a "+
+			"tenant-visible ceiling that nothing else describes", len(q.Spec.Hard), len(want))
+	}
+
+	// limits must not sit below requests, or the quota admits a pod its own
+	// request ceiling already allows and rejects it at the limit — a
+	// contradiction that surfaces as unschedulable pods rather than as a
+	// configuration error.
+	reqCPU, limCPU := q.Spec.Hard[corev1.ResourceRequestsCPU], q.Spec.Hard[corev1.ResourceLimitsCPU]
+	if limCPU.Cmp(reqCPU) < 0 {
+		t.Errorf("limits.cpu %s < requests.cpu %s", limCPU.String(), reqCPU.String())
+	}
+	reqMem, limMem := q.Spec.Hard[corev1.ResourceRequestsMemory], q.Spec.Hard[corev1.ResourceLimitsMemory]
+	if limMem.Cmp(reqMem) < 0 {
+		t.Errorf("limits.memory %s < requests.memory %s", limMem.String(), reqMem.String())
+	}
 }

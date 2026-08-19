@@ -191,3 +191,78 @@ func TestSLOPolicyToPlatformMapping(t *testing.T) {
 		t.Errorf("an SLOPolicy with no platformRef must map to nothing, got %v", r)
 	}
 }
+
+// TestEnsureAppProjectScopesTheTenant pins the four fields that decide what a
+// tenant's ArgoCD Applications may deploy, and where.
+//
+// The AppProject is the tenant's deploy boundary, and only its syncWindows were
+// asserted — the rollout hold has tests either side of it, while the scoping it
+// sits on had none. Every field here fails silently if wrong: Argo accepts the
+// project, Applications sync, and the boundary is simply wider than intended.
+//
+// This reconciler writes the whole spec on every tick (single-writer, see the
+// comment on ensureAppProject), so these are asserted together rather than one
+// per test: a rewrite that drops a field is the realistic failure, and reading
+// them from one rendered object is what catches it.
+func TestEnsureAppProjectScopesTheTenant(t *testing.T) {
+	p := newHoldPlatform()
+	r := newHoldReconciler(t, p)
+	if err := r.ensureAppProject(context.Background(), p); err != nil {
+		t.Fatalf("ensureAppProject: %v", err)
+	}
+
+	ap := &unstructured.Unstructured{}
+	ap.SetGroupVersionKind(appProjectGVK)
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: argoCDNamespace, Name: p.Name}, ap); err != nil {
+		t.Fatalf("get AppProject: %v", err)
+	}
+
+	// destinations — the namespace half is the tenant boundary. A "*" here, or a
+	// second unscoped entry, lets this tenant's Applications deploy into any
+	// namespace on the cluster including another tenant's.
+	dests, _, _ := unstructured.NestedSlice(ap.Object, "spec", "destinations")
+	if len(dests) != 1 {
+		t.Fatalf("namespace-tier AppProject must have exactly one destination, got %d: %v", len(dests), dests)
+	}
+	d, _ := dests[0].(map[string]interface{})
+	if got := d["namespace"]; got != PlatformNamespace(p) {
+		t.Errorf("destination namespace = %v, want %q — this is the field that keeps a tenant's "+
+			"Applications inside its own namespace", got, PlatformNamespace(p))
+	}
+	if got := d["server"]; got != "https://kubernetes.default.svc" {
+		t.Errorf("destination server = %v, want the in-cluster server", got)
+	}
+
+	// clusterResourceWhitelist — empty is the namespace tier's whole claim:
+	// tenant apps are namespaced-only. A wildcard entry here would let a tenant
+	// Application create ClusterRoles and CRDs, which is cluster-wide escalation
+	// from inside a namespace-scoped tenancy.
+	crw, found, _ := unstructured.NestedSlice(ap.Object, "spec", "clusterResourceWhitelist")
+	if found && len(crw) != 0 {
+		t.Errorf("clusterResourceWhitelist = %v, want empty at the namespace tier — any entry lets a "+
+			"tenant Application create cluster-scoped objects", crw)
+	}
+
+	// sourceRepos — where the manifests may come from. A "*" would let a tenant
+	// point an Application at any repository, which is arbitrary manifest
+	// execution under this project's destination and RBAC.
+	repos, _, _ := unstructured.NestedStringSlice(ap.Object, "spec", "sourceRepos")
+	if len(repos) == 0 {
+		t.Fatal("sourceRepos is empty — the project would accept no source at all")
+	}
+	for _, repo := range repos {
+		if repo == "*" {
+			t.Errorf("sourceRepos contains \"*\" — a tenant could sync manifests from any repository")
+		}
+	}
+	wantRepos := map[string]bool{
+		"https://github.com/nanohype/*":                      true,
+		"oci://ghcr.io/nanohype/eks-agent-platform/charts/*": true,
+	}
+	for _, repo := range repos {
+		if !wantRepos[repo] {
+			t.Errorf("unexpected sourceRepo %q — widening this is how a tenant reaches manifests "+
+				"outside the org", repo)
+		}
+	}
+}
