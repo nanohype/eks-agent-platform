@@ -97,7 +97,7 @@ func vclusterClusterSecretName(p *platformv1alpha1.Platform) string {
 
 // buildVClusterValues renders the per-Platform vcluster.yaml the operator hands
 // to the vcluster chart through the Application's helm.valuesObject. It sets the
-// load-bearing bits ADR 0009 mandates:
+// load-bearing bits ADR 0008 mandates:
 //   - sync.toHost.serviceAccounts.enabled: true — so the tenant tenant-runtime SA
 //     materializes on the host under a syncer-generated name, the target of the
 //     Pod Identity association.
@@ -807,7 +807,7 @@ func (r *PlatformReconciler) reconcileVClusterTier(ctx context.Context, p *platf
 }
 
 // cleanupVClusterResources tears down a vcluster-tier Platform in the reverse of
-// provisioning, finalizer-gated (ADR 0009 teardown order):
+// provisioning, finalizer-gated (ADR 0008 teardown order):
 //  1. delete tenant app Applications targeting the vcluster,
 //  2. delete the ArgoCD cluster-Secret registration,
 //  3. delete the vcluster Application (ArgoCD uninstalls the release),

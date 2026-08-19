@@ -1,4 +1,4 @@
-# ADR 0009 — vcluster hard-isolation tier: reconcile model, synced-SA Pod Identity, ArgoCD destination, containment, teardown
+# ADR 0008 — vcluster hard-isolation tier: reconcile model, synced-SA Pod Identity, ArgoCD destination, containment, teardown
 
 ## Status
 
@@ -101,7 +101,7 @@ renders them programmatically — typed client-go objects for the resources it k
 foreign CRDs it deliberately keeps out of its dependency graph (the `AppProject`,
 `operators/internal/controller/platform_reconcile.go:286`), and verbatim
 `.Files.Get` emission from `charts/operator/files/` for CR-heavy static manifests it
-does not want Helm to evaluate (the eval-runtime bundle, ADR 0008). It does
+does not want Helm to evaluate (the eval-runtime bundle, ADR 0007). It does
 **not** shell out to the Helm CLI anywhere, and it does not embed Helm's Go SDK.
 
 A per-Platform vcluster is a full Helm release — a StatefulSet, the control-plane and
@@ -550,7 +550,7 @@ than inheriting a number from this ADR.
 
 - **Helm-in-operator (SDK or subprocess) to install the vcluster.** Rejected — new
   heavy dependency / runtime surface, breaks the "operator never runs Helm" idiom
-  (ADR 0008).
+  (ADR 0007).
 - **Operator hand-renders vcluster's manifests** into `charts/operator/files/`.
   Rejected — forces the operator to track vcluster's full, moving manifest surface.
 - **Parallel per-tier reconcile paths** instead of a client swap. Rejected — duplicates
@@ -580,7 +580,7 @@ than inheriting a number from this ADR.
   (`ensurePodIdentityAssociation`, `deletePodIdentityAssociation`, `tenantRoleName`).
 - Isolation model: `docs/architecture/tenant-isolation-tiers.md`.
 - Threat model + cross-component contracts this ADR extends: [ADR 0003](0003-threat-model.md).
-- Operator-renders-not-Helm precedent: [ADR 0008](0008-eval-runtime-operator-chart.md).
+- Operator-renders-not-Helm precedent: [ADR 0007](0007-eval-runtime-operator-chart.md).
 - Platform-tenant contract (delivery + Pod Identity + OTel attrs):
   `nanohype/standards/platform-tenant-contract.json`.
 - Upstream: [loft-sh/vcluster](https://github.com/loft-sh/vcluster),

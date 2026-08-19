@@ -46,7 +46,7 @@ type PlatformSpec struct {
 	//   - vcluster: the same host-side containment PLUS a per-Platform virtual
 	//     cluster, so tenant code that talks to the Kubernetes API talks to its own
 	//     API server, not the host's (API-server-level isolation — NOT kernel/node
-	//     isolation; see docs/adr/0009-vcluster-isolation-tier.md and SECURITY.md).
+	//     isolation; see docs/adr/0008-vcluster-isolation-tier.md and SECURITY.md).
 	//
 	// Immutable: switching tiers on a live Platform is a migration (it would strand
 	// the virtual cluster and its synced host objects), so the tier is fixed at

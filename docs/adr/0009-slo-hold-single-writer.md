@@ -1,4 +1,4 @@
-# ADR 0010 — burn-rate rollout hold: one evaluator, one AppProject writer
+# ADR 0009 — burn-rate rollout hold: one evaluator, one AppProject writer
 
 ## Status
 

@@ -66,4 +66,4 @@ misconfigurations:
     paths:
       - "operators/config/rbac/role.yaml"
       - "charts/operator/templates/rbac.yaml"
-    statement: "Operator reconciles the vcluster kubeconfig Secret and the ArgoCD cluster-registration Secret for the hard-isolation tier. See docs/adr/0009-vcluster-isolation-tier.md + docs/adr/0003-threat-model.md."
+    statement: "Operator reconciles the vcluster kubeconfig Secret and the ArgoCD cluster-registration Secret for the hard-isolation tier. See docs/adr/0008-vcluster-isolation-tier.md + docs/adr/0003-threat-model.md."
