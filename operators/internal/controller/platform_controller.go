@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
@@ -56,7 +56,12 @@ type PlatformReconciler struct {
 	// every use goes through recordWarning, which no-ops on nil rather than
 	// making the recorder a construction requirement for tests that do not
 	// exercise this path.
-	Recorder record.EventRecorder
+	//
+	// events.EventRecorder rather than record.EventRecorder: controller-runtime
+	// marks the older provider obsolete in favour of the events/v1 API, and its
+	// signature carries `related` and `action` as fields alongside the note,
+	// where the older one folded them into the message.
+	Recorder events.EventRecorder
 
 	// NetworkEngine ("cilium"|"kubernetes") selects whether tenant egress is a
 	// CiliumNetworkPolicy (required to allow the host-entity Pod Identity creds
@@ -417,7 +422,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				for _, c := range susp.UngrantedCapabilities {
 					names = append(names, string(c))
 				}
-				r.recordWarning(platform, "CapabilityNotGranted",
+				r.recordWarning(platform, "CapabilityNotGranted", "ReconcileCapabilityPolicy",
 					"declared but granted nothing: %s — the tenant role carries no permission for it; "+
 						"the substrate binding it depends on does not exist",
 					strings.Join(names, ", "))
@@ -507,11 +512,13 @@ func setVClusterReady(p *platformv1alpha1.Platform, status metav1.ConditionStatu
 // recorder is wired. Unit tests construct the reconciler directly and do not all
 // need an event sink; making the nil check the helper's job keeps that from
 // becoming a construction requirement at every call site.
-func (r *PlatformReconciler) recordWarning(p *platformv1alpha1.Platform, reason, messageFmt string, args ...any) {
+// action names what the operator was doing, which the events/v1 API carries as
+// a field rather than leaving it to be inferred from the note.
+func (r *PlatformReconciler) recordWarning(p *platformv1alpha1.Platform, reason, action, noteFmt string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}
-	r.Recorder.Eventf(p, corev1.EventTypeWarning, reason, messageFmt, args...)
+	r.Recorder.Eventf(p, nil, corev1.EventTypeWarning, reason, action, noteFmt, args...)
 }
 
 // capabilitiesGrantedCondition reports whether every capability the Platform

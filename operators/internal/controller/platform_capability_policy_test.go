@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
@@ -70,9 +70,9 @@ func TestRecordWarning(t *testing.T) {
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
 	t.Run("emits a warning naming the capability", func(t *testing.T) {
-		rec := record.NewFakeRecorder(4)
+		rec := events.NewFakeRecorder(4)
 		r := &PlatformReconciler{Recorder: rec}
-		r.recordWarning(p, "CapabilityNotGranted", "declared but granted nothing: %s", "ses")
+		r.recordWarning(p, "CapabilityNotGranted", "ReconcileCapabilityPolicy", "declared but granted nothing: %s", "ses")
 
 		select {
 		case ev := <-rec.Events:
@@ -92,7 +92,7 @@ func TestRecordWarning(t *testing.T) {
 
 	t.Run("no recorder wired is a no-op, not a panic", func(t *testing.T) {
 		r := &PlatformReconciler{}
-		r.recordWarning(p, "CapabilityNotGranted", "declared but granted nothing: %s", "ses")
+		r.recordWarning(p, "CapabilityNotGranted", "ReconcileCapabilityPolicy", "declared but granted nothing: %s", "ses")
 	})
 }
 
