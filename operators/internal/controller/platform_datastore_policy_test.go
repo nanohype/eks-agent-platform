@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -59,6 +60,85 @@ func hasResource(s *policyStatement, want string) bool {
 // minimal actions scoped to the tenant-substrate naming convention
 // (<env>-<platform>-<datastore>, S3 account-qualified), cache contributes no
 // statement, and no Resource is a bare wildcard.
+// TestDatastoreActionsAreDataPlaneOnly pins the verbs a tenant gets on its own
+// datastores. Nothing referenced any of these six lists — the Resource scoping
+// is covered elsewhere and is what keeps a tenant inside its own stores, but
+// what it may *do* there was unobserved.
+//
+// The invariant is that every action is data-plane. A tenant reads and writes
+// its own data; it does not create, delete or reconfigure the store itself.
+// That line matters because the control-plane verbs are the ones that escape
+// the Resource scoping's intent: DeleteTable destroys the store the scoping was
+// protecting, PutBucketPolicy rewrites the rule that does the protecting, and
+// SetQueueAttributes can repoint a queue's redrive at another tenant's.
+//
+// Asserted two ways on purpose. The literal sets catch a removal — a dropped
+// verb is a tenant that silently cannot use its own store — while the
+// forbidden-prefix scan catches an addition nobody thought to update a literal
+// for, which is the direction a list like this actually drifts.
+func TestDatastoreActionsAreDataPlaneOnly(t *testing.T) {
+	lists := map[string][]string{
+		"dynamo":   datastoreDynamoActions,
+		"s3object": datastoreS3ObjectActions,
+		"s3bucket": datastoreS3BucketActions,
+		"sqs":      datastoreSQSActions,
+		"kafka":    datastoreKafkaActions,
+		"secret":   datastoreSecretActions,
+	}
+
+	want := map[string][]string{
+		"dynamo": {
+			"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan",
+			"dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem",
+			"dynamodb:BatchWriteItem", "dynamodb:ConditionCheckItem", "dynamodb:DescribeTable",
+		},
+		"s3object": {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+		"s3bucket": {"s3:ListBucket", "s3:GetBucketLocation"},
+		"sqs": {
+			"sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage",
+			"sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:ChangeMessageVisibility",
+		},
+		"kafka": {
+			"kafka-cluster:Connect", "kafka-cluster:DescribeCluster", "kafka-cluster:DescribeTopic",
+			"kafka-cluster:CreateTopic", "kafka-cluster:WriteData", "kafka-cluster:ReadData",
+			"kafka-cluster:DescribeGroup", "kafka-cluster:AlterGroup",
+		},
+		"secret": {"secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"},
+	}
+
+	for kind, got := range lists {
+		if !reflect.DeepEqual(got, want[kind]) {
+			t.Errorf("%s actions = %v, want %v", kind, got, want[kind])
+		}
+	}
+
+	// Control-plane verbs, by the shape of their name. kafka-cluster:CreateTopic
+	// is the deliberate exception: topics are the tenant's own namespace on a
+	// shared cluster, and the Resource scoping confines it to their prefix —
+	// creating one is closer to writing a key than to provisioning a store.
+	forbidden := []string{
+		"Delete Table", "Delete Bucket", "Delete Queue", "Delete Secret", "Delete Cluster",
+		"Create Table", "Create Bucket", "Create Queue", "Create Secret", "Create Cluster",
+		"Put Bucket", "Set Queue", "Update Table", "Update Secret", "Put Resource",
+		"Tag ", "Untag ",
+	}
+	for kind, actions := range lists {
+		for _, a := range actions {
+			verb := a[strings.Index(a, ":")+1:]
+			for _, f := range forbidden {
+				if strings.HasPrefix(verb, strings.ReplaceAll(f, " ", "")) {
+					t.Errorf("%s grants %q — control-plane verbs let a tenant reconfigure or destroy the "+
+						"store the Resource scoping exists to protect, not just use it", kind, a)
+				}
+			}
+		}
+	}
+
+	if !strings.Contains(strings.Join(datastoreS3ObjectActions, ","), "s3:GetObject") {
+		t.Error("the s3 object grant must include GetObject or a tenant cannot read its own bucket")
+	}
+}
+
 func TestDatastorePolicy_ScopesEachKind(t *testing.T) {
 	p := platformWithDatastores("myplat",
 		platformv1alpha1.DatastoreSpec{Name: "db", Kind: platformv1alpha1.DatastoreRelational},

@@ -7,6 +7,8 @@ Licensed under the Apache License, Version 2.0 (the "License");
 package controller
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,6 +17,60 @@ import (
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
+
+// TestAssumeRolePolicyForPodIdentity pins the trust policy every tenant role is
+// minted with. Nothing asserted it — the document is emitted once at role
+// creation and never read back, so no test observed any field of it.
+//
+// Both actions are load-bearing and the failure is neither loud nor local:
+//
+//	sts:AssumeRole   without it the association exists and no pod ever gets
+//	                 credentials
+//	sts:TagSession   EKS Pod Identity attaches session tags on every assume, so
+//	                 without it the assume is rejected — pods come up, the
+//	                 Platform reports Ready, and every AWS call fails with an
+//	                 authorization error naming a session tag rather than the
+//	                 trust policy
+//
+// The principal is what scopes it to Pod Identity at all: pods.eks.amazonaws.com
+// is a different service principal from ec2 or eks, and naming the wrong one
+// produces a role nothing can assume.
+func TestAssumeRolePolicyForPodIdentity(t *testing.T) {
+	raw, err := assumeRolePolicyForPodIdentity()
+	if err != nil {
+		t.Fatalf("assumeRolePolicyForPodIdentity: %v", err)
+	}
+	var doc struct {
+		Version   string `json:"Version"`
+		Statement []struct {
+			Effect    string            `json:"Effect"`
+			Principal map[string]string `json:"Principal"`
+			Action    []string          `json:"Action"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("trust policy is not valid JSON: %v", err)
+	}
+	if doc.Version != "2012-10-17" {
+		t.Errorf("Version = %q, want 2012-10-17", doc.Version)
+	}
+	if len(doc.Statement) != 1 {
+		t.Fatalf("want one statement, got %d", len(doc.Statement))
+	}
+	s := doc.Statement[0]
+	if s.Effect != "Allow" {
+		t.Errorf("Effect = %q, want Allow", s.Effect)
+	}
+	if got := s.Principal["Service"]; got != "pods.eks.amazonaws.com" {
+		t.Errorf("principal service %q, want pods.eks.amazonaws.com — any other principal mints a role "+
+			"Pod Identity cannot assume", got)
+	}
+	want := []string{"sts:AssumeRole", "sts:TagSession"}
+	if !reflect.DeepEqual(s.Action, want) {
+		t.Errorf("actions = %v, want %v — Pod Identity tags every session, so dropping sts:TagSession "+
+			"leaves pods running with a Ready Platform and every AWS call rejected", s.Action, want)
+	}
+}
 
 func TestSuspensionFromTags(t *testing.T) {
 	cases := []struct {

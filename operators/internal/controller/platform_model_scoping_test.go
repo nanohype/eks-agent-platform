@@ -217,6 +217,26 @@ func TestModelScopingPolicyDoc(t *testing.T) {
 		if !reflect.DeepEqual(s.Action, modelInvokeActions) {
 			t.Errorf("actions: got %v", s.Action)
 		}
+		// Compared against a literal set, not against modelInvokeActions.
+		// The check above renders the constant and compares it to itself, so it
+		// holds for whatever the constant says: adding an over-broad verb passes,
+		// and — the direction that matters — *removing* one passes too, leaving
+		// the deny not covering it. Drop InvokeModelWithResponseStream and a
+		// tenant can stream from a model outside its allowed set, with the clamp
+		// still present and still looking correct.
+		//
+		// The Guardrail loop below catches the one addition the comment on
+		// modelInvokeActions warns about; this catches the rest of the shape.
+		wantActions := []string{
+			"bedrock:Converse",
+			"bedrock:ConverseStream",
+			"bedrock:InvokeModel",
+			"bedrock:InvokeModelWithResponseStream",
+		}
+		if !reflect.DeepEqual(s.Action, wantActions) {
+			t.Errorf("clamped actions = %v, want %v — every invocation verb has to be denied or the "+
+				"NotResource clamp leaves that verb reachable on any model", s.Action, wantActions)
+		}
 		// The clamp must never catch guardrail actions — they authorize
 		// against guardrail ARNs, not model ARNs.
 		for _, a := range s.Action {
