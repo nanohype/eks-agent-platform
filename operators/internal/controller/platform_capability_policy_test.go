@@ -8,11 +8,13 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
@@ -55,6 +57,44 @@ func TestCapabilityGrantSidsCoversEveryCapability(t *testing.T) {
 		t.Errorf("capabilityGrantSids has %d entries, API declares %d capabilities",
 			len(capabilityGrantSids), len(all))
 	}
+}
+
+// TestRecordWarning covers the event path the CapabilitiesGranted condition
+// pairs with. The condition is the durable record; the event is what reaches an
+// operator running `kubectl describe platform` after their agent fails, and
+// anything watching events that never reads the CR.
+//
+// The nil case is not defensive filler: unit tests construct PlatformReconciler
+// directly and most do not wire a recorder, so the no-op is what keeps the
+// recorder from becoming a construction requirement across the suite.
+func TestRecordWarning(t *testing.T) {
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
+
+	t.Run("emits a warning naming the capability", func(t *testing.T) {
+		rec := events.NewFakeRecorder(4)
+		r := &PlatformReconciler{Recorder: rec}
+		r.recordWarning(p, "CapabilityNotGranted", "ReconcileCapabilityPolicy", "declared but granted nothing: %s", "ses")
+
+		select {
+		case ev := <-rec.Events:
+			if !strings.Contains(ev, "Warning") {
+				t.Errorf("event %q is not a Warning — an Normal event would not surface in describe's tail", ev)
+			}
+			if !strings.Contains(ev, "CapabilityNotGranted") {
+				t.Errorf("event %q does not carry the reason", ev)
+			}
+			if !strings.Contains(ev, "ses") {
+				t.Errorf("event %q does not name the capability — naming it is the point", ev)
+			}
+		default:
+			t.Fatal("no event recorded")
+		}
+	})
+
+	t.Run("no recorder wired is a no-op, not a panic", func(t *testing.T) {
+		r := &PlatformReconciler{}
+		r.recordWarning(p, "CapabilityNotGranted", "ReconcileCapabilityPolicy", "declared but granted nothing: %s", "ses")
+	})
 }
 
 func TestCapabilitiesGrantedCondition(t *testing.T) {
@@ -623,6 +663,71 @@ func TestEnsureCapabilityPolicy_SchedulerMintsInvokeRole(t *testing.T) {
 	send := putsFor(f, schedulerInvokeSendPolicyName)
 	if len(send) != 1 || !strings.Contains(*send[0].PolicyDocument, "development-myplat-nudges") {
 		t.Fatalf("the invoke role's send policy must target the tenant's queue: %+v", send)
+	}
+}
+
+// TestSchedulerInvokeTrustPolicy pins the confused-deputy guard on the invoke
+// role's trust document.
+//
+// The role trusts a service principal, not an account, so without conditions
+// *any* AWS account's EventBridge Scheduler can assume it: an outsider creates a
+// schedule in their own account targeting this role's ARN, and AWS hands them
+// tenant credentials. aws:SourceAccount pins the caller's account and
+// aws:SourceArn pins it further to this tenant's own schedule group, so a peer
+// tenant in the same account cannot reach it either.
+//
+// The existing coverage was a substring check for "scheduler.amazonaws.com" on
+// the marshalled document, which passes with the entire Condition block deleted
+// — the principal is what it asserts, and the principal is not the control. This
+// parses the document and reads every field of the statement, because a trust
+// policy has no field that is decoration.
+func TestSchedulerInvokeTrustPolicy(t *testing.T) {
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
+	scope := arnScopeFromRole(capRoleARN, "us-west-2")
+
+	raw, err := schedulerInvokeTrustPolicy("development", p, scope)
+	if err != nil {
+		t.Fatalf("schedulerInvokeTrustPolicy: %v", err)
+	}
+	var doc struct {
+		Version   string `json:"Version"`
+		Statement []struct {
+			Effect    string            `json:"Effect"`
+			Principal map[string]string `json:"Principal"`
+			Action    string            `json:"Action"`
+			Condition map[string]map[string]string
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("trust policy is not valid JSON: %v", err)
+	}
+	if len(doc.Statement) != 1 {
+		t.Fatalf("want one statement, got %d", len(doc.Statement))
+	}
+	s := doc.Statement[0]
+
+	if s.Effect != "Allow" || s.Action != "sts:AssumeRole" {
+		t.Errorf("statement is %s on %q, want Allow on sts:AssumeRole", s.Effect, s.Action)
+	}
+	if got := s.Principal["Service"]; got != "scheduler.amazonaws.com" {
+		t.Errorf("principal service %q — only EventBridge Scheduler may assume the invoke role", got)
+	}
+
+	// Compared against the same helpers the reconciler scopes the grant with, so
+	// a change to the account or the group naming has to move both together.
+	wantAccount := scope.account()
+	if got := s.Condition["StringEquals"]["aws:SourceAccount"]; got != wantAccount {
+		t.Errorf("aws:SourceAccount = %q, want %q — without it any account's Scheduler can assume this role "+
+			"by targeting its ARN, and AWS hands the caller tenant credentials", got, wantAccount)
+	}
+	wantArn := schedulerScheduleARN("development", p, scope)
+	if got := s.Condition["ArnLike"]["aws:SourceArn"]; got != wantArn {
+		t.Errorf("aws:SourceArn = %q, want %q — this is what stops a peer tenant in the same account, "+
+			"since SourceAccount alone would admit every schedule group", got, wantArn)
+	}
+	if !strings.Contains(wantArn, scheduleGroupName("development", p)) {
+		t.Errorf("the SourceArn %q does not name this tenant's schedule group — the condition would be "+
+			"account-wide rather than tenant-scoped", wantArn)
 	}
 }
 

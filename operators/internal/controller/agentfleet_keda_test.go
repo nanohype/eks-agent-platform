@@ -199,3 +199,88 @@ func TestRequeueJitter(t *testing.T) {
 		}
 	}
 }
+
+// TestScaledObjectTriggerUsesPodIdentity pins how the SQS scaler gets its
+// credentials.
+//
+// What actually binds the scaler to the tenant's identity is the
+// TriggerAuthentication's podIdentity.provider. The existing SQS test fetches
+// that object and asserts only that it exists; its provider — the field the
+// whole mechanism rests on — was unread. Dropped or changed, KEDA falls back to
+// its own credentials and either cannot see the tenant's queue or reads it
+// under a shared identity.
+//
+// identityOwner is deliberately absent from the trigger and asserted absent
+// here. In KEDA 2.20.2's pkg/scalers/aws/aws_common.go the provider is checked
+// first and the function returns before the legacy identityOwner switch, so
+// under provider "aws" that field is never read. It is also deprecated as of
+// v2.13 and slated for removal in v3. Emitting it would be a field that does
+// nothing, carrying a comment claiming it does something.
+func TestScaledObjectTriggerUsesPodIdentity(t *testing.T) {
+	ctx := context.Background()
+	s := fleetScheme(t)
+	p := readyPlatformIn()
+	// A real queue URL: with an empty one the reconciler renders a CPU trigger
+	// instead, and this test would assert nothing.
+	fleet := scalingFleet("https://sqs.us-west-2.amazonaws.com/123456789012/acme-work")
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
+	r := &AgentFleetReconciler{Client: cl, Scheme: s}
+
+	if _, err := r.reconcileFleetSelf(ctx, fleet); err != nil {
+		t.Fatalf("reconcileFleetSelf: %v", err)
+	}
+	ns := PlatformNamespace(p)
+
+	// The live mechanism.
+	ta := &unstructured.Unstructured{}
+	ta.SetGroupVersionKind(schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "TriggerAuthentication"})
+	taName := "fleet-" + fleet.Name + "-aws"
+	if err := cl.Get(ctx, types.NamespacedName{Name: taName, Namespace: ns}, ta); err != nil {
+		t.Fatalf("TriggerAuthentication not created: %v", err)
+	}
+	if got, _, _ := unstructured.NestedString(ta.Object, "spec", "podIdentity", "provider"); got != "aws" {
+		t.Errorf("TriggerAuthentication podIdentity.provider = %q, want \"aws\" — this is what makes KEDA "+
+			"poll as the tenant ServiceAccount rather than with its own credentials", got)
+	}
+
+	soGVK := schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"}
+	checked := 0
+
+	for _, agent := range fleet.Spec.Agents {
+		so := &unstructured.Unstructured{}
+		so.SetGroupVersionKind(soGVK)
+		name := agentDeploymentName(fleet, agent.Name)
+		if err := cl.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, so); err != nil {
+			continue // agents without a queue trigger render no ScaledObject
+		}
+		triggers, found, _ := unstructured.NestedSlice(so.Object, "spec", "triggers")
+		if !found {
+			continue
+		}
+		for _, raw := range triggers {
+			trig, _ := raw.(map[string]any)
+			if trig["type"] != "aws-sqs-queue" {
+				continue
+			}
+			checked++
+			meta, _ := trig["metadata"].(map[string]any)
+			// Absent, not "pod": see the note above. Asserted rather than
+			// ignored so that re-adding it has to come with a reason.
+			if got, present := meta["identityOwner"]; present {
+				t.Errorf("ScaledObject %s trigger sets identityOwner = %v — under podIdentity provider "+
+					"\"aws\" KEDA never reads that field, and it is deprecated as of v2.13", name, got)
+			}
+			// Without a resolvable authenticationRef the podIdentity provider
+			// above never reaches the trigger, and the scaler has no credential.
+			ref, _ := trig["authenticationRef"].(map[string]any)
+			if ref == nil || ref["name"] != taName {
+				t.Errorf("ScaledObject %s authenticationRef = %v, want name %q — the trigger reaches its "+
+					"podIdentity only through this reference", name, ref, taName)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no aws-sqs-queue trigger was rendered — this test asserted nothing, which is not the " +
+			"same as passing")
+	}
+}

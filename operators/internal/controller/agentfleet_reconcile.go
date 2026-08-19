@@ -400,13 +400,6 @@ func fleetScalingTriggers(fleet *agentsv1alpha1.AgentFleet, queueURL string) []a
 				"queueURL":    queueURL,
 				"queueLength": fmt.Sprintf("%d", depth),
 				"awsRegion":   region,
-				// 'pod' identityOwner makes KEDA use the workload's own
-				// credentials — the tenant SA provisioned by
-				// ensureTenantServiceAccount, which EKS Pod Identity binds to
-				// the tenant role — rather than KEDA's own operator role. See
-				// docs/adr/0006-keda-pod-identity.md; the SQS read the trigger
-				// needs is in the agent-iam baseline policy.
-				"identityOwner": "pod",
 			},
 			"authenticationRef": map[string]any{
 				"name": "fleet-" + fleet.Name + "-aws",
@@ -501,9 +494,18 @@ func (r *AgentFleetReconciler) ensureKEDATriggerAuth(ctx context.Context, tc cli
 		})
 		spec := map[string]any{
 			"podIdentity": map[string]any{
+				// This provider is the whole mechanism: with it, KEDA polls the
+				// queue as the tenant ServiceAccount — the one
+				// ensureTenantServiceAccount provisions, which EKS Pod Identity
+				// binds to the tenant role — rather than with the operator's own
+				// credentials. See docs/adr/0006-keda-pod-identity.md; the SQS
+				// read the trigger needs is in the agent-iam baseline policy.
+				//
+				// "aws", not "aws-eks". In KEDA's aws_common.go the provider is
+				// checked first and returns before the legacy identityOwner
+				// switch is reached, so under this provider that trigger field
+				// is never read. The ScaledObject deliberately does not set it.
 				"provider": "aws",
-				// identityOwner is on the trigger itself in the
-				// ScaledObject; the TA only declares the provider.
 			},
 		}
 		return unstructured.SetNestedField(ta.Object, spec, "spec")

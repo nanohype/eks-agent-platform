@@ -184,3 +184,55 @@ func mustBlocks(t *testing.T, prof string) map[string][]block {
 	}
 	return b
 }
+
+// TestCheck_MeasuredPackageWithNoFloorFailsLoud is the other direction of the
+// same guarantee as TestCheck_ConfiguredPackageWithNoDataFailsLoud.
+//
+// That one walks the config and catches a floor whose package is gone. Walking
+// the config cannot catch the inverse — a package the floors were never told
+// about — so this walks the measured set instead. Between them the two
+// collections are compared rather than one being iterated.
+//
+// The gap was real: internal/metricsbridge was added and arrived with no floor,
+// unguarded and silent, because every check ran from the config side.
+func TestCheck_MeasuredPackageWithNoFloorFailsLoud(t *testing.T) {
+	fileCov := map[string]fileCoverage{
+		"internal/controller/a.go": {covered: 9, total: 10},
+		"internal/newpkg/thing.go": {covered: 5, total: 5},
+	}
+	cfg := config{packageFloors: map[string]float64{"internal/controller": 75}}
+
+	vios, _ := check(fileCov, cfg)
+
+	var found bool
+	for _, v := range vios {
+		if v.scope == "internal/newpkg" && strings.Contains(v.kind, "no floor configured") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a measured package with no floor must fail; got %+v — otherwise a new package is "+
+			"unguarded until someone remembers to add it", vios)
+	}
+	// 100% coverage is not a pass here: the finding is the absent floor, not the
+	// number. A package could arrive at 0% and be equally unenumerated.
+	for _, v := range vios {
+		if v.scope == "internal/controller" {
+			t.Errorf("internal/controller is at 90%% against a 75%% floor and must not be flagged: %+v", v)
+		}
+	}
+}
+
+// TestCheck_ZeroStatementPackageNeedsNoFloor keeps the new direction from
+// demanding floors for packages that have nothing to measure — an
+// interface-only or constant-only package would otherwise be permanently
+// unsatisfiable, since no test can raise its coverage above zero of zero.
+func TestCheck_ZeroStatementPackageNeedsNoFloor(t *testing.T) {
+	fileCov := map[string]fileCoverage{
+		"internal/constants/keys.go": {covered: 0, total: 0},
+	}
+	vios, _ := check(fileCov, config{})
+	if len(vios) != 0 {
+		t.Errorf("a package with no statements needs no floor; got %+v", vios)
+	}
+}

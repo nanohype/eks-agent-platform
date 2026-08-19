@@ -27,10 +27,11 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/nanohype/eks-agent-platform/operators/internal/metricsbridge"
 )
 
 const (
-	listenAddr        = ":8080"
 	anthropicAPIBase  = "https://api.anthropic.com"
 	anthropicVersion  = "2023-06-01"
 	anthropicBeta     = "managed-agents-2026-04-01"
@@ -74,13 +75,13 @@ func run() error {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]int64{"depth": depth}); err != nil {
+		if err := metricsbridge.WriteDepth(w, depth); err != nil {
 			log.Printf("metrics-shim: write response: %v", err)
 		}
 	})
 
 	srv := &http.Server{
-		Addr:              listenAddr,
+		Addr:              metricsbridge.ListenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
@@ -92,7 +93,7 @@ func run() error {
 	serveErr := make(chan error, 1)
 	go func() {
 		// #nosec G706 -- envID is an operator-set config value, not request data.
-		log.Printf("metrics-shim: serving work-queue depth for environment %s on %s", envID, listenAddr)
+		log.Printf("metrics-shim: serving work-queue depth for environment %s on %s", envID, metricsbridge.ListenAddr)
 		serveErr <- srv.ListenAndServe()
 	}()
 

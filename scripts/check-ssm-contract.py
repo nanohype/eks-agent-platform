@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Every SSM parameter this repo publishes must have a consumer.
+"""Every SSM parameter this repo publishes must have a consumer, and every
+parameter it consumes must have a producer.
 
 An SSM parameter is a contract between two things that never reference each
 other. Nothing links them: the writer applies, the reader reads a string, and if
@@ -51,6 +52,47 @@ This checks one direction only — that what is written is read. The other
 direction (that what is read is written) spans repos: landing-zone publishes
 agent-iam, model-artifacts, observability and managed-monitoring into the same
 tree, and a single-repo job cannot see it.
+
+THE OTHER DIRECTION
+
+Everything above walks the published set. That can only find a parameter written
+with no reader; it can never find a READER WITH NO WRITER, because such a path
+appears nowhere in the collection being walked. A check that iterates one
+collection finds what is missing from the other, never what the walked
+collection was never told about.
+
+That gap was live when this was written. The operator reads
+
+    /eks-agent-platform/<cluster>/<platform>/ses/domain
+
+to bind a tenant's SES sending domain, and nothing in either landing-zone tree
+writes it — verified with a positive control, not inferred from a quiet grep. A
+Platform declaring the ses capability therefore gets no grant, reports Ready,
+and the first symptom is a tenant workload failing to send mail. The reading
+half was built and the writing half never was, and every check here ran from the
+side that could not see it.
+
+So the two sets are now compared rather than one being iterated.
+
+WHAT COUNTS AS A CONSUMED PATH
+
+Terraform `data "aws_ssm_parameter"` blocks, as before, and the operator's
+specific-path reads. The latter are found by convention: a function whose name
+ends in ParamPath returns an SSM parameter name, and there are three
+(sesDomainParamPath, masterSecretParamPath, tenantKeyParamPath). The convention
+is what makes them findable — a specific-path read built inline, without going
+through such a function, is invisible to this check in exactly the way an
+unmarked human consumer is. That is a limit worth knowing rather than a claim
+this check does not make.
+
+The operator's GetParametersByPath sweep is not a consumed path. It reads a
+subtree and ignores what it does not recognise, so it names nothing.
+
+A consumed path is satisfied when this repo publishes it, or when a
+`// ssm-producer: <who>` comment above the builder names who does. The marker is
+a claim, like its ssm-consumer counterpart, and it is meant to be: it costs one
+line and it puts the claim next to the reader, where the reviewer who doubts it
+is standing.
 
 Usage: scripts/check-ssm-contract.py [--verbose]
 """
@@ -108,6 +150,30 @@ def parse_locals(sources: list[str]) -> dict[str, str]:
 HEADER = re.compile(r'(?P<kind>resource|data)\s+"aws_ssm_parameter"\s+"(?P<label>\w+)"\s*\{')
 NAME = re.compile(r'\bname\s*=\s*"(?P<value>[^"\n]*)"')
 CONSUMER = re.compile(r"#\s*ssm-consumer:\s*(?P<who>.+?)\s*$", re.M)
+# The reader-side counterpart, written as a Go comment above the ParamPath
+# builder: `// ssm-producer: landing-zone's agent-iam component`.
+PRODUCER = re.compile(r"//\s*ssm-producer:\s*(?P<who>.+?)\s*$", re.M)
+# A ParamPath builder returns the parameter name. Captured with its fmt template
+# so the path can be compared against what terraform publishes.
+PARAM_PATH_FN = re.compile(
+    r"((?:^//[^\n]*\n)*)^func\s+(?P<fn>\w*ParamPath)\s*\([^)]*\)\s*string\s*\{"
+    r"(?P<body>.*?)\n\}",
+    re.M | re.S,
+)
+SSM_LITERAL = re.compile(r'"(?P<path>/eks-agent-platform/[^"\n]*)"')
+
+
+def wildcard(name: str) -> str:
+    """Collapse a path to the shape both sides can be compared in.
+
+    Terraform names carry ${var.cluster_name}; Go templates carry %s. Neither
+    resolves at check time and neither needs to: what matters is whether the
+    same SLOTS in the same positions are published and consumed. Every
+    substitution becomes *, so the two vocabularies meet.
+    """
+    out = re.sub(r"<[\w.]+>", "*", name)
+    out = re.sub(r"%[sdv]", "*", out)
+    return out.rstrip("/")
 
 
 def block_body(src: str, open_brace: int) -> str:
@@ -220,6 +286,60 @@ def collect() -> tuple[list[Param], set[str]]:
     return written, read
 
 
+class ConsumedPath:
+    def __init__(self, fn: str, file: Path, path: str, producer: str | None):
+        self.fn = fn
+        self.file = file
+        self.path = path
+        self.producer = producer
+
+    def __repr__(self) -> str:
+        return f"{self.fn}"
+
+
+def collect_consumed() -> list[ConsumedPath]:
+    """The operator's specific-path SSM reads, by convention.
+
+    A function named *ParamPath returns an SSM parameter name; its comment block
+    may carry `// ssm-producer:` naming who writes it. The convention is the
+    whole discovery mechanism, so if it finds none at all that is a parse
+    failure rather than a clean tree — the same reasoning as the Config.assign
+    arm-count guard below.
+    """
+    found: list[ConsumedPath] = []
+    for path in sorted(OPERATORS.rglob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        src = path.read_text()
+        for m in PARAM_PATH_FN.finditer(src):
+            lit = SSM_LITERAL.search(m.group("body"))
+            if not lit:
+                print(
+                    f"ERROR {path.relative_to(REPO)}: {m.group('fn')} returns no "
+                    "/eks-agent-platform literal; this check cannot resolve what it reads",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            declared = PRODUCER.search(m.group(1) or "")
+            found.append(
+                ConsumedPath(
+                    m.group("fn"),
+                    path.relative_to(REPO),
+                    lit.group("path"),
+                    declared.group("who") if declared else None,
+                )
+            )
+    if not found:
+        print(
+            "ERROR: found no *ParamPath builders under operators/; the convention this "
+            "check discovers consumers by is not matching, and every reader would look "
+            "satisfied",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return found
+
+
 def operator_keys() -> dict[str, str]:
     """{relative key: the Config field its case arm assigns}."""
     src = OPERATOR_CONFIG.read_text()
@@ -269,6 +389,21 @@ def main() -> int:
     written, read = collect()
     keys = operator_keys()
     live = live_fields()
+    consumed_paths = collect_consumed()
+
+    # The set comparison. Published shapes come from what terraform writes;
+    # consumed shapes from what the operator reads by name. Both are collapsed
+    # to their slot shape so ${var.cluster_name} and %s meet.
+    published_shapes = {wildcard(p.name) for p in written}
+    unproduced: list[ConsumedPath] = []
+    declared_elsewhere: list[ConsumedPath] = []
+    for c in consumed_paths:
+        if wildcard(c.path) in published_shapes:
+            continue
+        if c.producer:
+            declared_elsewhere.append(c)
+        else:
+            unproduced.append(c)
 
     # A field decoded from a parameter and read by nothing. Reported separately
     # from orphan parameters because the remedy differs: the parameter may have
@@ -316,6 +451,39 @@ def main() -> int:
         print("the usual finding is a literal hardcoded where the field should have been — or")
         print("delete the field, the case arm, and the parameter together.")
         print()
+
+    if verbose:
+        for c in declared_elsewhere:
+            print(f"  ok  {c.path}\n        {c} — produced by: {c.producer}")
+
+    print(
+        f"{len(consumed_paths)} parameters consumed by name, "
+        f"{len(consumed_paths) - len(unproduced)} produced, {len(unproduced)} unaccounted for"
+    )
+
+    if unproduced:
+        print()
+        print("These parameters are read and nothing writes them:")
+        print()
+        for c in unproduced:
+            print(f"  {c.path}")
+            print(f"      read by {c.file}  ({c.fn})")
+        print()
+        print("A reader with no writer is the same broken contract as a writer with no")
+        print("reader, and it fails the other way round: the read returns nothing, the")
+        print("caller treats absent as 'not configured', and the feature is silently off")
+        print("while everything reports healthy.")
+        print()
+        print("If another repo publishes it — landing-zone owns the account-level")
+        print("identities — say so above the builder:")
+        print()
+        print("      // ssm-producer: landing-zone's agent-iam component")
+        print("      func tenantKeyParamPath(clusterName, platform string) string {")
+        print()
+        print("If nothing publishes it anywhere, that is the finding: either build the")
+        print("producer or drop the read, but do not leave a capability whose grant")
+        print("depends on a parameter no one writes.")
+        return 1
 
     if orphans:
         print()

@@ -354,3 +354,56 @@ func TestEveryScriptStepHasTheBinariesItInvokes(t *testing.T) {
 		}
 	}
 }
+
+// TestScheduledSuiteForbidsConcurrentRuns pins concurrencyPolicy on the
+// CronWorkflow a scheduled EvalSuite renders. Nothing asserted it.
+//
+// Argo's default is "Allow". An eval run drives real model traffic, so an
+// overlapping run is billed twice and the two race on the same writeback: both
+// patch the suite's status, and the one that finishes last wins regardless of
+// which started later. A suite whose runs take longer than its interval — the
+// case where this matters — quietly accumulates concurrent runs rather than
+// skipping, and the bill and the status both stop meaning what they say.
+//
+// "Forbid" rather than "Replace" because a run that is already spending should
+// finish and report, not be killed halfway with the spend already incurred.
+func TestScheduledSuiteForbidsConcurrentRuns(t *testing.T) {
+	suite, platform, fleet := evalFixtures()
+	suite.Spec.Schedule = "0 2 * * *"
+
+	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(publishedGateway(platform, "chat")).Build()
+	r := &EvalReconciler{
+		Client:               c,
+		RunnerNamespace:      "eval-runner",
+		RunnerServiceAccount: "eval-runner-custom",
+		ReportsBucket:        testReportsBucket,
+	}
+	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
+		t.Fatalf("ensureArgoWorkflow: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: argoWorkflowsGV.Group, Version: argoWorkflowsGV.Version, Kind: "CronWorkflow",
+	})
+	key := client.ObjectKey{Namespace: r.evalRunnerNamespace(), Name: evalWorkflowName(suite)}
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("a scheduled suite must render a CronWorkflow: %v", err)
+	}
+
+	if pol, _, _ := unstructured.NestedString(got.Object, "spec", "concurrencyPolicy"); pol != "Forbid" {
+		t.Errorf("concurrencyPolicy = %q, want Forbid — Argo defaults to Allow, so a suite whose runs "+
+			"outlast its interval accumulates overlapping runs that bill twice and race on the same "+
+			"status writeback", pol)
+	}
+	if sched, _, _ := unstructured.NestedString(got.Object, "spec", "schedule"); sched != suite.Spec.Schedule {
+		t.Errorf("schedule = %q, want %q", sched, suite.Spec.Schedule)
+	}
+	// The workflowSpec has to be nested under the cron wrapper, not left at the
+	// top level — a CronWorkflow with no workflowSpec schedules nothing and
+	// reports no error.
+	if _, found, _ := unstructured.NestedMap(got.Object, "spec", "workflowSpec"); !found {
+		t.Error("CronWorkflow has no spec.workflowSpec — it would schedule nothing, silently")
+	}
+}

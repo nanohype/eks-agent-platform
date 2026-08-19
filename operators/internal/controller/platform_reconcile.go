@@ -453,6 +453,7 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *platformv1
 			"destinations":               destinations,
 			"clusterResourceWhitelist":   clusterResourceWhitelist,
 			"namespaceResourceWhitelist": []interface{}{map[string]interface{}{"group": "*", "kind": "*"}},
+			"namespaceResourceBlacklist": tenantDeniedNamespacedKinds(),
 		}
 		// Rollout holds. This write replaces the whole spec — SetNestedField
 		// assigns wholesale at the leaf — so any syncWindow written here by a
@@ -473,6 +474,46 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *platformv1
 		return unstructured.SetNestedField(ap.Object, spec, "spec")
 	})
 	return err
+}
+
+// tenantDeniedNamespacedKinds is the deny half of the tenant's namespaced
+// surface. The whitelist beside it stays {*, *} on purpose: a tenant deploys
+// arbitrary application resources and nobody holds the list of what they ship,
+// so an allow-list of kinds would fail at admission naming a kind rather than a
+// policy, for workloads that were never the concern.
+//
+// The concern is the gateway data plane. A tenant declares a ModelGateway CR and
+// the operator renders the Gateway, its AIGatewayRoute, the AIServiceBackends
+// and the policies; nothing a tenant ships creates those kinds directly. With
+// {*, *} alone a tenant's Application could create an HTTPRoute or
+// AIGatewayRoute in its OWN namespace naming another tenant's Gateway as
+// parentRef — Gateway API permits a cross-namespace parent, and the destination
+// scoping does not stop it because the object never leaves the tenant's
+// namespace. The listener's allowedRoutes: Same closes that today, and this
+// closes the step before it: with no route kind creatable, there is nothing to
+// attach.
+//
+// Denied by group rather than by kind. Every kind in these three groups is
+// operator-owned — the data plane, its backends and its traffic policies — so
+// the group is the honest boundary, and it does not have to be revisited when
+// Gateway API adds a route type.
+//
+// This constrains ArgoCD Applications in the tenant's project. The operator
+// writes these objects through its own ClusterRole and is unaffected.
+func tenantDeniedNamespacedKinds() []interface{} {
+	return []interface{}{
+		// Gateway API itself: HTTPRoute, GRPCRoute, TCPRoute, TLSRoute,
+		// UDPRoute, Gateway, ReferenceGrant, BackendTLSPolicy.
+		map[string]interface{}{"group": "gateway.networking.k8s.io", "kind": "*"},
+		// Envoy AI Gateway: AIGatewayRoute, AIServiceBackend,
+		// BackendSecurityPolicy.
+		map[string]interface{}{"group": "aigateway.envoyproxy.io", "kind": "*"},
+		// Envoy Gateway extensions: EnvoyProxy, Backend, ClientTrafficPolicy,
+		// BackendTrafficPolicy. EnvoyProxy is the one that would otherwise let a
+		// tenant restyle the proxy its own Gateway runs, and BackendTrafficPolicy
+		// the one that would let it rewrite a rate limit.
+		map[string]interface{}{"group": "gateway.envoyproxy.io", "kind": "*"},
+	}
 }
 
 // sloHoldWindows renders the deny syncWindows this Platform's AppProject should

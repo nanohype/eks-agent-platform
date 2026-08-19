@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
@@ -48,6 +49,19 @@ type PlatformReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
 	Concurrency int
+
+	// Recorder emits Warning events for conditions an operator needs to see
+	// without reading the CR — currently a declared capability that resolved to
+	// no grant. Nil in unit-test paths that construct the reconciler directly;
+	// every use goes through recordWarning, which no-ops on nil rather than
+	// making the recorder a construction requirement for tests that do not
+	// exercise this path.
+	//
+	// events.EventRecorder rather than record.EventRecorder: controller-runtime
+	// marks the older provider obsolete in favour of the events/v1 API, and its
+	// signature carries `related` and `action` as fields alongside the note,
+	// where the older one folded them into the message.
+	Recorder events.EventRecorder
 
 	// NetworkEngine ("cilium"|"kubernetes") selects whether tenant egress is a
 	// CiliumNetworkPolicy (required to allow the host-entity Pod Identity creds
@@ -98,6 +112,7 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cilium.io,resources=ciliumnetworkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=appprojects;applications,verbs=get;list;watch;create;update;patch;delete
@@ -396,6 +411,22 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// now see that from the CR instead of from a tenant's failing workload.
 		if r.IAM != nil {
 			upsertCondition(&platform.Status.Conditions, capabilitiesGrantedCondition(platform, susp.UngrantedCapabilities))
+			// The condition is the durable record; the event is what reaches an
+			// operator who runs `kubectl describe` after their agent fails, or a
+			// watcher that never reads the CR. Emitted every reconcile while the
+			// state holds — the event recorder aggregates repeats rather than
+			// flooding, and going quiet after the first would hide it from anyone
+			// who arrived later.
+			if len(susp.UngrantedCapabilities) > 0 {
+				names := make([]string, 0, len(susp.UngrantedCapabilities))
+				for _, c := range susp.UngrantedCapabilities {
+					names = append(names, string(c))
+				}
+				r.recordWarning(platform, "CapabilityNotGranted", "ReconcileCapabilityPolicy",
+					"declared but granted nothing: %s — the tenant role carries no permission for it; "+
+						"the substrate binding it depends on does not exist",
+					strings.Join(names, ", "))
+			}
 		}
 		upsertCondition(&platform.Status.Conditions, metav1.Condition{
 			Type:               "NamespaceReady",
@@ -477,6 +508,19 @@ func setVClusterReady(p *platformv1alpha1.Platform, status metav1.ConditionStatu
 
 // upsertCondition adds or replaces a Condition by Type, preserving
 // LastTransitionTime when Status hasn't changed (standard k8s pattern).
+// recordWarning emits a Warning event against the Platform, no-oping when no
+// recorder is wired. Unit tests construct the reconciler directly and do not all
+// need an event sink; making the nil check the helper's job keeps that from
+// becoming a construction requirement at every call site.
+// action names what the operator was doing, which the events/v1 API carries as
+// a field rather than leaving it to be inferred from the note.
+func (r *PlatformReconciler) recordWarning(p *platformv1alpha1.Platform, reason, action, noteFmt string, args ...any) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Eventf(p, nil, corev1.EventTypeWarning, reason, action, noteFmt, args...)
+}
+
 // capabilitiesGrantedCondition reports whether every capability the Platform
 // declares is actually in force.
 //

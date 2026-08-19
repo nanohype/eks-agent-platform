@@ -49,6 +49,35 @@ operators/testbin/
 operators/cover.out
 operators/config/crd/bases/*.yaml.bak
 
+# Ad-hoc `go build ./...` output. Every Makefile target passes -o bin/, which
+# the rule above already covers; these appear only when someone builds a single
+# main package by hand, because go then writes the binary into the working
+# directory named after that package's own directory.
+#
+# Enumerated rather than pattern-matched because a compiled binary has no
+# extension to match on, and unlike a list chasing an upstream vocabulary this
+# population is bounded and regenerable — it is the module's main packages:
+#
+#     go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./...
+#
+# ./cmd is deliberately absent. Its binary would be named "cmd", which collides
+# with the source directory of the same name, and go refuses rather than
+# overwriting it:
+#
+#     go: build output "cmd" already exists and is a directory
+#
+# So that file cannot appear — while the rule to ignore it WOULD match every new
+# untracked file under operators/cmd/, silently swallowing a newly added source
+# file in the operator's own main package. An ignore rule that can never catch
+# its target and can catch the source tree is worse than no rule.
+#
+# Stakes are low either way: the org rule is never `git add -A`, so these are
+# only reachable by naming a binary explicitly. That rule is what keeps this a
+# tidiness fix rather than a safety one.
+operators/agentctl
+operators/metrics-shim
+operators/coverage-check
+
 # OpenTofu / Terraform
 .terraform/
 # .terraform.lock.hcl: track the canonical per-component locks (reproducible,

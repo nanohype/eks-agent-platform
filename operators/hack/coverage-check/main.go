@@ -49,6 +49,10 @@ var floors = config{
 		"internal/operatorconfig": 75,
 		"internal/agentctl":       30,
 		"internal/awsclients":     30,
+		// internal/metricsbridge is the shim/reconciler wire contract: two
+		// constants and one encoder. It sits at the org floor because there is
+		// nothing in it that a test cannot reach.
+		"internal/metricsbridge": 75,
 	},
 	fileFloors: map[string]float64{
 		"internal/controller/platform_iam.go":                   100,
