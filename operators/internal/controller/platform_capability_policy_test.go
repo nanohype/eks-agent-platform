@@ -8,6 +8,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -662,6 +663,71 @@ func TestEnsureCapabilityPolicy_SchedulerMintsInvokeRole(t *testing.T) {
 	send := putsFor(f, schedulerInvokeSendPolicyName)
 	if len(send) != 1 || !strings.Contains(*send[0].PolicyDocument, "development-myplat-nudges") {
 		t.Fatalf("the invoke role's send policy must target the tenant's queue: %+v", send)
+	}
+}
+
+// TestSchedulerInvokeTrustPolicy pins the confused-deputy guard on the invoke
+// role's trust document.
+//
+// The role trusts a service principal, not an account, so without conditions
+// *any* AWS account's EventBridge Scheduler can assume it: an outsider creates a
+// schedule in their own account targeting this role's ARN, and AWS hands them
+// tenant credentials. aws:SourceAccount pins the caller's account and
+// aws:SourceArn pins it further to this tenant's own schedule group, so a peer
+// tenant in the same account cannot reach it either.
+//
+// The existing coverage was a substring check for "scheduler.amazonaws.com" on
+// the marshalled document, which passes with the entire Condition block deleted
+// — the principal is what it asserts, and the principal is not the control. This
+// parses the document and reads every field of the statement, because a trust
+// policy has no field that is decoration.
+func TestSchedulerInvokeTrustPolicy(t *testing.T) {
+	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
+	scope := arnScopeFromRole(capRoleARN, "us-west-2")
+
+	raw, err := schedulerInvokeTrustPolicy("development", p, scope)
+	if err != nil {
+		t.Fatalf("schedulerInvokeTrustPolicy: %v", err)
+	}
+	var doc struct {
+		Version   string `json:"Version"`
+		Statement []struct {
+			Effect    string            `json:"Effect"`
+			Principal map[string]string `json:"Principal"`
+			Action    string            `json:"Action"`
+			Condition map[string]map[string]string
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("trust policy is not valid JSON: %v", err)
+	}
+	if len(doc.Statement) != 1 {
+		t.Fatalf("want one statement, got %d", len(doc.Statement))
+	}
+	s := doc.Statement[0]
+
+	if s.Effect != "Allow" || s.Action != "sts:AssumeRole" {
+		t.Errorf("statement is %s on %q, want Allow on sts:AssumeRole", s.Effect, s.Action)
+	}
+	if got := s.Principal["Service"]; got != "scheduler.amazonaws.com" {
+		t.Errorf("principal service %q — only EventBridge Scheduler may assume the invoke role", got)
+	}
+
+	// Compared against the same helpers the reconciler scopes the grant with, so
+	// a change to the account or the group naming has to move both together.
+	wantAccount := scope.account()
+	if got := s.Condition["StringEquals"]["aws:SourceAccount"]; got != wantAccount {
+		t.Errorf("aws:SourceAccount = %q, want %q — without it any account's Scheduler can assume this role "+
+			"by targeting its ARN, and AWS hands the caller tenant credentials", got, wantAccount)
+	}
+	wantArn := schedulerScheduleARN("development", p, scope)
+	if got := s.Condition["ArnLike"]["aws:SourceArn"]; got != wantArn {
+		t.Errorf("aws:SourceArn = %q, want %q — this is what stops a peer tenant in the same account, "+
+			"since SourceAccount alone would admit every schedule group", got, wantArn)
+	}
+	if !strings.Contains(wantArn, scheduleGroupName("development", p)) {
+		t.Errorf("the SourceArn %q does not name this tenant's schedule group — the condition would be "+
+			"account-wide rather than tenant-scoped", wantArn)
 	}
 }
 

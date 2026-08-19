@@ -9,6 +9,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -53,6 +55,116 @@ func hasResource(s *policyStatement, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestDatastoreActionsAreDataPlaneOnly pins the verbs a tenant gets on its own
+// datastores. Nothing referenced any of these six lists — the Resource scoping
+// is covered elsewhere and is what keeps a tenant inside its own stores, but
+// what it may *do* there was unobserved.
+//
+// The intent is that every action is data-plane: a tenant reads and writes its
+// own data and does not create, delete or reconfigure the store itself. Control-
+// plane verbs are the ones that escape the Resource scoping's purpose rather
+// than its letter — DeleteTable destroys the store the scoping was protecting,
+// PutBucketPolicy and sqs:AddPermission rewrite the rule that does the
+// protecting, and SetQueueAttributes can repoint a queue's redrive at another
+// tenant's.
+//
+// Two mechanisms, and they are not equals. The literal sets are the check that
+// converges: DeepEqual fails on any addition and any removal. The scan below is
+// a tripwire for the case the sets cannot see, and it cannot express the intent
+// above — see the comment where it is defined.
+func TestDatastoreActionsAreDataPlaneOnly(t *testing.T) {
+	lists := map[string][]string{
+		"dynamo":   datastoreDynamoActions,
+		"s3object": datastoreS3ObjectActions,
+		"s3bucket": datastoreS3BucketActions,
+		"sqs":      datastoreSQSActions,
+		"kafka":    datastoreKafkaActions,
+		"secret":   datastoreSecretActions,
+	}
+
+	want := map[string][]string{
+		"dynamo": {
+			"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan",
+			"dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem",
+			"dynamodb:BatchWriteItem", "dynamodb:ConditionCheckItem", "dynamodb:DescribeTable",
+		},
+		"s3object": {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"},
+		"s3bucket": {"s3:ListBucket", "s3:GetBucketLocation"},
+		"sqs": {
+			"sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage",
+			"sqs:GetQueueAttributes", "sqs:GetQueueUrl", "sqs:ChangeMessageVisibility",
+		},
+		"kafka": {
+			"kafka-cluster:Connect", "kafka-cluster:DescribeCluster", "kafka-cluster:DescribeTopic",
+			"kafka-cluster:CreateTopic", "kafka-cluster:WriteData", "kafka-cluster:ReadData",
+			"kafka-cluster:DescribeGroup", "kafka-cluster:AlterGroup",
+		},
+		"secret": {"secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"},
+	}
+
+	for kind, got := range lists {
+		if !reflect.DeepEqual(got, want[kind]) {
+			t.Errorf("%s actions = %v, want %v", kind, got, want[kind])
+		}
+	}
+
+	// The literal sets above are the converging check: DeepEqual fails on any
+	// addition and any removal, so nothing gets past them on its own.
+	//
+	// What follows is a tripwire for the one case they cannot see — someone adds
+	// a verb to the production list AND updates the `want` literal here to match,
+	// which is the ordinary way a test gets "fixed". Then the sets agree and the
+	// change is unreviewed. This fires on the shapes below regardless.
+	//
+	// It is a tripwire, not a proof. A denylist cannot express "every verb is
+	// data-plane" — it expresses "these shapes are known-bad", and AWS adds verbs
+	// faster than any such list converges. Anyone adding a verb here should read
+	// it as a prompt to think, not as a clearance.
+	//
+	// Two rules rather than a longer list of names, because these two generalise:
+	// anything touching Policy or Permission is access-control manipulation, and
+	// anything that Creates or Deletes a store noun is provisioning.
+	// kafka-cluster:CreateTopic is the deliberate exception — a topic is the
+	// tenant's own namespace on a shared cluster, confined by the same prefix
+	// scoping, closer to writing a key than to provisioning a store.
+	accessControl := regexp.MustCompile(`Policy|Permission`)
+	provisioning := regexp.MustCompile(`^(Create|Delete)(Table|Bucket|Queue|Secret|Cluster|Stream|DB)`)
+	// Named shapes the two rules above do not cover. Not exhaustive by
+	// construction — each entry is one that escaped, kept so it cannot escape
+	// twice.
+	knownBad := []string{
+		"SetQueueAttributes", "UpdateTable", "UpdateSecret",
+		"UpdateContinuousBackups", "UpdateTimeToLive",
+		"TagResource", "UntagResource", "PutLifecycleConfiguration",
+	}
+
+	for kind, actions := range lists {
+		for _, a := range actions {
+			verb := a[strings.Index(a, ":")+1:]
+			switch {
+			case verb == "CreateTopic":
+				// documented exception, see above
+			case accessControl.MatchString(verb):
+				t.Errorf("%s grants %q — it edits the store's own access policy, which rewrites the rule "+
+					"the Resource scoping relies on rather than operating within it", kind, a)
+			case provisioning.MatchString(verb):
+				t.Errorf("%s grants %q — it creates or destroys the store the Resource scoping exists to "+
+					"protect, rather than using it", kind, a)
+			default:
+				for _, bad := range knownBad {
+					if verb == bad {
+						t.Errorf("%s grants %q — it reconfigures the store rather than using it", kind, a)
+					}
+				}
+			}
+		}
+	}
+
+	if !strings.Contains(strings.Join(datastoreS3ObjectActions, ","), "s3:GetObject") {
+		t.Error("the s3 object grant must include GetObject or a tenant cannot read its own bucket")
+	}
 }
 
 // TestDatastorePolicy_ScopesEachKind proves every datastore kind is granted its

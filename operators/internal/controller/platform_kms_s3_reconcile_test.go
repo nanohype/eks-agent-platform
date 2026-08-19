@@ -151,6 +151,61 @@ func TestEnsureBucketPolicy_AddsTenantStatementsToEmptyPolicy(t *testing.T) {
 	}
 }
 
+// TestBaselineDenyInsecureTransport reads the statement the other tests only
+// count.
+//
+// Everywhere else this baseline appears, the assertion is
+// countSid(sids, baselineDenyTLSSid) == 1 — presence. Presence is the one
+// property that cannot be wrong in an interesting way: the Sid is seeded from
+// the same constant the count looks for, so it matches whatever the statement
+// happens to say. An Effect of Allow on Principal "*" for s3:* would be counted
+// as correctly present.
+//
+// Each field carries a distinct failure, and none of them error anywhere — the
+// policy is structurally valid and S3 accepts it:
+//
+//	Effect        Allow instead of Deny grants the world s3:* on the bucket
+//	Condition     absent denies *all* access including TLS, bricking the bucket;
+//	              "true" instead of "false" denies only the traffic that was fine
+//	Resource      the bucket ARN alone leaves every object unprotected, since
+//	              object operations match arn:...:::bucket/* and not the bucket
+func TestBaselineDenyInsecureTransport(t *testing.T) {
+	const bucket = "artifacts"
+	stmt := baselineDenyInsecureTransport(bucket)
+
+	if got := stmt["Sid"]; got != baselineDenyTLSSid {
+		t.Errorf("Sid = %v, want %v", got, baselineDenyTLSSid)
+	}
+	if got := stmt["Effect"]; got != "Deny" {
+		t.Errorf("Effect = %v, want Deny — Allow here grants Principal * s3:* on the whole bucket", got)
+	}
+	if got := stmt["Principal"]; got != "*" {
+		t.Errorf("Principal = %v, want * — the deny has to reach every caller to be a baseline", got)
+	}
+	if got := stmt["Action"]; got != "s3:*" {
+		t.Errorf("Action = %v, want s3:* — a narrower action leaves the rest reachable over plaintext", got)
+	}
+
+	res, _ := stmt["Resource"].([]string)
+	wantRes := []string{"arn:aws:s3:::" + bucket, "arn:aws:s3:::" + bucket + "/*"}
+	if len(res) != len(wantRes) {
+		t.Fatalf("Resource = %v, want both the bucket and its objects %v", res, wantRes)
+	}
+	for i := range wantRes {
+		if res[i] != wantRes[i] {
+			t.Errorf("Resource[%d] = %q, want %q — object operations match bucket/* and not the bucket ARN, "+
+				"so dropping either half leaves that half in the clear", i, res[i], wantRes[i])
+		}
+	}
+
+	cond, _ := stmt["Condition"].(map[string]any)
+	b, _ := cond["Bool"].(map[string]any)
+	if got := b["aws:SecureTransport"]; got != "false" {
+		t.Errorf("Condition Bool aws:SecureTransport = %v, want \"false\" — this is what makes the statement "+
+			"deny plaintext rather than deny everything (absent) or deny only TLS (\"true\")", got)
+	}
+}
+
 // TestEnsureBucketPolicy_ScopesTenantAccessToItsOwnPrefix asserts the value that
 // is the entire tenant boundary on the shared artifacts bucket.
 //
