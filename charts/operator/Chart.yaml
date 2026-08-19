@@ -8,6 +8,14 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) behind evalRuntime.*. It ships no SLO
 # manifests — see 0.6.0 below, which removed them.
 #
+# 0.6.8 is documentation only. The CRD's `isolation` description cites an ADR by
+# path, and the ADR sequence closed up, so the packaged CRD carries different
+# bytes for the same schema — no field, type, default or validation marker
+# moves. README.md's install example also pinned `--version 0.2.0`, four minor
+# versions behind two lockstep bumps, so a reader following it installed a chart
+# whose SLOPolicy CRD lacks `sli.errorSelector` and whose eval WorkflowTemplate
+# takes one route parameter instead of three.
+#
 # 0.6.5 is documentation only. The README described an `slo.*` values block that
 # 0.6.0 had removed and that values.schema.json now rejects outright, so a reader
 # following it got `additional properties 'slo' not allowed` rather than the
@@ -45,7 +53,7 @@ type: application
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour — nor, as 0.6.3 records, a workflow parameter.
-version: 0.6.7
+version: 0.6.8
 appVersion: "0.6.1"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
