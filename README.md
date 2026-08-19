@@ -98,7 +98,7 @@ The operator chart is pulled from `oci://ghcr.io/nanohype/eks-agent-platform/cha
 ```bash
 helm install operator ./charts/operator \
   -n eks-agent-platform --create-namespace \
-  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$(aws ssm get-parameter --name /eks-agent-platform/dev/agent-iam/operator_role_arn --query Parameter.Value --output text)" \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$(aws ssm get-parameter --name /eks-agent-platform/development-platform/agent-iam/operator_role_arn --query Parameter.Value --output text)" \
   --set config.environment=dev
 ```
 
