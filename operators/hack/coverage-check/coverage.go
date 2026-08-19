@@ -288,6 +288,30 @@ func check(fileCov map[string]fileCoverage, cfg config) ([]violation, map[string
 			vios = append(vios, violation{scope: pkg, kind: "package", want: floor, got: fc})
 		}
 	}
+
+	// The other direction, and the one a loop over the config cannot reach: a
+	// package the profile measured that no floor names. Walking packageFloors
+	// finds a floor whose package is gone; only walking the measured set finds a
+	// package the floors were never told about.
+	//
+	// That gap is not hypothetical — internal/metricsbridge was added and
+	// arrived with no floor, unguarded and silent, because every check here ran
+	// from the config side. A new package is exactly when a floor is easiest to
+	// forget and least likely to be missed by review.
+	//
+	// The population comes from the coverage profile rather than from a second
+	// list, so it cannot drift from what was actually measured.
+	for pkg, fc := range pkgCov {
+		if _, ok := cfg.packageFloors[pkg]; ok {
+			continue
+		}
+		if fc.total == 0 {
+			// No statements to hold to a floor (interface/constant-only
+			// packages). Nothing to enforce and nothing to forget.
+			continue
+		}
+		vios = append(vios, violation{scope: pkg, kind: "package (no floor configured)", got: fc})
+	}
 	for file, floor := range cfg.fileFloors {
 		fc, ok := fileCov[file]
 		if !ok {
@@ -354,10 +378,16 @@ func report(w *strings.Builder, pkgCov, fileCov map[string]fileCoverage, cfg con
 	}
 	w.WriteString("\nFAIL — coverage floors not met:\n")
 	for _, v := range vios {
-		if strings.Contains(v.kind, "no coverage data") {
+		switch {
+		case strings.Contains(v.kind, "no coverage data"):
 			fmt.Fprintf(w, "  %-8s %-45s no coverage data (want ≥%.0f%%)\n", v.kind, v.scope, v.want)
-			continue
+		case strings.Contains(v.kind, "no floor configured"):
+			// No `want` to compare against — that is the finding. Say what to
+			// do rather than printing a comparison against zero.
+			fmt.Fprintf(w, "  %-8s %-45s measured %.1f%% (%d/%d) but no floor names it — "+
+				"add it to packageFloors\n", v.kind, v.scope, v.got.percent(), v.got.covered, v.got.total)
+		default:
+			fmt.Fprintf(w, "  %-8s %-45s %.1f%% < %.0f%%  (%d/%d)\n", v.kind, v.scope, v.got.percent(), v.want, v.got.covered, v.got.total)
 		}
-		fmt.Fprintf(w, "  %-8s %-45s %.1f%% < %.0f%%  (%d/%d)\n", v.kind, v.scope, v.got.percent(), v.want, v.got.covered, v.got.total)
 	}
 }
