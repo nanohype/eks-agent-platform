@@ -195,6 +195,10 @@ func datastorePolicyDoc(stmts []policyStatement) (string, error) {
 	return string(b), nil
 }
 
+// ssm-producer: landing-zone's tenant-substrate component, aws_ssm_parameter
+// "master_secret_arn". Its for_each key is "${tenant}/${d.name}", so the two
+// segments this builds separately arrive as one composite key on that side —
+// the rendered paths match even though the templates do not look alike.
 // masterSecretParamPath is where the tenant-substrate component publishes a
 // relational datastore's RDS-managed master-secret ARN. Keyed on the full cluster
 // name — the same /eks-agent-platform/<cluster>/ subtree the operator resolves the

@@ -51,6 +51,8 @@ func tenantKeyPolicyStatements(keyARN string) []policyStatement {
 	}}
 }
 
+// ssm-producer: landing-zone's tenant-substrate component, aws_ssm_parameter
+// "tenant_kms_key_arn", one per tenant whether or not it declares a datastore.
 // tenantKeyParamPath is where tenant-substrate publishes the tenant's own key
 // ARN — the same /eks-agent-platform/<cluster>/tenant-substrate/<tenant>/ subtree
 // the master-secret ARN uses.
