@@ -25,6 +25,7 @@ import (
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/internal/metricsbridge"
 )
 
 const sandboxPoolFinalizer = "agents.nanohype.dev/sandboxpool-finalizer"
@@ -38,7 +39,8 @@ const defaultSandboxWorkerImage = "ghcr.io/nanohype/eks-agent-platform/sandbox-w
 
 // metricsShimPort is the port the metrics-shim binary listens on; the KEDA
 // bridge Deployment, Service, and NetworkPolicy all reference it.
-const metricsShimPort = 8080
+// metricsShimPort is the shared bridge port; see internal/metricsbridge.
+const metricsShimPort = metricsbridge.Port
 
 // ptrTo returns a pointer to v — for the optional *bool / *int32 fields in
 // pod and Deployment specs.
@@ -416,7 +418,7 @@ func (r *SandboxPoolReconciler) ensureSandboxScaledObject(ctx context.Context, p
 					"type": "metrics-api",
 					"metadata": map[string]any{
 						"url":           bridgeURL,
-						"valueLocation": "depth",
+						"valueLocation": metricsbridge.DepthKey,
 						"targetValue":   fmt.Sprintf("%d", target),
 						"format":        "json",
 					},
