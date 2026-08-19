@@ -301,6 +301,14 @@ func check(fileCov map[string]fileCoverage, cfg config) ([]violation, map[string
 	//
 	// The population comes from the coverage profile rather than from a second
 	// list, so it cannot drift from what was actually measured.
+	//
+	// What is being checked here is ENUMERATION, not coverage. A fully covered
+	// package that no floor names is exactly as unguarded as an empty one:
+	// nothing holds it to anything, and its next commit can take it to zero
+	// without failing this gate. So the violation below carries no `want` and
+	// the report deliberately does not print the measured percentage as though
+	// it were being compared — a reader who sees 100% beside a failure will
+	// close the ticket, and the number is not the finding.
 	for pkg, fc := range pkgCov {
 		if _, ok := cfg.packageFloors[pkg]; ok {
 			continue
