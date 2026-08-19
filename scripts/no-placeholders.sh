@@ -16,14 +16,29 @@ set -uo pipefail
 
 SENTINELS='PLACEHOLDER|REPLACE_ME|REPLACEME|CHANGEME|CHANGE_ME|FILL_ME|FILLME|TODO_FILL|TO_BE_FILLED|<FILL|<YOUR_|<ACCOUNT_ID>|<FLEET_ACCOUNT'
 
-hits=$(grep -rnE "$SENTINELS" . \
-  --include='*.yaml' --include='*.yml' --include='*.tf' --include='*.hcl' \
-  --include='*.tfvars' --include='*.json' \
-  --exclude='*.example' \
-  --exclude-dir='.git' --exclude-dir='.terraform' --exclude-dir='.terragrunt-cache' \
-  --exclude-dir='node_modules' --exclude-dir='examples' --exclude-dir='testdata' \
-  --exclude-dir='test' --exclude-dir='mcp-tunnel' --exclude-dir='vendor' \
-  2>/dev/null)
+SCAN_ARGS=(
+  --include='*.yaml' --include='*.yml' --include='*.tf' --include='*.hcl'
+  --include='*.tfvars' --include='*.json'
+  --exclude='*.example'
+  --exclude-dir='.git' --exclude-dir='.terraform' --exclude-dir='.terragrunt-cache'
+  --exclude-dir='node_modules' --exclude-dir='examples' --exclude-dir='testdata'
+  --exclude-dir='test' --exclude-dir='mcp-tunnel' --exclude-dir='vendor'
+)
+
+# Count the corpus before searching it. Finding no sentinel and searching no
+# files produce the same silence, so without this the gate reports success from
+# the wrong working directory, or if the include patterns stop matching the
+# extensions deploy config is written in. An absence check needs a floor, or it
+# is satisfied by having looked nowhere.
+scanned=$(grep -rl '' . "${SCAN_ARGS[@]}" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$scanned" -eq 0 ]; then
+  echo "No deploy-config files matched under $PWD." >&2
+  echo "Run this from the repository root. A pass here would mean the scan found" >&2
+  echo "nothing to read, not that the config is clean." >&2
+  exit 2
+fi
+
+hits=$(grep -rnE "$SENTINELS" . "${SCAN_ARGS[@]}" 2>/dev/null)
 
 if [ -n "$hits" ]; then
   echo "Unfilled placeholder sentinel(s) found in deploy config:"
@@ -34,4 +49,4 @@ if [ -n "$hits" ]; then
   echo "exclude list in scripts/no-placeholders.sh."
   exit 1
 fi
-echo "✓ no placeholder sentinels in deploy config"
+echo "✓ no placeholder sentinels in $scanned deploy-config files"
