@@ -3,27 +3,17 @@ name: release
 # One way in: a tag.
 #
 # `operator-v1.2.3` builds, signs and publishes exactly that component. Nothing
-# else does, and that is the point rather than an omission.
+# else does, and that is the point rather than an omission: keyless OIDC signing
+# from a branch push produces a certificate whose subject ends
+# `release.yaml@refs/heads/<branch>`, and eks-gitops' Kyverno `verify-images`
+# policy admits only `release\.ya?ml@refs/tags/.+` (Enforce on staging and
+# production), so a branch-built image is denied at admission on every cluster
+# it was built for.
 #
-# A push to main used to be a safety net here. It read the version out of
-# `charts/operator/Chart.yaml`, asked the registry whether it was published, and
-# built when it was not — because `appVersion: 0.4.0` had once ridden in on a
-# feature commit with no tag behind it, and every cluster syncing the chart got
-# ImagePullBackOff on the operator itself.
-#
-# That net could not have caught anything. Keyless OIDC signing from a main push
-# produces a certificate whose subject ends `release.yaml@refs/heads/main`, and
-# eks-gitops' Kyverno `verify-images` policy admits only
-# `release\.ya?ml@refs/tags/.+` — patched to Enforce on staging and production.
-# So the first image that path ever built would have been signed correctly,
-# published correctly, and then denied at admission on every cluster it was
-# built for. It never fired: 0.4.0 came from a tag run, so this was untested
-# rather than working.
-#
-# The invariant it was defending is now held where it can actually be held.
-# `scripts/check-image-refs.py` is a required check, so a PR that points the
-# chart at an unpublished image cannot merge in the first place. Tag the code,
-# then point the chart at what exists.
+# The invariant a branch build would defend is held by
+# `scripts/check-image-refs.py`, a required check: a PR that points the chart at
+# an unpublished image cannot merge. Tag the code, then point the chart at what
+# exists.
 on:
   push:
     tags:

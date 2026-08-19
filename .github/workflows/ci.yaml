@@ -110,13 +110,13 @@ jobs:
 
       # EVERY suite in the tree runs, not only the ones attached to a bucket.
       #
-      # Running the suites used to be a side effect of the teardown check below, which
-      # enumerates bucket-bearing components — so a component's tests executed only if
-      # it happened to create an S3 bucket. cost-access asserts that the operator can
-      # decrypt what it queries, that its grant reaches the account CUR, and that its
-      # handles land in the subtree the operator actually sweeps; it creates no bucket,
-      # so not one of those runs had ever been executed by CI. A test that does not run
-      # is a comment that costs money to write.
+      # This loop is deliberately independent of the teardown check below, which
+      # enumerates bucket-bearing components. Coupling the two makes a component's
+      # tests run only if it happens to create an S3 bucket — cost-access asserts that
+      # the operator can decrypt what it queries, that its grant reaches the account
+      # CUR, and that its handles land in the subtree the operator actually sweeps,
+      # and it creates no bucket. A test that does not run is a comment that costs
+      # money to write.
       - name: tofu test
         run: |
           failed=""
@@ -417,13 +417,13 @@ jobs:
 
   # helm lint, template rendering and CRD parity all read the chart against
   # itself. None of them asks whether the image it tells a cluster to pull
-  # exists — which is how appVersion sat eighty commits ahead of the newest
-  # published operator tag while every gate stayed green.
+  # exists — so `appVersion` can drift arbitrarily far ahead of the newest
+  # published operator tag while every other gate stays green.
   #
   # Keep this job name stable — it is a required status check on main, and it is
-  # what makes tag-only releases safe. release.yaml no longer builds on a push to
-  # main, so nothing downstream repairs a chart that points at an unpublished
-  # image; this is the thing that stops one merging.
+  # what makes tag-only releases safe. release.yaml builds on tags only, so
+  # nothing downstream repairs a chart that points at an unpublished image; this
+  # is the thing that stops one merging.
   image-refs:
     name: every image the chart names is published
     runs-on: ubuntu-latest

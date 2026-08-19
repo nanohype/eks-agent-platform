@@ -61,11 +61,8 @@ primary signal, and the command above is the first thing to run.
    - raise **Service Quotas → Amazon Athena → Active DML queries** for the account, which is a
      support-backed request rather than an apply.
 
-   Diagnose step 3 above already says this. The two halves of this page used to disagree about
-   whether the lever existed, and an operator following the old mitigation opened `main.tf`
-   during a live incident and found nothing to change.
 3. **IAM regression** — rollback or patch the operator role policy.
-4. **Manual budget check** — if reconcile is broken but you need spend visibility now: run the rollup query manually in the AWS console with the workgroup + database from `kubectl get cm -n eks-agent-platform operator-config -o yaml`.
+4. **Manual budget check** — if reconcile is broken but you need spend visibility now: run the rollup query manually in the AWS console with the workgroup + database from `aws ssm get-parameters-by-path --path /eks-agent-platform/org/cost-pipeline --recursive`.
 
 ## Recover
 

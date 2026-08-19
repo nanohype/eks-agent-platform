@@ -51,12 +51,9 @@ writes the result to `SLOPolicy.status`. kube-state-metrics projects that status
 so a paging rule reads the number the control loop decided on instead of
 re-deriving it. The comparison is strictly greater-than.
 
-> **Amended.** This originally read "matching the operator's own
-> PrometheusRule, so the two evaluators cannot disagree at the boundary".
-> That rule has been deleted: the catalog installs the prometheus-operator
-> CRDs and no ruler, so it was applied everywhere and evaluated nowhere —
-> as this ADR itself noted. There is now one evaluator, which is a stronger
-> version of the same property.
+> No second evaluator exists to disagree with it: the catalog installs the
+> prometheus-operator CRDs and no ruler, so there is no in-cluster rule engine
+> re-deriving the verdict from the same windows.
 
 **The hold is a deny `syncWindow` on the tenant's `AppProject`, authored by the
 Platform reconciler.** The SLO reconciler decides and records `HoldEngagedAt`; the

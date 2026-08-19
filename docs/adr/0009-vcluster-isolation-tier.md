@@ -101,7 +101,7 @@ renders them programmatically — typed client-go objects for the resources it k
 foreign CRDs it deliberately keeps out of its dependency graph (the `AppProject`,
 `operators/internal/controller/platform_reconcile.go:286`), and verbatim
 `.Files.Get` emission from `charts/operator/files/` for CR-heavy static manifests it
-does not want Helm to evaluate (the eval-runtime + SLO bundles, ADR 0008). It does
+does not want Helm to evaluate (the eval-runtime bundle, ADR 0008). It does
 **not** shell out to the Helm CLI anywhere, and it does not embed Helm's Go SDK.
 
 A per-Platform vcluster is a full Helm release — a StatefulSet, the control-plane and
@@ -425,12 +425,10 @@ it.**
   provides. The next rung, a dedicated cluster
   (`tenant-isolation-tiers.md`), is the answer when even shared nodes are
   unacceptable.
-- **Correction of record:** `SECURITY.md` currently calls the vcluster option
-  "kernel-level boundaries" (line 22) and "kernel-level" hard isolation (line 55).
-  That is wrong and oversells the control. The accurate claim is **API-server-level
-  isolation**; kernel-level isolation requires the dedicated node pool or a dedicated
-  cluster. This ADR is the source of truth the `SECURITY.md` isolation section is
-  reconciled against when the tier's docs are made true.
+- **This ADR is the source of truth for the tier's isolation claim.** `SECURITY.md`
+  and `docs/architecture/tenant-isolation-tiers.md` state API-server-level isolation
+  because this section decides it; a change here moves them. Kernel-level isolation
+  requires the dedicated node pool or a dedicated cluster, never this tier.
 
 ### The syncer as a new trust boundary
 
@@ -588,6 +586,7 @@ than inheriting a number from this ADR.
 - Upstream: [loft-sh/vcluster](https://github.com/loft-sh/vcluster),
   [EKS Pod Identity integration](https://www.vcluster.com/docs/vcluster/third-party-integrations/pod-identity/eks-pod-identity),
   chart repo `https://charts.loft.sh`.
-- Implementation of this design (reconcile path, chart surface, conformance + kx
-  validation, docs made true) is tracked as the vcluster implementation work that
-  follows this ADR.
+- Implementation: `operators/internal/controller/vcluster.go` + `vcluster_naming.go`,
+  the `vcluster` values block in `charts/operator/values.yaml`, and the conformance
+  suites `operators/test/conformance/platform_vcluster_test.go` +
+  `agentfleet_vcluster_test.go`.

@@ -2,7 +2,7 @@
 
 Browsable Markdown reference, regenerated from the Go types on every `make -C operators manifests`:
 
-- [`v1alpha1.md`](./v1alpha1.md) — all ten kinds, every field, every validation marker.
+- [`v1alpha1.md`](./v1alpha1.md) — all nine kinds, every field, every validation marker.
 
 The **source of truth** is the Go types in `operators/api/{platform,agents,governance}/v1alpha1/` plus the generated manifests in `operators/config/crd/bases/`; this Markdown is a rendered view of them.
 

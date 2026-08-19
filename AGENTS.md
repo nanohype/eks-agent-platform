@@ -21,7 +21,7 @@ A Kubernetes-native control plane that lets you declare agent platforms as CRDs 
 Plus:
 
 - **`operators/`** — Go operator binary registering nine reconcilers (one binary, one leader-election lease)
-- **`charts/`** — Helm charts for installing the operator (CRDs + Deployment + RBAC + the eval-runtime/SLO bundles behind chart toggles) + the `tenant` chart consumers use. `eks-gitops` `addons-agent-operator` git-sources `charts/operator` and injects per-cluster IRSA to deliver it onto clusters
+- **`charts/`** — Helm charts for installing the operator (CRDs + Deployment + RBAC + the eval-runtime bundle behind `evalRuntime.*`) + the `tenant` chart consumers use. `eks-gitops` `addons-agent-operator` git-sources `charts/operator` and injects per-cluster IRSA to deliver it onto clusters
 - **`examples/`** — minimal end-to-end CR sets (Tenant + Platform + ModelGateway + AgentFleet + BudgetPolicy) you can copy
 
 ## Contract surface
@@ -33,7 +33,7 @@ apiVersion: platform.nanohype.dev/v1alpha1
 kind: Platform
 metadata:
   name: my-app
-  namespace: tenants-my-team
+  namespace: eks-agent-platform
 spec:
   displayName: 'My App'
   persona: ops # sales-ops | support | finance | ops | founder | eng | marketing | legal | generic
@@ -55,7 +55,7 @@ apiVersion: governance.nanohype.dev/v1alpha1
 kind: BudgetPolicy
 metadata:
   name: my-app
-  namespace: tenants-my-team
+  namespace: eks-agent-platform
 spec:
   platformRef: { name: my-app }
   monthlyUsd: '2500'
@@ -65,7 +65,7 @@ spec:
 
 ### The two-role identity picture
 
-A Platform tenant ends up with **two** IAM roles serving different workload classes. This is intentional, not duplication. Both are bound to their ServiceAccount by an **EKS Pod Identity association**, never a role-arn annotation — no chart carries a role ARN (the [platform-tenant contract](https://github.com/nanohype/nanohype/blob/main/standards/platform-tenant-contract.json) forbids it):
+A Platform tenant ends up with **two** IAM roles serving different workload classes. This is intentional, not duplication. Both are bound to their ServiceAccount by an **EKS Pod Identity association**, never a role-arn annotation — no tenant chart carries a role ARN (the [platform-tenant contract](https://github.com/nanohype/nanohype/blob/main/standards/platform-tenant-contract.json) forbids it):
 
 | Role                     | Owner                                        | Bound ServiceAccount (Pod Identity association) | Used by                                                           |
 | ------------------------ | -------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------- |
@@ -81,7 +81,7 @@ The association the operator created is reported on `Platform.status.podIdentity
 1. Apply a `BudgetPolicy` CR in the tenant namespace (or alongside Platform — operator handles ordering).
 2. Apply a `Platform` CR referencing the BudgetPolicy.
 3. The operator reconciles:
-   - Namespace `tenants-<team>` (with `pod-security.kubernetes.io/enforce: restricted` label)
+   - Namespace `tenants-<platform>` (with `pod-security.kubernetes.io/enforce: restricted` label)
    - `ResourceQuota` + `LimitRange` defaults
    - Default-deny `NetworkPolicy` plus egress allow-list (DNS, the model gateway, OTel collector)
    - ArgoCD `AppProject` scoped to the tenant namespace
