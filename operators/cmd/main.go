@@ -254,6 +254,10 @@ func main() {
 		NetworkEngine: networkEngine,
 		VCluster:      vclusterFactory,
 		VClusterCfg:   vclusterCfg,
+		// Recorder carries the warnings a status condition alone would not
+		// reach: `kubectl describe platform` and anything watching events see a
+		// declared capability that resolved to no grant, without polling the CR.
+		Recorder: mgr.GetEventRecorderFor("platform-controller"),
 	}
 	if awsClients != nil {
 		platformReconciler.IAM = awsClients.IAM
