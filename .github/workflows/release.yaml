@@ -14,6 +14,15 @@ name: release
 # `scripts/check-image-refs.py`, a required check: a PR that points the chart at
 # an unpublished image cannot merge. Tag the code, then point the chart at what
 # exists.
+# A release publishes immutable, signed artifacts, so a run in flight is never
+# cancelled: interrupting between `cosign sign` and `cosign attest` leaves a
+# signed image carrying no attestation, which the admission policy rejects while
+# the tag looks published. Grouping by ref lets independent component tags run
+# together and makes a re-run of one tag queue behind itself.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
     tags:
@@ -65,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write   # push this component's image to ghcr.io under this repository
       id-token: write   # cosign keyless signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -110,13 +119,21 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
             ghcr.io/${{ github.repository }}/operator:latest
+      # `${{ }}` is substituted into the script TEXT before the shell sees it, so a
+      # tag containing shell metacharacters becomes part of the command. Binding
+      # it to an environment variable makes it a string value the shell expands,
+      # which no crafted tag can escape.
       - name: sign (keyless, OIDC)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
+          cosign sign --yes "$IMAGE"
       - name: sbom
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
         run: |
-          syft "ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
-          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
+          syft "$IMAGE" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson "$IMAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-operator-${{ steps.ver.outputs.version }}
@@ -128,7 +145,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write   # push this component's image to ghcr.io under this repository
       id-token: write   # cosign keyless signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -162,12 +179,16 @@ jobs:
             ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
             ghcr.io/${{ github.repository }}/sandbox-worker:latest
       - name: sign (keyless, OIDC)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
+          cosign sign --yes "$IMAGE"
       - name: sbom
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
         run: |
-          syft "ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
-          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
+          syft "$IMAGE" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson "$IMAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-sandbox-worker-${{ steps.ver.outputs.version }}
@@ -180,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write   # push this component's image to ghcr.io under this repository
       id-token: write   # cosign keyless signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -217,12 +238,16 @@ jobs:
             ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
             ghcr.io/${{ github.repository }}/eval-runner:latest
       - name: sign (keyless, OIDC)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
+          cosign sign --yes "$IMAGE"
       - name: sbom
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
         run: |
-          syft "ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
-          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
+          syft "$IMAGE" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson "$IMAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-eval-runner-${{ steps.ver.outputs.version }}
@@ -234,7 +259,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write   # push this component's image to ghcr.io under this repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -354,10 +379,14 @@ jobs:
     name: publish @eks-agent/* to npm
     if: startsWith(github.ref, 'refs/tags/sdk-v')
     runs-on: ubuntu-latest
+    # NPM_TOKEN is a long-lived credential that can publish under the org scope,
+    # and a job holding it needs an approval surface that a repository secret
+    # does not have. Naming an environment is what makes required reviewers,
+    # wait timers and branch restrictions applicable to this publish at all —
+    # without one, any workflow change reaching this job publishes immediately.
+    environment: npm-publish
     permissions:
-      # changeset publish writes git tags alongside the npm publish, so this is
-      # the one job that needs write on contents.
-      contents: write
+      contents: write   # changeset publish writes git tags beside the npm publish
       id-token: write   # npm provenance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -25,9 +25,15 @@ on:
     - cron: "0 7 * * 1"
   workflow_dispatch:
 
+# A drift report describes the state at the moment it runs, so a newer run
+# supersedes one still in flight rather than queueing behind it.
+concurrency:
+  group: chart-drift
+  cancel-in-progress: true
+
 permissions:
   contents: read
-  packages: read
+  packages: read   # read the published chart digests this compares against
 
 jobs:
   published:

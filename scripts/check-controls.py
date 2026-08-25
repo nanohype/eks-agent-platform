@@ -109,6 +109,26 @@ class Control:
         self.expect_reject = expect_reject
 
 
+# Exit codes that are NOT a verdict about the tree. Every one of them exits
+# non-zero, which is indistinguishable from a rejection unless it is named.
+NOT_A_REJECTION = {
+    2: "argparse usage error — the gate never reached its check",
+    3: "precondition failure — a tool the gate needs is missing or does not run",
+    126: "found but not executable",
+    127: "command not found",
+}
+
+def crash_reason(returncode: int) -> str | None:
+    """Why this exit is not a verdict about the tree, or None if it is a rejection.
+
+    Kept separate from the verdict loop so the self-test can attack it directly.
+    A rule that only exists inline is a rule nothing has ever exercised.
+    """
+    if returncode > 128:
+        return "killed by a signal"
+    return NOT_A_REJECTION.get(returncode)
+
+
 CONTROLS = [
     Control(
         gate="check-route-api-parity.py",
@@ -226,8 +246,24 @@ CONTROLS = [
     Control(
         gate="check-ssm-contract.py",
         path="terraform/components/bedrock/main.tf",
-        before='  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_id"',
-        after='  # name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_id"',
+        # The WHOLE resource, not just its `name` line. Commenting one line
+        # leaves an aws_ssm_parameter with no resolvable name, which the gate
+        # correctly refuses to evaluate — a different property from the one
+        # under test here, and it exits 3 rather than rejecting.
+        before="""resource "aws_ssm_parameter" "baseline_guardrail_id" {
+  count = local.enable_guardrail ? 1 : 0
+  name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_id"
+  type  = "String"
+  value = aws_bedrock_guardrail.baseline[0].guardrail_id
+  tags  = local.tags
+}""",
+        after="""# resource "aws_ssm_parameter" "baseline_guardrail_id" {
+#   count = local.enable_guardrail ? 1 : 0
+#   name  = "/eks-agent-platform/${var.cluster_name}/bedrock/baseline_guardrail_id"
+#   type  = "String"
+#   value = aws_bedrock_guardrail.baseline[0].guardrail_id
+#   tags  = local.tags
+# }""",
         catches="an SSM producer read from a COMMENT. A commented-out publisher counted as "
         "publishing, so a parameter nobody writes read as written and the gate reported the "
         "contract whole",
@@ -406,10 +442,68 @@ CONTROLS = [
         "mutable, so the second push silently replaces the bytes behind a version already deployed",
         expect_output='operator',
     ),
+    # Two spellings, two code paths. `permissions: write-all` is a STRING at the
+    # top level and `{id-token: write}` is a mapping; a gate that only walks the
+    # mapping form passes the broader grant of the two.
+    Control(
+        gate="check-workflow-permissions.py",
+        path=".github/workflows/ci.yaml",
+        before="\npermissions:\n  contents: read\n",
+        after="\npermissions:\n  contents: read\n  id-token: write\n",
+        catches="an OIDC-token grant moved to workflow level, where it applies to every job "
+        "added afterwards — so the diff that acquires the cloud role contains no permission change. "
+        "zizmor's DEFAULT persona exits 0 on this input and --persona=auditor exits 14",
+        expect_output="id-token",
+    ),
+    Control(
+        gate="check-workflow-permissions.py",
+        path=".github/workflows/pr-title.yaml",
+        before="\npermissions:\n  contents: read\n  pull-requests: read   # read the pull request title this validates\n",
+        after="\npermissions: write-all\n",
+        catches="the string spelling of a total grant, which a gate walking only the mapping "
+        "form reads as no permissions at all",
+        expect_output="write-all",
+    ),
+    # The gate that guards the guard. Dropping a job from the needs list is the
+    # silent half of this class: the job still runs and still goes red, and the
+    # merge button stays enabled beside it.
+    Control(
+        gate="check-merge-gate.py",
+        path=".github/workflows/ci.yaml",
+        before="        named-paths,\n",
+        after="",
+        catches="a job that runs on pull requests dropped from the merge gate's needs list, "
+        "where it reports failures into a UI that ignores them",
+        expect_output="named-paths",
+    ),
+    # An ACCEPT control. The stripper chained two single-syntax passes, so a `#`
+    # comment mentioning an S3 key prefix had its `/*` read as a block-comment
+    # opener and 130 lines of live Terraform vanished — three published
+    # parameters with them, while the gate reported the contract whole. The
+    # property under test is that a comment mentioning a slash-star does not
+    # remove the resources under it.
+    Control(
+        gate="check-ssm-contract.py",
+        path="terraform/components/bedrock/main.tf",
+        before='resource "aws_ssm_parameter" "baseline_guardrail_id" {',
+        after='# reports/{platform}/manifests/* are written beside this\n'
+              'resource "aws_ssm_parameter" "baseline_guardrail_id" {',
+        catches="a hash comment containing a slash-star erasing the resources below it",
+        expect_output="22 parameters published",
+        expect_reject=False,
+    ),
+    # Per FEATURE, not per spelling: -n is the same absence as -A, and the table
+    # listed only -A.
+    Control(
+        gate="check-shell-portability.py",
+        path="scripts/local-kx/install.sh",
+        before="set -euo pipefail",
+        after="set -euo pipefail\ndeclare -n __ref=PATH",
+        catches="a bash 4.3 nameref in a script that must run on the bash 3.2 macOS ships — "
+        "an adjacent spelling of the absence the table already knew about",
+        expect_output="declare/local -n nameref",
+    ),
 ]
-
-
-
 def mutation_landed(original: str, mutated: str, marker: str) -> tuple[bool, str]:
     """Did the edit actually change the file's MEANING, not just its bytes?
 
@@ -465,6 +559,44 @@ def harness_self_test() -> list[str]:
     ok, why = mutation_landed(base, "alpha\nbeta\ndelta\n", "delta")
     if not ok:
         problems.append(f"harness: a genuine mutation was rejected ({why})")
+
+    # The crash rule. Every code here exits non-zero, which is how a gate says
+    # REJECTED — so if any of them classifies as a verdict, this suite reports
+    # guards that do not exist.
+    if crash_reason(1) is not None:
+        problems.append("harness: exit 1 was classified as a crash, so real rejections cannot score")
+    for code in (2, 3, 126, 127, 137):
+        if crash_reason(code) is None:
+            problems.append(f"harness: exit {code} would score as a rejection")
+
+    # Against a real process, not only the table: a shell asked for a binary that
+    # does not exist exits 127, and that is the case eks-gitops scored as five
+    # catches.
+    got = subprocess.run(
+        ["sh", "-c", "definitely-not-a-real-binary-xyz"], capture_output=True, text=True
+    ).returncode
+    if crash_reason(got) is None:
+        problems.append(
+            f"harness: a missing binary really exited {got}, and that code classifies as a rejection"
+        )
+
+    # A gate can exit 127 having printed NOTHING — its tool vanished, or it
+    # discards its own diagnostics. Screening crashes by matching output for
+    # "Traceback" or "command not found" cannot see this shape by construction,
+    # and it is the one where the floor records the strictest gate in the suite.
+    # Both rules are kept: the text rule catches a gate that died mid-run and
+    # said so, the NUMBER catches one that said nothing.
+    silent = subprocess.run(["sh", "-c", "exit 127"], capture_output=True, text=True)
+    if silent.returncode != 127 or (silent.stdout + silent.stderr).strip():
+        problems.append(
+            f"harness: the silent-crash fixture exited {silent.returncode} and printed "
+            f"{(silent.stdout + silent.stderr)!r}. It must exit 127 and print nothing — a fixture "
+            "that starts printing stops testing the case it exists for."
+        )
+    elif crash_reason(silent.returncode) is None:
+        problems.append("harness: a SILENT exit 127 classifies as a rejection")
+    if "Traceback" in (silent.stdout + silent.stderr) or "not found" in (silent.stdout + silent.stderr):
+        problems.append("harness: the silent fixture is not silent, so it no longer tests the text-blind case")
     return problems
 
 
@@ -527,8 +659,10 @@ def main() -> int:
             )
             continue
         if pre.returncode != 0:
+            pre_why = crash_reason(pre.returncode)
             failures.append(
-                f"{label}: the gate does not pass on the UNMODIFIED tree (exit {pre.returncode}), so its "
+                f"{label}: the gate does not pass on the UNMODIFIED tree (exit {pre.returncode}"
+                f"{', ' + pre_why if pre_why else ''}), so its "
                 f"reaction to the mutation proves nothing.\n      {pre.stdout.strip()[:200]} {pre.stderr.strip()[:200]}"
             )
             continue
@@ -571,7 +705,14 @@ def main() -> int:
         # the file it choked on can carry the marker along with it.
         if not c.expect_reject:
             # ACCEPT control: the mutated fixture must still pass.
-            if post.returncode != 0:
+            crashed = crash_reason(post.returncode)
+            if crashed is not None:
+                failures.append(
+                    f"{label}: the gate exited {post.returncode} ({crashed}) on a fixture it must "
+                    "accept. That is not over-matching, it is a crash, and naming it as the former "
+                    "sends the reader to the wrong line."
+                )
+            elif post.returncode != 0:
                 failures.append(
                     f"{label}: the gate REJECTED a fixture it must accept — it over-matches.\n"
                     f"      the control introduced: {c.catches}"
@@ -582,7 +723,25 @@ def main() -> int:
                 )
             continue
 
-        if "Traceback (most recent call last)" in combined or "panic:" in combined:
+        # A non-zero exit is how a gate says REJECTED, so every other reason a
+        # process exits non-zero arrives wearing the same clothes. A traceback is
+        # only the visible half: exit 127 (command not found), 126 (found but not
+        # executable), 3 (a precondition this repo's gates use for a missing
+        # tool) and anything above 128 (killed by a signal) all exit non-zero
+        # while proving nothing about the mutation. Scored as catches, they
+        # report guards that do not exist — and they do it in the tool built to
+        # check the other tools, where nothing else is looking.
+        #
+        # So the rejection code is named rather than inferred from "not zero".
+        crashed = crash_reason(post.returncode)
+        if crashed is not None:
+            why = crashed
+            failures.append(
+                f"{label}: the gate exited {post.returncode} ({why}) on the mutated fixture. That is "
+                "not a rejection — it exits non-zero and would otherwise score as a catch.\n"
+                f"      {combined.strip().splitlines()[-1][:160] if combined.strip() else '<no output>'}"
+            )
+        elif "Traceback (most recent call last)" in combined or "panic:" in combined:
             failures.append(
                 f"{label}: the gate CRASHED on the mutated fixture rather than rejecting it. A crash "
                 "exits non-zero and would otherwise score as a catch, so the control would report a "

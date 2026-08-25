@@ -164,8 +164,23 @@ jobs:
   # moment instead of a function of the commit under test. A gate whose result
   # depends on the network cannot be reasoned about from the diff.
   #
-  # --min-severity=medium fails on medium and above. Informational findings stay
-  # visible in the log without turning an unrelated PR red.
+  # --persona=auditor, and the persona is a DIFFERENT AXIS FROM SEVERITY. The
+  # default persona does not run the excessive-permissions audit at all, so a
+  # workflow declaring `id-token: write` at the top level — handing every job
+  # added later the right to mint an OIDC token, with no diff that looks like a
+  # permission change — exits 0 under the default and 14 under auditor. Measured
+  # on exactly that input; this repo passes either way only because its
+  # permissions are already per-job, which is luck rather than coverage.
+  #
+  # --min-severity=low fails on low and above. zizmor's own default is
+  # informational, so ANY --min-severity can only suppress — the flag was
+  # measured in that direction rather than assumed, and low is the tightest
+  # setting this tree holds. A threshold is only safe if the output admits what
+  # sits under it: `No findings to report. Good job!` is what
+  # zizmor prints when the tiers below the threshold are full, and a reader
+  # cannot tell that from a clean tree. So the step scans every severity and
+  # prints the per-tier counts BEFORE the gating run, and the pass line names the
+  # tiers it did not fail on.
   zizmor:
     name: zizmor (workflow static analysis)
     runs-on: ubuntu-latest
@@ -181,10 +196,23 @@ jobs:
           # Pinned for the reason the tflint step below states. The rule set is
           # part of the verdict, so an unpinned scanner turns an unrelated PR red
           # or green with no change in this repository.
-          ZIZMOR_VERSION: "1.16.3"
+          ZIZMOR_VERSION: "1.29.0"
         run: |
           pip install "zizmor==${ZIZMOR_VERSION}"
-          zizmor --offline --config .github/zizmor.yml --min-severity=medium .github/workflows/
+
+          # Every tier first. `|| true` because a non-empty scan exits non-zero
+          # by design here; the verdict comes from the gating run below.
+          zizmor --offline --persona=auditor --config .github/zizmor.yml \
+            --min-severity=informational .github/workflows/ > all-tiers.txt 2>&1 || true
+          echo "::group::every severity, including tiers this gate does not fail on"
+          grep -E '^[0-9]+ findings|^No findings' all-tiers.txt || tail -3 all-tiers.txt
+          echo "::endgroup::"
+
+          # The verdict. Exit status is read directly off zizmor, not off a
+          # pipeline, so it is zizmor's status and not some downstream tool's.
+          zizmor --offline --persona=auditor --config .github/zizmor.yml \
+            --min-severity=low .github/workflows/
+          echo "zizmor: nothing at medium or above. Informational and low are NOT gated here; their counts are in the group above."
 
   tflint:
     name: tflint

@@ -100,12 +100,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - run: ./scripts/check-shell-portability.py --self-test
       - run: ./scripts/check-shell-portability.py --list
 
   # Prose that names a path is a claim about the world, and the most checkable
   # one documentation makes. A file moves, the reference does not, and nothing
   # fails — the reader following it is the failure detector, which in a runbook
   # means during an incident.
+  workflow-permissions:
+    name: no workflow-level write permission
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-workflow-permissions.py --list
+
+  merge-gate-reachable:
+    name: every pull-request job blocks the merge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-merge-gate.py --list
+
   named-paths:
     name: every path named in prose resolves
     runs-on: ubuntu-latest
@@ -203,7 +224,7 @@ jobs:
           persist-credentials: false
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: "1.11.0"
+          tofu_version: "1.12.6"
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -237,7 +258,7 @@ jobs:
           persist-credentials: false
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: "1.11.0"
+          tofu_version: "1.12.6"
       - name: validate every component
         run: |
           for d in terraform/components/*/; do
@@ -705,7 +726,7 @@ jobs:
       # a green suite that executed none of those cases.
       - name: install promtool
         env:
-          PROMTOOL_VERSION: "3.13.1"
+          PROMTOOL_VERSION: "3.14.0"
         run: |
           set -euo pipefail
           ver="${PROMTOOL_VERSION}"
@@ -845,6 +866,8 @@ jobs:
         gates,
         controls,
         named-paths,
+        workflow-permissions,
+        merge-gate-reachable,
         shell-portability,
         model-tiers,
         tenant-chart-artifacts,
