@@ -26,9 +26,31 @@ variable "eval_runner_service_account" {
 }
 
 variable "bedrock_invoke_resource_arns" {
-  description = "List of Bedrock model ARNs eval-runner pods can invoke. Defaults to '*' which is fine in dev; production should pass the specific cross-region inference profile ARNs the eval suites actually exercise."
+  description = <<-EOT
+    Bedrock model ARNs eval-runner pods may invoke. Required: there is no default,
+    because the only default this variable could carry is a permissive one.
+
+    "*" here is a path around the per-Platform model scoping the operator
+    generates — an eval-runner pod holding it can invoke every model in the
+    account regardless of what any Platform's allowedModels says. A default that
+    grants that silently makes the open case the one you get by not deciding,
+    which inverts the direction an operator expects: whoever leaves an allowlist
+    alone believes they have granted nothing.
+
+    Pass the specific cross-region inference-profile ARNs the eval suites
+    exercise. In a development environment that list is still a list, not "*".
+  EOT
   type        = list(string)
-  default     = ["*"]
+
+  validation {
+    condition     = length(var.bedrock_invoke_resource_arns) > 0
+    error_message = "bedrock_invoke_resource_arns must name at least one ARN; an empty list would render a policy granting nothing and the eval runner would fail every case with AccessDenied."
+  }
+
+  validation {
+    condition     = !contains(var.bedrock_invoke_resource_arns, "*")
+    error_message = "bedrock_invoke_resource_arns must not contain \"*\" — it grants invoke on every model in the account and bypasses the per-Platform model scoping the operator generates. Name the inference-profile ARNs the eval suites actually exercise."
+  }
 }
 
 variable "allowed_regions" {
