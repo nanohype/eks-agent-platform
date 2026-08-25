@@ -61,6 +61,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
+
 try:
     import yaml
 except ImportError:
@@ -258,6 +261,8 @@ def check_shell(docs: list[dict]) -> bool:
 
 
 def main() -> int:
+    require_binary("helm", "render the chart holding the eval workflow")
+
     docs = render()
     results = [check_psa(docs), check_shell(docs)]
     if all(results):

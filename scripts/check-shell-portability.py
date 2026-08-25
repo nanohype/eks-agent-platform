@@ -37,6 +37,9 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from _source_text import strip_comments  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -106,9 +109,12 @@ def declared_shell(path: pathlib.Path) -> str:
 
 
 def main() -> int:
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--list", action="store_true", help="print every script scanned and its declared shell")
     args = ap.parse_args()
+
+    require_binary("git", "enumerate the committed shell scripts this parses")
 
     scripts = tracked_shell_scripts()
     findings: list[str] = []

@@ -47,7 +47,11 @@ from __future__ import annotations
 import argparse
 
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 from pathlib import Path
 
 try:
@@ -103,6 +107,8 @@ def render(values: Path) -> list[dict]:
 
 
 def main() -> int:
+    require_binary("helm", "render the chart this instantiates every CRD from")
+
     if not CRD_DIR.is_dir():
         print(f"FAIL  {CRD_DIR} does not exist")
         return 1

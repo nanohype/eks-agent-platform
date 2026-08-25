@@ -60,7 +60,11 @@ Usage: ./scripts/check-chart-crd-parity.py
 """
 import argparse
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 from pathlib import Path
 
 try:
@@ -317,6 +321,8 @@ def check_admissibility(problems):
 
 
 def main():
+    require_binary("helm", "render the chart whose CRDs this compares against the operator's")
+
     problems: list[str] = []
     renders = check_coverage(problems)
     documents = check_admissibility(problems)

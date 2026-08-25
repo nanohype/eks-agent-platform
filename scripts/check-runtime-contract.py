@@ -74,7 +74,11 @@ import argparse
 
 import re
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 from pathlib import Path
 
 try:
@@ -148,6 +152,8 @@ def supplied_parameters(ref: str) -> set[str]:
 
 
 def main() -> int:
+    require_binary("git", "read the committed tree this compares the runtime contract against")
+
     listing = "--list" in sys.argv
 
     app_version = chart_app_version()
