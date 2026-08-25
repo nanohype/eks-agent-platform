@@ -271,9 +271,18 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 		}
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _ = r.Athena.StopQueryExecution(stopCtx, &athena.StopQueryExecutionInput{
+		// Best-effort, but not silent. This stop is the only thing between an
+		// abandoned query and an open-ended bill, so the case where it FAILS is
+		// exactly the case an operator needs to hear about — and the query id is
+		// the one thing they need to cancel it by hand. Discarding the error
+		// threw that away at the moment it became useful, leaving a scan running
+		// with nobody aware and no id to reach it by.
+		if _, stopErr := r.Athena.StopQueryExecution(stopCtx, &athena.StopQueryExecutionInput{
 			QueryExecutionId: aws.String(qid),
-		})
+		}); stopErr != nil {
+			log.FromContext(ctx).Error(stopErr, "could not stop an abandoned Athena query; it keeps scanning and keeps billing until it completes",
+				"queryExecutionId", qid, "remedy", "aws athena stop-query-execution --query-execution-id "+qid)
+		}
 	}()
 
 	deadline := time.Now().Add(r.queryTimeout())
