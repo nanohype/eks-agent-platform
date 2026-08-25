@@ -35,8 +35,16 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-# workflow file -> the job branch protection requires.
-GATES = {"ci.yaml": "merge-gate", "security.yaml": "merge-gate-security"}
+# workflow file -> (job id, the CONTEXT STRING branch protection requires).
+#
+# Protection matches a required check by the job's DISPLAY NAME, not its id, so
+# renaming `name:` silently detaches the job from the rule that requires it: the
+# workflow still runs, the gate still passes, and the required context never
+# reports. Both halves are asserted here so the rename fails locally instead.
+GATES = {
+    "ci.yaml": ("merge-gate", "merge gate"),
+    "security.yaml": ("merge-gate-security", "merge gate (security)"),
+}
 
 
 def runs_on_pull_request(wf: dict, job: dict) -> bool:
@@ -61,7 +69,7 @@ def main() -> int:
     exempt: list[str] = []
     checked = 0
 
-    for fname, gate in GATES.items():
+    for fname, (gate, context) in GATES.items():
         path = WORKFLOWS / fname
         if not path.is_file():
             sys.exit(f"check-merge-gate: {path.relative_to(ROOT)} is missing; this gate names it by hand")
@@ -69,6 +77,13 @@ def main() -> int:
         jobs = wf.get("jobs") or {}
         if gate not in jobs:
             sys.exit(f"check-merge-gate: {fname} has no job named {gate!r} — the required check is gone")
+        declared = jobs[gate].get("name")
+        if declared != context:
+            sys.exit(
+                f"check-merge-gate: {fname} job {gate!r} declares name {declared!r}, but branch "
+                f"protection requires the context {context!r}. A required check matches by display "
+                "name; renaming the job detaches it from the rule without failing anything."
+            )
         needs = jobs[gate].get("needs") or []
         needs = [needs] if isinstance(needs, str) else list(needs)
         for name, job in jobs.items():

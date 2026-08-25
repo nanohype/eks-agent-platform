@@ -55,6 +55,14 @@ PIN_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         "a setup-action input naming a tool release",
     ),
     (
+        ".github/workflows",
+        re.compile(
+            r"#\s*renovate:[^\n]*depName=(?P<name>\S+)[^\n]*\n\s*version:\s*\"?(?P<value>[^\"\s]+)\"?",
+            re.M,
+        ),
+        "a setup-action version input, named by its Renovate marker",
+    ),
+    (
         "operators/Makefile",
         re.compile(r"^(?P<name>[A-Z][A-Z0-9_]*_VERSION)\s*\?=\s*(?P<value>\S+)", re.M),
         "a Makefile tool version",
@@ -163,17 +171,28 @@ def main() -> int:
         return 1
 
     managers = manager_regexes()
+    # Which MANAGERS fired, tracked by identity. A manager naming its dependency
+    # with an inline (?<depName>) group records an owner that is not its own
+    # template name, so comparing names reports a live manager as idle.
+    matched_managers: set[int] = set()
     unmanaged = []
     covered: list[tuple[str, str, str]] = []
 
     for f, name, value, why in pins:
         line = f"{name}: {value}"
-        alt = f"{name}={value}"
-        alt2 = f"{name} ?= {value}"
+        text = f.read_text(encoding="utf-8")
         owner = None
-        for mgr_name, rx in managers:
-            if rx.search(line) or rx.search(alt) or rx.search(alt2) or rx.search(f"ARG {alt}"):
-                owner = mgr_name
+        for mgr_idx, (mgr_name, rx) in enumerate(managers):
+            for m in rx.finditer(text):
+                gd = m.groupdict()
+                if gd.get("currentValue") != value:
+                    continue
+                # An inline (?<depName>) group names the dependency where no
+                # depNameTemplate does.
+                owner = gd.get("depName") or (mgr_name if mgr_name != "<unnamed>" else name)
+                matched_managers.add(mgr_idx)
+                break
+            if owner:
                 break
         if owner:
             covered.append((str(f.relative_to(ROOT)), line, owner))
@@ -181,8 +200,7 @@ def main() -> int:
             unmanaged.append((str(f.relative_to(ROOT)), name, value, why))
 
     # A manager matching nothing is the same silent nothing as no manager.
-    owners_used = {o for _f, _l, o in covered}
-    idle = [n for n, _rx in managers if n not in owners_used]
+    idle = [n for i, (n, _rx) in enumerate(managers) if i not in matched_managers]
 
     if args.list:
         for f, line, owner in covered:

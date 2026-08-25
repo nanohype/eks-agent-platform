@@ -158,6 +158,19 @@ jobs:
           # check-chart-version-bump compares against the base ref.
           fetch-depth: 0
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
+      # This job runs EVERY gate for real, so it needs every binary any gate
+      # asserts a precondition on — not only the ones its own name suggests.
+      # check-vcluster-chart resolves the operator constants with go.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
       - run: pip install pyyaml
       - run: ./scripts/check-controls.py --list
 
@@ -422,6 +435,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
@@ -445,6 +464,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-crd-instantiation.py
 
@@ -505,6 +530,12 @@ jobs:
           # left-hand side, and the gate refuses to run rather than pass vacuously.
           fetch-depth: 0
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: ./scripts/check-chart-version-bump.py --self-test
       # base_ref is a ref name the PR author does not control, but it is still a
       # template expansion landing inside a command line; passing it through the
@@ -535,6 +566,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-eval-workflow.py
 
@@ -594,6 +631,12 @@ jobs:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-vcluster-chart.py
 
@@ -650,6 +693,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: |
           for d in charts/*/; do
             name=$(basename "$d")

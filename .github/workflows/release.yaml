@@ -265,6 +265,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - name: login
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
