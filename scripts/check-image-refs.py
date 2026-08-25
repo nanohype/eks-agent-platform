@@ -34,7 +34,11 @@ import argparse
 import json
 import re
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import EXIT_CANNOT_EVALUATE
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -88,7 +92,7 @@ def chart_images() -> list[tuple[str, str]]:
     app_version = scalar(chart_yaml, "appVersion")
     if not app_version:
         print("could not read appVersion from charts/operator/Chart.yaml", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
 
     # The operator's own image. `tag: ""` means "use appVersion" — the same
     # fallback templates/_helpers.tpl applies — so an appVersion bumped ahead
@@ -96,7 +100,7 @@ def chart_images() -> list[tuple[str, str]]:
     block = re.search(r"^image:\n((?:\s+.*\n)+)", values_yaml, re.M)
     if not block:
         print("could not find the top-level image: block in values.yaml", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     repo = scalar(block.group(1), "repository")
     tag = scalar(block.group(1), "tag") or app_version
     refs.append(("charts/operator/values.yaml (image, tag->appVersion)", f"{repo}:{tag}"))
@@ -139,7 +143,7 @@ def chart_images() -> list[tuple[str, str]]:
         print("could not find any ghcr.io image reference in operators/**.go — the",
               file=sys.stderr)
         print("Go source scan matched nothing, so it is asserting nothing.", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
 
     # Same ref in three workflow steps is one question for the registry.
     seen: dict[str, str] = {}
@@ -172,7 +176,7 @@ def main(args: argparse.Namespace) -> int:
     refs = chart_images()
     if not refs:
         print("no image references found — the collector is broken, not the chart", file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_EVALUATE
 
     if args.offline:
         # The commit-controlled half. chart_images() has already cross-checked

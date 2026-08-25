@@ -46,7 +46,11 @@ from __future__ import annotations
 import argparse
 
 import re
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import EXIT_CANNOT_EVALUATE
 from pathlib import Path
 
 import yaml
@@ -86,7 +90,7 @@ def load(path: Path) -> dict:
     doc = yaml.safe_load(path.read_text())
     if not isinstance(doc, dict):
         print(f"ERROR {path.name}: not a mapping; this check cannot read it", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     return doc
 
 
@@ -106,7 +110,7 @@ def triggers(doc: dict, path: Path) -> dict:
             break
     else:
         print(f"ERROR {path.name}: no `on:` block found; the parse is wrong", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
 
     # `on: pull_request` and `on: [pull_request, push]` are both legal and
     # neither can name activity types, so both mean "the defaults".
@@ -117,7 +121,7 @@ def triggers(doc: dict, path: Path) -> dict:
     if isinstance(block, dict):
         return block
     print(f"ERROR {path.name}: unreadable `on:` block of type {type(block).__name__}", file=sys.stderr)
-    sys.exit(2)
+    sys.exit(EXIT_CANNOT_EVALUATE)
 
 
 def subscribed_types(on: dict) -> set[str]:
@@ -173,7 +177,7 @@ def main() -> int:
     paths = sorted(list(WORKFLOWS.glob("*.yml")) + list(WORKFLOWS.glob("*.yaml")))
     if not paths:
         print(f"ERROR: no workflows under {WORKFLOWS}; the walk is not seeing the tree", file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_EVALUATE
 
     gaps: list[tuple[str, str, str, set[str], set[str]]] = []
     examined = 0

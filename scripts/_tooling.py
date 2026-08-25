@@ -46,7 +46,14 @@ import shutil
 import subprocess
 import sys
 
+# 0 pass, 1 a finding about the tree, 2 argparse's own usage error, 3 the gate
+# could not evaluate. 3 covers a missing tool AND a parse or discovery that came
+# back empty: both mean nothing was checked, which is a different statement from
+# "checked and clean" and from "checked and failed". Sharing 2 with argparse
+# would make a gate that bailed indistinguishable from one handed a bad flag,
+# and a floor reading exit status alone cannot tell them apart.
 EXIT_PRECONDITION = 3
+EXIT_CANNOT_EVALUATE = EXIT_PRECONDITION
 
 # The invocation each tool actually accepts, measured rather than assumed.
 PROBES = {
