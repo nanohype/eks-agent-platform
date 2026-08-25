@@ -339,7 +339,7 @@ func (r *PlatformReconciler) ensureGatewayCiliumEgress(ctx context.Context, p *p
 	cnp.SetName("gateway-egress")
 	cnp.SetNamespace(PlatformNamespace(p))
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cnp, func() error {
-		cnp.SetLabels(labelsForPlatform(p))
+		cnp.SetLabels(r.labelsForPlatform(p))
 		return unstructured.SetNestedField(cnp.Object, map[string]interface{}{
 			"endpointSelector": map[string]interface{}{"matchLabels": envoyProxyPodLabels()},
 			"egress":           gatewayEgressCiliumRules(),

@@ -153,7 +153,7 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 						{Name: "ANTHROPIC_ENVIRONMENT_KEY", ValueFrom: &corev1.EnvVarSource{
 							SecretKeyRef: &envKeyRef,
 						}},
-					}, p, platformModelFamily(p)),
+					}, p, platformModelFamily(p), r.Environment),
 					Resources:       pool.Spec.Resources,
 					SecurityContext: restrictedContainerSecurityContext(),
 					VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
@@ -283,7 +283,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 						{Name: "ANTHROPIC_API_KEY", ValueFrom: &corev1.EnvVarSource{
 							SecretKeyRef: pool.Spec.APIKeySecret,
 						}},
-					}, p, ""),
+					}, p, "", r.Environment),
 					Ports: []corev1.ContainerPort{{
 						Name:          "http",
 						ContainerPort: metricsShimPort,

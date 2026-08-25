@@ -29,10 +29,20 @@ const otelResourceAttrsEnvName = "OTEL_RESOURCE_ATTRIBUTES"
 // resolve their model at request time rather than from a fixed spec, so no
 // single model id is knowable when the pod is built. Values come straight from
 // the owning Platform so cost/latency dashboards can slice by team and app.
-func otelResourceAttrs(p *platformv1alpha1.Platform, modelFamily string) string {
+//
+// deployment.environment is the resource-tagging standard's OTel render of the
+// environment dimension, and it is the one attribute here the Platform cannot
+// supply: the environment is the operator's, not the tenant's. Omitted when the
+// operator runs without one rather than emitted empty, because an attribute
+// present with no value is worse than an absent one — a query filtering on it
+// matches, and returns a series that belongs to no environment.
+func otelResourceAttrs(p *platformv1alpha1.Platform, modelFamily, environment string) string {
 	attrs := []string{
 		"agents.tenant=" + p.Spec.Tenant,
 		"agents.platform=" + p.Name,
+	}
+	if environment != "" {
+		attrs = append(attrs, "deployment.environment="+environment)
 	}
 	if modelFamily != "" {
 		attrs = append(attrs, "agents.model_family="+modelFamily)
@@ -45,7 +55,7 @@ func otelResourceAttrs(p *platformv1alpha1.Platform, modelFamily string) string 
 // tenant-supplied AgentSandbox env) is dropped: the operator is authoritative
 // for the tenant/platform attribution so dashboards can trust it, and a
 // duplicate env key is undefined behavior in a container.
-func withOTelResourceAttrs(env []corev1.EnvVar, p *platformv1alpha1.Platform, modelFamily string) []corev1.EnvVar {
+func withOTelResourceAttrs(env []corev1.EnvVar, p *platformv1alpha1.Platform, modelFamily, environment string) []corev1.EnvVar {
 	out := make([]corev1.EnvVar, 0, len(env)+1)
 	for _, e := range env {
 		if e.Name == otelResourceAttrsEnvName {
@@ -55,7 +65,7 @@ func withOTelResourceAttrs(env []corev1.EnvVar, p *platformv1alpha1.Platform, mo
 	}
 	return append(out, corev1.EnvVar{
 		Name:  otelResourceAttrsEnvName,
-		Value: otelResourceAttrs(p, modelFamily),
+		Value: otelResourceAttrs(p, modelFamily, environment),
 	})
 }
 

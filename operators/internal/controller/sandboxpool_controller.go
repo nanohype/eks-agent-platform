@@ -27,6 +27,12 @@ import (
 // pool. The reconciler is k8s-only — it makes no AWS or Anthropic API
 // calls.
 type SandboxPoolReconciler struct {
+	// Environment is the operator's deploy stage, stamped on the pods this
+	// reconciler builds as the OTel deployment.environment resource attribute
+	// (resource-tagging renders the environment dimension there). Empty on a
+	// cluster started without --environment, and omitted from the attribute
+	// rather than emitted blank.
+	Environment string
 	client.Client
 	Scheme      *runtime.Scheme
 	Concurrency int

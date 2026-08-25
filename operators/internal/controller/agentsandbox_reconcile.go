@@ -102,7 +102,7 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client
 				// it holds tenants to. model_family comes from the Platform when
 				// it pins a single family; the session picks its own model, so
 				// model_id is left to the runtime.
-				Env:             withOTelResourceAttrs(box.Spec.Env, p, platformModelFamily(p)),
+				Env:             withOTelResourceAttrs(box.Spec.Env, p, platformModelFamily(p), r.Environment),
 				Resources:       box.Spec.Resources,
 				SecurityContext: restrictedContainerSecurityContext(),
 				VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},

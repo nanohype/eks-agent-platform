@@ -267,7 +267,7 @@ func (r *AgentFleetReconciler) ensureAgentDeployments(ctx context.Context, tc cl
 						{Name: "MODEL_ROUTE", Value: agent.ModelRoute},
 						{Name: "AGENT_NAME", Value: agent.Name},
 						{Name: "AGENT_SYSTEM_PROMPT", Value: agent.SystemPrompt},
-					}, p, fleet.Name, agent.Name),
+					}, p, fleet.Name, agent.Name, r.Environment),
 					Resources: agentResources(agent),
 				}},
 			}
@@ -312,8 +312,8 @@ func agentResources(agent *agentsv1alpha1.AgentSpec) corev1.ResourceRequirements
 // claim cannot be reconciled against a record that names one. Resource
 // attributes ride every span the process emits, so setting them here covers
 // the whole agent rather than the calls it remembers to annotate.
-func withAgentOTelAttrs(env []corev1.EnvVar, p *platformv1alpha1.Platform, fleetName, agentName string) []corev1.EnvVar {
-	out := withOTelResourceAttrs(env, p, platformModelFamily(p))
+func withAgentOTelAttrs(env []corev1.EnvVar, p *platformv1alpha1.Platform, fleetName, agentName, environment string) []corev1.EnvVar {
+	out := withOTelResourceAttrs(env, p, platformModelFamily(p), environment)
 	for i := range out {
 		if out[i].Name != otelResourceAttrsEnvName {
 			continue
