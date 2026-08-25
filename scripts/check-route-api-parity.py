@@ -54,14 +54,23 @@ GO_ENUM = re.compile(r"^//\s*\+kubebuilder:validation:Enum=(\S+)\s*$\s*^type Rou
 # The rendered `api:` property's enum members. controller-gen emits the enum as a
 # YAML sequence under the property, so anchor on the property name and take the
 # `- <value>` lines that follow before the next key at the same indent.
-CRD_API_BLOCK = re.compile(r"^(\s+)api:\n(?:\1\s+.*\n)*?\1\s+enum:\n((?:\1\s+- \S+\n)+)", re.M)
+#
+# `[ \t]` throughout, never `\s`. These patterns run against a view where comment
+# BODIES are blanked to spaces, so a blanked line is a run of whitespace ending
+# in a newline — and `\s` spans newlines. An anchor written `^\s+` can therefore
+# begin on the blanked annotation line ABOVE the match and report that line
+# instead, which does not fail: it silently shifts every file:line citation up by
+# however many blanked lines sit above. A backreference sometimes forces the
+# engine to backtrack to the right line, but that is luck rather than design, and
+# the patterns below carrying no backreference have nothing to save them.
+CRD_API_BLOCK = re.compile(r"^([ \t]+)api:\n(?:\1[ \t]+.*\n)*?\1[ \t]+enum:\n((?:\1[ \t]+- \S+\n)+)", re.M)
 CRD_MEMBER = re.compile(r"-\s*(\S+)")
 
 # export type RouteAPI = 'Anthropic' | 'OpenAI';
-TS_UNION = re.compile(r"export type RouteAPI\s*=\s*([^;]+);")
+TS_UNION = re.compile(r"export type RouteAPI[ \t]*=[ \t]*([^;]+);")
 
 # export const RouteAPI = z.enum(['Anthropic', 'OpenAI']);
-ZOD_ENUM = re.compile(r"export const RouteAPI\s*=\s*z\.enum\(\[([^\]]+)\]\)")
+ZOD_ENUM = re.compile(r"export const RouteAPI[ \t]*=[ \t]*z\.enum\(\[([^\]]+)\]\)")
 
 QUOTED = re.compile(r"['\"]([^'\"]+)['\"]")
 

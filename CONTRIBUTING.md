@@ -33,7 +33,7 @@ See [README.md](./README.md#layout) and [ARCHITECTURE.md](./ARCHITECTURE.md).
 2. Add a reconciler in `operators/internal/controller/`.
 3. Add cross-field validation as CEL `+kubebuilder:validation:XValidation` markers on the API types (CRD schema is the floor; CEL enforces the invariants at admission).
 4. Regenerate CRD manifests with `task operator:gen` — outputs to `operators/config/crd/bases/` and `charts/operator/crds/`.
-5. Regenerate the TS client in `packages/client/src/generated/` via `task client:gen`.
+5. Mirror any new spec/status field into the zod schemas in `packages/core/src/schemas.ts`. The TypeScript side is hand-written rather than generated, and `pnpm check:schema-drift` diffs it against the generated CRD OpenAPI so a field present on one side and not the other fails the build.
 6. Confirm `docs/crd-reference/v1alpha1.md` picked up the new kind — `make -C operators manifests` re-renders it from godoc. There are no per-kind files.
 7. Add a conformance test in `operators/test/conformance/`.
 

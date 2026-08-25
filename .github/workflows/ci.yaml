@@ -60,6 +60,19 @@ jobs:
       - run: ./scripts/check-version-pins.py --self-test
       - run: ./scripts/check-version-pins.py --list
 
+  # Prose that names a path is a claim about the world, and the most checkable
+  # one documentation makes. A file moves, the reference does not, and nothing
+  # fails — the reader following it is the failure detector, which in a runbook
+  # means during an incident.
+  named-paths:
+    name: every path named in prose resolves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-named-paths.py --list
+
   # Positive controls. A gate that has only been READ is a gate being trusted:
   # this repo shipped a parity gate that matched over raw source, so a
   # commented-out declaration above the live one won the search and the gate
@@ -771,6 +784,7 @@ jobs:
         ssm-contract,
         gates,
         controls,
+        named-paths,
         version-pins,
         route-api-parity,
         workflow-triggers,

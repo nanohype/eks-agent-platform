@@ -25,6 +25,24 @@ mean something:
   block, with the original bytes held in memory. A control that leaves the tree
   dirty turns the next gate's clean-check into a false negative.
 
+WHAT THIS DOES NOT COVER
+
+Stated rather than rounded up, because a limit left unstated is a limit that
+reads as coverage:
+
+  * The harness cannot control ITSELF, and check-gates.py is exempt because its
+    own probe is already a mutation. So two of the gates in scripts/ are held to
+    the anti-vacuity floor by nothing but this paragraph. Both fail open.
+  * Fixtures are MUTATED COPIES of real files, not built from literals. Building
+    them from literals would delete the did-the-edit-land question outright
+    rather than defending against it, and the defence is what is implemented
+    here. Several gates discover their inputs by walking the repository, so a
+    literal fixture for those would have to be a repository — a real cost, not a
+    design preference.
+  * A control proves a gate rejects ONE violation. A gate can still be blind to
+    a second shape nobody thought to plant, which is how the RouteAPI gate
+    shipped: it rejected the drift it was written for and read a comment as code.
+
     scripts/check-controls.py [--list]
 """
 
@@ -55,13 +73,29 @@ EXEMPT = {
 class Control:
     """One (file, edit) pair that must make a gate fail."""
 
-    def __init__(self, gate: str, path: str, before: str, after: str, catches: str, args: list[str] | None = None):
+    def __init__(
+        self,
+        gate: str,
+        path: str,
+        before: str,
+        after: str,
+        catches: str,
+        args: list[str] | None = None,
+        expect_output: str | None = None,
+    ):
         self.gate = gate
         self.path = ROOT / path
         self.before = before
         self.after = after
         self.catches = catches
         self.args = args or []
+        # When set, the gate must not only reject — its output must contain this
+        # text. That is what turns a control on the MECHANISM into a control on
+        # the PROPERTY: "the gate exits non-zero" holds for any refactor, while
+        # "the finding is cited at line 7" fails the moment a rewrite shifts the
+        # citation, which is the defect worth catching and the one a bare exit
+        # code cannot see.
+        self.expect_output = expect_output
 
 
 CONTROLS = [
@@ -103,14 +137,43 @@ CONTROLS = [
     Control(
         gate="check-version-pins.py",
         path="renovate.json",
-        before='      "matchStrings": [\n        "ZIZMOR_VERSION:',
-        after='      "matchStrings": [\n        "ZIZMOR_VERSION_RULE_DELETED:',
+        before='"ZIZMOR_VERSION:',
+        after='"ZIZMOR_VERSION_RULE_DELETED_BY_CONTROL:',
         catches="a manager whose matchStrings stop matching their pin. Deleting the RULE must make "
         "the gate fail rather than fall back to an empty pattern — an empty pattern matches nothing "
         "and passes everything, the empty-enumeration failure wearing different clothes. An earlier "
         "form of this control renamed depNameTemplate and left matchStrings intact: the edit landed, "
         "the bytes changed, and the meaning did not, so the gate's pass was correct and the CONTROL "
         "was the thing at fault",
+    ),
+    Control(
+        gate="check-named-paths.py",
+        path="README.md",
+        before="## Layout",
+        after="## Layout\n\nSee [the ledger](docs/zzsynthetic-control-marker/ledger.md).\n",
+        catches="prose naming a repo path that does not exist — the claim documentation makes most "
+        "often and the one that rots fastest. The marker is a synthetic token that appears nowhere "
+        "in the tree: a realistic-looking path could already exist, and then present-after-mutating "
+        "would prove nothing",
+    ),
+    Control(
+        gate="check-named-paths.py",
+        path="README.md",
+        # Anchored at the FIRST line so the expected citation is deterministic.
+        # Anchoring mid-file would make the assertion depend on how much prose
+        # sits above it, and the control would then break on an unrelated edit —
+        # a control that goes stale is a control that stops being run.
+        before="# eks-agent-platform",
+        after=(
+            "<!-- filler -->\n<!-- filler -->\n<!-- filler -->\n"
+            "[the ledger](docs/zzsynthetic-line-marker/ledger.md)\n\n# eks-agent-platform"
+        ),
+        catches="a citation shifted off the violation's own line. Three comment lines sit above the "
+        "broken reference, so a pattern anchored with a newline-spanning class would report one of "
+        "THEM instead — a failure that does not announce itself, because the gate still rejects and "
+        "only the line number is wrong. Asserting the line rather than the exit code makes this "
+        "property survive a refactor to a different matching mechanism",
+        expect_output="README.md:4",
     ),
     Control(
         gate="no-placeholders.sh",
@@ -392,6 +455,11 @@ def main() -> int:
             failures.append(
                 f"{label}: the gate PASSED with the violation present — it fails open.\n"
                 f"      the control introduced: {c.catches}"
+            )
+        elif c.expect_output and c.expect_output not in (post.stdout + post.stderr):
+            failures.append(
+                f"{label}: the gate rejected, but its finding does not contain {c.expect_output!r}. "
+                "The rejection alone is not the property under test."
             )
 
     if failures:
