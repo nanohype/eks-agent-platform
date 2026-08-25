@@ -30,6 +30,12 @@ chart itself hardcodes.
 
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _source_text import strip_comments  # noqa: E402
+
 import argparse
 
 import pathlib
@@ -59,14 +65,20 @@ def main() -> int:
             print(f"FAIL  {path.relative_to(ROOT)} does not exist")
             return 1
 
-    block_match = ARGS_BLOCK.search(DEPLOYMENT.read_text(encoding="utf-8"))
+    block_match = ARGS_BLOCK.search(strip_comments(DEPLOYMENT.read_text(encoding="utf-8"), "yaml"))
     if not block_match:
         print(f"FAIL  no container args: block in {DEPLOYMENT.relative_to(ROOT)} —")
         print("      the parse matched nothing, so this check is asserting nothing.")
         return 1
 
     passed = sorted(set(PASSED_FLAG.findall(block_match.group(2))))
-    defined = set(DEFINED_FLAG.findall(MAIN.read_text(encoding="utf-8")))
+    # The Go side read as CODE, not as text. A commented-out flag.StringVar
+    # still looked like a definition, so a chart passing a flag the binary no
+    # longer defines passed this gate — while the real consequence is Go's flag
+    # package exiting on the unknown argument and every operator pod
+    # crashlooping at startup, which is the exact failure this gate exists to
+    # prevent. Verified by commenting one out and watching the gate pass.
+    defined = set(DEFINED_FLAG.findall(strip_comments(MAIN.read_text(encoding="utf-8"), "go")))
 
     # Neither side may be empty. Both are produced by regexes that a formatting
     # change could silently stop matching, and an empty set on either side makes

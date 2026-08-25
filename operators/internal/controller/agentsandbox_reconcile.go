@@ -109,9 +109,9 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client
 				Env:             withOTelResourceAttrs(box.Spec.Env, p, platformModelFamily(p), r.Environment),
 				Resources:       box.Spec.Resources,
 				SecurityContext: sandboxContainerSecurityContext(),
-				VolumeMounts:    sandboxWritableMounts(),
+				VolumeMounts:    sandboxWritableMounts(box.Spec.WritablePaths...),
 			}},
-			Volumes: sandboxWritableVolumes(),
+			Volumes: sandboxWritableVolumes(box.Spec.WritablePaths...),
 		},
 	}
 	if err := tc.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {

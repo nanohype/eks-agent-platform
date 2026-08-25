@@ -59,6 +59,25 @@ type AgentSandboxSpec struct {
 	// +optional
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
 
+	// WritablePaths are additional absolute paths the session container may
+	// write, mounted as emptyDir alongside /workspace and /tmp.
+	//
+	// The session runs with a read-only root filesystem, and the only paths this
+	// operator can name for an arbitrary image are the two it already mounts:
+	// /workspace, which is this CRD's own contract, and /tmp, which every
+	// runtime expects. Everything else is a fact about the image — where its
+	// user's HOME is, where its toolchain caches — and the image is yours.
+	//
+	// Declare what your entrypoint writes. Getting this wrong surfaces as the
+	// container failing on a read-only filesystem at the moment it tries, which
+	// is inside a tool call rather than at startup, so it is worth checking
+	// against the image rather than discovering.
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:items:MaxLength=256
+	// +kubebuilder:validation:items:Pattern=`^/[A-Za-z0-9._/-]*$`
+	// +optional
+	WritablePaths []string `json:"writablePaths,omitempty"`
+
 	// ActiveDeadlineSeconds is the wall-clock ceiling on one session, measured
 	// from the moment the pod starts.
 	//

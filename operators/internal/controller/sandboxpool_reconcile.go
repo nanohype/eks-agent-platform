@@ -156,9 +156,9 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 					}, p, platformModelFamily(p), r.Environment),
 					Resources:       pool.Spec.Resources,
 					SecurityContext: sandboxContainerSecurityContext(),
-					VolumeMounts:    sandboxWritableMounts(),
+					VolumeMounts:    sandboxWritableMounts(workerHomeDir),
 				}},
-				Volumes: sandboxWritableVolumes(),
+				Volumes: sandboxWritableVolumes(workerHomeDir),
 			},
 		}
 		return nil
@@ -168,6 +168,15 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 	}
 	return nil
 }
+
+// workerHomeDir is HOME in the sandbox-worker image, which this repo builds —
+// sandbox-worker/Dockerfile creates it with `useradd --create-home worker`. Both
+// `ant` and git write under it, so with a read-only root it has to be mounted.
+//
+// Named here rather than in the shared helper because it is a fact about THIS
+// image. An AgentSandbox runs whatever image its tenant names and declares its
+// own paths instead.
+const workerHomeDir = "/home/worker"
 
 // ensureSandboxNetworkPolicy installs a NetworkPolicy selecting worker
 // pods: ingress is denied entirely; egress narrows to kube-dns and

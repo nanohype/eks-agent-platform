@@ -101,6 +101,16 @@ def strip_slash_comments(text: str) -> str:
     return out
 
 
+def strip_hcl_comments(text: str) -> str:
+    """HCL / Terraform, which accepts `#`, `//` AND `/* */`.
+
+    Both passes are needed and the order does not matter, because each is
+    quote-aware and a comment opened in one syntax cannot contain an unbalanced
+    quote that changes the other's reading.
+    """
+    return strip_hash_comments(strip_slash_comments(text))
+
+
 def strip_comments(text: str, language: str) -> str:
     """Dispatch by language. An unknown language is an error, not a pass-through.
 
@@ -111,6 +121,8 @@ def strip_comments(text: str, language: str) -> str:
         return strip_hash_comments(text)
     if language in ("go", "ts", "typescript", "js", "javascript"):
         return strip_slash_comments(text)
+    if language in ("hcl", "tf", "terraform"):
+        return strip_hcl_comments(text)
     raise ValueError(
         f"strip_comments: no comment syntax known for {language!r}; "
         "add one rather than matching over raw text"

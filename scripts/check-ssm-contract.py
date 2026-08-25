@@ -99,6 +99,12 @@ Usage: scripts/check-ssm-contract.py [--verbose]
 
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _source_text import strip_comments  # noqa: E402
+
 import argparse
 
 import re
@@ -250,12 +256,28 @@ def collect() -> tuple[list[Param], set[str]]:
 
     for component_dir in sorted(p for p in COMPONENTS.iterdir() if p.is_dir()):
         files = sorted(component_dir.glob("*.tf"))
-        locals_map = parse_locals([f.read_text() for f in files])
+        locals_map = parse_locals([strip_comments(f.read_text(), "hcl") for f in files])
 
         for tf in files:
-            src = tf.read_text()
+            # TWO VIEWS OF ONE FILE, chosen by what each check is asking.
+            #
+            # `raw` carries the `# ssm-consumer:` annotations — a comment, and
+            # this gate's own vocabulary for "another repo reads this one". A
+            # stripped view erases them and every cross-repo parameter reports as
+            # unread. Measured: stripping this read turned four correctly
+            # annotated parameters into findings, including
+            # kill-switch/state_machine_arn, which the telemetry-pipeline
+            # standard names as a published discovery path.
+            #
+            # `src` is the same file with comments blanked, and the resource
+            # bodies are read from it — because a commented-out `name =` is not a
+            # published parameter, and counting it as one let a parameter nobody
+            # writes read as written.
+            raw = tf.read_text()
+            src = strip_comments(raw, "hcl")
             for m in HEADER.finditer(src):
                 body = block_body(src, m.end() - 1)
+                raw_body = block_body(raw, m.end() - 1) if m.end() - 1 < len(raw) else body
                 name_match = NAME.search(body)
                 if not name_match:
                     # A name built by something other than a literal string. Fail
@@ -274,7 +296,11 @@ def collect() -> tuple[list[Param], set[str]]:
                     read.add(resolved)
                     continue
 
-                declared = CONSUMER.search(leading_comments(src, m.start()))
+                # RAW: the annotation IS a comment, and it is what says another
+                # repo reads this parameter. The resource body above is read from
+                # the stripped view; this one line is the other half of the same
+                # view-per-check split.
+                declared = CONSUMER.search(leading_comments(raw, m.start()))
                 written.append(
                     Param(
                         component_dir.name,
@@ -312,6 +338,17 @@ def collect_consumed() -> list[ConsumedPath]:
     for path in sorted(OPERATORS.rglob("*.go")):
         if path.name.endswith("_test.go"):
             continue
+        # RAW, deliberately. The `// ssm-producer:` marker this function reads IS
+        # a comment — it is the gate's own vocabulary for "another repo writes
+        # this one" — so a stripped view here erases the annotation and reports
+        # every cross-repo parameter as unpublished. Measured: stripping dropped
+        # producers from 22 to 19 and turned three correctly-annotated reads into
+        # findings.
+        #
+        # The sibling sites below DO strip, and the difference is what each is
+        # asking. A commented-out `case` arm is not a live assignment and a
+        # commented-out field reference is not a use; a commented-out annotation
+        # is still the annotation.
         src = path.read_text()
         for m in PARAM_PATH_FN.finditer(src):
             lit = SSM_LITERAL.search(m.group("body"))
@@ -344,7 +381,7 @@ def collect_consumed() -> list[ConsumedPath]:
 
 def operator_keys() -> dict[str, str]:
     """{relative key: the Config field its case arm assigns}."""
-    src = OPERATOR_CONFIG.read_text()
+    src = strip_comments(OPERATOR_CONFIG.read_text(), "go")
     body = re.search(r"func \(c \*Config\) assign\(.*?\n\}", src, re.S)
     if not body:
         print(f"ERROR: cannot find Config.assign in {OPERATOR_CONFIG}", file=sys.stderr)
@@ -373,7 +410,7 @@ def live_fields() -> set[str]:
     for path in sorted(OPERATORS.rglob("*.go")):
         if OPERATOR_CONFIG.parent in path.parents:
             continue
-        for m in re.finditer(r"\.([A-Z]\w*)\b", path.read_text()):
+        for m in re.finditer(r"\.([A-Z]\w*)\b", strip_comments(path.read_text(), "go")):
             live.add(m.group(1))
     if not live:
         print(

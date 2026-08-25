@@ -110,30 +110,61 @@ func TestSandboxContainerSecurityContextIsReadOnlyAndHasSomewhereToWrite(t *test
 		t.Error("the fleet profile now forces a read-only root on the tenant's own image; that is a different decision and needs its own opt-out")
 	}
 
-	mounts := sandboxWritableMounts()
-	vols := sandboxWritableVolumes()
-	if len(mounts) != len(vols) {
-		t.Fatalf("%d writable mount(s) against %d volume(s) — a mount with no volume does not start", len(mounts), len(vols))
+	// The paths this operator may name for an ARBITRARY image are the two it
+	// already owns. Everything else is a fact about the image, and deriving one
+	// image's layout and applying it to another is how a read-only root becomes
+	// a workload that cannot start — the first version of this helper mounted
+	// /home/worker for the tenant-supplied AgentSandbox image too, where it is a
+	// guess.
+	base := sandboxWritableMounts()
+	got := map[string]string{}
+	for _, m := range base {
+		got[m.MountPath] = m.Name
+	}
+	for _, want := range []string{"/workspace", "/tmp"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("no writable mount at %s; with a read-only root a write there fails inside the tool call", want)
+		}
+	}
+	if _, ok := got["/home/worker"]; ok {
+		t.Error("/home/worker is mounted for every sandbox; it is the sandbox-worker image's HOME and a guess for any tenant image")
 	}
 
-	byName := map[string]bool{}
+	// A caller that KNOWS its image adds to that set.
+	withHome := sandboxWritableMounts("/home/worker")
+	if len(withHome) != len(base)+1 {
+		t.Errorf("declaring an extra path yielded %d mounts, want %d", len(withHome), len(base)+1)
+	}
+
+	// Volumes and mounts have to agree, or the pod does not start.
+	vols := sandboxWritableVolumes("/home/worker")
+	if len(vols) != len(withHome) {
+		t.Fatalf("%d mount(s) against %d volume(s)", len(withHome), len(vols))
+	}
+	names := map[string]bool{}
 	for _, v := range vols {
 		if v.EmptyDir == nil {
 			t.Errorf("writable volume %q is not an emptyDir; a sandbox that outlives its session is not single-use", v.Name)
 		}
-		byName[v.Name] = true
+		names[v.Name] = true
 	}
-
-	// Enumerated from the image: WORKDIR /workspace, useradd --create-home for
-	// /home/worker, and /tmp because approximately everything expects it.
-	want := map[string]string{"/workspace": "", "/home/worker": "", "/tmp": ""}
-	for _, m := range mounts {
-		if !byName[m.Name] {
+	for _, m := range withHome {
+		if !names[m.Name] {
 			t.Errorf("mount %q names no volume", m.Name)
 		}
-		delete(want, m.MountPath)
 	}
-	for path := range want {
-		t.Errorf("no writable mount at %s; with a read-only root a write there fails at runtime, inside the tool call", path)
+
+	// A duplicate declaration must not produce two volumes with one name.
+	if dup := sandboxWritableVolumes("/tmp", "/tmp"); len(dup) != len(base) {
+		t.Errorf("a duplicate path produced %d volumes, want %d", len(dup), len(base))
+	}
+
+	// A tenant-declared path has to render an RFC-1123 volume name.
+	for _, v := range sandboxWritableVolumes("/var/cache/tool_x") {
+		for _, r := range v.Name {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+				t.Errorf("volume name %q carries %q, which the API server rejects", v.Name, r)
+			}
+		}
 	}
 }

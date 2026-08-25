@@ -66,8 +66,18 @@ INVOCATION = re.compile(r"(?:\./)?scripts/(check-[a-z0-9-]+\.py)((?:\s+--[a-z0-9
 FLAG = re.compile(r"--[a-z0-9-]+")
 
 
+# The floor's own blind spot, named rather than left to be discovered.
+#
+# Probing this file from this file re-invokes it once per gate, recursively, and
+# never returns — so check-gates.py is the one gate its own floor does not hold.
+# Nothing here proves this script parses argv strictly; that rests on reading it
+# and on its --self-test, which is testimony about itself by exactly the standard
+# this file exists to enforce elsewhere.
+SELF = "check-gates.py"
+
+
 def gates() -> list[pathlib.Path]:
-    found = sorted(SCRIPTS.glob("check-*.py"))
+    found = sorted(p for p in SCRIPTS.glob("check-*.py") if p.name != SELF)
     if not found:
         sys.exit(
             f"check-gates: no check-*.py under {SCRIPTS.relative_to(ROOT)}. "
@@ -77,30 +87,64 @@ def gates() -> list[pathlib.Path]:
     return found
 
 
-def rejects_nonsense(gate: pathlib.Path) -> tuple[bool, str]:
-    """Run the gate with an argument nothing declares and report whether it refused."""
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(gate), NONSENSE],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=ROOT,
+# argparse exits 2 on an unrecognized argument. That number is the OBSERVATION;
+# anything the gate prints about itself is testimony.
+#
+# The distinction is not pedantic — it is the whole floor. A four-line script
+# that runs no check, prints "unrecognized argument" and exits 1 satisfied the
+# previous form of this function, because that form read the gate's own stderr
+# for words like "unrecognized". The subject was being asked to describe its own
+# behaviour and believed. Verified by writing exactly that script and watching it
+# pass as one of twenty-one healthy gates.
+ARGPARSE_USAGE_EXIT = 2
+
+
+def parses_argv_strictly(gate: pathlib.Path, declared: set[str]) -> tuple[bool, str]:
+    """Does the gate distinguish an argument it declares from one it does not?
+
+    Two halves, and they cannot be satisfied by the same evidence — that is the
+    point of testing both. A gate that exits 2 on everything fails the accept
+    half; one that exits 2 on nothing fails the reject half. Neither can be
+    faked by a script that does no work, because a script that does no work
+    cannot tell the two invocations apart.
+
+    Only exit status is read. Nothing the gate writes is consulted.
+    """
+    def run(args: list[str]) -> int:
+        try:
+            return subprocess.run(
+                [sys.executable, str(gate), *args],
+                capture_output=True, text=True, timeout=300, cwd=ROOT,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            return -1
+
+    # REJECT half: an argument nothing declares must be refused as a usage error.
+    if run([NONSENSE]) != ARGPARSE_USAGE_EXIT:
+        return False, (
+            f"an unrecognized argument did not exit {ARGPARSE_USAGE_EXIT}. A gate that ignores argv "
+            "cannot tell a renamed flag from a correct one, so a CI step naming a mode the script "
+            "no longer has keeps passing"
         )
-    except subprocess.TimeoutExpired:
-        return False, "timed out"
-    if proc.returncode == 0:
-        return False, "exited 0 — the argument was ignored"
-    combined = (proc.stdout + proc.stderr).lower()
-    # A non-zero exit is necessary but not sufficient: a gate can fail for its
-    # own reasons (a missing dependency, a real finding) and look like it
-    # rejected the argument. Require it to SAY so.
-    if any(w in combined for w in ("unrecognized", "unknown", "invalid", "usage:")):
-        return True, ""
-    return False, f"exited {proc.returncode} without naming the argument — indistinguishable from failing for another reason"
+
+    # ACCEPT half: a flag it DOES declare must not be refused as a usage error.
+    # Without this, a gate that refuses every argument would pass the half above
+    # while being unusable — the reject test alone is one-sided.
+    # One declared flag, not all of them. The shape being caught is a gate that
+    # refuses EVERYTHING, which shows up on any flag — and several gates here
+    # shell out to helm or a registry, so a run per flag makes the floor
+    # expensive enough that it stops being run, which is its own failure mode.
+    if declared:
+        flag = sorted(declared)[0]
+        rc = run([flag])
+        if rc == ARGPARSE_USAGE_EXIT:
+            return False, f"it declares {flag} but refuses it as a usage error, so the flag is unreachable"
+        if rc == -1:
+            return False, f"timed out running its own declared flag {flag}"
+    return True, ""
 
 
-def declared_flags(gate: pathlib.Path) -> set[str]:
+def declared_flags(gate: pathlib.Path, boolean_only: bool = False) -> set[str]:
     """Flags this gate actually declares, read from the AST.
 
     The question is whether a CALL happens, so the view has to be one where text
@@ -126,6 +170,17 @@ def declared_flags(gate: pathlib.Path) -> set[str]:
         fn = node.func
         if not (isinstance(fn, ast.Attribute) and fn.attr == "add_argument"):
             continue
+        # A flag taking a VALUE cannot be probed by passing it alone — argparse
+        # rightly calls that a usage error, which says nothing about whether the
+        # gate parses strictly. Only store_true flags are self-contained enough
+        # to use as the accept-half fixture.
+        if boolean_only:
+            store_true = any(
+                kw.arg == "action" and isinstance(kw.value, ast.Constant) and kw.value.value == "store_true"
+                for kw in node.keywords
+            )
+            if not store_true:
+                continue
         for arg in node.args:
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("--"):
                 out.add(arg.value)
@@ -144,35 +199,51 @@ def workflow_invocations() -> list[tuple[str, str, str]]:
 
 
 def self_test() -> int:
-    """Prove the two probes can distinguish a passing gate from a failing one.
-
-    Without this the probes are themselves unfalsified — a rejects_nonsense that
-    always returned True would report every gate healthy, which is the exact
-    shape this file exists to catch.
-    """
+    """Try to fool the probe. A probe nobody has attacked is one being trusted."""
     ok = True
+    tmp = SCRIPTS / "_check-gates-selftest-tmp.py"
 
-    strict = SCRIPTS / "check-leaf-input-parity.py"  # argparse-based
-    passed, why = rejects_nonsense(strict)
-    if not passed:
-        print(f"self-test: {strict.name} is argparse-based and should reject; got: {why}", file=sys.stderr)
+    def try_gate(body: str, declared: set[str]) -> bool:
+        tmp.write_text(body, encoding="utf-8")
+        try:
+            passed, _ = parses_argv_strictly(tmp, declared)
+            return passed
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    # A gate that does nothing but CLAIM to reject. This is the exact shape that
+    # defeated the previous stdout-reading form of the probe.
+    if try_gate(
+        "#!/usr/bin/env python3\nimport sys\nprint('unrecognized argument', file=sys.stderr)\nsys.exit(1)\n",
+        set(),
+    ):
+        print("self-test: a gate that only CLAIMS to reject was reported as strict", file=sys.stderr)
         ok = False
 
-    # A gate that ignores everything must be caught. Written to a temp path
-    # rather than shipped, so the repo carries no permanently-failing gate.
-    lax = SCRIPTS / "_check-gates-selftest-lax.py"
-    lax.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n", encoding="utf-8")
-    try:
-        passed, _ = rejects_nonsense(lax)
-        if passed:
-            print("self-test: a gate that exits 0 on any argument was reported as rejecting", file=sys.stderr)
-            ok = False
-    finally:
-        lax.unlink(missing_ok=True)
+    # A gate that refuses everything, including flags it declares. Passes the
+    # reject half and must fail the accept half.
+    if try_gate("#!/usr/bin/env python3\nimport sys\nsys.exit(2)\n", {"--list"}):
+        print("self-test: a gate that refuses its own declared flag was reported as strict", file=sys.stderr)
+        ok = False
+
+    # A gate that accepts everything.
+    if try_gate("#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n", set()):
+        print("self-test: a gate that ignores argv was reported as strict", file=sys.stderr)
+        ok = False
+
+    # A genuinely strict gate must pass, or the probe rejects everything and the
+    # floor is vacuous in the other direction.
+    if not try_gate(
+        "#!/usr/bin/env python3\nimport argparse\nap = argparse.ArgumentParser()\n"
+        "ap.add_argument('--list', action='store_true')\nap.parse_args()\n",
+        {"--list"},
+    ):
+        print("self-test: a genuinely strict gate was rejected", file=sys.stderr)
+        ok = False
 
     if not ok:
         return 1
-    print("✓ check-gates self-test: the probe distinguishes a strict gate from a permissive one")
+    print("✓ check-gates self-test: the probe reads exit status only, and cannot be satisfied by a gate that merely claims to reject")
     return 0
 
 
@@ -190,7 +261,7 @@ def main() -> int:
     failures: list[str] = []
 
     for gate in found:
-        passed, why = rejects_nonsense(gate)
+        passed, why = parses_argv_strictly(gate, declared_flags(gate, boolean_only=True))
         if not passed:
             failures.append(
                 f"{gate.relative_to(ROOT)} accepts an unrecognized argument ({why}).\n"
@@ -226,7 +297,13 @@ def main() -> int:
             print(f"  - {f}", file=sys.stderr)
         return 1
 
-    print(f"✓ {len(found)} gates reject an unknown argument; every flag {len(invocations)} CI invocations pass is declared")
+    print(
+        f"✓ {len(found)} gates probed: each refuses an unrecognized argument and accepts a flag it "
+        f"declares, observed from exit status alone. Every flag {len(invocations)} CI invocations "
+        f"pass is declared.\n"
+        f"  NOT probed: {SELF} (probing it from itself recurses); flags taking a VALUE "
+        f"(bare, they are a usage error whatever the gate does)."
+    )
     return 0
 
 
