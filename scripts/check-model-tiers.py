@@ -34,11 +34,25 @@ Resolution order, most authoritative first:
   2. the sibling nanohype checkout, if one is beside this repo
   3. a cached copy under /private/tmp, written by whoever last pulled it
 
-When none resolve the gate SKIPS with a stated reason and a zero exit — it
-cannot assert a comparison against a document it does not have, and inventing
-the expected values here would be exactly the copy this file exists to avoid.
-The skip prints, so an environment where it never runs is visible rather than
-silently green.
+WHY A COMMITTED SNAPSHOT EXISTS ANYWAY
+
+None of those resolve on a CI runner, and the earlier design skipped with a zero
+exit when that happened. Measured on a pull request: the gate took the skip
+branch every time and reported success with a planted violation present. A gate
+that can only assert on a developer's machine asserts nothing where it matters,
+and the skip message scrolls past in a green job.
+
+So the comparison is split by who controls the operand.
+
+  * The COMMIT controls the scaffolder. model_defaults.json is compared against
+    scripts/llm-policy-snapshot.json, which is committed, so the check is
+    deterministic and runs identically everywhere.
+  * The WORLD controls the standard. Wherever the catalog does resolve, the
+    snapshot is compared against it as well, so the snapshot cannot drift
+    unnoticed on any machine that has the catalog.
+
+The snapshot is not a second source of truth: it is a cache with a gate over it.
+Nothing reads it as authority when the authority is reachable.
 
     scripts/check-model-tiers.py [--list]
 """
@@ -53,6 +67,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULTS = ROOT / "operators" / "internal" / "agentctl" / "model_defaults.json"
+SNAPSHOT = ROOT / "scripts" / "llm-policy-snapshot.json"
 
 
 def candidate_policy_paths() -> list[pathlib.Path]:
@@ -88,16 +103,41 @@ def main() -> int:
         print("check-model-tiers: model_defaults.json declares no tiers at all", file=sys.stderr)
         return 1
 
-    policy = load_policy()
-    if policy is None:
-        # Loud skip. Silence here would be indistinguishable from a pass.
-        print(
-            "check-model-tiers: SKIPPED — no llm-policy.json resolved from "
-            f"{len(candidate_policy_paths())} candidate locations, so the comparison asserts nothing "
-            "on this run. Set NANOHYPE_STANDARDS_DIR to the catalog's standards directory."
+    if not SNAPSHOT.is_file():
+        sys.exit(
+            f"check-model-tiers: {SNAPSHOT.relative_to(ROOT)} is missing. It is the operand this "
+            "gate compares against everywhere the catalog does not resolve; without it the check "
+            "would pass by skipping."
         )
-        print(f"  scaffolder tiers, unverified: {json.dumps(tiers, sort_keys=True)}")
-        return 0
+    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["models"]
+
+    # What the world controls: the snapshot must still equal the catalog, checked
+    # wherever the catalog is reachable.
+    catalog = load_policy()
+    if catalog is None:
+        print(
+            f"check-model-tiers: the catalog did not resolve from {len(candidate_policy_paths())} "
+            "candidate locations, so this run compares the scaffolder against the committed "
+            "snapshot only. Set NANOHYPE_STANDARDS_DIR to also verify the snapshot itself."
+        )
+    elif catalog != snapshot:
+        print("\nThe committed snapshot no longer matches the org LLM policy:\n", file=sys.stderr)
+        for tier in sorted(set(catalog) | set(snapshot)):
+            if catalog.get(tier) != snapshot.get(tier):
+                print(
+                    f"  - {tier}: catalog names {catalog.get(tier)!r}, "
+                    f"snapshot has {snapshot.get(tier)!r}",
+                    file=sys.stderr,
+                )
+        print(
+            "\nUpdate scripts/llm-policy-snapshot.json from the catalog, then this gate will hold "
+            "the scaffolder to the new tiers.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # What the commit controls: the scaffolder must equal the snapshot.
+    policy = snapshot
 
     if args.list:
         for tier in sorted(set(tiers) | set(policy)):

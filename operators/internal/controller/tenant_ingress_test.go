@@ -160,9 +160,12 @@ func TestSandboxContainerSecurityContextIsReadOnlyAndHasSomewhereToWrite(t *test
 	}
 
 	// A tenant-declared path has to render an RFC-1123 volume name.
+	isRFC1123Char := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
+	}
 	for _, v := range sandboxWritableVolumes("/var/cache/tool_x") {
 		for _, r := range v.Name {
-			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			if !isRFC1123Char(r) {
 				t.Errorf("volume name %q carries %q, which the API server rejects", v.Name, r)
 			}
 		}

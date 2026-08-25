@@ -31,6 +31,10 @@ const (
 	labelTeam        = "platform.nanohype.dev/team"
 )
 
+// The label keys the operator stamps on everything it creates. They are exported
+// because the tenant chart, the eval runner and the conformance suite select on
+// exactly these strings, and a selector that disagrees with the stamp silently
+// matches nothing.
 const (
 	LabelPlatform      = labelPrefix + "/platform"
 	LabelTenant        = labelPrefix + "/tenant"

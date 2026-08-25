@@ -71,6 +71,13 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	reading, err := r.aggregate(ctx, &tenant)
 	if err != nil {
 		logger.Error(err, "tenant aggregate failed; will retry on next tick")
+		// Without this the status keeps the last successful roll-up with no
+		// indication it is stale, and Aggregated=False cannot be told apart from
+		// a tenant that genuinely owns nothing. The persona dashboards read those
+		// fields directly.
+		if markErr := r.markAggregateUnreadable(ctx, &tenant, err); markErr != nil {
+			logger.Error(markErr, "could not record that the roll-up was unreadable")
+		}
 		return ctrl.Result{RequeueAfter: r.requeue()}, nil
 	}
 	if err := r.applyStatus(ctx, &tenant, reading); err != nil {
