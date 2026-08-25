@@ -11,8 +11,12 @@ import type { InvocationResult, ModelBackend, StopReason } from './types.js';
  * The operator forwards `string(route.API)` verbatim, so a lowercase union here
  * would match nothing the operator can send: the runner would fall through to
  * the other branch and post an OpenAI body at the Anthropic endpoint, against a
- * gateway that reports healthy. scripts/check-route-api-parity.py is what holds
- * the two spellings together, because no type system spans this seam.
+ * gateway that reports healthy.
+ *
+ * No type system spans this seam — the value crosses a JSON boundary between two
+ * languages — so scripts/check-route-api-parity.py holds the declarations
+ * together instead, comparing this union against the generated CRD enum, the Go
+ * marker behind it, and the zod enum in `@eks-agent/core`.
  */
 export type RouteAPI = 'Anthropic' | 'OpenAI';
 

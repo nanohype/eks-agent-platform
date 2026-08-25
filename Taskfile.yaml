@@ -193,17 +193,6 @@ tasks:
     cmds:
       - pnpm test
 
-  client:gen:
-    desc: "Generate TS client types from CRD OpenAPI v3 schemas (script not wired yet)"
-    cmds:
-      - |
-        echo "client:gen is not wired yet. Until scripts/gen-client.mjs exists"
-        echo "(planned: run kubernetes-fluent-client or kubernetes-models-ts against"
-        echo "operators/config/crd/bases/*.yaml and emit TS types into"
-        echo "packages/client/src/generated/), use the hand-written types in"
-        echo "packages/client/src/index.ts."
-        exit 1
-
   # === Help ===
 
   help:

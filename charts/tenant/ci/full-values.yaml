@@ -1,5 +1,5 @@
 # Coverage render #1 — every Platform.spec field the chart can emit, on the
-# allowedModelFamilies branch. Read by scripts/check-chart-crd-coverage.py, which
+# allowedModelFamilies branch. Read by scripts/check-chart-crd-parity.py, which
 # asserts the union of the ci/ renders reaches every field in the Platform CRD's
 # spec schema. A field the CRD gains and the chart cannot express fails that gate.
 #

@@ -38,6 +38,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: ./scripts/check-ssm-contract.py
 
+  # Three declarations of one closed set, in two languages, with a JSON boundary
+  # between them and no type system spanning it. A value the TypeScript side is
+  # missing is not a compile error anywhere — the runner takes its other branch
+  # and posts the wrong body at a gateway that reports healthy.
+  route-api-parity:
+    name: RouteAPI agrees across its declarations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: ./scripts/check-route-api-parity.py --list
+
   # A gate on a mutable field has to subscribe to the event that mutates it, or
   # it reports on a version of the PR that no longer exists.
   workflow-triggers:
@@ -634,6 +645,7 @@ jobs:
         placeholders,
         doc-contracts,
         ssm-contract,
+        route-api-parity,
         workflow-triggers,
         leaf-input-parity,
         format,
