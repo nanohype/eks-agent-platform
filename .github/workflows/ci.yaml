@@ -60,6 +60,20 @@ jobs:
       - run: ./scripts/check-version-pins.py --self-test
       - run: ./scripts/check-version-pins.py --list
 
+  # The contract lists three per-env deltas among the tenant chart's required
+  # artifacts and says empty is still required. Three files that always exist
+  # mean a deploy path can name one unconditionally; a file that exists only
+  # when it has content makes every consumer branch on its absence, and the
+  # branch nobody wrote deploys base values into production silently.
+  tenant-chart-artifacts:
+    name: tenant chart ships its required artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-tenant-chart-artifacts.py --list
+
   # A comment claiming to mirror a standard is a claim nothing keeps true. This
   # one had drifted a full generation before anything compared the two.
   model-tiers:
@@ -558,8 +572,26 @@ jobs:
   # what makes tag-only releases safe. release.yaml builds on tags only, so
   # nothing downstream repairs a chart that points at an unpublished image; this
   # is the thing that stops one merging.
+  # Enumeration only — the half that is a fact about THIS commit. Whether a
+  # registry can serve the reference is a fact about the world, and a merge that
+  # fails because GHCR had an outage teaches people to bypass the gate rather
+  # than to fix anything. That half moved to chart-drift.yaml's schedule.
   image-refs:
+    name: image references are internally consistent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-image-refs.py --offline --list
+
+  image-refs-registry:
     name: every image the chart names is published
+    # Not in the merge gate: see image-refs above. Runs on push to main so a
+    # merged change that names an unpublished image still surfaces promptly,
+    # and on the chart-drift schedule for the case where nothing here changed
+    # and the registry did.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -801,6 +833,7 @@ jobs:
         controls,
         named-paths,
         model-tiers,
+        tenant-chart-artifacts,
         version-pins,
         route-api-parity,
         workflow-triggers,

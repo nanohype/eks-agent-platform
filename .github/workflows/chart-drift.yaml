@@ -40,3 +40,24 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
       - run: ./scripts/check-chart-version-bump.py --self-test
       - run: ./scripts/check-chart-version-bump.py --published
+
+  # The world-controlled half of the image gate. Its verdict changes when a
+  # package is deleted or a registry has an outage, neither of which a pull
+  # request causes — so it reports here rather than blocking a merge. The
+  # enumeration half runs on every PR in ci.yaml as `image-refs`.
+  #
+  # A red run here is a real finding about the estate, not about the diff: it
+  # means something this tree names can no longer be pulled.
+  image-refs-registry:
+    name: every image the chart names is still published
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: docker login (ghcr.io)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+      - run: ./scripts/check-image-refs.py --list

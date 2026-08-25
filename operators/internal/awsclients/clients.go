@@ -82,6 +82,28 @@ func withOperationTimeout(d time.Duration) func(*smithymiddleware.Stack) error {
 	}
 }
 
+// NoRetry is an API option that runs an operation exactly once.
+//
+// Retry policy belongs to the operation CLASS, not to the client. Almost
+// everything this operator calls is declarative — PutRolePolicy,
+// AttachRolePolicy, PutBucketPolicy — so a retried call converges on the same
+// state and the SDK's default three attempts are what should happen on a
+// throttle. The reconciler pattern depends on that.
+//
+// The exception is an operation that CREATES something the caller then has to
+// track by id. A retry there does not converge: it produces a second real
+// object, and the caller only ever learns about one of them. Athena's
+// StartQueryExecution is the case in this repo — each attempt starts a billable
+// scan, the caller keeps the last id, and the earlier query runs to completion
+// with nothing holding its id to cancel it. The SDK's retry is invisible from
+// the call site, so the cost appears on an invoice rather than in a log.
+//
+// Applied per call rather than per client, because turning retries off globally
+// would remove them from the declarative operations that are correct to retry.
+func NoRetry(o *athena.Options) {
+	o.RetryMaxAttempts = 1
+}
+
 // New builds a Clients backed by the default credential chain (IRSA via
 // fromContainerCredentials → fromEnv → fromInstanceProfile). Region is
 // resolved from the same chain unless explicitly passed.

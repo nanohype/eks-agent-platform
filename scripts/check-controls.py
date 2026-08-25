@@ -185,6 +185,15 @@ CONTROLS = [
         "standard. The marker is a synthetic id so it cannot already appear in the tree",
     ),
     Control(
+        gate="check-tenant-chart-artifacts.py",
+        path="charts/tenant/values-staging.yaml",
+        before="# Per-environment delta",
+        after="account: 123456789012\n# Per-environment delta",
+        catches="an estate literal reaching a chart value — an AWS account id written down where "
+        "landing-zone outputs should plumb it. The delta files are exactly where someone reaches "
+        "for one",
+    ),
+    Control(
         gate="no-placeholders.sh",
         path="charts/tenant/values.yaml",
         before="platform:",
@@ -236,8 +245,10 @@ CONTROLS = [
         gate="check-image-refs.py",
         path="charts/operator/values.yaml",
         before="repository: ghcr.io/nanohype/eks-agent-platform/operator",
-        after="repository: ghcr.io/nanohype/eks-agent-platform/operator-does-not-exist",
-        catches="the chart naming an image no registry can serve",
+        after="repository: ghcr.io/nanohype/eks-agent-platform/zzsynthetic-absent-image",
+        catches="the chart naming an image no registry can serve. Controlled in ONLINE mode, "
+        "because that is the half this violation belongs to — the offline mode deliberately does "
+        "not consult a registry, so it cannot and should not catch this one",
     ),
     Control(
         gate="check-crd-instantiation.py",

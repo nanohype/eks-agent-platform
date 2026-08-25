@@ -28,6 +28,7 @@ import (
 
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 )
 
 // killSwitchBreachPercent is the percent-of-budget at which the kill-
@@ -238,7 +239,22 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 		QueryExecutionContext: &athenatypes.QueryExecutionContext{
 			Database: aws.String(r.AthenaCfg.Database),
 		},
-	})
+		// Exactly one attempt. Every other AWS call this operator makes is
+		// declarative and converges on a retry; this one creates a billable
+		// scan and hands back an id the caller then tracks. A retried attempt
+		// produces a second real query, the caller keeps only the last id, and
+		// the earlier scan runs to completion with nothing holding its id to
+		// stop it — the deferred StopQueryExecution below can only cancel the
+		// one it knows about. The SDK's retry is invisible from here, so the
+		// duplicate surfaces on an invoice rather than in a log.
+		//
+		// Losing the query to a throttle is the safe direction: the reconciler
+		// reports the spend unreadable and increments
+		// agents_budget_spend_unreadable_total, which is the signal that exists
+		// for exactly this. PutEvents on the kill-switch path deliberately KEEPS
+		// its retries for the mirrored reason — a duplicate breach event detaches
+		// an already-detached policy, while a lost one leaves a tenant spending.
+	}, awsclients.NoRetry)
 	if err != nil {
 		return "", fmt.Errorf("athena StartQueryExecution: %w", err)
 	}
