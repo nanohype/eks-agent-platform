@@ -45,16 +45,150 @@ from _source_text import strip_comments  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Each: (name, pattern, the bash it needs, what it does on 3.2).
+# Derived PER FEATURE, not per spelling. The earlier table listed ${x^^} but not
+# ${x^}, and `declare -A` but not -n/-l/-u — every gap an adjacent spelling of an
+# absence already known about. Measured against /bin/bash 3.2.57: eleven
+# constructs broke there while this gate accepted them, and it passed its
+# positive control the whole time, because a control proves detection of the
+# planted case and says nothing about the rest of the class.
+#
+# Each entry is verified in both directions by EXECUTION, not by reading: the
+# construct fails under 3.2, and the 3.2-valid neighbour it could be confused
+# with does not match. scripts/check-shell-portability.py --self-test runs that.
 BASH4_CONSTRUCTS: list[tuple[str, re.Pattern[str], str, str]] = [
-    ("declare -A / local -A", re.compile(r"\b(?:declare|local|typeset)\s+-[A-Za-z]*A\b"), "4.0",
+    # Parameter expansion operators added in 4.x.
+    ("${var^} / ${var^^} / ${var,} / ${var,,} case modification",
+     re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?(\^\^?|,,?)"), "4.0", "bad substitution"),
+    ("${var@OP} parameter transformation",
+     re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?@[A-Za-z]\}"), "4.4", "bad substitution"),
+    ("${arr[-1]} negative array index",
+     re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\[\s*-"), "4.3", "bad array subscript"),
+
+    # declare/local/typeset options. Matched by OPTION LETTER so a new spelling
+    # of the same absence cannot slip past: -A associative (4.0), -n nameref
+    # (4.3), -l/-u case-forcing (4.0).
+    ("declare/local -A associative array",
+     re.compile(r"\b(?:declare|local|typeset)\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*A"), "4.0",
      "declare: -A: invalid option"),
+    ("declare/local -n nameref",
+     re.compile(r"\b(?:declare|local|typeset)\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*n"), "4.3",
+     "declare: -n: invalid option"),
+    ("declare/local -l or -u case forcing",
+     re.compile(r"\b(?:declare|local|typeset)\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*[lu]"), "4.0",
+     "declare: -l: invalid option"),
+
+    # Builtins and syntax added in 4.x.
     ("mapfile", re.compile(r"\bmapfile\b"), "4.0", "command not found"),
     ("readarray", re.compile(r"\breadarray\b"), "4.0", "command not found"),
     ("coproc", re.compile(r"\bcoproc\b"), "4.0", "syntax error"),
-    ("${var^^} / ${var,,} case modification", re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(\^\^?|,,?)"), "4.0",
-     "bad substitution"),
+    ("wait -n", re.compile(r"\bwait\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*n\b"), "4.3", "wait: -n: invalid option"),
+    ("read -N", re.compile(r"\bread\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*N"), "4.1", "read: -N: invalid option"),
+    ("shopt -s globstar", re.compile(r"\bshopt\s+(?:-[a-z]\s+)*globstar\b"), "4.0",
+     "shopt: globstar: invalid shell option name"),
+    ("printf -v into an array element",
+     re.compile(r"\bprintf\s+(?:-[A-Za-z]*\s+)*-v\s+[\"\']?[A-Za-z_][A-Za-z0-9_]*\["), "4.1",
+     "printf: `a[0]': not a valid identifier"),
+
+    # Redirection forms added in 4.x. `&>` and `>&` are 3.2-valid; only the
+    # APPEND form and the varname form are not.
     ("&>> append redirect", re.compile(r"&>>"), "4.0", "syntax error"),
+    ("|& pipe-with-stderr", re.compile(r"\|&"), "4.0", "syntax error"),
+    ("{fd}> varname redirect", re.compile(r"(?<![$\\])\{[A-Za-z_][A-Za-z0-9_]*\}\s*[<>]"), "4.1",
+     "ambiguous redirect / syntax error"),
 ]
+
+
+# Each construct paired with the 3.2-VALID neighbour it is most confusable with.
+# The pattern must match the first and must not match the second — that pairing
+# is what makes the rule a feature rather than a spelling. Where a bash 3.2 is
+# on hand the pair is also EXECUTED, because a table asserting what a shell does
+# is a second source of truth for the shell.
+PROBES: list[tuple[str, str, str]] = [
+    ("${var^} / ${var^^} / ${var,} / ${var,,} case modification", 'x=ab; echo "${x^}"', 'x=ab; echo "${x#a}"'),
+    ("${var@OP} parameter transformation", 'x=ab; echo "${x@U}"', 'x=ab; echo "${x}"'),
+    ("${arr[-1]} negative array index", 'a=(1 2); echo "${a[-1]}"', 'a=(1 2); echo "${a[0]}"'),
+    ("declare/local -A associative array", "declare -A mm; mm[k]=v", "declare -r c=1; echo \"$c\""),
+    ("declare/local -n nameref", 'v=1; declare -n r=v; echo "$r"', 'declare -i n=1; echo "$n"'),
+    ("declare/local -l or -u case forcing", 'declare -l s=AB; echo "$s"', 'declare -i n=1; echo "$n"'),
+    ("mapfile", "mapfile -t a < /dev/null", "cat /dev/null"),
+    ("readarray", "readarray -t a < /dev/null", "cat /dev/null"),
+    ("coproc", "coproc cat; exec 0<&-", "cat /dev/null"),
+    ("wait -n", "sleep 0 & wait -n", "sleep 0 & wait"),
+    ("read -N", 'printf ab | read -N2 v', 'printf "x\\n" | { read -r v; echo "$v"; }'),
+    ("shopt -s globstar", "shopt -s globstar", "shopt -s nullglob"),
+    ("printf -v into an array element", 'a=(x); printf -v "a[0]" %s y', "printf -v s %s hi; echo \"$s\""),
+    ("&>> append redirect", "echo x &>> /dev/null", "echo x &> /dev/null"),
+    ("|& pipe-with-stderr", "echo hi |& cat", "echo hi | cat"),
+    ("{fd}> varname redirect", "exec {fd}>/dev/null", 'x=1; echo "${x}"'),
+]
+
+
+def self_test() -> int:
+    """Every rule must reject its construct and accept its 3.2-valid neighbour."""
+    import shutil
+    import subprocess
+
+    by_name = {name: pat for name, pat, _, _ in BASH4_CONSTRUCTS}
+    problems: list[str] = []
+
+    named = {n for n, _, _ in PROBES}
+    for name in by_name:
+        if name not in named:
+            problems.append(f"{name}: declared as a rule with no probe, so nothing exercises it")
+
+    for name, breaking, valid in PROBES:
+        pat = by_name.get(name)
+        if pat is None:
+            problems.append(f"{name}: probe names a rule that does not exist")
+            continue
+        if not pat.search(breaking):
+            problems.append(f"{name}: does not match its own construct {breaking!r}")
+        if pat.search(valid):
+            problems.append(f"{name}: also matches the 3.2-VALID neighbour {valid!r} — a false alarm")
+
+    # Execution, when a bash 3.2 is actually available. Anything newer cannot
+    # answer the question, and guessing from the version string is the table
+    # again.
+    # Look for a 3.2 rather than taking the first bash on PATH. A developer
+    # machine commonly has a homebrew bash 5 ahead of the system one, and using
+    # it makes the execution half skip on the very machine that HAS the shell
+    # this table is about.
+    candidates = [c for c in (shutil.which("bash"), "/bin/bash", "/usr/bin/bash") if c]
+    bash, ver = "", ""
+    for cand in candidates:
+        try:
+            v = subprocess.run([cand, "-c", "echo $BASH_VERSION"], capture_output=True, text=True).stdout.strip()
+        except OSError:
+            continue
+        if not ver:
+            bash, ver = cand, v
+        if v.startswith("3.2"):
+            bash, ver = cand, v
+            break
+    if ver.startswith("3.2"):
+        for name, breaking, valid in PROBES:
+            for body, want_fail in ((breaking, True), (valid, False)):
+                rc = subprocess.run([bash, "-c", "set -euo pipefail\n" + body],
+                                    capture_output=True, text=True).returncode
+                if (rc != 0) != want_fail:
+                    problems.append(
+                        f"{name}: under bash {ver} the probe {body!r} exited {rc}, which contradicts "
+                        "what this table claims about that shell"
+                    )
+        print(f"  probes executed against bash {ver} at {bash}")
+    else:
+        print(
+            f"  probes NOT executed: the bash here is {ver or '<unknown>'}, not 3.2. Pattern "
+            "behaviour was still checked both ways; the shell claims were not."
+        )
+
+    if problems:
+        print(f"\n{len(problems)} self-test failure(s):\n", file=sys.stderr)
+        for pr in problems:
+            print(f"  - {pr}", file=sys.stderr)
+        return 1
+    print(f"✓ {len(PROBES)} constructs: each rule matches its construct and not its 3.2-valid neighbour")
+    return 0
 
 
 # For a script declaring #!/bin/sh. Debian's /bin/sh is dash; macOS's is bash 3.2
@@ -112,7 +246,12 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--list", action="store_true", help="print every script scanned and its declared shell")
+    ap.add_argument("--self-test", action="store_true",
+                    help="check every rule against its construct and its 3.2-valid neighbour")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     require_binary("git", "enumerate the committed shell scripts this parses")
 
