@@ -108,7 +108,11 @@ from _source_text import strip_comments  # noqa: E402
 import argparse
 
 import re
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import EXIT_CANNOT_EVALUATE
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -289,7 +293,7 @@ def collect() -> tuple[list[Param], set[str]]:
                         "has no literal name; this check cannot resolve it",
                         file=sys.stderr,
                     )
-                    sys.exit(2)
+                    sys.exit(EXIT_CANNOT_EVALUATE)
                 resolved = normalize(name_match.group("value"), locals_map)
 
                 if m.group("kind") == "data":
@@ -358,7 +362,7 @@ def collect_consumed() -> list[ConsumedPath]:
                     "/eks-agent-platform literal; this check cannot resolve what it reads",
                     file=sys.stderr,
                 )
-                sys.exit(2)
+                sys.exit(EXIT_CANNOT_EVALUATE)
             declared = PRODUCER.search(m.group(1) or "")
             found.append(
                 ConsumedPath(
@@ -375,8 +379,31 @@ def collect_consumed() -> list[ConsumedPath]:
             "satisfied",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     return found
+
+
+def operator_producers() -> set[str]:
+    """Keys whose case arm names another repo as the publisher.
+
+    Read from the RAW source: the annotation IS a comment, and the stripped view
+    this gate uses for code erases it. Same view-per-check split the terraform
+    walk makes, for the same reason.
+    """
+    raw = OPERATOR_CONFIG.read_text()
+    out: set[str] = set()
+    lines = raw.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r'\s*case\s+"([^"]+)":', line)
+        if not m:
+            continue
+        for prev in reversed(lines[max(0, i - 4) : i]):
+            if "ssm-producer:" in prev:
+                out.add(m.group(1))
+                break
+            if not prev.strip().startswith("//"):
+                break
+    return out
 
 
 def operator_keys() -> dict[str, str]:
@@ -385,7 +412,7 @@ def operator_keys() -> dict[str, str]:
     body = re.search(r"func \(c \*Config\) assign\(.*?\n\}", src, re.S)
     if not body:
         print(f"ERROR: cannot find Config.assign in {OPERATOR_CONFIG}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     arms = re.findall(r'case\s+"([^"]+)":\s*\n\s*c\.(\w+)\s*=', body.group(0))
     keys = dict(arms)
     if len(keys) < 10:
@@ -394,7 +421,7 @@ def operator_keys() -> dict[str, str]:
             "and every operator-consumed parameter would look like an orphan",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     return keys
 
 
@@ -418,7 +445,7 @@ def live_fields() -> set[str]:
             "is not seeing the tree and every field would look dead",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     return live
 
 
@@ -453,7 +480,7 @@ def main() -> int:
 
     if not written:
         print("ERROR: no aws_ssm_parameter resources found; the walk is not seeing the tree", file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_EVALUATE
 
     orphans: list[Param] = []
     consumed: list[tuple[Param, str]] = []
@@ -499,6 +526,34 @@ def main() -> int:
         f"{len(consumed_paths)} parameters consumed by name, "
         f"{len(consumed_paths) - len(unproduced)} produced, {len(unproduced)} unaccounted for"
     )
+
+    # A decoded key nothing publishes. This is a THIRD direction, and it was
+    # open: the other two compare parameters against path-built reads, while a
+    # Config.assign arm names its key as a literal and is matched by neither. A
+    # parameter that vanishes — the producer deleted, commented out, or renamed —
+    # leaves the arm decoding a key that never arrives, and the operator treats
+    # absent as not-configured, so the capability is silently off.
+    externally_produced = operator_producers()
+    undelivered = sorted(
+        (k, f) for k, f in keys.items()
+        if CLUSTER_ROOT + k not in {p.name for p in written} and k not in externally_produced
+    )
+    if undelivered:
+        print()
+        print("These keys are decoded by the operator and nothing in this repo publishes them:")
+        print()
+        for k, f in undelivered:
+            print(f"  {CLUSTER_ROOT}{k}")
+            print(f"      decoded into Config.{f}, and no aws_ssm_parameter writes it")
+        print()
+        print("The operator reads absent as 'not configured', so the capability is off while")
+        print("everything reports healthy. Either publish it here, or if another repo owns")
+        print("the prefix say so above the case arm:")
+        print()
+        print("      // ssm-producer: landing-zone's agent-iam component, which owns this prefix.")
+        print('      case "agent-iam/operator_role_arn":')
+        print()
+        return 1
 
     if unproduced:
         print()

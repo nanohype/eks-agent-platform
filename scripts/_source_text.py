@@ -19,6 +19,8 @@ reports still line up with the original file.
 
 from __future__ import annotations
 
+import re
+
 
 def _blank(s: str, start: int, end: int) -> str:
     """Replace s[start:end] with spaces, keeping newlines so lines still align."""
@@ -122,13 +124,87 @@ def strip_slash_comments(text: str) -> str:
 
 
 def strip_hcl_comments(text: str) -> str:
-    """HCL / Terraform, which accepts `#`, `//` AND `/* */`.
+    """HCL / Terraform, which accepts `#`, `//` AND `/* */` — in ONE pass.
 
-    Both passes are needed and the order does not matter, because each is
-    quote-aware and a comment opened in one syntax cannot contain an unbalanced
-    quote that changes the other's reading.
+    Chaining the two single-syntax strippers is wrong in either order, because
+    each one is blind to the other's comments. Running the slash pass first, a
+    `#` comment mentioning an S3 key prefix — `eval-reports/{platform}/manifests/*`
+    — has its `/*` read as a block-comment opener, and everything up to the next
+    `*/` is erased. Measured on this repository: one file lost 130 lines of live
+    Terraform including three `aws_ssm_parameter` resources, and the gate reading
+    it reported a whole contract while three published parameters were invisible.
+    Running the hash pass first inverts the failure: a `#` inside a `/* */` block
+    ends the block early.
+
+    Interpolation is the second trap. `${...}` inside a string opens a fresh
+    EXPRESSION context that may contain its own strings, so a scanner treating
+    every quote as a delimiter inverts polarity on an odd nested count and reads
+    the rest of the file as a string — or, worse, as a comment. Depth is tracked
+    rather than counted.
+
+    Heredocs are the third: `<<EOT` runs to its terminator and everything inside
+    is data, `#` and `/*` included.
     """
-    return strip_hash_comments(strip_slash_comments(text))
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+
+        # Heredoc: <<EOT / <<-EOT ... a line that is only the tag.
+        hd = re.match(r"<<-?([A-Za-z_][A-Za-z0-9_]*)", text[i:])
+        if hd:
+            tag = hd.group(1)
+            m = re.search(rf"^\s*{re.escape(tag)}\s*$", text[i:], re.M)
+            i = n if not m else i + m.end()
+            continue
+
+        if c == '"':
+            # String, with interpolation depth. Comments do not open in here.
+            i += 1
+            depth = 0
+            while i < n:
+                ch = text[i]
+                if ch == "\\":
+                    i += 2
+                    continue
+                if depth == 0 and ch == '"':
+                    i += 1
+                    break
+                if ch == "$" and text[i : i + 2] == "${":
+                    depth += 1
+                    i += 2
+                    continue
+                if depth and ch == "{":
+                    depth += 1
+                elif depth and ch == "}":
+                    depth -= 1
+                elif depth and ch == '"':
+                    # A string nested inside the interpolation expression.
+                    i += 1
+                    while i < n and text[i] != '"':
+                        i += 2 if text[i] == "\\" else 1
+                i += 1
+            continue
+
+        if c == "#" or text[i : i + 2] == "//":
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            for k in range(i, j):
+                out[k] = " "
+            i = j
+            continue
+
+        if text[i : i + 2] == "/*":
+            j = text.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            for k in range(i, j):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+
+        i += 1
+    return "".join(out)
 
 
 def strip_comments(text: str, language: str) -> str:
