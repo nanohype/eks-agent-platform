@@ -58,6 +58,29 @@ type AgentSandboxSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+
+	// ActiveDeadlineSeconds is the wall-clock ceiling on one session, measured
+	// from the moment the pod starts.
+	//
+	// It is what makes TTLSecondsAfterFinished reachable. That TTL counts from a
+	// TERMINAL phase, so it collects a session that ended and says nothing about
+	// one that never does: a hung agent — a tool call waiting on a socket
+	// nothing will answer, a model call with no deadline of its own — leaves a
+	// pod holding its node slot and its tenant credentials indefinitely, polled
+	// every reconcile forever, with the garbage collector waiting on a phase
+	// that will not arrive.
+	//
+	// Kubernetes enforces this one itself and marks the pod Failed on expiry,
+	// which IS the terminal phase, so the existing TTL then collects it. The two
+	// fields are one mechanism: this bounds the session, that bounds the corpse.
+	//
+	// Default 4h — comfortably past any legitimate agent session and far short
+	// of a pod nobody notices for a week. Set 0 to disable, which is a decision
+	// about a specific workload rather than the shape a sandbox ships with.
+	// +kubebuilder:default=14400
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ActiveDeadlineSeconds *int32 `json:"activeDeadlineSeconds,omitempty"`
 }
 
 // AgentSandboxStatus reports the sandbox's reconciled state.

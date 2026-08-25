@@ -107,3 +107,50 @@ func TestSessionPodIsConfinedToTheSandboxPool(t *testing.T) {
 		t.Error("session container has no securityContext")
 	}
 }
+
+// TTLSecondsAfterFinished counts from a TERMINAL phase, so on its own it
+// collects a session that ended and says nothing about one that never does.
+// These pin the two as one mechanism: the deadline bounds the session, the TTL
+// bounds the corpse.
+func TestSandboxActiveDeadline(t *testing.T) {
+	secs := func(v int32) *int32 { return &v }
+
+	cases := []struct {
+		name string
+		in   *int32
+		want *int64
+	}{
+		{
+			// Kubernetes rejects activeDeadlineSeconds: 0, so "disabled" has to
+			// be an absent field rather than a zero one.
+			name: "explicit zero disables rather than expiring instantly",
+			in:   secs(0),
+			want: nil,
+		},
+		{
+			name: "unset leaves the field absent",
+			in:   nil,
+			want: nil,
+		},
+		{
+			name: "a positive ceiling reaches the pod spec",
+			in:   secs(14400),
+			want: func() *int64 { v := int64(14400); return &v }(),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			box := &agentsv1alpha1.AgentSandbox{}
+			box.Spec.ActiveDeadlineSeconds = tc.in
+			got := sandboxActiveDeadline(box)
+			switch {
+			case tc.want == nil && got != nil:
+				t.Errorf("got %d, want the field absent", *got)
+			case tc.want != nil && got == nil:
+				t.Errorf("got the field absent, want %d — a session with no ceiling holds its node slot and its tenant credentials until someone notices", *tc.want)
+			case tc.want != nil && got != nil && *got != *tc.want:
+				t.Errorf("got %d want %d", *got, *tc.want)
+			}
+		})
+	}
+}
