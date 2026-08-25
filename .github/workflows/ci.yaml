@@ -60,6 +60,21 @@ jobs:
       - run: ./scripts/check-version-pins.py --self-test
       - run: ./scripts/check-version-pins.py --list
 
+  # A comment claiming to mirror a standard is a claim nothing keeps true. This
+  # one had drifted a full generation before anything compared the two.
+  model-tiers:
+    name: model tiers match the org LLM policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: resolve the standards catalog
+        run: |
+          git clone --depth 1 https://github.com/nanohype/nanohype.git /tmp/nanohype
+          echo "NANOHYPE_STANDARDS_DIR=/tmp/nanohype/standards" >> "$GITHUB_ENV"
+      - run: ./scripts/check-model-tiers.py --list
+
   # Prose that names a path is a claim about the world, and the most checkable
   # one documentation makes. A file moves, the reference does not, and nothing
   # fails — the reader following it is the failure detector, which in a runbook
@@ -785,6 +800,7 @@ jobs:
         gates,
         controls,
         named-paths,
+        model-tiers,
         version-pins,
         route-api-parity,
         workflow-triggers,

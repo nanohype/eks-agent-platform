@@ -165,29 +165,62 @@ export function renderHtml(results: CaseResult[], scored: Scored, generatedAt: s
       const latency = r ? `${String(r.latency_ms)}ms` : '';
       const status = s.passed ? '<span class="pass">PASS</span>' : '<span class="fail">FAIL</span>';
       const reasons = s.reasons.length > 0 ? htmlEscape(s.reasons.join('; ')) : '';
-      return `<tr><td>${htmlEscape(s.name)}</td><td>${status}</td><td>${latency}</td><td>${cost}</td><td>${reasons}</td></tr>`;
+      return `<tr><th scope="row">${htmlEscape(s.name)}</th><td>${status}</td><td>${latency}</td><td>${cost}</td><td>${reasons}</td></tr>`;
     })
     .join('\n');
   const verdict = result.passed ? 'PASSED' : 'FAILED';
+  // This page is read on a phone as often as a laptop — an eval gate fails during
+  // a rollout, and whoever is paged opens the report from wherever they are.
+  //
+  //   viewport      without it a mobile browser renders at a desktop width and
+  //                 scales down, so the failure reasons arrive unreadable.
+  //   scroll box    the reasons column carries arbitrary-length text; the table
+  //                 scrolls inside its own container so a long reason cannot make
+  //                 the whole page scroll sideways.
+  //   tokens        colours are defined once and redefined for a dark viewer,
+  //                 with an explicit background — a page that paints no ground
+  //                 inherits the browser's and renders dark text on dark.
+  //   scope         header cells associate with their column for a screen reader.
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>EvalSuite report</title>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EvalSuite report</title>
 <style>
-body{font:14px system-ui,sans-serif;margin:2rem;color:#111}
-table{border-collapse:collapse;width:100%;margin-top:1rem}
-th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;vertical-align:top}
-th{background:#f5f5f5}
-.pass{color:#137333;font-weight:600}
-.fail{color:#b3261e;font-weight:600}
+:root{
+  --bg:#ffffff; --fg:#111111; --muted:#5b6168;
+  --line:#dddddd; --head:#f5f5f5;
+  --pass:#137333; --fail:#b3261e;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#14181c; --fg:#e6e9ec; --muted:#9aa4ad;
+    --line:#2c3239; --head:#1c2229;
+    --pass:#5bb974; --fail:#f2836f;
+  }
+}
+body{font:14px system-ui,sans-serif;margin:2rem;background:var(--bg);color:var(--fg)}
+h1{font-size:1.5rem;line-height:1.25}
+p{max-width:70ch}
+.scroll{overflow-x:auto;margin-top:1rem}
+table{border-collapse:collapse;width:100%;min-width:44rem}
+th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--head)}
+td:last-child{min-width:18rem}
+.pass{color:var(--pass);font-weight:600}
+.fail{color:var(--fail);font-weight:600}
 .summary{font-size:16px}
+.generated{color:var(--muted)}
 </style></head><body>
 <h1>EvalSuite report — ${verdict}</h1>
 <p class="summary">mean score <strong>${result.meanScore}</strong> vs threshold ${htmlEscape(result.passThreshold)} —
 ${String(result.passedCount)}/${String(result.total)} passed, ${String(result.unpricedCount)} unpriced.</p>
-<p>generated ${htmlEscape(generatedAt)}</p>
-<table><thead><tr><th>case</th><th>result</th><th>latency</th><th>cost</th><th>reasons</th></tr></thead>
+<p class="generated">generated ${htmlEscape(generatedAt)}</p>
+<div class="scroll">
+<table><thead><tr><th scope="col">case</th><th scope="col">result</th><th scope="col">latency</th><th scope="col">cost</th><th scope="col">reasons</th></tr></thead>
 <tbody>
 ${rows}
 </tbody></table>
+</div>
 </body></html>
 `;
 }

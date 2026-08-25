@@ -110,7 +110,7 @@ modelGateway:
   defaultRoute:
     name: primary
     modelFamily: anthropic
-    modelId: us.anthropic.claude-sonnet-4-6
+    modelId: us.anthropic.claude-sonnet-5
     rateLimit: 60
 
 agentFleet:

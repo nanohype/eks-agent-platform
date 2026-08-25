@@ -176,6 +176,15 @@ CONTROLS = [
         expect_output="README.md:4",
     ),
     Control(
+        gate="check-model-tiers.py",
+        path="operators/internal/agentctl/model_defaults.json",
+        before='"default": "us.anthropic.claude-sonnet-5"',
+        after='"default": "us.anthropic.claude-zzsynthetic-drifted-tier"',
+        catches="the scaffolder's model tiers drifting from the org LLM policy — the drift that "
+        "shipped a full generation behind while the file's own comment claimed it mirrored the "
+        "standard. The marker is a synthetic id so it cannot already appear in the tree",
+    ),
+    Control(
         gate="no-placeholders.sh",
         path="charts/tenant/values.yaml",
         before="platform:",

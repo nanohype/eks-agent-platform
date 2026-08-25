@@ -1,54 +1,54 @@
 {
-  "$comment": "Single source of truth for model defaults. The agentctl CLI embeds this file via go:embed (operators/internal/agentctl/personas.go) and reads it from both the `tenant init` and `platform new` scaffolders. `tiers` names the org LLM-policy models (nanohype/standards/llm-policy.json); `personas` maps each persona to the model ids its scaffolded ModelGateway routes default to. Bump model ids here — never in the consuming code.",
+  "$comment": "Single source of truth for model defaults. The tiers below must equal llm-policy.json models exactly — scripts/check-model-tiers.py asserts it, because a comment claiming to mirror a standard is a claim nothing keeps true.  The agentctl CLI embeds this file via go:embed (operators/internal/agentctl/personas.go) and reads it from both the `tenant init` and `platform new` scaffolders. `tiers` names the org LLM-policy models (nanohype/standards/llm-policy.json); `personas` maps each persona to the model ids its scaffolded ModelGateway routes default to. Bump model ids here — never in the consuming code.",
   "tiers": {
-    "default": "us.anthropic.claude-sonnet-4-6",
+    "default": "us.anthropic.claude-sonnet-5",
     "light": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "escalation": "us.anthropic.claude-opus-4-8"
+    "escalation": "us.anthropic.claude-opus-5"
   },
   "personas": {
     "sales-ops": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6",
+      "primaryModelId": "us.anthropic.claude-sonnet-5",
       "secondaryModelId": "us.amazon.nova-lite-v1:0",
       "secondaryFamily": "amazon-nova"
     },
     "support": {
       "family": "anthropic",
       "primaryModelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-      "secondaryModelId": "us.anthropic.claude-sonnet-4-6",
+      "secondaryModelId": "us.anthropic.claude-sonnet-5",
       "secondaryFamily": "anthropic"
     },
     "finance": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6"
+      "primaryModelId": "us.anthropic.claude-sonnet-5"
     },
     "ops": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6"
+      "primaryModelId": "us.anthropic.claude-sonnet-5"
     },
     "founder": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6",
+      "primaryModelId": "us.anthropic.claude-sonnet-5",
       "secondaryModelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
       "secondaryFamily": "anthropic"
     },
     "eng": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6"
+      "primaryModelId": "us.anthropic.claude-sonnet-5"
     },
     "marketing": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6",
+      "primaryModelId": "us.anthropic.claude-sonnet-5",
       "secondaryModelId": "us.amazon.nova-pro-v1:0",
       "secondaryFamily": "amazon-nova"
     },
     "legal": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6"
+      "primaryModelId": "us.anthropic.claude-sonnet-5"
     },
     "generic": {
       "family": "anthropic",
-      "primaryModelId": "us.anthropic.claude-sonnet-4-6"
+      "primaryModelId": "us.anthropic.claude-sonnet-5"
     }
   }
 }
