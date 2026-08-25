@@ -33,9 +33,13 @@ exact bytes rather than normalising.
 
 from __future__ import annotations
 
+import argparse
 import pathlib
 import re
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _source_text import strip_comments  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -62,14 +66,32 @@ ZOD_ENUM = re.compile(r"export const RouteAPI\s*=\s*z\.enum\(\[([^\]]+)\]\)")
 QUOTED = re.compile(r"['\"]([^'\"]+)['\"]")
 
 
-def read(path: pathlib.Path) -> str:
+def read(path: pathlib.Path, language: str) -> str:
+    """Read a source file with its comments blanked out.
+
+    A commented-out declaration above the real one wins a `.search()`, so a
+    matcher over raw text reports the set the comment names. Verified by the
+    positive control in scripts/check-controls.py: a commented-out RouteAPI
+    union placed above the live one must fail this gate, and against raw text it
+    did not — it silently reported the comment's members.
+
+    The Go marker is the exception and is read from RAW text: a kubebuilder
+    validation marker IS a comment, and blanking it would delete the thing being
+    checked.
+    """
+    if not path.is_file():
+        sys.exit(f"check-route-api-parity: {path.relative_to(ROOT)} is missing; this gate cannot compare anything")
+    return strip_comments(path.read_text(encoding="utf-8"), language)
+
+
+def read_raw(path: pathlib.Path) -> str:
     if not path.is_file():
         sys.exit(f"check-route-api-parity: {path.relative_to(ROOT)} is missing; this gate cannot compare anything")
     return path.read_text(encoding="utf-8")
 
 
 def go_marker_members() -> list[str]:
-    m = GO_ENUM.search(read(GO_TYPES))
+    m = GO_ENUM.search(read_raw(GO_TYPES))
     if not m:
         sys.exit(
             "check-route-api-parity: no +kubebuilder:validation:Enum marker on `type RouteAPI string` in "
@@ -79,7 +101,7 @@ def go_marker_members() -> list[str]:
 
 
 def crd_members() -> list[str]:
-    blocks = CRD_API_BLOCK.findall(read(CRD))
+    blocks = CRD_API_BLOCK.findall(read(CRD, "yaml"))
     if not blocks:
         sys.exit(
             f"check-route-api-parity: no enum rendered for an `api:` property in {CRD.relative_to(ROOT)}. "
@@ -102,18 +124,24 @@ def quoted_members(text: str, pattern: re.Pattern[str], path: pathlib.Path, what
 
 
 def main() -> int:
+    # Strict on purpose — see scripts/check-gates.py. A gate that ignores argv
+    # cannot tell a renamed flag from a correct one.
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--list", action="store_true", help="print each declaration and the members it admits")
+    args = ap.parse_args()
+
     sources = {
         f"go marker      ({GO_TYPES.relative_to(ROOT)})": go_marker_members(),
         f"generated CRD  ({CRD.relative_to(ROOT)})": crd_members(),
         f"eval-runner    ({RUNNER.relative_to(ROOT)})": quoted_members(
-            read(RUNNER), TS_UNION, RUNNER, "`export type RouteAPI` union"
+            read(RUNNER, "ts"), TS_UNION, RUNNER, "`export type RouteAPI` union"
         ),
         f"core zod enum  ({CORE.relative_to(ROOT)})": quoted_members(
-            read(CORE), ZOD_ENUM, CORE, "`export const RouteAPI = z.enum([...])`"
+            read(CORE, "ts"), ZOD_ENUM, CORE, "`export const RouteAPI = z.enum([...])`"
         ),
     }
 
-    if "--list" in sys.argv:
+    if args.list:
         for label, members in sources.items():
             print(f"  {label}: {', '.join(members)}")
 

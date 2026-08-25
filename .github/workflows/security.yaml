@@ -9,9 +9,12 @@ on:
     # Weekly Tuesday 06:00 UTC — catches new CVEs even when no PRs land.
     - cron: "0 6 * * 2"
 
+# Least privilege at the workflow level. security-events: write is granted only
+# to the three jobs that upload a SARIF report — a workflow-level grant would
+# hand the ability to write code-scanning results to every job, including the
+# ones that only run a linter.
 permissions:
   contents: read
-  security-events: write
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
@@ -24,6 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
       # The official gitleaks-action gates organization repos behind a paid
       # license; the gitleaks CLI itself is free. Pin the version, verify the
@@ -45,8 +49,13 @@ jobs:
   trivy-config:
     name: trivy (terraform + dockerfile misconfig)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # uploads a SARIF report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
@@ -78,6 +87,9 @@ jobs:
   trivy-fs:
     name: trivy (filesystem vuln scan — go + npm deps)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # uploads a SARIF report
     env:
       # trivy's pnpm parser drops dev dependencies unless told otherwise, and the
       # job name above claims npm coverage it therefore did not have: it reported
@@ -92,6 +104,8 @@ jobs:
       TRIVY_INCLUDE_DEV_DEPS: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       # Two invocations on purpose, because one cannot do both jobs.
       #
       # The trivy-action rebuilds a SARIF report with ALL severities regardless of
@@ -140,11 +154,45 @@ jobs:
           format: table
           skip-dirs: "node_modules,**/.terraform"
 
+  # A workflow runs with this repository's credentials on every push, so the
+  # workflows ARE a dependency surface and their defects are supply-chain
+  # defects. zizmor is the scanner for that surface, sitting beside trivy and
+  # govulncheck rather than in a reviewer's head.
+  #
+  # --offline is load-bearing: without it the audit resolves actions over the
+  # network, and the verdict becomes a function of what GitHub answers at that
+  # moment instead of a function of the commit under test. A gate whose result
+  # depends on the network cannot be reasoned about from the diff.
+  #
+  # --min-severity=medium fails on medium and above. Informational findings stay
+  # visible in the log without turning an unrelated PR red.
+  zizmor:
+    name: zizmor (workflow static analysis)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: zizmor
+        env:
+          # Pinned for the reason the tflint step below states. The rule set is
+          # part of the verdict, so an unpinned scanner turns an unrelated PR red
+          # or green with no change in this repository.
+          ZIZMOR_VERSION: "1.16.3"
+        run: |
+          pip install "zizmor==${ZIZMOR_VERSION}"
+          zizmor --offline --config .github/zizmor.yml --min-severity=medium .github/workflows/
+
   tflint:
     name: tflint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6
         with:
           # Pinned, not `latest`. Resolving "latest" is itself an unauthenticated
@@ -166,8 +214,13 @@ jobs:
   gosec:
     name: gosec
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # uploads a SARIF report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
@@ -184,8 +237,12 @@ jobs:
   golangci:
     name: golangci-lint
     runs-on: ubuntu-latest
+    env:
+      GOLANGCI_VERSION: v2.12.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
@@ -195,7 +252,7 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           working-directory: operators
-          version: v2.12.2
+          version: ${{ env.GOLANGCI_VERSION }}
           verify: false
 
   # govulncheck complements the trivy dependency scan: it is Go-vulnerability-DB
@@ -208,6 +265,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
@@ -233,6 +292,7 @@ jobs:
     needs:
       [
         gitleaks,
+        zizmor,
         trivy-config,
         trivy-fs,
         tflint,

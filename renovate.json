@@ -3,10 +3,89 @@
   "extends": ["github>nanohype/.github"],
   "packageRules": [
     {
-      "description": "@eks-agent/pricing dep refresh — fast pickup on its small dep surface (@eks-agent/core via workspace:* + the standard devDeps). The PRICES table itself is NOT Renovate-managed; scripts/refresh-pricing.mjs (Phase 2) handles that via a separate AWS Pricing API workflow on its own cron schedule. The accelerated schedule here is for the package.json deps, not the PRICES content.",
+      "description": "@eks-agent/pricing dep refresh \u2014 fast pickup on its small dep surface (@eks-agent/core via workspace:* + the standard devDeps). The PRICES table itself is NOT Renovate-managed; scripts/refresh-pricing.mjs (Phase 2) handles that via a separate AWS Pricing API workflow on its own cron schedule. The accelerated schedule here is for the package.json deps, not the PRICES content.",
       "matchFileNames": ["packages/pricing/package.json"],
       "schedule": ["before 6am every weekday"],
       "groupName": "pricing-deps"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Tool versions pinned as workflow env vars. Renovate parses `uses:` refs natively but not a version a step installs itself, so without these the scanners deciding whether this repo is clean would age silently \u2014 and the one that ages worst is the security tooling, where a stale rule set reads as a clean tree. scripts/check-version-pins.py asserts every such pin is matched here.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["GITLEAKS_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "gitleaks/gitleaks",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    },
+    {
+      "description": "zizmor, installed from PyPI by the workflow static-analysis job.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["ZIZMOR_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "zizmor",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "description": "govulncheck, installed with `go install` by the security workflow.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["GOVULNCHECK_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "golang.org/x/vuln",
+      "datasourceTemplate": "go"
+    },
+    {
+      "description": "tflint, pinned as a setup-tflint action input rather than a `uses:` ref.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["tflint_version:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "terraform-linters/tflint",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "OpenTofu, pinned as a setup-opentofu action input.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["tofu_version:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "opentofu/opentofu",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    },
+    {
+      "description": "golangci-lint. Pinned as a job-level env var rather than inline on the action input, so one discovery pattern covers every tool version in the repo \u2014 scripts/check-version-pins.py finds NAME_VERSION and nothing else.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["GOLANGCI_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "The Anthropic `ant` CLI the sandbox worker runs. Its two per-architecture checksums are deliberately NOT auto-bumped: a digest Renovate could rewrite unread is a supply-chain check that verifies nothing. A version bump lands with stale checksums, the image build fails on sha256sum, and the failure is the prompt to refresh them from the upstream checksums file.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^sandbox-worker/Dockerfile$/"],
+      "matchStrings": ["ARG ANT_VERSION=(?<currentValue>[^\\s]+)"],
+      "depNameTemplate": "anthropics/anthropic-cli",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    },
+    {
+      "description": "The Kubernetes version envtest runs the conformance suite against. It is the API server the CEL validation rules in four CRDs are actually exercised on, so it ageing is a silent loss of coverage rather than a stale dependency.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^operators/Makefile$/"],
+      "matchStrings": ["ENVTEST_K8S_VERSION \\?= (?<currentValue>[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "kubernetes/kubernetes",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>\\d+\\.\\d+)"
+    },
+    {
+      "description": "promtool. The SLO assertions execute real PromQL against synthetic series through this binary, so its version decides what those tests actually prove \u2014 a pin ageing here is a silent change in the semantics being asserted, not a stale convenience.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["PROMTOOL_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "prometheus/prometheus",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
     }
   ]
 }

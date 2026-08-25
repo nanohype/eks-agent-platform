@@ -58,6 +58,7 @@ match.
 
 Usage: ./scripts/check-chart-crd-parity.py
 """
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -342,5 +343,17 @@ def main():
     )
 
 
+
+# Argument parsing is strict on purpose: a gate that ignores argv cannot tell a
+# renamed flag from a correct one, so a CI step naming a mode this script does
+# not have would keep exiting 0. scripts/check-gates.py asserts this for every
+# gate here.
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    # This gate takes no arguments; argparse rejects anything passed.
+    return ap.parse_args()
+
+
 if __name__ == "__main__":
+    _parse_args()
     main()

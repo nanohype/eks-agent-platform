@@ -50,6 +50,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import argparse
 import sys
 import tarfile
 import tempfile
@@ -67,6 +68,30 @@ REGISTRY = "oci://ghcr.io/nanohype/eks-agent-platform/charts"
 # gate cannot order is one it must refuse to judge, because the alternative is
 # waving the chart through on a comparison it never made.
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$")
+
+
+
+# tarfile's `filter=` argument — which refuses members that would escape the
+# destination — arrives in Python 3.12. Passing it unconditionally makes this
+# gate unrunnable on anything older, and a gate that cannot run is a gate that
+# cannot reject. The extraction stays filtered wherever the runtime offers it;
+# below 3.12 the members are checked directly rather than dropping the guard,
+# because the guard is the point.
+def _safe_extractall(tf, dest) -> None:
+    import os
+    import sys as _sys
+
+    if _sys.version_info >= (3, 12):
+        tf.extractall(dest, filter="data")
+        return
+    base = os.path.abspath(dest)
+    for member in tf.getmembers():
+        target = os.path.abspath(os.path.join(base, member.name))
+        if not (target == base or target.startswith(base + os.sep)):
+            raise RuntimeError(f"refusing tar member escaping the destination: {member.name!r}")
+        if member.issym() or member.islnk():
+            raise RuntimeError(f"refusing link member in a chart archive: {member.name!r}")
+    tf.extractall(dest)  # noqa: S202 — members validated above
 
 
 def run(*args: str, cwd: pathlib.Path | None = None) -> str:
@@ -95,7 +120,7 @@ def packaged_tree(chart_dir: pathlib.Path, dest: pathlib.Path) -> pathlib.Path:
     extracted = dest / "x"
     extracted.mkdir(exist_ok=True)
     with tarfile.open(tgzs[0]) as tf:
-        tf.extractall(extracted, filter="data")
+        _safe_extractall(tf, extracted)
     roots = [p for p in extracted.iterdir() if p.is_dir()]
     if len(roots) != 1:
         raise RuntimeError(f"expected one chart root in {extracted}, found {len(roots)}")
@@ -149,7 +174,7 @@ def base_chart(ref: str, name: str, dest: pathlib.Path) -> pathlib.Path | None:
     tar_path = dest / "base.tar"
     tar_path.write_bytes(archive.stdout)
     with tarfile.open(tar_path) as tf:
-        tf.extractall(dest, filter="data")
+        _safe_extractall(tf, dest)
     return dest / "charts" / name
 
 
@@ -172,7 +197,7 @@ def registry_chart(name: str, version: str, dest: pathlib.Path) -> pathlib.Path 
     extracted = dest / "x"
     extracted.mkdir(exist_ok=True)
     with tarfile.open(tgzs[0]) as tf:
-        tf.extractall(extracted, filter="data")
+        _safe_extractall(tf, extracted)
     return extracted / name
 
 
@@ -352,15 +377,21 @@ def main() -> int:
     if not shutil.which("helm"):
         print("FAIL  helm is not on PATH; the comparison cannot be made.")
         return 1
-    if "--self-test" in sys.argv:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--self-test", action="store_true", help="prove the diff comparison can fail")
+    ap.add_argument("--published", action="store_true", help="compare against the published chart index")
+    ap.add_argument("--base", help="git ref to diff against")
+    args = ap.parse_args()
+
+    if args.self_test:
         return self_test()
     with tempfile.TemporaryDirectory() as td:
         work = pathlib.Path(td)
-        if "--published" in sys.argv:
+        if args.published:
             return check_against_registry(work)
         base = "origin/main"
-        if "--base" in sys.argv:
-            base = sys.argv[sys.argv.index("--base") + 1]
+        if args.base:
+            base = args.base
         return check_against_base(base, work)
 
 
