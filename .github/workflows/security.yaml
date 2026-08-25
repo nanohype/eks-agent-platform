@@ -214,8 +214,17 @@ jobs:
           cache-dependency-path: operators/go.sum
       - name: govulncheck
         working-directory: operators
+        env:
+          # Pinned for the reason the tflint step above states, and with more
+          # riding on it: this is the gate that decides whether the Go supply
+          # chain is clean, so resolving it from @latest fetches an unverified
+          # version of the thing doing the verifying, and a release that changes
+          # what it reports turns an unrelated PR red or green with no change
+          # here. The vulnerability DATA is fetched at run time and stays
+          # current regardless — pinning the tool does not pin the advisories.
+          GOVULNCHECK_VERSION: v1.7.0
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           "$(go env GOPATH)/bin/govulncheck" ./...
 
   merge-gate-security:

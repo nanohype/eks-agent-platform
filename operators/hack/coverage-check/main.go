@@ -30,19 +30,26 @@ import (
 //     declarations + a constructor); there is no branching logic to exercise
 //     without a live AWS endpoint, so it carries a floor matching that reality.
 //
-// On top of the package floors, seven security-critical files carry a per-file
+// On top of the package floors, the security-critical files carry a per-file
 // 100% override (the rubric's security-critical-100 rule): the tenant and
 // session IAM role reconcilers, the KMS-grant + bucket-policy reconciler, and
-// the four policy generators — datastore access, capability grants, tenant
-// secrets, and the tenant key policy. These mint the IAM roles, KMS grants, S3
-// policies, and per-datastore, per-capability and per-secret grants that are the
-// tenant isolation boundary; a single uncovered branch there is an unproven
-// security control.
+// the policy generators — model scoping, datastore access, capability grants,
+// tenant secrets, and the tenant key policy. These mint the IAM roles, KMS
+// grants, S3 policies, and the per-model, per-datastore, per-capability and
+// per-secret grants that are the tenant isolation boundary; a single uncovered
+// branch there is an unproven security control.
 //
-// The list below is the authority. Keep this paragraph counting the same files
-// it does — a comment that undercounts the gate reads as though the newer
-// entries were added without the same deliberation, which is the opposite of
-// what an auditor should conclude from them.
+// The membership test is what the file GENERATES, not where it sits. Model
+// scoping renders the explicit-Deny document that bounds which Bedrock models a
+// tenant may invoke, which makes it the model-authorization boundary on an
+// agent platform and the entry whose absence costs the most — the deny document
+// is what stands between a declared model list and the baseline's wildcard
+// Allow. A file that renders an IAM, KMS or S3 document belongs here; one that
+// only reads them does not.
+//
+// The list below is the authority; this paragraph describes it. Adding an entry
+// without extending the description leaves a reader counting one set and the
+// gate enforcing another.
 var floors = config{
 	packageFloors: map[string]float64{
 		"internal/controller":     75,
@@ -56,6 +63,7 @@ var floors = config{
 	},
 	fileFloors: map[string]float64{
 		"internal/controller/platform_iam.go":                   100,
+		"internal/controller/platform_model_scoping.go":         100,
 		"internal/controller/platform_session_iam.go":           100,
 		"internal/controller/platform_kms_s3.go":                100,
 		"internal/controller/platform_datastore_policy.go":      100,

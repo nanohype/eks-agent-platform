@@ -272,7 +272,7 @@ func modelScopingPolicyDoc(resources []string) (string, error) {
 	}
 	b, err := json.Marshal(policyDocument{Version: "2012-10-17", Statement: []policyStatement{stmt}})
 	if err != nil {
-		return "", fmt.Errorf("marshal model scoping policy: %w", err)
+		return "", fmt.Errorf("marshal model scoping policy: %w", err) //coverage:ignore json.Marshal of a policyDocument of string fields cannot fail
 	}
 	return string(b), nil
 }
@@ -293,7 +293,7 @@ func (r *PlatformReconciler) ensureModelScopingPolicy(ctx context.Context, roleN
 	}
 	desired, err := modelScopingPolicyDoc(resources)
 	if err != nil {
-		return err
+		return err //coverage:ignore only reachable if json.Marshal fails, which it cannot for this document
 	}
 
 	getOut, getErr := r.IAM.GetRolePolicy(ctx, &iam.GetRolePolicyInput{
