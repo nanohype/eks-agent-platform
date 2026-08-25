@@ -155,13 +155,10 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 						}},
 					}, p, platformModelFamily(p), r.Environment),
 					Resources:       pool.Spec.Resources,
-					SecurityContext: restrictedContainerSecurityContext(),
-					VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+					SecurityContext: sandboxContainerSecurityContext(),
+					VolumeMounts:    sandboxWritableMounts(),
 				}},
-				Volumes: []corev1.Volume{{
-					Name:         "workspace",
-					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-				}},
+				Volumes: sandboxWritableVolumes(),
 			},
 		}
 		return nil
@@ -311,7 +308,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 							corev1.ResourceMemory: resource.MustParse("64Mi"),
 						},
 					},
-					SecurityContext: restrictedContainerSecurityContext(),
+					SecurityContext: sandboxContainerSecurityContext(),
 				}},
 			},
 		}

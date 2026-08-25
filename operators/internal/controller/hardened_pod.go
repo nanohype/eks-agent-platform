@@ -40,10 +40,65 @@ func restrictedPodSecurityContext() *corev1.PodSecurityContext {
 // restrictedContainerSecurityContext is the container-level securityContext
 // for the "restricted" profile: no privilege escalation, all capabilities
 // dropped.
+//
+// It does NOT set readOnlyRootFilesystem, and that is the correct default for
+// this helper: AgentFleet runs the tenant's own long-running application image,
+// which this repo has no contract with. Forcing a read-only root on an arbitrary
+// image breaks the ones that write to paths nobody enumerated, and a hardening
+// measure that makes a workload fail to start is one an operator turns off
+// wholesale.
+//
+// Sandbox workloads use sandboxContainerSecurityContext below instead. The split
+// is the trust model made explicit rather than one posture stretched over two
+// different situations.
 func restrictedContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		AllowPrivilegeEscalation: ptrTo(false),
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+// sandboxContainerSecurityContext hardens a container that runs UNTRUSTED agent
+// code, adding a read-only root filesystem to the restricted profile.
+//
+// Pod Security's "restricted" profile does not require readOnlyRootFilesystem,
+// so the profile label alone does not get it — which left the operator's own
+// pod hardened further than the pods executing arbitrary tool calls, exactly
+// inverted relative to the trust each deserves.
+//
+// A read-only root is only usable alongside somewhere to write, so it is paired
+// with sandboxWritableMounts below and the two are never used apart.
+func sandboxContainerSecurityContext() *corev1.SecurityContext {
+	sc := restrictedContainerSecurityContext()
+	sc.ReadOnlyRootFilesystem = ptrTo(true)
+	return sc
+}
+
+// sandboxWritableVolumes / sandboxWritableMounts are the paths a sandbox
+// container may write with a read-only root.
+//
+// Enumerated from what the image actually needs rather than guessed:
+// sandbox-worker/Dockerfile sets WORKDIR /workspace for tool execution and
+// creates /home/worker with `useradd --create-home`, and the `ant` CLI and git
+// both write under HOME. /tmp is the third because approximately everything
+// expects it, and a tool failing on a missing temp dir reports it as its own
+// bug rather than as a mount that is not there.
+//
+// emptyDir, so nothing survives the session — which is most of what makes a
+// single-use sandbox single-use.
+func sandboxWritableVolumes() []corev1.Volume {
+	return []corev1.Volume{
+		{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
+}
+
+func sandboxWritableMounts() []corev1.VolumeMount {
+	return []corev1.VolumeMount{
+		{Name: "workspace", MountPath: "/workspace"},
+		{Name: "home", MountPath: "/home/worker"},
+		{Name: "tmp", MountPath: "/tmp"},
 	}
 }
 

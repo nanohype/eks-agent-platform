@@ -104,13 +104,10 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client
 				// model_id is left to the runtime.
 				Env:             withOTelResourceAttrs(box.Spec.Env, p, platformModelFamily(p), r.Environment),
 				Resources:       box.Spec.Resources,
-				SecurityContext: restrictedContainerSecurityContext(),
-				VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+				SecurityContext: sandboxContainerSecurityContext(),
+				VolumeMounts:    sandboxWritableMounts(),
 			}},
-			Volumes: []corev1.Volume{{
-				Name:         "workspace",
-				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-			}},
+			Volumes: sandboxWritableVolumes(),
 		},
 	}
 	if err := tc.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {

@@ -87,3 +87,53 @@ func TestTenantIngressPolicyDeniesByDefault(t *testing.T) {
 			"blocking it reads as a quiet workload rather than a blocked one", collectorNamespace)
 	}
 }
+
+// A read-only root filesystem is only usable alongside somewhere to write, so
+// the two are asserted together. Pod Security's "restricted" profile does not
+// require readOnlyRootFilesystem, which is why the namespace label alone left
+// the pods executing untrusted tool calls with a writable root while the
+// operator's own pod had one — the hardening was inverted relative to the trust
+// each deserves.
+func TestSandboxContainerSecurityContextIsReadOnlyAndHasSomewhereToWrite(t *testing.T) {
+	sc := sandboxContainerSecurityContext()
+	if sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
+		t.Error("sandbox containers run untrusted agent code with a writable root filesystem")
+	}
+	if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+		t.Error("sandbox containers allow privilege escalation")
+	}
+
+	// The tenant's own long-running image keeps a writable root deliberately:
+	// this repo has no contract with it, and a hardening measure that stops an
+	// arbitrary image from starting is one an operator disables wholesale.
+	if fleet := restrictedContainerSecurityContext(); fleet.ReadOnlyRootFilesystem != nil {
+		t.Error("the fleet profile now forces a read-only root on the tenant's own image; that is a different decision and needs its own opt-out")
+	}
+
+	mounts := sandboxWritableMounts()
+	vols := sandboxWritableVolumes()
+	if len(mounts) != len(vols) {
+		t.Fatalf("%d writable mount(s) against %d volume(s) — a mount with no volume does not start", len(mounts), len(vols))
+	}
+
+	byName := map[string]bool{}
+	for _, v := range vols {
+		if v.EmptyDir == nil {
+			t.Errorf("writable volume %q is not an emptyDir; a sandbox that outlives its session is not single-use", v.Name)
+		}
+		byName[v.Name] = true
+	}
+
+	// Enumerated from the image: WORKDIR /workspace, useradd --create-home for
+	// /home/worker, and /tmp because approximately everything expects it.
+	want := map[string]string{"/workspace": "", "/home/worker": "", "/tmp": ""}
+	for _, m := range mounts {
+		if !byName[m.Name] {
+			t.Errorf("mount %q names no volume", m.Name)
+		}
+		delete(want, m.MountPath)
+	}
+	for path := range want {
+		t.Errorf("no writable mount at %s; with a read-only root a write there fails at runtime, inside the tool call", path)
+	}
+}
