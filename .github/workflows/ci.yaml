@@ -270,7 +270,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: tofu fmt -check -recursive terraform/
       - run: pnpm format:check
-      - run: cd operators && test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      # `test -z "$(gofmt -l .)"` passes when gofmt is ABSENT, because the
+      # substitution is then empty and the emptiness is what was being tested.
+      # An absent tool deleted the guard rather than tripping it. Presence is
+      # asserted first, and the file list is captured once so the verdict and
+      # the report cannot disagree.
+      - name: gofmt
+        run: |
+          cd operators
+          command -v gofmt >/dev/null || {
+            echo "gofmt is not on PATH; nothing was checked."
+            exit 3
+          }
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt: every file is formatted"
       # The three formatters above each own a language: tofu fmt for Terraform,
       # biome for TS and JSON, gofmt for Go. .editorconfig declares charset, LF
       # endings, a final newline and no trailing whitespace for *every* file, and
