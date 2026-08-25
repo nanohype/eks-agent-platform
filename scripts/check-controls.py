@@ -53,6 +53,9 @@ import pathlib
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 
@@ -83,6 +86,9 @@ class Control:
         expect_output: str,
         args: list[str] | None = None,
         expect_reject: bool = True,
+        # Seconds this gate is given. The default suits a gate that reads the
+        # tree; a gate that RUNS other gates needs its own budget.
+        timeout: int = 300,
     ):
         self.gate = gate
         self.path = ROOT / path
@@ -107,6 +113,7 @@ class Control:
         # control level: it can show a gate rejects, never that it discriminates,
         # and a gate rejecting everything would pass every control it has.
         self.expect_reject = expect_reject
+        self.timeout = timeout
 
 
 # Exit codes that are NOT a verdict about the tree. Every one of them exits
@@ -115,6 +122,7 @@ NOT_A_REJECTION = {
     2: "argparse usage error — the gate never reached its check",
     3: "precondition failure — a tool the gate needs is missing or does not run",
     126: "found but not executable",
+    124: "timed out — the gate never finished, so it rejected nothing",
     127: "command not found",
 }
 
@@ -503,6 +511,20 @@ CONTROLS = [
         "an adjacent spelling of the absence the table already knew about",
         expect_output="declare/local -n nameref",
     ),
+    # Removing a floor must make the empty-tree check fail. Without this the
+    # floors it relies on could be weakened and nothing would notice — which is
+    # how both of them came to be satisfiable by the gates' own directory.
+    Control(
+        gate="check-empty-tree.py",
+        path="scripts/check-shell-portability.py",
+        before="    if outside_gate_dir == 0:",
+        after="    if False:",
+        catches="a gate whose floor counts only what MATCHED, so a tree holding just the gate "
+        "scripts satisfies it with the gates' own files and the gate certifies its own presence",
+        expect_output="check-shell-portability.py",
+        # It runs every other gate twice over, once clean and once mutated.
+        timeout=1800,
+    ),
 ]
 def mutation_landed(original: str, mutated: str, marker: str) -> tuple[bool, str]:
     """Did the edit actually change the file's MEANING, not just its bytes?
@@ -600,10 +622,22 @@ def harness_self_test() -> list[str]:
     return problems
 
 
-def run(gate: str, args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [str(SCRIPTS / gate), *args], capture_output=True, text=True, timeout=300, cwd=ROOT
-    )
+def run(gate: str, args: list[str], timeout: int = 300) -> subprocess.CompletedProcess[str]:
+    """Run a gate. A timeout becomes a reportable result rather than a traceback.
+
+    A gate that never finishes has not rejected anything, and letting the
+    TimeoutExpired escape loses which control was in flight — the same
+    crash-instead-of-verdict shape this suite screens gates for.
+    """
+    try:
+        return subprocess.run(
+            [str(SCRIPTS / gate), *args], capture_output=True, text=True, timeout=timeout, cwd=ROOT
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args=[gate], returncode=124,
+            stdout="", stderr=f"{gate}: did not finish within {timeout}s",
+        )
 
 
 def anti_vacuity() -> list[str]:
@@ -631,133 +665,183 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="print each control and the violation it introduces")
     args = ap.parse_args()
 
+    # git is asserted HERE rather than inside each gate, because it does not
+    # merely run alongside them: several scope their population to the tracked
+    # set, and the controls build fixture repositories. It decides what the
+    # suite is meant to examine, which makes it upstream of the entire run —
+    # asserting it per-gate is too late, and its absence would surface as an
+    # exception naming a binary instead of naming what could not be determined.
+    require_binary("git", "determine the tracked set the gates scope themselves to")
+
     failures = harness_self_test() + anti_vacuity()
+    # CASES PROVEN, incremented at the END of the loop body — after the gate has
+    # passed clean, the mutation has landed, the gate has rejected, and the
+    # rejection has NAMED the mutation. len(CONTROLS) is a different quantity: it
+    # counts controls DECLARED, and reads the same whether every one completed a
+    # proof or none did.
+    proven = 0
+    # Every file this run touches, with the content it had BEFORE the run. A
+    # crash anywhere in the loop — including in this suite's own bookkeeping —
+    # otherwise leaves a mutation on disk, and the NEXT run measures the debris:
+    # a gate reported as failing open when it rejects correctly on a clean tree.
+    # That happened here, and git status was what settled it, so the restore is
+    # no longer left to the per-control finally alone.
+    touched: dict[pathlib.Path, str] = {}
 
-    for c in CONTROLS:
-        label = f"{c.gate} ← {c.path.relative_to(ROOT)}"
-        if args.list:
-            print(f"  {label}\n      catches: {c.catches}")
+    try:
+      for c in CONTROLS:
+          label = f"{c.gate} ← {c.path.relative_to(ROOT)}"
+          if args.list:
+              print(f"  {label}\n      catches: {c.catches}")
 
-        if not c.path.is_file():
-            failures.append(f"{label}: the control's target file does not exist")
-            continue
-        original = c.path.read_text(encoding="utf-8")
-        if c.before not in original:
-            failures.append(
-                f"{label}: the control's anchor text is gone, so it mutates nothing and proves nothing. "
-                "Re-point the control at the current shape of the file."
+          if not c.path.is_file():
+              failures.append(f"{label}: the control's target file does not exist")
+              continue
+          original = c.path.read_text(encoding="utf-8")
+          touched.setdefault(c.path, original)
+          if c.before not in original:
+              failures.append(
+                  f"{label}: the control's anchor text is gone, so it mutates nothing and proves nothing. "
+                  "Re-point the control at the current shape of the file."
+              )
+              continue
+
+          # CLEAN FIRST. A non-zero exit after mutating means nothing if the gate
+          # was already failing.
+          pre = run(c.gate, c.args, c.timeout)
+          if "Traceback (most recent call last)" in (pre.stdout + pre.stderr) or "panic:" in (pre.stdout + pre.stderr):
+              failures.append(
+                  f"{label}: the gate CRASHED on the UNMODIFIED tree. A crash on either fixture means "
+                  "the control is measuring an exception rather than a decision."
+              )
+              continue
+          if pre.returncode != 0:
+              pre_why = crash_reason(pre.returncode)
+              failures.append(
+                  f"{label}: the gate does not pass on the UNMODIFIED tree (exit {pre.returncode}"
+                  f"{', ' + pre_why if pre_why else ''}), so its "
+                  f"reaction to the mutation proves nothing.\n      {pre.stdout.strip()[:200]} {pre.stderr.strip()[:200]}"
+              )
+              continue
+
+          mutated = original.replace(c.before, c.after, 1)
+
+          # PROVE THE MUTATION LANDED. A control that silently fails to mutate
+          # hands the gate an unchanged fixture, the gate correctly passes it, and
+          # the run records that pass as evidence the control worked — a false
+          # negative that reads exactly like a success. Verified by inspecting the
+          # text, never inferred from the exit code.
+          #
+          # This is why the mutation is a Python string replace rather than a
+          # shell one-liner: sed address ranges, in-place flags and character
+          # classes differ between BSD and GNU, so the same control can mutate on
+          # one machine and no-op on the other.
+          landed, why = mutation_landed(original, mutated, c.after)
+          if not landed:
+              failures.append(f"{label}: {why}")
+              continue
+
+          try:
+              c.path.write_text(mutated, encoding="utf-8")
+              # Read back from disk rather than trusting the write.
+              if c.path.read_text(encoding="utf-8") == original:
+                  failures.append(f"{label}: the mutated file on disk is identical to the original")
+                  c.path.write_text(original, encoding="utf-8")
+                  continue
+              post = run(c.gate, c.args, c.timeout)
+          finally:
+              c.path.write_text(original, encoding="utf-8")
+
+          combined = post.stdout + post.stderr
+
+          # A CRASHING gate exits non-zero, and a floor reading exit status alone
+          # records that as a successful rejection — exit-code-conflates-causes
+          # occurring inside the thing built to check for it. The name-the-mutation
+          # assertion below catches most of it, since a traceback rarely contains
+          # the planted marker, but "rarely" is not "cannot": a crash that echoes
+          # the file it choked on can carry the marker along with it.
+          if not c.expect_reject:
+              # ACCEPT control: the mutated fixture must still pass.
+              crashed = crash_reason(post.returncode)
+              if crashed is not None:
+                  failures.append(
+                      f"{label}: the gate exited {post.returncode} ({crashed}) on a fixture it must "
+                      "accept. That is not over-matching, it is a crash, and naming it as the former "
+                      "sends the reader to the wrong line."
+                  )
+              elif post.returncode != 0:
+                  failures.append(
+                      f"{label}: the gate REJECTED a fixture it must accept — it over-matches.\n"
+                      f"      the control introduced: {c.catches}"
+                  )
+              elif c.expect_output not in combined:
+                  failures.append(
+                      f"{label}: the gate accepted, but its output does not contain {c.expect_output!r}"
+                  )
+              else:
+                  proven += 1
+              continue
+
+          # A non-zero exit is how a gate says REJECTED, so every other reason a
+          # process exits non-zero arrives wearing the same clothes. A traceback is
+          # only the visible half: exit 127 (command not found), 126 (found but not
+          # executable), 3 (a precondition this repo's gates use for a missing
+          # tool) and anything above 128 (killed by a signal) all exit non-zero
+          # while proving nothing about the mutation. Scored as catches, they
+          # report guards that do not exist — and they do it in the tool built to
+          # check the other tools, where nothing else is looking.
+          #
+          # So the rejection code is named rather than inferred from "not zero".
+          crashed = crash_reason(post.returncode)
+          if crashed is not None:
+              why = crashed
+              failures.append(
+                  f"{label}: the gate exited {post.returncode} ({why}) on the mutated fixture. That is "
+                  "not a rejection — it exits non-zero and would otherwise score as a catch.\n"
+                  f"      {combined.strip().splitlines()[-1][:160] if combined.strip() else '<no output>'}"
+              )
+          elif "Traceback (most recent call last)" in combined or "panic:" in combined:
+              failures.append(
+                  f"{label}: the gate CRASHED on the mutated fixture rather than rejecting it. A crash "
+                  "exits non-zero and would otherwise score as a catch, so the control would report a "
+                  "guard that does not exist.\n"
+                  f"      {combined.strip().splitlines()[-1][:160] if combined.strip() else ''}"
+              )
+          elif post.returncode == 0:
+              failures.append(
+                  f"{label}: the gate PASSED with the violation present — it fails open.\n"
+                  f"      the control introduced: {c.catches}"
+              )
+          elif c.expect_output not in combined:
+              failures.append(
+                  f"{label}: the gate rejected, but its finding does not contain {c.expect_output!r}. "
+                  "The rejection alone is not the property under test."
+              )
+          else:
+              proven += 1
+
+    finally:
+        # Runs whatever happened above, including an exception in this file.
+        left = [q for q, before in touched.items() if q.read_text(encoding="utf-8") != before]
+        for q in left:
+            q.write_text(touched[q], encoding="utf-8")
+        if left:
+            print(
+                f"check-controls: restored {len(left)} file(s) a failed run had left mutated: "
+                + ", ".join(str(q.relative_to(ROOT)) for q in left),
+                file=sys.stderr,
             )
-            continue
 
-        # CLEAN FIRST. A non-zero exit after mutating means nothing if the gate
-        # was already failing.
-        pre = run(c.gate, c.args)
-        if "Traceback (most recent call last)" in (pre.stdout + pre.stderr) or "panic:" in (pre.stdout + pre.stderr):
-            failures.append(
-                f"{label}: the gate CRASHED on the UNMODIFIED tree. A crash on either fixture means "
-                "the control is measuring an exception rather than a decision."
-            )
-            continue
-        if pre.returncode != 0:
-            pre_why = crash_reason(pre.returncode)
-            failures.append(
-                f"{label}: the gate does not pass on the UNMODIFIED tree (exit {pre.returncode}"
-                f"{', ' + pre_why if pre_why else ''}), so its "
-                f"reaction to the mutation proves nothing.\n      {pre.stdout.strip()[:200]} {pre.stderr.strip()[:200]}"
-            )
-            continue
-
-        mutated = original.replace(c.before, c.after, 1)
-
-        # PROVE THE MUTATION LANDED. A control that silently fails to mutate
-        # hands the gate an unchanged fixture, the gate correctly passes it, and
-        # the run records that pass as evidence the control worked — a false
-        # negative that reads exactly like a success. Verified by inspecting the
-        # text, never inferred from the exit code.
-        #
-        # This is why the mutation is a Python string replace rather than a
-        # shell one-liner: sed address ranges, in-place flags and character
-        # classes differ between BSD and GNU, so the same control can mutate on
-        # one machine and no-op on the other.
-        landed, why = mutation_landed(original, mutated, c.after)
-        if not landed:
-            failures.append(f"{label}: {why}")
-            continue
-
-        try:
-            c.path.write_text(mutated, encoding="utf-8")
-            # Read back from disk rather than trusting the write.
-            if c.path.read_text(encoding="utf-8") == original:
-                failures.append(f"{label}: the mutated file on disk is identical to the original")
-                c.path.write_text(original, encoding="utf-8")
-                continue
-            post = run(c.gate, c.args)
-        finally:
-            c.path.write_text(original, encoding="utf-8")
-
-        combined = post.stdout + post.stderr
-
-        # A CRASHING gate exits non-zero, and a floor reading exit status alone
-        # records that as a successful rejection — exit-code-conflates-causes
-        # occurring inside the thing built to check for it. The name-the-mutation
-        # assertion below catches most of it, since a traceback rarely contains
-        # the planted marker, but "rarely" is not "cannot": a crash that echoes
-        # the file it choked on can carry the marker along with it.
-        if not c.expect_reject:
-            # ACCEPT control: the mutated fixture must still pass.
-            crashed = crash_reason(post.returncode)
-            if crashed is not None:
-                failures.append(
-                    f"{label}: the gate exited {post.returncode} ({crashed}) on a fixture it must "
-                    "accept. That is not over-matching, it is a crash, and naming it as the former "
-                    "sends the reader to the wrong line."
-                )
-            elif post.returncode != 0:
-                failures.append(
-                    f"{label}: the gate REJECTED a fixture it must accept — it over-matches.\n"
-                    f"      the control introduced: {c.catches}"
-                )
-            elif c.expect_output not in combined:
-                failures.append(
-                    f"{label}: the gate accepted, but its output does not contain {c.expect_output!r}"
-                )
-            continue
-
-        # A non-zero exit is how a gate says REJECTED, so every other reason a
-        # process exits non-zero arrives wearing the same clothes. A traceback is
-        # only the visible half: exit 127 (command not found), 126 (found but not
-        # executable), 3 (a precondition this repo's gates use for a missing
-        # tool) and anything above 128 (killed by a signal) all exit non-zero
-        # while proving nothing about the mutation. Scored as catches, they
-        # report guards that do not exist — and they do it in the tool built to
-        # check the other tools, where nothing else is looking.
-        #
-        # So the rejection code is named rather than inferred from "not zero".
-        crashed = crash_reason(post.returncode)
-        if crashed is not None:
-            why = crashed
-            failures.append(
-                f"{label}: the gate exited {post.returncode} ({why}) on the mutated fixture. That is "
-                "not a rejection — it exits non-zero and would otherwise score as a catch.\n"
-                f"      {combined.strip().splitlines()[-1][:160] if combined.strip() else '<no output>'}"
-            )
-        elif "Traceback (most recent call last)" in combined or "panic:" in combined:
-            failures.append(
-                f"{label}: the gate CRASHED on the mutated fixture rather than rejecting it. A crash "
-                "exits non-zero and would otherwise score as a catch, so the control would report a "
-                "guard that does not exist.\n"
-                f"      {combined.strip().splitlines()[-1][:160] if combined.strip() else ''}"
-            )
-        elif post.returncode == 0:
-            failures.append(
-                f"{label}: the gate PASSED with the violation present — it fails open.\n"
-                f"      the control introduced: {c.catches}"
-            )
-        elif c.expect_output not in combined:
-            failures.append(
-                f"{label}: the gate rejected, but its finding does not contain {c.expect_output!r}. "
-                "The rejection alone is not the property under test."
-            )
+    # Every control must have either proven something or failed. A control that
+    # leaves the loop recording neither is a silent skip, and the summary would
+    # report it as covered.
+    unaccounted = len(CONTROLS) - proven - len(failures)
+    if unaccounted:
+        failures.append(
+            f"{unaccounted} control(s) left the loop without proving or failing anything, so this "
+            "run licenses nothing. The summary counts cases PROVEN; a control that records neither "
+            "outcome is covered in the count and tested nowhere."
+        )
 
     if failures:
         print(f"\n{len(failures)} control failure(s):\n", file=sys.stderr)
@@ -765,7 +849,16 @@ def main() -> int:
             print(f"  - {f}", file=sys.stderr)
         return 1
 
-    print(f"✓ {len(CONTROLS)} positive controls: every gate passes clean and rejects its own violation")
+    if proven == 0:
+        print(
+            "check-controls: zero controls completed a proof, so this run licenses nothing.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"✓ {proven} positive controls PROVEN (of {len(CONTROLS)} declared): every gate passes "
+        "clean and rejects its own violation"
+    )
     return 0
 
 

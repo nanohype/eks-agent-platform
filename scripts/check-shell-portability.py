@@ -31,6 +31,7 @@ blanking string bodies would also blank the code that uses them.
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import re
 import subprocess
@@ -55,6 +56,25 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Each entry is verified in both directions by EXECUTION, not by reading: the
 # construct fails under 3.2, and the 3.2-valid neighbour it could be confused
 # with does not match. scripts/check-shell-portability.py --self-test runs that.
+# TWO FLOORS, deliberately not one number.
+#
+# The UNCONDITIONAL floor is a law about any tree: at least one scanned script
+# must live OUTSIDE the gates' own directory. It is what catches a tree holding
+# only scripts/, where this check found the four shell scripts shipped beside it
+# and certified its own presence. Collapsing the two into a single count is what
+# lets a gate's own directory satisfy its floor.
+#
+# The REPO-ONLY floor is a fact about THIS repository, not a law: it catches a
+# walk that has shrunk to almost nothing. It is set under the real count so a
+# genuine deletion does not trip it.
+MIN_SHELL_SCRIPTS = 4
+GATE_DIR = "scripts"
+
+# The execution half of --self-test needs a bash 3.2 to reach its verdict, which
+# makes that interpreter an external authority. Absent, the self-test FAILS
+# unless this is set, and the opt-out path prints what it did not do.
+PARTIAL_OPTOUT = "SHELL_SELFTEST_ALLOW_PARTIAL"
+
 BASH4_CONSTRUCTS: list[tuple[str, re.Pattern[str], str, str]] = [
     # Parameter expansion operators added in 4.x.
     ("${var^} / ${var^^} / ${var,} / ${var,,} case modification",
@@ -176,10 +196,21 @@ def self_test() -> int:
                         "what this table claims about that shell"
                     )
         print(f"  probes executed against bash {ver} at {bash}")
-    else:
+    elif os.environ.get(PARTIAL_OPTOUT) == "1":
+        # The permissive path is EXPLICIT and it prints what it did not do. A
+        # skip that exits 0 on its own initiative is how an interpreter-shaped
+        # authority disappears into a green job.
         print(
-            f"  probes NOT executed: the bash here is {ver or '<unknown>'}, not 3.2. Pattern "
-            "behaviour was still checked both ways; the shell claims were not."
+            f"  PARTIAL: bash here is {ver or '<unknown>'}, not 3.2, so the EXECUTION half did not "
+            f"run. {len(PROBES)} rules were checked against their construct and their 3.2-valid "
+            f"neighbour by pattern only. Set by {PARTIAL_OPTOUT}=1."
+        )
+    else:
+        problems.append(
+            f"no bash 3.2 is available (found {ver or '<unknown>'}), so the table's claims about "
+            "that shell were not executed. An interpreter this check needs to REACH ITS VERDICT is "
+            f"an authority like any other, and its absence is a refusal. Set {PARTIAL_OPTOUT}=1 to "
+            "accept the pattern half alone, which prints PARTIAL and says what it skipped."
         )
 
     if problems:
@@ -290,8 +321,31 @@ def main() -> int:
                         f"locally cannot surface this."
                     )
 
-    if scanned == 0:
-        print("check-shell-portability: scanned nothing", file=sys.stderr)
+    # A FLOOR ON WHAT WAS EXAMINED, not an at-least-one check. Run against a tree
+    # holding only these gate scripts, this check found the shell scripts shipped
+    # BESIDE it and reported success — "scanned nothing" was never true, and the
+    # count it printed had nothing acting on it. The floor sits under the number
+    # this repository carries, so it catches a walk that matched almost nothing
+    # rather than a single deletion.
+    outside_gate_dir = sum(
+        1 for q in tracked_shell_scripts() if q.relative_to(ROOT).parts[0] != GATE_DIR
+    )
+    if outside_gate_dir == 0:
+        print(
+            f"check-shell-portability: every one of the {scanned} script(s) scanned lives under "
+            f"{GATE_DIR}/. A tree containing only the gates satisfies a count floor with the gates' "
+            "own scripts, so a pass here says nothing about the repository.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if scanned < MIN_SHELL_SCRIPTS:
+        print(
+            f"check-shell-portability: scanned {scanned} shell script(s), fewer than the "
+            f"{MIN_SHELL_SCRIPTS} this repository carries. Finding almost nothing and finding "
+            "nothing wrong are not the same result, and only one of them is a pass.",
+            file=sys.stderr,
+        )
         return 1
 
     if findings:
@@ -305,7 +359,10 @@ def main() -> int:
         )
         return 1
 
-    print(f"✓ {scanned} shell script(s) use nothing newer than bash 3.2")
+    print(
+        f"✓ {scanned} shell script(s) use nothing newer than bash 3.2 "
+        f"({outside_gate_dir} of them outside {GATE_DIR}/)"
+    )
     return 0
 
 

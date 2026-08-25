@@ -75,6 +75,12 @@ FLAG = re.compile(r"--[a-z0-9-]+")
 # this file exists to enforce elsewhere.
 SELF = "check-gates.py"
 
+# The gate scripts exist in any tree that holds this file, so their count proves
+# nothing about the repository. The CI invocations do: run against a tree with no
+# .github/, this check probed every gate and passed while reading zero workflows.
+# Set under the real count, for the reason check-shell-portability states.
+MIN_CI_INVOCATIONS = 15
+
 
 def gates() -> list[pathlib.Path]:
     found = sorted(p for p in SCRIPTS.glob("check-*.py") if p.name != SELF)
@@ -258,6 +264,15 @@ def main() -> int:
 
     found = gates()
     invocations = workflow_invocations()
+    if len(invocations) < MIN_CI_INVOCATIONS:
+        print(
+            f"check-gates: found {len(invocations)} CI invocation(s) of a gate, fewer than the "
+            f"{MIN_CI_INVOCATIONS} this repository is known to wire. The gate scripts are present "
+            "in any tree holding this file, so without the workflows this check probes argument "
+            "handling and proves nothing about the repository.",
+            file=sys.stderr,
+        )
+        return 1
     failures: list[str] = []
 
     for gate in found:

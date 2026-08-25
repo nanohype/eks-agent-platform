@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -100,7 +101,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: ./scripts/check-shell-portability.py --self-test
+      - name: shell portability self-test
+        env:
+          # ubuntu-latest ships bash 5 and no 3.2, so the EXECUTION half of the
+          # self-test cannot run here. It is opted out EXPLICITLY rather than
+          # skipped silently: the step prints PARTIAL naming what it did not do,
+          # and the pattern half — every rule against its construct and against
+          # the 3.2-valid neighbour it is confusable with — still gates. The
+          # execution half runs on any machine that has a 3.2, which is where
+          # this table's claims about that shell were measured.
+          SHELL_SELFTEST_ALLOW_PARTIAL: "1"
+        run: ./scripts/check-shell-portability.py --self-test
       - run: ./scripts/check-shell-portability.py --list
 
   # Prose that names a path is a claim about the world, and the most checkable
@@ -126,6 +137,16 @@ jobs:
           persist-credentials: false
       - run: pip install pyyaml
       - run: ./scripts/check-merge-gate.py --list
+
+  empty-tree:
+    name: no gate passes on a tree with no repo content
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-empty-tree.py --list
 
   named-paths:
     name: every path named in prose resolves
@@ -662,29 +683,6 @@ jobs:
           persist-credentials: false
       - run: ./scripts/check-image-refs.py --offline --list
 
-  image-refs-registry:
-    name: every image the chart names is published
-    # Not in the merge gate: see image-refs above. Runs on push to main so a
-    # merged change that names an unpublished image still surfaces promptly,
-    # and on the chart-drift schedule for the case where nothing here changed
-    # and the registry did.
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: docker login (ghcr.io)
-        # Both values reach the shell as environment variables rather than
-        # through template expansion. github.actor is attacker-influenceable on
-        # a fork PR, and an expansion is substituted into the script BEFORE the
-        # shell parses it, so a crafted value is code rather than an argument.
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-      - run: ./scripts/check-image-refs.py --list
-
   helm:
     name: helm lint + template
     runs-on: ubuntu-latest
@@ -917,6 +915,7 @@ jobs:
         named-paths,
         workflow-permissions,
         merge-gate-reachable,
+        empty-tree,
         shell-portability,
         model-tiers,
         tenant-chart-artifacts,

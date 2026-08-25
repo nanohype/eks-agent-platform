@@ -109,7 +109,35 @@ def main() -> int:
             "gate compares against everywhere the catalog does not resolve; without it the check "
             "would pass by skipping."
         )
-    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["models"]
+    # Each precondition named separately. Removing one authority grades one
+    # authority: a MISSING snapshot and a MALFORMED one both exit non-zero, so by
+    # exit status alone both read as refusals — but an uncaught decode error
+    # names a Python identifier instead of the file that is wrong, which sends
+    # the reader to the interpreter rather than to the operand.
+    try:
+        snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))["models"]
+    except json.JSONDecodeError as e:
+        print(
+            f"check-model-tiers: {SNAPSHOT.relative_to(ROOT)} is not valid JSON ({e}). The operand "
+            "this gate compares against cannot be read, so nothing was checked.",
+            file=sys.stderr,
+        )
+        return 1
+    except KeyError:
+        print(
+            f"check-model-tiers: {SNAPSHOT.relative_to(ROOT)} has no \"models\" object. It is the "
+            "operand this gate compares against; without it the check would pass by comparing "
+            "nothing.",
+            file=sys.stderr,
+        )
+        return 1
+    if not isinstance(snapshot, dict) or not snapshot:
+        print(
+            f"check-model-tiers: {SNAPSHOT.relative_to(ROOT)} declares no model tiers. An empty "
+            "operand makes every comparison vacuously true.",
+            file=sys.stderr,
+        )
+        return 1
 
     # What the world controls: the snapshot must still equal the catalog, checked
     # wherever the catalog is reachable.
