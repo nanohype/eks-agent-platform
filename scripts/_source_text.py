@@ -49,10 +49,30 @@ def strip_hash_comments(text: str) -> str:
             i += 1
             continue
         if c == "#":
-            j = out.find("\n", i)
-            j = len(out) if j == -1 else j
-            out = _blank(out, i, j)
-            i = j
+            # In SHELL a `#` only opens a comment at the start of a word — after
+            # whitespace, a separator, or at the start of a line. `${var#pat}`,
+            # `${#array[@]}` and `foo#bar` are not comments, and treating them as
+            # one blanks the rest of the line, hiding anything after it.
+            #
+            # Verified: `remedy=${row#*x}; declare -A leaked=()` lost the
+            # `declare -A` entirely under the looser rule, which is a fail-open
+            # in a gate whose whole job is finding that construct.
+            #
+            # YAML and Python are stricter still about where a comment may
+            # start, so the same rule is safe for them — a `#` mid-token is not a
+            # comment in any of the three.
+            prev = out[i - 1] if i > 0 else "\n"
+            prev2 = out[i - 2 : i]
+            # `${#array[@]}` is parameter-length expansion, not a comment. `{` is
+            # otherwise a word separator, so this pair has to be excluded by name.
+            is_param_len = prev2 == "${"
+            if not is_param_len and (prev.isspace() or prev in "(){};|&<>"):
+                j = out.find("\n", i)
+                j = len(out) if j == -1 else j
+                out = _blank(out, i, j)
+                i = j
+                continue
+            i += 1
             continue
         i += 1
     return out

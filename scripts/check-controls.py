@@ -82,6 +82,7 @@ class Control:
         catches: str,
         expect_output: str,
         args: list[str] | None = None,
+        expect_reject: bool = True,
     ):
         self.gate = gate
         self.path = ROOT / path
@@ -100,6 +101,12 @@ class Control:
         if not expect_output:
             raise ValueError(f"control for {gate} declares no expect_output; a rejection that does not name the planted violation is not evidence about it")
         self.expect_output = expect_output
+        # Most controls plant a violation and require a rejection. A few plant
+        # something that must NOT trip the gate — the near-miss that proves the
+        # gate is not over-matching. Without this the floor is one-sided at the
+        # control level: it can show a gate rejects, never that it discriminates,
+        # and a gate rejecting everything would pass every control it has.
+        self.expect_reject = expect_reject
 
 
 CONTROLS = [
@@ -225,6 +232,28 @@ CONTROLS = [
         "publishing, so a parameter nobody writes read as written and the gate reported the "
         "contract whole",
         expect_output="baseline_guardrail_id",
+    ),
+    Control(
+        gate="check-shell-portability.py",
+        path="scripts/local-kx/uninstall.sh",
+        before="set -euo pipefail",
+        after="set -euo pipefail\nmapfile -t zzsynthetic_lines < /dev/null",
+        catches="a bash 4 builtin in a script macOS will run on bash 3.2 — the class that shipped "
+        "here as `declare -A` in the local-kx installer, aborting it before a single prerequisite "
+        "was checked",
+        expect_output="mapfile",
+    ),
+    Control(
+        gate="check-shell-portability.py",
+        path="scripts/local-kx/uninstall.sh",
+        before="set -euo pipefail",
+        after="set -euo pipefail\n# zzsynthetic: mapfile and declare -A are bash 4 builtins",
+        catches="the construct appearing ONLY IN A COMMENT, which must NOT trip the gate. A gate "
+        "that flagged it could not carry the prose warning about the class it enforces — the first "
+        "thing it would reject is the sentence explaining it. This is the near-miss that proves the "
+        "gate discriminates rather than merely rejects.",
+        expect_output="use nothing newer than bash 3.2",
+        expect_reject=False,
     ),
     Control(
         gate="no-placeholders.sh",
@@ -540,6 +569,19 @@ def main() -> int:
         # assertion below catches most of it, since a traceback rarely contains
         # the planted marker, but "rarely" is not "cannot": a crash that echoes
         # the file it choked on can carry the marker along with it.
+        if not c.expect_reject:
+            # ACCEPT control: the mutated fixture must still pass.
+            if post.returncode != 0:
+                failures.append(
+                    f"{label}: the gate REJECTED a fixture it must accept — it over-matches.\n"
+                    f"      the control introduced: {c.catches}"
+                )
+            elif c.expect_output not in combined:
+                failures.append(
+                    f"{label}: the gate accepted, but its output does not contain {c.expect_output!r}"
+                )
+            continue
+
         if "Traceback (most recent call last)" in combined or "panic:" in combined:
             failures.append(
                 f"{label}: the gate CRASHED on the mutated fixture rather than rejecting it. A crash "

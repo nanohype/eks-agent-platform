@@ -59,16 +59,29 @@ fi
 
 # 2. upstream CRD presence check
 echo "checking kx prerequisites..."
-declare -A crd_to_slice=(
-  ["aigatewayroutes.aigateway.envoyproxy.io"]="task -d ../kx stack:ai-platform:enable     # Envoy AI Gateway"
-  ["scaledobjects.keda.sh"]="task -d ../kx stack:autoscaling:enable   # KEDA"
-  ["workflows.argoproj.io"]="task -d ../kx stack:argo-platform:enable  # argo-workflows"
+# A parallel array of "crd<TAB>remedy" rows rather than an associative array.
+#
+# `declare -A` is a bash 4 builtin, and macOS ships bash 3.2 — which is the most
+# likely machine to be running a LOCAL kind cluster. With `set -euo pipefail`
+# above, the script aborted here on `declare: -A: invalid option` before checking
+# a single prerequisite, so the failure looked like a broken shell rather than an
+# unsupported one.
+#
+# shellcheck cannot catch this: it parses, it does not run, and a static parser
+# does not know which bash the reader has. scripts/check-shell-portability.py is
+# what holds it.
+crd_prereqs=(
+  "aigatewayroutes.aigateway.envoyproxy.io	task -d ../kx stack:ai-platform:enable     # Envoy AI Gateway"
+  "scaledobjects.keda.sh	task -d ../kx stack:autoscaling:enable   # KEDA"
+  "workflows.argoproj.io	task -d ../kx stack:argo-platform:enable  # argo-workflows"
 )
 missing=0
-for crd in "${!crd_to_slice[@]}"; do
+for row in "${crd_prereqs[@]}"; do
+  crd="${row%%	*}"
+  remedy="${row#*	}"
   if ! kubectl get crd "$crd" >/dev/null 2>&1; then
     red "missing CRD: $crd"
-    yellow "  enable with: ${crd_to_slice[$crd]}"
+    yellow "  enable with: $remedy"
     missing=1
   fi
 done

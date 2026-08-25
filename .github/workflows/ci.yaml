@@ -89,6 +89,19 @@ jobs:
           echo "NANOHYPE_STANDARDS_DIR=/tmp/nanohype/standards" >> "$GITHUB_ENV"
       - run: ./scripts/check-model-tiers.py --list
 
+  # shellcheck parses; it does not run. A static parser cannot know which bash a
+  # reader has, so a runtime-version incompatibility is invisible to it — which
+  # is how `declare -A` reached the local-kx installer, aborting it on every
+  # macOS before a single prerequisite was checked.
+  shell-portability:
+    name: shell scripts run on the bash macOS ships
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-shell-portability.py --list
+
   # Prose that names a path is a claim about the world, and the most checkable
   # one documentation makes. A file moves, the reference does not, and nothing
   # fails — the reader following it is the failure detector, which in a runbook
@@ -832,6 +845,7 @@ jobs:
         gates,
         controls,
         named-paths,
+        shell-portability,
         model-tiers,
         tenant-chart-artifacts,
         version-pins,
