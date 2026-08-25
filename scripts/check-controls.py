@@ -673,6 +673,48 @@ def main() -> int:
     # exception naming a binary instead of naming what could not be determined.
     require_binary("git", "determine the tracked set the gates scope themselves to")
 
+    # COMMITTED DEBRIS. A crash mid-loop used to leave a fixture mutated on disk;
+    # the restore now runs in a finally, but that does not help a mutation that
+    # was already staged and committed before the crash was understood. One was:
+    # a workflow-level `id-token: write` planted by a control reached main's
+    # branch and was caught by CI rather than here.
+    #
+    # So the committed form of every control target is checked against the
+    # mutation that control applies, before any control runs. Knowing the failure
+    # mode does not prevent it; this does.
+    debris = []
+    for c in CONTROLS:
+        rel = c.path.relative_to(ROOT)
+        head = subprocess.run(
+            ["git", "show", f"HEAD:{rel}"], capture_output=True, text=True, cwd=ROOT, timeout=60
+        )
+        if head.returncode != 0:
+            continue
+        if c.after and c.after not in c.before and c.after in head.stdout and c.before not in head.stdout:
+            debris.append(f"{rel}: carries the mutation from the {c.gate} control")
+    if debris:
+        print(
+            f"\n{len(debris)} control mutation(s) are COMMITTED, not just present on disk:\n",
+            file=sys.stderr,
+        )
+        for d in debris:
+            print(f"  - {d}", file=sys.stderr)
+        print(
+            "\nA control's fixture is meant to exist only between the mutation and the restore. "
+            "Committed, it is a real defect in the tree wearing a test's clothes, and every control "
+            "over that file now measures the debris.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # A JUDGEMENT, not an oversight, and stated as one so a reviewer can overrule
+    # it rather than having to discover it: `sh` is invoked by the self-test
+    # fixtures below and is NOT asserted by name. POSIX requires it, every runner
+    # and developer machine this suite targets has it, and asserting it would
+    # mean asserting the shell that would have to exist for the assertion itself
+    # to be reportable. If `sh` is genuinely absent the fixtures raise, and that
+    # is the one binary whose absence this file does not promise to name.
+
     failures = harness_self_test() + anti_vacuity()
     # CASES PROVEN, incremented at the END of the loop body — after the gate has
     # passed clean, the mutation has landed, the gate has rejected, and the

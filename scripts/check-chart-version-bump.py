@@ -52,6 +52,9 @@ import shutil
 import subprocess
 import argparse
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 import tarfile
 import tempfile
 
@@ -374,14 +377,20 @@ def self_test() -> int:
 
 
 def main() -> int:
-    if not shutil.which("helm"):
-        print("FAIL  helm is not on PATH; the comparison cannot be made.")
-        return 1
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--self-test", action="store_true", help="prove the diff comparison can fail")
     ap.add_argument("--published", action="store_true", help="compare against the published chart index")
     ap.add_argument("--base", help="git ref to diff against")
     args = ap.parse_args()
+
+    # This gate held its own inline check for helm, which named the tool but
+    # exited 1 — the code a finding about the tree uses — and ran before
+    # parse_args, so --help failed without a binary it does not need to print
+    # usage. Both are the shared assertion's job: exit 3, after argument
+    # handling, and git asserted too rather than left to raise from the first
+    # call.
+    require_binary("helm", "render the chart whose version this compares across refs")
+    require_binary("git", "read the base ref this compares the working tree against")
 
     if args.self_test:
         return self_test()
