@@ -83,7 +83,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase: Pending, Provisioning, Ready, ScaledToZero, Failed. |  | Optional: \{\} <br /> |
-| `readyAgents` _integer_ | ReadyAgents counts agents whose downstream Deployment is ready. |  | Optional: \{\} <br /> |
+| `readyAgents` _integer_ | ReadyAgents counts agents whose Deployment reports at least one ready<br />replica, read back from the cluster on each reconcile — not the number of<br />agents declared in spec. The distinction is the whole value of the field:<br />a fleet whose every pod is in CrashLoopBackOff has as many declared agents<br />as a healthy one, so a declared count answers a question nobody asked and<br />reads as health on the dashboard that exists to catch the failure. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the last spec.generation reconciled. |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
 

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -97,6 +98,12 @@ func NewVClusterClientFactory(host client.Client, scheme *runtime.Scheme) VClust
 	}
 }
 
+// vclusterRequestTimeout bounds every request to a tenant's vcluster API
+// server. 30s comfortably covers the slowest single call a reconcile makes
+// against it and is short enough that a wedged vcluster frees its worker within
+// one reconcile interval rather than holding it indefinitely.
+const vclusterRequestTimeout = 30 * time.Second
+
 func (f *cachedVClusterClientFactory) ClientFor(ctx context.Context, p *platformv1alpha1.Platform) (client.Client, error) {
 	var secret corev1.Secret
 	key := types.NamespacedName{Namespace: PlatformNamespace(p), Name: vclusterKubeconfigSecretName()}
@@ -126,6 +133,16 @@ func (f *cachedVClusterClientFactory) ClientFor(ctx context.Context, p *platform
 	if err != nil {
 		return nil, fmt.Errorf("parse vcluster kubeconfig from %s: %w", key, err)
 	}
+	// A kubeconfig carries no request timeout, so a client built straight from
+	// one inherits none. That matters more here than for the host client: the
+	// vcluster API server is a pod inside the tenant's own namespace, which
+	// makes it the one API server in this operator that can be slow, wedged or
+	// evicted without anything else noticing — and controller-runtime does not
+	// decorate the reconcile context with a deadline, so an unbounded call pins
+	// a reconcile worker until the process restarts. The same reasoning and the
+	// same ceiling as awsclients.awsHTTPTimeout, applied to the other remote
+	// this operator talks to.
+	restCfg.Timeout = vclusterRequestTimeout
 	c, err := client.New(restCfg, client.Options{Scheme: f.scheme})
 	if err != nil {
 		return nil, fmt.Errorf("build vcluster client for %s: %w", p.Name, err)

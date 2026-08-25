@@ -296,6 +296,76 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 	return err
 }
 
+// ensureTenantIngressPolicy closes the other direction of the tenant boundary.
+//
+// ensureNetworkPolicy selects every pod in the namespace but declares
+// PolicyTypes: [Egress] only, and a policy that names no Ingress type does not
+// restrict ingress at all — it is not a deny, it is an absence. AgentFleet,
+// AgentSandbox and SandboxPool pods each carry their own deny-all ingress, so
+// the gap was never the agent workloads: it was the tenant's own chart-deployed
+// application pods, which are reachable from any pod on the cluster.
+//
+// A separate policy rather than another field on the shared one, for the reason
+// ensureGatewayEgressPolicy already states: policies are additive, and the
+// tenant chart ships its own NetworkPolicy declaring whatever ingress its
+// application actually serves. Adding rules here would put the operator in the
+// business of guessing that.
+//
+// Two exceptions, and they are the two that break silently if omitted:
+//
+//   - Same-namespace to the gateway. The tenant egress rule lets an application
+//     pod SEND to its own Envoy, but a deny-all ingress on the Envoy refuses the
+//     delivery, and the failure surfaces as model calls timing out against a
+//     Gateway that reports healthy.
+//   - The monitoring namespace. A metrics scrape is ingress; without it the
+//     tenant's own series stop arriving, which reads as a quiet workload rather
+//     than as a blocked one.
+//
+// Vanilla NetworkPolicy on both engines, with no cilium twin: the tenant EGRESS
+// policy needs one only because the Pod Identity endpoint is a cilium host
+// entity that a vanilla ipBlock cannot express. Nothing here names an entity
+// outside the standard API, and Cilium enforces standard NetworkPolicy, so one
+// object covers both.
+func (r *PlatformReconciler) ensureTenantIngressPolicy(ctx context.Context, p *platformv1alpha1.Platform) error {
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tenant-ingress",
+			Namespace: PlatformNamespace(p),
+		},
+	}
+	tcp := corev1.ProtocolTCP
+	gatewayPort := intstr.FromInt(8080)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
+		np.Labels = labelsForPlatform(p)
+		np.Spec = networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{}, // all pods in the tenant namespace
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					// The gateway, from this namespace only. A peer with no
+					// NamespaceSelector means "this namespace".
+					From: []networkingv1.NetworkPolicyPeer{{
+						PodSelector: &metav1.LabelSelector{},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Protocol: &tcp, Port: &gatewayPort},
+					},
+				},
+				{
+					// Metrics scrape from the collector's namespace.
+					From: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": collectorNamespace},
+						},
+					}},
+				},
+			},
+		}
+		return nil
+	})
+	return err
+}
+
 // ensureGatewayEgressPolicy grants the model gateway's Envoy the one thing no
 // other tenant pod gets: outbound TLS, which is how it reaches Bedrock.
 //

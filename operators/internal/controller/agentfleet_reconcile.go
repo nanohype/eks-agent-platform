@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -674,11 +675,43 @@ func (r *AgentFleetReconciler) reconcileFleetSelf(ctx context.Context, fleet *ag
 		if errors.Is(err, errKEDANotInstalled) {
 			// KEDA absence isn't fatal — scaling is optional. Log and
 			// move on; the deployment runs at the static replica count.
-			return fleetResult{phase: phaseReady, readyAgents: safeAgentCount(fleet)}, nil
+			return fleetResult{phase: phaseReady, readyAgents: r.observeReadyAgents(ctx, tc, fleet, platform)}, nil
 		}
 		return fleetResult{}, err
 	}
-	return fleetResult{phase: phaseReady, readyAgents: safeAgentCount(fleet)}, nil
+	return fleetResult{phase: phaseReady, readyAgents: r.observeReadyAgents(ctx, tc, fleet, platform)}, nil
+}
+
+// observeReadyAgents counts the agents whose Deployment reports at least one
+// ready replica.
+//
+// It reads the workloads back rather than returning len(spec.agents), which is
+// what the field's contract requires and what the previous count did not do:
+// applying a Deployment says the API server accepted it, not that anything is
+// serving. A fleet whose every pod was in CrashLoopBackOff reported
+// readyAgents == len(spec.agents) and phase Ready, and agents_fleet_ready_agents
+// carried the same number onto the dashboards that exist to notice exactly that.
+//
+// A read failure yields the count observed so far rather than an error. This
+// runs after the Deployments have been applied successfully, so the fleet is
+// reconciled either way, and failing the whole pass on a status read would turn
+// a reporting gap into a reconcile loop. An agent whose Deployment cannot be
+// read is simply not counted as ready — the direction that under-reports rather
+// than over-reports, which is the safe one for a number a pager reads.
+func (r *AgentFleetReconciler) observeReadyAgents(ctx context.Context, tc client.Client, fleet *agentsv1alpha1.AgentFleet, p *platformv1alpha1.Platform) int32 {
+	ns := PlatformNamespace(p)
+	var ready int32
+	for _, agent := range fleet.Spec.Agents {
+		var dep appsv1.Deployment
+		key := types.NamespacedName{Namespace: ns, Name: agentDeploymentName(fleet, agent.Name)}
+		if err := tc.Get(ctx, key, &dep); err != nil {
+			continue
+		}
+		if dep.Status.ReadyReplicas > 0 {
+			ready++
+		}
+	}
+	return ready
 }
 
 //nolint:dupl // status writeback mirrors the other reconcilers by design
@@ -691,7 +724,7 @@ func (r *AgentFleetReconciler) applyFleetStatus(ctx context.Context, fleet *agen
 		Type:               "AgentsReconciled",
 		Status:             metav1.ConditionTrue,
 		Reason:             "Reconciled",
-		Message:            fmt.Sprintf("%d agent(s) emitted", res.readyAgents),
+		Message:            fmt.Sprintf("%d of %d agent(s) ready", res.readyAgents, safeAgentCount(fleet)),
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: fleet.Generation,
 	}

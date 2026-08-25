@@ -224,6 +224,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		{"ensureQuota", r.ensureQuota},
 		{"ensureLimitRange", r.ensureLimitRange},
 		{"ensureNetworkPolicy", r.ensureNetworkPolicy},
+		{"ensureTenantIngressPolicy", r.ensureTenantIngressPolicy},
 		{"ensureTenantCiliumEgress", r.ensureTenantCiliumEgress},
 		{"ensureGatewayEgressPolicy", r.ensureGatewayEgressPolicy},
 		{"ensureGatewayCiliumEgress", r.ensureGatewayCiliumEgress},
