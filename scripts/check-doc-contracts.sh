@@ -275,6 +275,12 @@ elif [ "$collector_ns" != "$chart_ns" ]; then
   fail=1
 fi
 
+# THE OPPOSITE DIRECTION from the floors in no-placeholders.sh, and the reason
+# the default cannot be copied between them: here NON-zero is the failing value,
+# so an undetermined counter must default to non-zero. Defaulting it to 0 would
+# write the defect into the fix — 0 reads as "no findings", which is exactly what
+# a counter that was never set most resembles.
+fail=${fail:-1}
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
