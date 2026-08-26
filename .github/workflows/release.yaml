@@ -94,7 +94,23 @@ jobs:
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${{ needs.plan.outputs.operator }}" >> "$GITHUB_OUTPUT"
+        # An EMPTY version is not rejected downstream — it is a valid instruction.
+        # `ghcr.io/owner/repo/operator:` is a reference with no tag, which a
+        # registry resolves rather than refuses, so the job would build, sign and
+        # publish against something nobody proposed and report success.
+        #
+        # Asserted with a shell conditional rather than an external tool: a guard
+        # that asks its question through a binary is deleted by the absence of
+        # that binary. On refusal NOTHING is written to the output, so no later
+        # step has a bad value to misread.
+        env:
+          RAW: "${{ needs.plan.outputs.operator }}"
+        run: |
+          if [ -z "$RAW" ]; then
+            echo "::error::derived an empty version from the plan job; refusing to tag an image with no tag"
+            exit 1
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
         # Both values reach the shell as environment variables rather than
         # through template expansion. github.actor is attacker-influenceable on
@@ -155,7 +171,23 @@ jobs:
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${GITHUB_REF#refs/tags/sandbox-worker-v}" >> "$GITHUB_OUTPUT"
+        # An EMPTY version is not rejected downstream — it is a valid instruction.
+        # `ghcr.io/owner/repo/operator:` is a reference with no tag, which a
+        # registry resolves rather than refuses, so the job would build, sign and
+        # publish against something nobody proposed and report success.
+        #
+        # Asserted with a shell conditional rather than an external tool: a guard
+        # that asks its question through a binary is deleted by the absence of
+        # that binary. On refusal NOTHING is written to the output, so no later
+        # step has a bad value to misread.
+        env:
+          RAW: "${GITHUB_REF#refs/tags/sandbox-worker-v}"
+        run: |
+          if [ -z "$RAW" ]; then
+            echo "::error::derived an empty version from the sandbox-worker tag; refusing to tag an image with no tag"
+            exit 1
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
         # Both values reach the shell as environment variables rather than
         # through template expansion. github.actor is attacker-influenceable on
@@ -211,7 +243,23 @@ jobs:
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${{ needs.plan.outputs.eval_runner }}" >> "$GITHUB_OUTPUT"
+        # An EMPTY version is not rejected downstream — it is a valid instruction.
+        # `ghcr.io/owner/repo/eval-runner:` is a reference with no tag, which a
+        # registry resolves rather than refuses, so the job would build, sign and
+        # publish against something nobody proposed and report success.
+        #
+        # Asserted with a shell conditional rather than an external tool: a guard
+        # that asks its question through a binary is deleted by the absence of
+        # that binary. On refusal NOTHING is written to the output, so no later
+        # step has a bad value to misread.
+        env:
+          RAW: "${{ needs.plan.outputs.eval_runner }}"
+        run: |
+          if [ -z "$RAW" ]; then
+            echo "::error::derived an empty version from the plan job; refusing to tag an image with no tag"
+            exit 1
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
         # Both values reach the shell as environment variables rather than
         # through template expansion. github.actor is attacker-influenceable on
