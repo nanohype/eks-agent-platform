@@ -88,8 +88,14 @@ def main() -> int:
 
     require_binary("git", "build the empty repository every gate is run against")
 
+    # BOTH populations. This gate first globbed check-*.py only, so the shell
+    # gates were never run against the gates-only tree — the check's own
+    # population was narrower than the class it names, which is the defect it
+    # exists to find. no-placeholders.sh was passing there on its own scripts.
     gates = sorted(
-        p.name for p in SCRIPTS.glob("check-*.py") if p.name != SELF and p.name not in EXEMPT
+        p.name
+        for p in list(SCRIPTS.glob("check-*.py")) + list(SCRIPTS.glob("*.sh"))
+        if p.name != SELF and p.name not in EXEMPT
     )
     for name, why in sorted(EXEMPT.items()):
         print(f"  exempt: {name} — {why}")
@@ -104,9 +110,10 @@ def main() -> int:
         dest = pathlib.Path(td) / "tree"
         build_empty_tree(dest)
         for gate in gates:
+            argv = ["sh", f"scripts/{gate}"] if gate.endswith(".sh") else [sys.executable, f"scripts/{gate}"]
             try:
                 r = subprocess.run(
-                    [sys.executable, f"scripts/{gate}"],
+                    argv,
                     cwd=dest, capture_output=True, text=True, timeout=GATE_TIMEOUT,
                 )
             except subprocess.TimeoutExpired:
