@@ -874,6 +874,19 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+    # TWO LAYERS, SAFE FOR DIFFERENT REASONS, and the difference is worth writing
+    # down rather than calling both of them safe:
+    #
+    #   `proven` initialises to 0, which is the value that FAILS below. That is a
+    #   GUARANTEE — a loop that never runs leaves the failing value in place, so
+    #   it does not depend on anything else executing.
+    #
+    #   An EMPTY registry is caught by anti_vacuity() deriving membership from the
+    #   gates on disk, which indicts every gate rather than certifying them. That
+    #   is a second, independent check rather than an arrangement of this one, but
+    #   it is a different mechanism and would not survive anti_vacuity being
+    #   rewritten to read the registry's own length.
+    #
     # Every control must have either proven something or failed. A control that
     # leaves the loop recording neither is a silent skip, and the summary would
     # report it as covered.
