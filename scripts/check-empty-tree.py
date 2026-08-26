@@ -106,6 +106,11 @@ def main() -> int:
         )
 
     passed_on_nothing: list[tuple[str, str]] = []
+    # Gates that produced no verdict at all. A fallback that folds these into the
+    # refusals is a decision to ignore them taken in advance — and the summary
+    # then counts gates SEEN as gates PROVEN.
+    undetermined: list[str] = []
+    refused = 0
     with tempfile.TemporaryDirectory() as td:
         dest = pathlib.Path(td) / "tree"
         build_empty_tree(dest)
@@ -117,17 +122,34 @@ def main() -> int:
                     cwd=dest, capture_output=True, text=True, timeout=GATE_TIMEOUT,
                 )
             except subprocess.TimeoutExpired:
-                # Not a pass, and not a decision either. Letting this escape made
-                # THIS gate crash rather than report — the shape it screens for.
-                if args.list:
-                    print(f"  refused (timeout)  {gate} — did not finish in {GATE_TIMEOUT}s")
+                # NOT a refusal. "Did not finish" and "refused" are different
+                # facts, and an earlier version of this handler counted the first
+                # as the second — reported only under --list, while the summary
+                # said "every one refuses" over a total that included it.
+                undetermined.append(f"{gate} — did not finish in {GATE_TIMEOUT}s")
                 continue
             last = (r.stdout + r.stderr).strip().splitlines()
             summary = last[-1][:100] if last else "<no output>"
             if r.returncode == 0:
                 passed_on_nothing.append((gate, summary))
-            elif args.list:
-                print(f"  refused ({r.returncode})  {gate}")
+            else:
+                refused += 1
+                if args.list:
+                    print(f"  refused ({r.returncode})  {gate}")
+
+    if undetermined:
+        print(
+            f"\n{len(undetermined)} gate(s) produced NO verdict against the gates-only tree:\n",
+            file=sys.stderr,
+        )
+        for u in undetermined:
+            print(f"  - {u}", file=sys.stderr)
+        print(
+            "\nThat is not a refusal. A gate that never finished has not demonstrated anything, "
+            "and counting it among those that refused reports gates SEEN as gates PROVEN.",
+            file=sys.stderr,
+        )
+        return 1
 
     if passed_on_nothing:
         print(
@@ -145,7 +167,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"✓ {len(gates)} gates: every one refuses a tree that contains only the gates")
+    print(f"✓ {refused} gates REFUSED a tree that contains only the gates (of {len(gates)} run)")
     return 0
 
 
