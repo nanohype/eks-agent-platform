@@ -231,6 +231,7 @@ func TestModelScopingPolicyDoc(t *testing.T) {
 			"bedrock:Converse",
 			"bedrock:ConverseStream",
 			"bedrock:InvokeModel",
+			"bedrock:InvokeModelWithBidirectionalStream",
 			"bedrock:InvokeModelWithResponseStream",
 		}
 		if !reflect.DeepEqual(s.Action, wantActions) {

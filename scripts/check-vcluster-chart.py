@@ -50,6 +50,9 @@ import os
 import pathlib
 import subprocess
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 import tempfile
 
 try:
@@ -123,11 +126,15 @@ def render(repo: str, version: str, values: pathlib.Path) -> list[str]:
 
 
 def main() -> int:
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--write", action="store_true",
                     help="rewrite the inventory from this render (review the "
                          "diff first)")
     args = ap.parse_args()
+
+    require_binary("helm", "render the vcluster chart")
+    require_binary("go", "resolve the operator constants the chart must agree with")
 
     repo, version = pinned_chart()
     print("── vcluster chart acceptance ──")

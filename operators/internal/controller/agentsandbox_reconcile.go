@@ -84,6 +84,10 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client
 			Labels:    agentSandboxLabels(box, p),
 		},
 		Spec: corev1.PodSpec{
+			// The wall-clock ceiling. Enforced by the kubelet rather than by a
+			// reconcile, so it still fires if this operator is down — which is
+			// exactly when a runaway session would otherwise be unattended.
+			ActiveDeadlineSeconds:        sandboxActiveDeadline(box),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			ServiceAccountName:           tenantSAName,
 			AutomountServiceAccountToken: ptrTo(false),
@@ -102,15 +106,12 @@ func (r *AgentSandboxReconciler) ensureSessionPod(ctx context.Context, tc client
 				// it holds tenants to. model_family comes from the Platform when
 				// it pins a single family; the session picks its own model, so
 				// model_id is left to the runtime.
-				Env:             withOTelResourceAttrs(box.Spec.Env, p, platformModelFamily(p)),
+				Env:             withOTelResourceAttrs(box.Spec.Env, p, platformModelFamily(p), r.Environment),
 				Resources:       box.Spec.Resources,
-				SecurityContext: restrictedContainerSecurityContext(),
-				VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+				SecurityContext: sandboxContainerSecurityContext(),
+				VolumeMounts:    sandboxWritableMounts(box.Spec.WritablePaths...),
 			}},
-			Volumes: []corev1.Volume{{
-				Name:         "workspace",
-				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-			}},
+			Volumes: sandboxWritableVolumes(box.Spec.WritablePaths...),
 		},
 	}
 	if err := tc.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -245,6 +246,21 @@ func (r *AgentSandboxReconciler) reconcileAgentSandboxSelf(ctx context.Context, 
 	default: // Pending, Unknown
 		return phasePending, &pod, nil
 	}
+}
+
+// sandboxActiveDeadline resolves the session's wall-clock ceiling in the form a
+// PodSpec wants: nil to disable, which is what an explicit 0 means. Kubernetes
+// rejects activeDeadlineSeconds: 0, so the disable case has to be an absent
+// field rather than a zero one.
+func sandboxActiveDeadline(box *agentsv1alpha1.AgentSandbox) *int64 {
+	if box.Spec.ActiveDeadlineSeconds == nil {
+		return nil
+	}
+	if *box.Spec.ActiveDeadlineSeconds <= 0 {
+		return nil
+	}
+	d := int64(*box.Spec.ActiveDeadlineSeconds)
+	return &d
 }
 
 // reconcileTTL garbage-collects a finished AgentSandbox: once its session

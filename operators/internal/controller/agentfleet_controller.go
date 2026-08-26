@@ -34,6 +34,12 @@ import (
 // KEDA absence is tolerated — the fleet runs at its static replica count, no
 // reconcile error.
 type AgentFleetReconciler struct {
+	// Environment is the operator's deploy stage, stamped on the pods this
+	// reconciler builds as the OTel deployment.environment resource attribute
+	// (resource-tagging renders the environment dimension there). Empty on a
+	// cluster started without --environment, and omitted from the attribute
+	// rather than emitted blank.
+	Environment string
 	client.Client
 	Scheme      *runtime.Scheme
 	Concurrency int

@@ -11,18 +11,37 @@ import (
 	"testing"
 )
 
-// TestModelTiers pins the org LLM-policy model tiers. These are the values the
-// scaffolder and downstream defaults must track (nanohype llm-policy standard).
+// TestModelTiers asserts the SHAPE of the tier table, not its values.
+//
+// The exact ids belong to the org LLM policy, and scripts/check-model-tiers.py
+// compares the two by reading the published standard. Restating them here made
+// this test a second copy of the same values — which is the defect that let the
+// table drift a full generation while the file's own comment claimed it mirrored
+// the standard, and left a reader two places to look and no way to tell which
+// was right. A test that pins values it also has to be updated with proves the
+// updater was consistent, not that the values are correct.
+//
+// What is worth pinning here is what no external document can say: that all
+// three tiers exist, that none is empty, and that each is a cross-region
+// inference-profile id. The last is a runtime requirement rather than a style
+// preference — llm-policy's inference-profile-required rule exists because
+// Bedrock refuses a bare foundation-model id for the current Claude family with
+// a ValidationException on the first call.
 func TestModelTiers(t *testing.T) {
 	tiers := ModelTiers()
-	want := map[string]string{
-		"default":    "us.anthropic.claude-sonnet-4-6",
-		"light":      "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-		"escalation": "us.anthropic.claude-opus-4-8",
-	}
-	for k, v := range want {
-		if tiers[k] != v {
-			t.Errorf("tier %q: got %q want %q", k, tiers[k], v)
+	for _, tier := range []string{"default", "light", "escalation"} {
+		id, ok := tiers[tier]
+		if !ok {
+			t.Errorf("tier %q is absent from the tier table", tier)
+			continue
+		}
+		if strings.TrimSpace(id) == "" {
+			t.Errorf("tier %q is empty", tier)
+			continue
+		}
+		if !strings.HasPrefix(id, "us.") {
+			t.Errorf("tier %q = %q, which is not a us. cross-region inference-profile id; "+
+				"Bedrock refuses a bare foundation-model id for the current Claude family", tier, id)
 		}
 	}
 }

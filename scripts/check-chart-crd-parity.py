@@ -58,8 +58,13 @@ match.
 
 Usage: ./scripts/check-chart-crd-parity.py
 """
+import argparse
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 from pathlib import Path
 
 try:
@@ -316,6 +321,8 @@ def check_admissibility(problems):
 
 
 def main():
+    require_binary("helm", "render the chart whose CRDs this compares against the operator's")
+
     problems: list[str] = []
     renders = check_coverage(problems)
     documents = check_admissibility(problems)
@@ -342,5 +349,17 @@ def main():
     )
 
 
+
+# Argument parsing is strict on purpose: a gate that ignores argv cannot tell a
+# renamed flag from a correct one, so a CI step naming a mode this script does
+# not have would keep exiting 0. scripts/check-gates.py asserts this for every
+# gate here.
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    # This gate takes no arguments; argparse rejects anything passed.
+    return ap.parse_args()
+
+
 if __name__ == "__main__":
+    _parse_args()
     main()

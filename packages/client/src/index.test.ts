@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  EksAgentClient,
-  resolveApi,
   type CustomObjectsClient,
+  EksAgentClient,
   type KubeConfigLoader,
   type Platform,
+  resolveApi,
 } from './index.js';
 
 function fakeApi(overrides: Partial<CustomObjectsClient> = {}): {
@@ -31,15 +31,21 @@ function fakeApi(overrides: Partial<CustomObjectsClient> = {}): {
     },
     deleteClusterCustomObject: record('deleteClusterCustomObject', {}),
     listNamespacedCustomObject: record('listNamespacedCustomObject', { items: [] }),
+    getNamespacedCustomObject: record('getNamespacedCustomObject', {}),
+    createNamespacedCustomObject: (...args: unknown[]) => {
+      calls.createNamespacedCustomObject = args;
+      return Promise.resolve((args[0] as { body?: unknown }).body ?? {});
+    },
+    deleteNamespacedCustomObject: record('deleteNamespacedCustomObject', {}),
     ...overrides,
   };
   return { api, calls };
 }
 
-const platform = (name: string): Platform => ({
+const platform = (name: string, namespace?: string): Platform => ({
   apiVersion: 'platform.nanohype.dev/v1alpha1',
   kind: 'Platform',
-  metadata: { name },
+  metadata: namespace ? { name, namespace } : { name },
   spec: {
     persona: 'ops',
     tenant: 'acme',
@@ -101,10 +107,10 @@ describe('EksAgentClient', () => {
 
   it('parses read responses through the schema, rejecting a malformed CR', async () => {
     const { api } = fakeApi({
-      getClusterCustomObject: () => Promise.resolve({ apiVersion: 'wrong', kind: 'Platform' }),
+      getNamespacedCustomObject: () => Promise.resolve({ apiVersion: 'wrong', kind: 'Platform' }),
     });
     const client = new EksAgentClient({ api });
-    await expect(client.getPlatform('acme')).rejects.toThrow();
+    await expect(client.getPlatform('tenants-acme', 'acme')).rejects.toThrow();
   });
 
   it('returns an empty list when the API response carries no items', async () => {
@@ -126,15 +132,74 @@ describe('EksAgentClient', () => {
     });
   });
 
-  it('applies and deletes platforms by name against the cluster scope', async () => {
-    const { api, calls } = fakeApi();
+  // Platform is `scope: Namespaced`. Addressing a single object through the
+  // cluster-scoped path builds a URL with no namespace segment, which the API
+  // server answers 404 for however real the object is — so these assert the
+  // METHOD as much as the arguments.
+  it('addresses a single platform through the namespaced scope', async () => {
+    const calls: Record<string, unknown[]> = {};
+    const { api } = fakeApi({
+      // The read boundary parses, so the fake has to answer with a real
+      // resource rather than an empty object.
+      getNamespacedCustomObject: (...args: unknown[]) => {
+        calls.getNamespacedCustomObject = args;
+        return Promise.resolve(platform('acme', 'tenants-acme'));
+      },
+      createNamespacedCustomObject: (...args: unknown[]) => {
+        calls.createNamespacedCustomObject = args;
+        return Promise.resolve((args[0] as { body?: unknown }).body ?? {});
+      },
+      deleteNamespacedCustomObject: (...args: unknown[]) => {
+        calls.deleteNamespacedCustomObject = args;
+        return Promise.resolve({});
+      },
+      getClusterCustomObject: (...args: unknown[]) => {
+        calls.getClusterCustomObject = args;
+        return Promise.resolve({});
+      },
+      createClusterCustomObject: (...args: unknown[]) => {
+        calls.createClusterCustomObject = args;
+        return Promise.resolve({});
+      },
+      deleteClusterCustomObject: (...args: unknown[]) => {
+        calls.deleteClusterCustomObject = args;
+        return Promise.resolve({});
+      },
+    });
     const client = new EksAgentClient({ api });
-    await client.applyPlatform(platform('acme'));
-    await client.deletePlatform('acme');
-    expect(calls.createClusterCustomObject?.[0]).toMatchObject({
+    await client.getPlatform('tenants-acme', 'acme');
+    await client.applyPlatform(platform('acme', 'tenants-acme'));
+    await client.deletePlatform('tenants-acme', 'acme');
+
+    expect(calls.getNamespacedCustomObject?.[0]).toMatchObject({
+      namespace: 'tenants-acme',
+      plural: 'platforms',
+      name: 'acme',
+    });
+    expect(calls.createNamespacedCustomObject?.[0]).toMatchObject({
+      namespace: 'tenants-acme',
       body: { metadata: { name: 'acme' } },
     });
-    expect(calls.deleteClusterCustomObject?.[0]).toMatchObject({ name: 'acme' });
+    expect(calls.deleteNamespacedCustomObject?.[0]).toMatchObject({
+      namespace: 'tenants-acme',
+      name: 'acme',
+    });
+
+    // The cluster-scoped single-object methods must go unused for this kind.
+    expect(calls.getClusterCustomObject).toBeUndefined();
+    expect(calls.createClusterCustomObject).toBeUndefined();
+    expect(calls.deleteClusterCustomObject).toBeUndefined();
+  });
+
+  it('refuses to apply a platform that names no namespace', async () => {
+    // The namespace comes from the object, so an object without one has nowhere
+    // to go and the API server has no default to fall back on. Failing here
+    // names the missing field; the alternative is a 404 that reads as a broken
+    // cluster.
+    const { api, calls } = fakeApi();
+    const client = new EksAgentClient({ api });
+    await expect(client.applyPlatform(platform('acme'))).rejects.toThrow(/namespace is required/);
+    expect(calls.createNamespacedCustomObject).toBeUndefined();
   });
 
   it('rejects when the caller-supplied signal is already aborted', async () => {

@@ -41,10 +41,22 @@ const modelScopingPolicyName = "bedrock-model-scoping"
 // bedrock:GetGuardrail — those authorize against guardrail ARNs, which are
 // never in the allowed-model set and must not become collateral of the
 // NotResource deny.
+// modelInvokeActions is the set the scoping policy denies outside the tenant's
+// declared models. It must cover every action the baseline's grant reaches, or
+// the uncovered one is an unscoped path to any model: the baseline grants
+// bedrock:InvokeModel*, and a Deny that names fewer actions than the Allow
+// leaves the difference governed by the Allow alone.
+//
+// InvokeModelWithBidirectionalStream is the action that makes the wildcard
+// matter. It is matched by InvokeModel* and reaches the same models as
+// InvokeModel, so omitting it here scoped four actions and left a fifth open —
+// silently, because a policy that denies four of five actions is not
+// distinguishable from a correct one by reading either document alone.
 var modelInvokeActions = []string{
 	"bedrock:Converse",
 	"bedrock:ConverseStream",
 	"bedrock:InvokeModel",
+	"bedrock:InvokeModelWithBidirectionalStream",
 	"bedrock:InvokeModelWithResponseStream",
 }
 
@@ -260,7 +272,7 @@ func modelScopingPolicyDoc(resources []string) (string, error) {
 	}
 	b, err := json.Marshal(policyDocument{Version: "2012-10-17", Statement: []policyStatement{stmt}})
 	if err != nil {
-		return "", fmt.Errorf("marshal model scoping policy: %w", err)
+		return "", fmt.Errorf("marshal model scoping policy: %w", err) //coverage:ignore json.Marshal of a policyDocument of string fields cannot fail
 	}
 	return string(b), nil
 }
@@ -281,7 +293,7 @@ func (r *PlatformReconciler) ensureModelScopingPolicy(ctx context.Context, roleN
 	}
 	desired, err := modelScopingPolicyDoc(resources)
 	if err != nil {
-		return err
+		return err //coverage:ignore only reachable if json.Marshal fails, which it cannot for this document
 	}
 
 	getOut, getErr := r.IAM.GetRolePolicy(ctx, &iam.GetRolePolicyInput{

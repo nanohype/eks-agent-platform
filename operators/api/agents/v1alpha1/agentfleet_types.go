@@ -111,7 +111,12 @@ type AgentFleetStatus struct {
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
-	// ReadyAgents counts agents whose downstream Deployment is ready.
+	// ReadyAgents counts agents whose Deployment reports at least one ready
+	// replica, read back from the cluster on each reconcile — not the number of
+	// agents declared in spec. The distinction is the whole value of the field:
+	// a fleet whose every pod is in CrashLoopBackOff has as many declared agents
+	// as a healthy one, so a declared count answers a question nobody asked and
+	// reads as health on the dashboard that exists to catch the failure.
 	// +optional
 	ReadyAgents int32 `json:"readyAgents,omitempty"`
 

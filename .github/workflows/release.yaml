@@ -14,6 +14,15 @@ name: release
 # `scripts/check-image-refs.py`, a required check: a PR that points the chart at
 # an unpublished image cannot merge. Tag the code, then point the chart at what
 # exists.
+# A release publishes immutable, signed artifacts, so a run in flight is never
+# cancelled: interrupting between `cosign sign` and `cosign attest` leaves a
+# signed image carrying no attestation, which the admission policy rejects while
+# the tag looks published. Grouping by ref lets independent component tags run
+# together and makes a re-run of one tag queue behind itself.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
     tags:
@@ -23,10 +32,12 @@ on:
       - "charts-v*"
       - "sdk-v*"
 
+# Least privilege at the workflow level; each job below grants itself only what
+# it needs. A workflow-level grant applies to every job including the ones that
+# only read, so a compromised step in the planning job would hold the same
+# package-write and OIDC token as the publishing ones.
 permissions:
-  contents: write
-  packages: write
-  id-token: write
+  contents: read
 
 jobs:
   plan:
@@ -37,6 +48,8 @@ jobs:
       eval_runner: ${{ steps.plan.outputs.eval_runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: derive
         id: plan
         run: |
@@ -59,18 +72,54 @@ jobs:
     needs: plan
     if: needs.plan.outputs.operator != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push this component's image to ghcr.io under this repository
+      id-token: write   # cosign keyless signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # cache: false on every release build. The cache is writable by any
+      # workflow on the repository, including one running from a pull request,
+      # so a poisoned entry restored here would be baked into a signed artifact
+      # and attested as if it came from this commit. A release runs rarely; the
+      # cache buys a minute and costs the thing the signature is supposed to
+      # mean.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
+          cache: false
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${{ needs.plan.outputs.operator }}" >> "$GITHUB_OUTPUT"
+        # An EMPTY version is not rejected downstream — it is a valid instruction.
+        # `ghcr.io/owner/repo/operator:` is a reference with no tag, which a
+        # registry resolves rather than refuses, so the job would build, sign and
+        # publish against something nobody proposed and report success.
+        #
+        # Asserted with a shell conditional rather than an external tool: a guard
+        # that asks its question through a binary is deleted by the absence of
+        # that binary. On refusal NOTHING is written to the output, so no later
+        # step has a bad value to misread.
+        env:
+          RAW: "${{ needs.plan.outputs.operator }}"
+        run: |
+          if [ -z "$RAW" ]; then
+            echo "::error::derived an empty version from the plan job; refusing to tag an image with no tag"
+            exit 1
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        # Both values reach the shell as environment variables rather than
+        # through template expansion. github.actor is attacker-influenceable on
+        # a fork PR, and an expansion is substituted into the script BEFORE the
+        # shell parses it, so a crafted value is code rather than an argument.
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: build + push (multi-arch)
@@ -86,34 +135,68 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
             ghcr.io/${{ github.repository }}/operator:latest
+      # `${{ }}` is substituted into the script TEXT before the shell sees it, so a
+      # tag containing shell metacharacters becomes part of the command. Binding
+      # it to an environment variable makes it a string value the shell expands,
+      # which no crafted tag can escape.
       - name: sign (keyless, OIDC)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
+          cosign sign --yes "$IMAGE"
       - name: sbom
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
         run: |
-          syft "ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
-          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
+          syft "$IMAGE" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson "$IMAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-operator-${{ steps.ver.outputs.version }}
           path: sbom.spdx.json
-      # Record the release as a tag when main triggered it, so `git tag` and the
-      # registry never disagree about what shipped. Written with GITHUB_TOKEN,
-      # which deliberately cannot re-trigger this workflow.
 
   sandbox-worker-image:
     name: build + sign sandbox worker image
     if: startsWith(github.ref, 'refs/tags/sandbox-worker-v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push this component's image to ghcr.io under this repository
+      id-token: write   # cosign keyless signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${GITHUB_REF#refs/tags/sandbox-worker-v}" >> "$GITHUB_OUTPUT"
+        # An EMPTY version is not rejected downstream — it is a valid instruction.
+        # `ghcr.io/owner/repo/operator:` is a reference with no tag, which a
+        # registry resolves rather than refuses, so the job would build, sign and
+        # publish against something nobody proposed and report success.
+        #
+        # Asserted with a shell conditional rather than an external tool: a guard
+        # that asks its question through a binary is deleted by the absence of
+        # that binary. On refusal NOTHING is written to the output, so no later
+        # step has a bad value to misread.
+        env:
+          RAW: "${GITHUB_REF#refs/tags/sandbox-worker-v}"
+        run: |
+          if [ -z "$RAW" ]; then
+            echo "::error::derived an empty version from the sandbox-worker tag; refusing to tag an image with no tag"
+            exit 1
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        # Both values reach the shell as environment variables rather than
+        # through template expansion. github.actor is attacker-influenceable on
+        # a fork PR, and an expansion is substituted into the script BEFORE the
+        # shell parses it, so a crafted value is code rather than an argument.
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: build + push (multi-arch)
@@ -128,12 +211,16 @@ jobs:
             ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
             ghcr.io/${{ github.repository }}/sandbox-worker:latest
       - name: sign (keyless, OIDC)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
+          cosign sign --yes "$IMAGE"
       - name: sbom
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
         run: |
-          syft "ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
-          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
+          syft "$IMAGE" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson "$IMAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-sandbox-worker-${{ steps.ver.outputs.version }}
@@ -144,15 +231,44 @@ jobs:
     needs: plan
     if: needs.plan.outputs.eval_runner != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push this component's image to ghcr.io under this repository
+      id-token: write   # cosign keyless signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: derive version
         id: ver
-        run: echo "version=${{ needs.plan.outputs.eval_runner }}" >> "$GITHUB_OUTPUT"
+        # An EMPTY version is not rejected downstream — it is a valid instruction.
+        # `ghcr.io/owner/repo/eval-runner:` is a reference with no tag, which a
+        # registry resolves rather than refuses, so the job would build, sign and
+        # publish against something nobody proposed and report success.
+        #
+        # Asserted with a shell conditional rather than an external tool: a guard
+        # that asks its question through a binary is deleted by the absence of
+        # that binary. On refusal NOTHING is written to the output, so no later
+        # step has a bad value to misread.
+        env:
+          RAW: "${{ needs.plan.outputs.eval_runner }}"
+        run: |
+          if [ -z "$RAW" ]; then
+            echo "::error::derived an empty version from the plan job; refusing to tag an image with no tag"
+            exit 1
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
       - name: docker login (ghcr.io)
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        # Both values reach the shell as environment variables rather than
+        # through template expansion. github.actor is attacker-influenceable on
+        # a fork PR, and an expansion is substituted into the script BEFORE the
+        # shell parses it, so a crafted value is code rather than an argument.
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: build + push (multi-arch)
@@ -170,29 +286,44 @@ jobs:
             ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
             ghcr.io/${{ github.repository }}/eval-runner:latest
       - name: sign (keyless, OIDC)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
+          cosign sign --yes "$IMAGE"
       - name: sbom
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
         run: |
-          syft "ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}" -o spdx-json > sbom.spdx.json
-          cosign attest --yes --predicate sbom.spdx.json --type spdxjson ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
+          syft "$IMAGE" -o spdx-json > sbom.spdx.json
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson "$IMAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-eval-runner-${{ steps.ver.outputs.version }}
           path: sbom.spdx.json
-      # Record the release as a tag when main triggered it, so `git tag` and the
-      # registry never disagree about what shipped. Written with GITHUB_TOKEN,
-      # which deliberately cannot re-trigger this workflow.
 
   charts-oci:
     name: package + push charts to OCI
     if: startsWith(github.ref, 'refs/tags/charts-v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push this component's image to ghcr.io under this repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - name: login
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GHCR_USER" --password-stdin
       - name: package + push
         env:
           REGISTRY: oci://ghcr.io/${{ github.repository }}/charts
@@ -302,13 +433,28 @@ jobs:
     name: publish @eks-agent/* to npm
     if: startsWith(github.ref, 'refs/tags/sdk-v')
     runs-on: ubuntu-latest
+    # NPM_TOKEN is a long-lived credential that can publish under the org scope,
+    # and a job holding it needs an approval surface that a repository secret
+    # does not have. Naming an environment is what makes required reviewers,
+    # wait timers and branch restrictions applicable to this publish at all —
+    # without one, any workflow change reaching this job publishes immediately.
+    environment: npm-publish
+    permissions:
+      contents: write   # changeset publish writes git tags beside the npm publish
+      id-token: write   # npm provenance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          run_install: false
+      # No dependency cache on the publishing path — see the note on setup-go
+      # above. The npm publish carries provenance, so what it attests has to be
+      # a function of the commit rather than of a cache any workflow can write.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version-file: package.json
-          cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
       - run: pnpm build

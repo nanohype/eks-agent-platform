@@ -73,6 +73,11 @@ type fakeIAM struct {
 	deleteInlineReturnsErr map[string]error
 	// putInlineReturnsErr injects a PutRolePolicy error keyed by policy name.
 	putInlineReturnsErr map[string]error
+	// inlinePageSize, when > 0, paginates ListRolePolicies at that size so a
+	// test can drive the marker-following branch of deleteInlinePolicies. A
+	// loop that ignores the marker deletes only the first page, which on the
+	// finalizer path leaves grants on a role whose Platform is gone.
+	inlinePageSize int
 }
 
 func newFakeIAM() *fakeIAM {
@@ -237,7 +242,30 @@ func (f *fakeIAM) ListRolePolicies(_ context.Context, params *iam.ListRolePolici
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	return &iam.ListRolePoliciesOutput{PolicyNames: names}, nil
+	if f.inlinePageSize <= 0 || len(names) <= f.inlinePageSize {
+		return &iam.ListRolePoliciesOutput{PolicyNames: names}, nil
+	}
+	// Resume from the caller's marker, which the real API sets to the last name
+	// it returned.
+	start := 0
+	if m := aws.ToString(params.Marker); m != "" {
+		for i, n := range names {
+			if n == m {
+				start = i + 1
+				break
+			}
+		}
+	}
+	end := start + f.inlinePageSize
+	if end >= len(names) {
+		return &iam.ListRolePoliciesOutput{PolicyNames: names[start:]}, nil
+	}
+	page := names[start:end]
+	return &iam.ListRolePoliciesOutput{
+		PolicyNames: page,
+		IsTruncated: true,
+		Marker:      aws.String(page[len(page)-1]),
+	}, nil
 }
 
 func (f *fakeIAM) ListAttachedRolePolicies(_ context.Context, params *iam.ListAttachedRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {

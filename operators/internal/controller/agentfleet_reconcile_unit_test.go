@@ -114,7 +114,12 @@ func TestReconcileFleetSelf(t *testing.T) {
 		}
 	})
 
-	t.Run("ready platform renders the fleet", func(t *testing.T) {
+	// readyAgents is an OBSERVATION, so these two cases differ only in what the
+	// cluster reports back about the workload — the fleet spec is identical.
+	// Applying a Deployment is not the same as an agent serving, and a count
+	// that cannot tell them apart reports a crashlooping fleet as healthy.
+
+	t.Run("ready platform renders the fleet but counts no unready agent", func(t *testing.T) {
 		p := readyPlatformIn()
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, publishedGateway(p, "chat")).Build()
 		r := &AgentFleetReconciler{Client: cl, Scheme: s}
@@ -122,13 +127,42 @@ func TestReconcileFleetSelf(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reconcileFleetSelf (ready): %v", err)
 		}
-		if res.phase != phaseReady || res.readyAgents != 1 {
-			t.Errorf("ready fleet: got (%q, %d) want (Ready, 1)", res.phase, res.readyAgents)
+		// The Deployment exists — reconcile applied it — and reports no ready
+		// replica, which is what a fleet rolled onto a broken image looks like.
+		if res.phase != phaseReady || res.readyAgents != 0 {
+			t.Errorf("fleet with no ready replica: got (%q, %d) want (Ready, 0)", res.phase, res.readyAgents)
 		}
 		// The host containment NetworkPolicy landed on the host.
 		var np networkingv1.NetworkPolicy
 		if err := cl.Get(context.Background(), types.NamespacedName{Name: "fleet-squad", Namespace: PlatformNamespace(p)}, &np); err != nil {
 			t.Errorf("fleet NetworkPolicy not created on the host: %v", err)
+		}
+	})
+
+	t.Run("an agent whose Deployment reports a ready replica is counted", func(t *testing.T) {
+		p := readyPlatformIn()
+		fleet := agentFleet()
+		// Seed the Deployment the reconcile will find, already reporting ready.
+		// CreateOrUpdate keeps the status the fake client holds, so this is the
+		// same object reconcile converges on.
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      agentDeploymentName(fleet, fleet.Spec.Agents[0].Name),
+				Namespace: PlatformNamespace(p),
+			},
+			Status: appsv1.DeploymentStatus{ReadyReplicas: 1},
+		}
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithObjects(p, publishedGateway(p, "chat"), dep).
+			WithStatusSubresource(dep).
+			Build()
+		r := &AgentFleetReconciler{Client: cl, Scheme: s}
+		res, err := r.reconcileFleetSelf(context.Background(), fleet)
+		if err != nil {
+			t.Fatalf("reconcileFleetSelf (ready replica): %v", err)
+		}
+		if res.phase != phaseReady || res.readyAgents != 1 {
+			t.Errorf("fleet with one ready replica: got (%q, %d) want (Ready, 1)", res.phase, res.readyAgents)
 		}
 	})
 }

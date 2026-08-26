@@ -17,7 +17,7 @@ type: application
 # model_defaults.json does not declare; every persona there is the anthropic
 # family. Choosing a persona is the chart's one mandatory configuration step,
 # so that list is the input to the only decision it demands.
-version: 0.5.2
+version: 0.5.3
 appVersion: "0.1.0"
 maintainers:
   - name: stxkxs

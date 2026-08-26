@@ -58,6 +58,48 @@ type AgentSandboxSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+
+	// WritablePaths are additional absolute paths the session container may
+	// write, mounted as emptyDir alongside /workspace and /tmp.
+	//
+	// The session runs with a read-only root filesystem, and the only paths this
+	// operator can name for an arbitrary image are the two it already mounts:
+	// /workspace, which is this CRD's own contract, and /tmp, which every
+	// runtime expects. Everything else is a fact about the image — where its
+	// user's HOME is, where its toolchain caches — and the image is yours.
+	//
+	// Declare what your entrypoint writes. Getting this wrong surfaces as the
+	// container failing on a read-only filesystem at the moment it tries, which
+	// is inside a tool call rather than at startup, so it is worth checking
+	// against the image rather than discovering.
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:items:MaxLength=256
+	// +kubebuilder:validation:items:Pattern=`^/[A-Za-z0-9._/-]*$`
+	// +optional
+	WritablePaths []string `json:"writablePaths,omitempty"`
+
+	// ActiveDeadlineSeconds is the wall-clock ceiling on one session, measured
+	// from the moment the pod starts.
+	//
+	// It is what makes TTLSecondsAfterFinished reachable. That TTL counts from a
+	// TERMINAL phase, so it collects a session that ended and says nothing about
+	// one that never does: a hung agent — a tool call waiting on a socket
+	// nothing will answer, a model call with no deadline of its own — leaves a
+	// pod holding its node slot and its tenant credentials indefinitely, polled
+	// every reconcile forever, with the garbage collector waiting on a phase
+	// that will not arrive.
+	//
+	// Kubernetes enforces this one itself and marks the pod Failed on expiry,
+	// which IS the terminal phase, so the existing TTL then collects it. The two
+	// fields are one mechanism: this bounds the session, that bounds the corpse.
+	//
+	// Default 4h — comfortably past any legitimate agent session and far short
+	// of a pod nobody notices for a week. Set 0 to disable, which is a decision
+	// about a specific workload rather than the shape a sandbox ships with.
+	// +kubebuilder:default=14400
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ActiveDeadlineSeconds *int32 `json:"activeDeadlineSeconds,omitempty"`
 }
 
 // AgentSandboxStatus reports the sandbox's reconciled state.

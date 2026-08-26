@@ -106,6 +106,7 @@ var (
 	datastoreNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,16}[a-z0-9])?$`)
 	secretNameRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9/_+=.@-]*$`)
 	attributeNameRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,255}$`)
+	operatorRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9._%+-]*@[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$`)
 )
 
 var datastoreKinds = []platformv1alpha1.DatastoreKind{
@@ -209,6 +210,14 @@ func ParseVocabulary(platformName string, flags VocabularyFlags) (PlatformVocabu
 		// byte-match the operator's own RBAC subject name.
 		if op != strings.ToLower(op) {
 			return out, fmt.Errorf("attribution operator %q must be lowercase: the same string binds the AWS and Kubernetes audit records, so it has to byte-match the operator's RBAC subject name", op)
+		}
+		// The shape matters beyond casing: the resourceNames entry names a
+		// principal the tenant ServiceAccount may impersonate, and Kubernetes'
+		// own privileged principals are colon-prefixed, so admission refuses
+		// anything outside the email character class. Rejecting here means the
+		// scaffolder does not emit a Platform the apiserver will turn away.
+		if !operatorRe.MatchString(op) {
+			return out, fmt.Errorf("attribution operator %q is not a lowercase email address: the value becomes a resourceNames entry on an impersonate ClusterRole, so admission refuses anything that could name a built-in system: principal", op)
 		}
 		out.AttributionOperators = append(out.AttributionOperators, op)
 	}

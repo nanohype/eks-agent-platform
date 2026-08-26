@@ -1,0 +1,14 @@
+# Per-environment delta for the staging deployment of a tenant Platform.
+#
+# Empty is a legitimate delta and the file is required anyway
+# (platform-tenant-contract do_not: "Do NOT skip per-env
+# values-{dev,staging,production}.yaml — every chart has three deltas even if
+# some are empty"). Three files that always exist mean a deploy path can name
+# one unconditionally; a file that exists only when it has content makes every
+# consumer branch on its absence, and the branch nobody wrote is the one that
+# silently deploys base values into production.
+#
+# What belongs here: the values that genuinely differ per environment. What does
+# NOT belong here is an AWS account id, a region, or a KMS key ARN — the same
+# contract forbids hardcoding those in chart values, because per-env values
+# plumb them from landing-zone outputs at deploy time.

@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: ./scripts/no-placeholders.sh
 
   doc-contracts:
@@ -26,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: ./scripts/check-doc-contracts.sh
 
   # An SSM parameter is a contract between two things that never reference each
@@ -36,7 +40,188 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: ./scripts/check-ssm-contract.py
+
+  # A pin Renovate cannot see does not announce that it has aged — it quietly
+  # stops being current, and the pins that age worst are the security tools,
+  # where a stale scanner reports a clean tree indistinguishably from a clean
+  # tree. This asserts the classification rather than describing it: a comment
+  # listing which files carry versions goes stale the first time someone adds
+  # one, and nothing fails.
+  version-pins:
+    name: every version pin is Renovate-managed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-version-pins.py --self-test
+      - run: ./scripts/check-version-pins.py --list
+
+  # The contract lists three per-env deltas among the tenant chart's required
+  # artifacts and says empty is still required. Three files that always exist
+  # mean a deploy path can name one unconditionally; a file that exists only
+  # when it has content makes every consumer branch on its absence, and the
+  # branch nobody wrote deploys base values into production silently.
+  tenant-chart-artifacts:
+    name: tenant chart ships its required artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-tenant-chart-artifacts.py --list
+
+  # A comment claiming to mirror a standard is a claim nothing keeps true. This
+  # one had drifted a full generation before anything compared the two.
+  model-tiers:
+    name: model tiers match the org LLM policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: resolve the standards catalog
+        run: |
+          git clone --depth 1 https://github.com/nanohype/nanohype.git /tmp/nanohype
+          echo "NANOHYPE_STANDARDS_DIR=/tmp/nanohype/standards" >> "$GITHUB_ENV"
+      - run: ./scripts/check-model-tiers.py --list
+
+  # shellcheck parses; it does not run. A static parser cannot know which bash a
+  # reader has, so a runtime-version incompatibility is invisible to it — which
+  # is how `declare -A` reached the local-kx installer, aborting it on every
+  # macOS before a single prerequisite was checked.
+  shell-portability:
+    name: shell scripts run on the bash macOS ships
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: shell portability self-test
+        env:
+          # ubuntu-latest ships bash 5 and no 3.2, so the EXECUTION half of the
+          # self-test cannot run here. It is opted out EXPLICITLY rather than
+          # skipped silently: the step prints PARTIAL naming what it did not do,
+          # and the pattern half — every rule against its construct and against
+          # the 3.2-valid neighbour it is confusable with — still gates. The
+          # execution half runs on any machine that has a 3.2, which is where
+          # this table's claims about that shell were measured.
+          SHELL_SELFTEST_ALLOW_PARTIAL: "1"
+        run: ./scripts/check-shell-portability.py --self-test
+      - run: ./scripts/check-shell-portability.py --list
+
+  # Prose that names a path is a claim about the world, and the most checkable
+  # one documentation makes. A file moves, the reference does not, and nothing
+  # fails — the reader following it is the failure detector, which in a runbook
+  # means during an incident.
+  workflow-permissions:
+    name: no workflow-level write permission
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-workflow-permissions.py --list
+
+  merge-gate-reachable:
+    name: every pull-request job blocks the merge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-merge-gate.py --list
+
+  empty-tree:
+    name: no gate passes on a tree with no repo content
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-empty-tree.py --list
+
+  named-paths:
+    name: every path named in prose resolves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-named-paths.py --list
+
+  # Positive controls. A gate that has only been READ is a gate being trusted:
+  # this repo shipped a parity gate that matched over raw source, so a
+  # commented-out declaration above the live one won the search and the gate
+  # reported the comment's members. It read correctly and it was blind.
+  #
+  # Each control makes the exact edit its gate exists to catch and requires a
+  # non-zero exit — after asserting the gate passes CLEAN first (otherwise the
+  # failure proves nothing) and after asserting the fixture actually CHANGED (a
+  # mutation that silently no-ops hands the gate an unmodified file, and its
+  # correct pass gets recorded as proof the control worked).
+  #
+  # A gate with no control fails this job, so the suite cannot quietly shrink.
+  controls:
+    name: every gate rejects its own violation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # check-chart-version-bump compares against the base ref.
+          fetch-depth: 0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
+      # This job runs EVERY gate for real, so it needs every binary any gate
+      # asserts a precondition on — not only the ones its own name suggests.
+      # check-vcluster-chart resolves the operator constants with go.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: operators/go.mod
+          cache-dependency-path: operators/go.sum
+      - run: pip install pyyaml
+      - run: ./scripts/check-controls.py --list
+
+  # A gate over the gates. A check that cannot fail is worse than no check,
+  # because the success it reports is what everything downstream reads — and
+  # this repo's evidence that a dimension holds is largely "a gate covers it".
+  # Runs its own self-test first, since a meta-gate that cannot fail is the same
+  # defect one level up.
+  gates:
+    name: every gate can reject
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-gates.py --self-test
+      - run: ./scripts/check-gates.py --list
+
+  # Three declarations of one closed set, in two languages, with a JSON boundary
+  # between them and no type system spanning it. A value the TypeScript side is
+  # missing is not a compile error anywhere — the runner takes its other branch
+  # and posts the wrong body at a gateway that reports healthy.
+  route-api-parity:
+    name: RouteAPI agrees across its declarations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-route-api-parity.py --list
 
   # A gate on a mutable field has to subscribe to the event that mutates it, or
   # it reports on a version of the PR that no longer exists.
@@ -45,6 +230,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: pip install pyyaml
       - run: ./scripts/check-workflow-triggers.py --list
 
@@ -56,6 +243,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: ./scripts/check-leaf-input-parity.py --self-test
       - run: ./scripts/check-leaf-input-parity.py --list
 
@@ -64,9 +253,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: "1.11.0"
+          tofu_version: "1.12.6"
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -79,7 +270,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: tofu fmt -check -recursive terraform/
       - run: pnpm format:check
-      - run: cd operators && test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      # `test -z "$(gofmt -l .)"` passes when gofmt is ABSENT, because the
+      # substitution is then empty and the emptiness is what was being tested.
+      # An absent tool deleted the guard rather than tripping it. Presence is
+      # asserted first, and the file list is captured once so the verdict and
+      # the report cannot disagree.
+      - name: gofmt
+        run: |
+          cd operators
+          command -v gofmt >/dev/null || {
+            echo "gofmt is not on PATH; nothing was checked."
+            exit 3
+          }
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt: every file is formatted"
       # The three formatters above each own a language: tofu fmt for Terraform,
       # biome for TS and JSON, gofmt for Go. .editorconfig declares charset, LF
       # endings, a final newline and no trailing whitespace for *every* file, and
@@ -96,9 +304,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: "1.11.0"
+          tofu_version: "1.12.6"
       - name: validate every component
         run: |
           for d in terraform/components/*/; do
@@ -236,6 +446,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: pip install pyyaml
       - run: ./scripts/check-chart-rbac.py
 
@@ -257,7 +469,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
@@ -278,7 +498,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-crd-instantiation.py
 
@@ -293,6 +521,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: ./scripts/check-project-resources.py
 
   # ── chart args parity ────────────────────────────────────────────────────
@@ -308,6 +538,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - run: ./scripts/check-chart-args.py
 
   # ── Chart version bump gate ──────────────────────────────────────────────
@@ -330,12 +562,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # The comparison needs the merge base. Without full history there is no
           # left-hand side, and the gate refuses to run rather than pass vacuously.
           fetch-depth: 0
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: ./scripts/check-chart-version-bump.py --self-test
-      - run: ./scripts/check-chart-version-bump.py --base origin/${{ github.base_ref || 'main' }}
+      # base_ref is a ref name the PR author does not control, but it is still a
+      # template expansion landing inside a command line; passing it through the
+      # environment keeps the script's argv a function of the variable rather
+      # than of the substitution.
+      - env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: ./scripts/check-chart-version-bump.py --base "origin/$BASE_REF"
 
   # ── eval workflow gate ───────────────────────────────────────────────────
   # The eval pipeline was dead twice over, and both failures were invisible to
@@ -355,7 +600,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-eval-workflow.py
 
@@ -385,6 +638,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
       - run: pip install pyyaml
       - run: ./scripts/check-runtime-contract.py --list
@@ -407,11 +661,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-vcluster-chart.py
 
@@ -424,21 +686,33 @@ jobs:
   # what makes tag-only releases safe. release.yaml builds on tags only, so
   # nothing downstream repairs a chart that points at an unpublished image; this
   # is the thing that stops one merging.
+  # Enumeration only — the half that is a fact about THIS commit. Whether a
+  # registry can serve the reference is a fact about the world, and a merge that
+  # fails because GHCR had an outage teaches people to bypass the gate rather
+  # than to fix anything. That half moved to chart-drift.yaml's schedule.
   image-refs:
-    name: every image the chart names is published
+    name: image references are internally consistent
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: docker login (ghcr.io)
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - run: ./scripts/check-image-refs.py --list
+        with:
+          persist-credentials: false
+      - run: ./scripts/check-image-refs.py --offline --list
 
   helm:
     name: helm lint + template
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: |
           for d in charts/*/; do
             name=$(basename "$d")
@@ -476,6 +750,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -491,8 +767,12 @@ jobs:
     # Keep this job name stable — it is a required status check on main.
     name: go test (envtest)
     runs-on: ubuntu-latest
+    env:
+      GOLANGCI_VERSION: v2.12.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
@@ -508,9 +788,11 @@ jobs:
       # into a hard failure here — a runner that lost the binary must not report
       # a green suite that executed none of those cases.
       - name: install promtool
+        env:
+          PROMTOOL_VERSION: "3.14.0"
         run: |
           set -euo pipefail
-          ver=3.13.1
+          ver="${PROMTOOL_VERSION}"
           curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${ver}/prometheus-${ver}.linux-amd64.tar.gz" \
             | tar -xz -C /tmp
           sudo install -m 0755 "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
@@ -528,7 +810,7 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           working-directory: operators
-          version: v2.12.2
+          version: ${{ env.GOLANGCI_VERSION }}
           verify: false
 
   # ── Generated CRD reference drift gate ───────────────────────────────────
@@ -542,6 +824,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
@@ -560,6 +844,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -580,6 +866,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version-file: package.json
@@ -605,6 +893,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -618,6 +908,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
@@ -634,6 +926,17 @@ jobs:
         placeholders,
         doc-contracts,
         ssm-contract,
+        gates,
+        controls,
+        named-paths,
+        workflow-permissions,
+        merge-gate-reachable,
+        empty-tree,
+        shell-portability,
+        model-tiers,
+        tenant-chart-artifacts,
+        version-pins,
+        route-api-parity,
         workflow-triggers,
         leaf-input-parity,
         format,

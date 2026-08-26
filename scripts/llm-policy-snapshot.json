@@ -1,0 +1,9 @@
+{
+  "$comment": "A committed snapshot of the model tiers nanohype's llm-policy standard names. The catalog is the source of truth; this file exists because a gate that can only resolve the catalog on a developer's machine asserts nothing in CI, where it silently skips and reports success. Comparing the scaffolder against this file is what the commit controls. Comparing this file against the catalog is what the world controls, and scripts/check-model-tiers.py does that too whenever the catalog resolves \u2014 so the snapshot cannot drift unnoticed on any machine that has it.",
+  "sources": ["nanohype://standards/llm-policy"],
+  "models": {
+    "default": "us.anthropic.claude-sonnet-5",
+    "escalation": "us.anthropic.claude-opus-5",
+    "light": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  }
+}

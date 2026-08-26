@@ -54,10 +54,15 @@ WHAT IT DOES NOT COVER, DELIBERATELY
 
 from __future__ import annotations
 
+import argparse
+
 import pathlib
 import re
 import subprocess
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 
 try:
     import yaml
@@ -256,6 +261,8 @@ def check_shell(docs: list[dict]) -> bool:
 
 
 def main() -> int:
+    require_binary("helm", "render the chart holding the eval workflow")
+
     docs = render()
     results = [check_psa(docs), check_shell(docs)]
     if all(results):
@@ -265,5 +272,17 @@ def main() -> int:
     return 1
 
 
+
+# Argument parsing is strict on purpose: a gate that ignores argv cannot tell a
+# renamed flag from a correct one, so a CI step naming a mode this script does
+# not have would keep exiting 0. scripts/check-gates.py asserts this for every
+# gate here.
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    # This gate takes no arguments; argparse rejects anything passed.
+    return ap.parse_args()
+
+
 if __name__ == "__main__":
+    _parse_args()
     sys.exit(main())

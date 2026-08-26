@@ -14,6 +14,22 @@
 # Sibling to scripts/no-placeholders.sh — same "prose is a contract" idea.
 set -euo pipefail
 
+# The tools this gate reasons with, asserted before any of them is used.
+#
+# Without this, an absent grep makes `scanned` EMPTY rather than zero, so the
+# anti-vacuity floor below evaluates `[ "" -eq 0 ]`, which is an error and not a
+# true condition — the floor is skipped, the search finds nothing, and the gate
+# reports a clean tree it never read. A check against vacuity that is itself
+# deleted by a missing tool is the same defect one level up.
+#
+# 3, not 1: nothing was checked, which is a different fact from the tree failing.
+for _t in grep; do
+  command -v "$_t" >/dev/null 2>&1 || {
+    echo "$(basename "$0"): $_t is not on PATH; nothing was checked." >&2
+    exit 3
+  }
+done
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -259,6 +275,12 @@ elif [ "$collector_ns" != "$chart_ns" ]; then
   fail=1
 fi
 
+# THE OPPOSITE DIRECTION from the floors in no-placeholders.sh, and the reason
+# the default cannot be copied between them: here NON-zero is the failing value,
+# so an undetermined counter must default to non-zero. Defaulting it to 0 would
+# write the defect into the fix — 0 reads as "no findings", which is exactly what
+# a counter that was never set most resembles.
+fail=${fail:-1}
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

@@ -29,10 +29,16 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
+
 import json
 import re
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import EXIT_CANNOT_EVALUATE
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,7 +92,7 @@ def chart_images() -> list[tuple[str, str]]:
     app_version = scalar(chart_yaml, "appVersion")
     if not app_version:
         print("could not read appVersion from charts/operator/Chart.yaml", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
 
     # The operator's own image. `tag: ""` means "use appVersion" — the same
     # fallback templates/_helpers.tpl applies — so an appVersion bumped ahead
@@ -94,7 +100,7 @@ def chart_images() -> list[tuple[str, str]]:
     block = re.search(r"^image:\n((?:\s+.*\n)+)", values_yaml, re.M)
     if not block:
         print("could not find the top-level image: block in values.yaml", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     repo = scalar(block.group(1), "repository")
     tag = scalar(block.group(1), "tag") or app_version
     refs.append(("charts/operator/values.yaml (image, tag->appVersion)", f"{repo}:{tag}"))
@@ -137,7 +143,7 @@ def chart_images() -> list[tuple[str, str]]:
         print("could not find any ghcr.io image reference in operators/**.go — the",
               file=sys.stderr)
         print("Go source scan matched nothing, so it is asserting nothing.", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
 
     # Same ref in three workflow steps is one question for the registry.
     seen: dict[str, str] = {}
@@ -165,12 +171,21 @@ def resolves(ref: str) -> tuple[bool, str]:
     return False, first
 
 
-def main() -> int:
-    show = "--list" in sys.argv
+def main(args: argparse.Namespace) -> int:
+    show = args.list
     refs = chart_images()
     if not refs:
         print("no image references found — the collector is broken, not the chart", file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_EVALUATE
+
+    if args.offline:
+        # The commit-controlled half. chart_images() has already cross-checked
+        # the tree's own declarations against each other — appVersion against
+        # the pinned tag, the same ref across workflow steps — and raised on any
+        # disagreement. Reaching a registry is the part that is not about this
+        # commit, so it is skipped here and runs on the schedule instead.
+        print(f"✓ {len(refs)} image reference(s) enumerated and internally consistent (offline; registry not consulted)")
+        return 0
 
     failures: list[tuple[str, str, str]] = []
     known: list[tuple[str, str]] = []
@@ -223,5 +238,18 @@ def main() -> int:
     return 0
 
 
+
+# Argument parsing is strict on purpose: a gate that ignores argv cannot tell a
+# renamed flag from a correct one, so a CI step naming a mode this script does
+# not have would keep exiting 0. scripts/check-gates.py asserts this for every
+# gate here.
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--list', action='store_true', help='print every image reference examined, not only the failures')
+    ap.add_argument('--offline', action='store_true',
+                    help='enumerate and cross-check the references without asking a registry')
+    return ap.parse_args()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(_parse_args()))
