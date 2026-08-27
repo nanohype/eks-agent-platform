@@ -44,8 +44,14 @@ Usage: ./scripts/check-crd-instantiation.py
 
 from __future__ import annotations
 
+import argparse
+
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 from pathlib import Path
 
 try:
@@ -101,6 +107,8 @@ def render(values: Path) -> list[dict]:
 
 
 def main() -> int:
+    require_binary("helm", "render the chart this instantiates every CRD from")
+
     if not CRD_DIR.is_dir():
         print(f"FAIL  {CRD_DIR} does not exist")
         return 1
@@ -200,5 +208,17 @@ def main() -> int:
     return 0 if ok else 1
 
 
+
+# Argument parsing is strict on purpose: a gate that ignores argv cannot tell a
+# renamed flag from a correct one, so a CI step naming a mode this script does
+# not have would keep exiting 0. scripts/check-gates.py asserts this for every
+# gate here.
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    # This gate takes no arguments; argparse rejects anything passed.
+    return ap.parse_args()
+
+
 if __name__ == "__main__":
+    _parse_args()
     sys.exit(main())

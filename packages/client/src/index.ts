@@ -1,10 +1,11 @@
 import {
-  ModelGatewayResource,
-  PlatformResource,
+  AgentError,
   type ModelGatewayResource as ModelGateway,
+  ModelGatewayResource,
   type PlatformResource as Platform,
+  PlatformResource,
 } from '@eks-agent/core';
-import { KubeConfig, CustomObjectsApi } from '@kubernetes/client-node';
+import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
 
 export type { ResourceMeta } from '@eks-agent/core';
 export type { ModelGateway, Platform };
@@ -31,11 +32,21 @@ const LIST_PAGE_SIZE = 100;
  */
 export type CustomObjectsClient = Pick<
   CustomObjectsApi,
+  // Cluster-scoped: Tenant, plus the all-namespaces LIST of a namespaced kind,
+  // which genuinely is the cluster-scoped path.
   | 'listClusterCustomObject'
   | 'getClusterCustomObject'
   | 'createClusterCustomObject'
   | 'deleteClusterCustomObject'
+  // Namespaced: Platform and ModelGateway. Narrowing this Pick to the methods
+  // actually called is what keeps the fake in index.test.ts small — and it is
+  // also why a namespaced kind addressed through a cluster-scoped method
+  // typechecked: both names were in the set, and nothing here relates a method
+  // to the SCOPE of the kind it is used for.
   | 'listNamespacedCustomObject'
+  | 'getNamespacedCustomObject'
+  | 'createNamespacedCustomObject'
+  | 'deleteNamespacedCustomObject'
 >;
 
 export interface ClientOptions {
@@ -178,12 +189,28 @@ export class EksAgentClient {
     );
   }
 
-  async getPlatform(name: string, opts: CallOptions = {}): Promise<Platform> {
+  /**
+   * Platform is a NAMESPACED kind, so a single object is addressed by
+   * (namespace, name).
+   *
+   * Only Tenant is cluster-scoped (`scope: Cluster` in
+   * platform.nanohype.dev_tenants.yaml); Platform is `scope: Namespaced`,
+   * because BudgetPolicy, ModelGateway, AgentFleet and EvalSuite reference it by
+   * name and those references resolve within a namespace. Addressing it through
+   * the cluster-scoped path builds a URL with no namespace segment, which the
+   * API server answers 404 for however real the object is — a not-found that
+   * reads as a missing Platform rather than as a malformed request.
+   *
+   * listPlatforms is the exception below and is correct as it stands: listing a
+   * namespaced kind across all namespaces genuinely is the cluster-scoped path.
+   */
+  async getPlatform(namespace: string, name: string, opts: CallOptions = {}): Promise<Platform> {
     const signal = deadlineSignal(this.timeoutMs, opts.signal);
     const r: unknown = await abortable(
-      this.api.getClusterCustomObject({
+      this.api.getNamespacedCustomObject({
         group: GROUPS.platform,
         version: VERSION,
+        namespace,
         plural: 'platforms',
         name,
       }),
@@ -192,12 +219,26 @@ export class EksAgentClient {
     return PlatformResource.parse(r);
   }
 
+  /**
+   * The namespace comes from the object rather than a parameter: a Platform
+   * carries its own `metadata.namespace`, and taking a second one would let a
+   * caller post a body into a namespace it does not name.
+   */
   async applyPlatform(p: Platform, opts: CallOptions = {}): Promise<Platform> {
     const signal = deadlineSignal(this.timeoutMs, opts.signal);
+    const namespace = p.metadata?.namespace;
+    if (!namespace) {
+      throw new AgentError({
+        class: 'BadRequest',
+        message:
+          'Platform.metadata.namespace is required: Platform is a namespaced kind and the API server has no default to fall back on',
+      });
+    }
     const r: unknown = await abortable(
-      this.api.createClusterCustomObject({
+      this.api.createNamespacedCustomObject({
         group: GROUPS.platform,
         version: VERSION,
+        namespace,
         plural: 'platforms',
         body: p,
       }),
@@ -206,12 +247,13 @@ export class EksAgentClient {
     return PlatformResource.parse(r);
   }
 
-  async deletePlatform(name: string, opts: CallOptions = {}): Promise<void> {
+  async deletePlatform(namespace: string, name: string, opts: CallOptions = {}): Promise<void> {
     const signal = deadlineSignal(this.timeoutMs, opts.signal);
     await abortable(
-      this.api.deleteClusterCustomObject({
+      this.api.deleteNamespacedCustomObject({
         group: GROUPS.platform,
         version: VERSION,
+        namespace,
         plural: 'platforms',
         name,
       }),

@@ -166,7 +166,7 @@ podDisruptionBudget:
 # chart's init-charts, so the tenant's control+data plane live entirely within
 # the isolation boundary. The agents themselves need no init-chart: they are
 # plain Deployments, which every cluster already serves. ArgoCD is a hard prerequisite for
-# this tier (see docs/adr/0009-vcluster-isolation-tier.md); the namespace tier
+# this tier (see docs/adr/0008-vcluster-isolation-tier.md); the namespace tier
 # ignores this block entirely.
 vcluster:
   chart:

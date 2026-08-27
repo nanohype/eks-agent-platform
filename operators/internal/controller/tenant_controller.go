@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -70,6 +71,13 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	reading, err := r.aggregate(ctx, &tenant)
 	if err != nil {
 		logger.Error(err, "tenant aggregate failed; will retry on next tick")
+		// Without this the status keeps the last successful roll-up with no
+		// indication it is stale, and Aggregated=False cannot be told apart from
+		// a tenant that genuinely owns nothing. The persona dashboards read those
+		// fields directly.
+		if markErr := r.markAggregateUnreadable(ctx, &tenant, err); markErr != nil {
+			logger.Error(markErr, "could not record that the roll-up was unreadable")
+		}
 		return ctrl.Result{RequeueAfter: r.requeue()}, nil
 	}
 	if err := r.applyStatus(ctx, &tenant, reading); err != nil {
@@ -222,6 +230,38 @@ func (r *TenantReconciler) applyStatus(ctx context.Context, t *platformv1alpha1.
 		} else {
 			upsertCondition(&fresh.Status.Conditions, conditionTenantUnderBudget())
 		}
+		return r.Status().Update(ctx, &fresh)
+	})
+}
+
+// markAggregateUnreadable records that the roll-up could not be computed.
+//
+// It exists because Aggregated=False already had two meanings that a reader
+// cannot tell apart: a tenant genuinely owning no Platforms, and a tenant whose
+// list failed. Both left the same empty roll-up on status, and the persona
+// dashboards read exactly those fields. A distinct Reason is what separates
+// "nothing to report" from "could not look".
+//
+// The counts are deliberately NOT zeroed. Whatever the last successful tick
+// wrote is a better answer than zero — it is stale rather than wrong, and
+// LastReconciled says how stale. Writing zeros here would turn an unreadable
+// tenant into one that positively reports owning nothing.
+func (r *TenantReconciler) markAggregateUnreadable(ctx context.Context, t *platformv1alpha1.Tenant, cause error) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh platformv1alpha1.Tenant
+		if err := r.Get(ctx, types.NamespacedName{Name: t.Name}, &fresh); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		upsertCondition(&fresh.Status.Conditions, metav1.Condition{
+			Type:               "Aggregated",
+			Status:             metav1.ConditionFalse,
+			Reason:             "AggregateUnreadable",
+			Message:            fmt.Sprintf("could not roll up this tenant's Platforms, so the counts and spend below are from the last successful reconcile: %v", cause),
+			LastTransitionTime: metav1Now(),
+		})
 		return r.Status().Update(ctx, &fresh)
 	})
 }

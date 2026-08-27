@@ -105,7 +105,7 @@ func main() {
 	// vcluster hard-isolation tier config. The operator declares a per-Platform
 	// vcluster as an ArgoCD Application pinned to this chart version; the
 	// init-charts JSON bootstraps KEDA inside each vcluster. See
-	// docs/adr/0009-vcluster-isolation-tier.md.
+	// docs/adr/0008-vcluster-isolation-tier.md.
 	var vclusterChartRepo string
 	var vclusterChartVersion string
 	var vclusterInitChartsJSON string
@@ -139,7 +139,7 @@ func main() {
 	flag.IntVar(&tenantWorkers, "tenant-workers", 1, "MaxConcurrentReconciles for the Tenant reconciler.")
 	flag.DurationVar(&tenantRequeueInterval, "tenant-requeue-interval", 5*time.Minute, "How often the Tenant reconciler re-aggregates owned Platforms.")
 	flag.StringVar(&shimImage, "shim-image", os.Getenv("AGENTS_SHIM_IMAGE"), "Operator image used for the SandboxPool KEDA metrics bridge. Empty disables queue-depth autoscaling.")
-	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (dev/staging/production). Stamped on tenant resources as deployment.environment.")
+	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (development/staging/production). Stamped on every operator-created object as the platform.nanohype.dev/environment label, and on the pods it builds as the OTel deployment.environment resource attribute. Omitted from both when unset rather than emitted empty.")
 	flag.StringVar(&clusterName, "cluster-name", os.Getenv("AGENTS_CLUSTER_NAME"), "Full EKS cluster name this operator serves (e.g. dev-analytics). Keys the SSM-config subtree and prefixes every resource the operator mints, isolating co-located sibling clusters.")
 	flag.StringVar(&region, "region", os.Getenv("AGENTS_REGION"), "AWS region. Defaults to credential-chain region if empty.")
 	flag.StringVar(&costCenter, "cost-center", os.Getenv("AGENTS_COST_CENTER"), "Org cost-center tag stamped on tenant roles (resource-tagging standard).")
@@ -306,6 +306,7 @@ func main() {
 		Concurrency:   runtimeWorkers,
 		NetworkEngine: networkEngine,
 		Region:        region,
+		Environment:   environment,
 		VCluster:      vclusterFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "AgentFleet")
@@ -316,6 +317,7 @@ func main() {
 		Scheme:      mgr.GetScheme(),
 		Concurrency: sandboxWorkers,
 		ShimImage:   shimImage,
+		Environment: environment,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "SandboxPool")
 		os.Exit(1)
@@ -325,6 +327,7 @@ func main() {
 		Scheme:      mgr.GetScheme(),
 		Concurrency: agentSandboxWorkers,
 		VCluster:    vclusterFactory,
+		Environment: environment,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to register reconciler", "controller", "AgentSandbox")
 		os.Exit(1)

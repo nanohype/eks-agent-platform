@@ -1,0 +1,26 @@
+# zizmor configuration — workflow static analysis.
+#
+# The dependency surface of a repository is not only its manifests. A workflow
+# runs with this repository's credentials on every push, so its own defects are
+# supply-chain defects, and the audit that finds them belongs in CI beside the
+# dependency scanners rather than in a reviewer's head.
+#
+# Same posture as .trivyignore.yaml: no blanket suppressions. Every entry is
+# scoped to a rule and a location and carries the technical reason the finding
+# does not apply, so an entry that stops being true is an entry someone has to
+# argue for again.
+
+rules:
+  cache-poisoning:
+    ignore:
+      # setup-node is flagged in any workflow that publishes, because the action
+      # CAN restore a dependency cache into a build whose output gets signed or
+      # attested. This invocation passes no `cache:` input, so it restores
+      # nothing — the finding is about the action's capability rather than this
+      # configuration's behaviour. The sibling setup-go on the same publishing
+      # path carries `cache: false` explicitly for the same reason, where the
+      # input exists to say so.
+      #
+      # The load-bearing part is the absence of a `cache:` key on this step. Add
+      # one and this suppression stops describing the step it names.
+      - release.yaml

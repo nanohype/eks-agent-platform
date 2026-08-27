@@ -97,7 +97,7 @@ func vclusterClusterSecretName(p *platformv1alpha1.Platform) string {
 
 // buildVClusterValues renders the per-Platform vcluster.yaml the operator hands
 // to the vcluster chart through the Application's helm.valuesObject. It sets the
-// load-bearing bits ADR 0009 mandates:
+// load-bearing bits ADR 0008 mandates:
 //   - sync.toHost.serviceAccounts.enabled: true — so the tenant tenant-runtime SA
 //     materializes on the host under a syncer-generated name, the target of the
 //     Pod Identity association.
@@ -262,7 +262,7 @@ func (r *PlatformReconciler) ensureVClusterApplication(ctx context.Context, p *p
 	app.SetName(vclusterAppName(p))
 	app.SetNamespace(argoCDNamespace)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, app, func() error {
-		app.SetLabels(labelsForPlatform(p))
+		app.SetLabels(r.labelsForPlatform(p))
 		spec := map[string]interface{}{
 			"project": p.Name,
 			"source": map[string]interface{}{
@@ -314,7 +314,7 @@ func vclusterControlPlaneSelector() map[string]string {
 // and gains the apiserver. Runs on the host client.
 func (r *PlatformReconciler) ensureVClusterControlPlaneEgress(ctx context.Context, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
-	labels := labelsForPlatform(p)
+	labels := r.labelsForPlatform(p)
 	if r.NetworkEngine == NetworkEngineCilium {
 		cnp := &unstructured.Unstructured{}
 		cnp.SetGroupVersionKind(ciliumNetworkPolicyGVK)
@@ -469,7 +469,7 @@ func dnsNetworkPolicyPorts(udp, tcp *corev1.Protocol) []networkingv1.NetworkPoli
 // a dropped packet is not a refused one.
 func (r *PlatformReconciler) ensureVClusterAPIAccess(ctx context.Context, p *platformv1alpha1.Platform) error {
 	ns := PlatformNamespace(p)
-	labels := labelsForPlatform(p)
+	labels := r.labelsForPlatform(p)
 
 	if r.NetworkEngine == NetworkEngineCilium {
 		cnp := &unstructured.Unstructured{}
@@ -548,7 +548,7 @@ func (r *PlatformReconciler) ensureVClusterInternalBootstrap(ctx context.Context
 		if ns.Labels == nil {
 			ns.Labels = map[string]string{}
 		}
-		for k, v := range labelsForPlatform(p) {
+		for k, v := range r.labelsForPlatform(p) {
 			ns.Labels[k] = v
 		}
 		return nil
@@ -644,7 +644,7 @@ func (r *PlatformReconciler) ensureVClusterClusterSecret(ctx context.Context, p 
 		Namespace: argoCDNamespace,
 	}}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		labels := labelsForPlatform(p)
+		labels := r.labelsForPlatform(p)
 		labels["argocd.argoproj.io/secret-type"] = "cluster"
 		secret.Labels = labels
 		secret.Type = corev1.SecretTypeOpaque
@@ -807,7 +807,7 @@ func (r *PlatformReconciler) reconcileVClusterTier(ctx context.Context, p *platf
 }
 
 // cleanupVClusterResources tears down a vcluster-tier Platform in the reverse of
-// provisioning, finalizer-gated (ADR 0009 teardown order):
+// provisioning, finalizer-gated (ADR 0008 teardown order):
 //  1. delete tenant app Applications targeting the vcluster,
 //  2. delete the ArgoCD cluster-Secret registration,
 //  3. delete the vcluster Application (ArgoCD uninstalls the release),

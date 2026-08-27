@@ -8,10 +8,9 @@
 | [0004](./0004-suspension-via-iam-tag.md)      | Kill-switch suspension propagated via IAM tag, not EventBridge→k8s bridge                                        | Accepted               |
 | [0005](./0005-cost-publisher-lambda.md)       | In-flight Bedrock cost via Lambda republisher, not direct CloudWatch metric filter                               | Accepted               |
 | [0006](./0006-keda-pod-identity.md)           | KEDA aws-sqs-queue uses pod-identity, not KEDA operator IRSA                                                     | Accepted               |
-| [0007](./0007-eval-runtime-kustomize.md)      | eval-runtime WorkflowTemplate ships via kustomize, not the operator chart                                        | Superseded by ADR-0008 |
-| [0008](./0008-eval-runtime-operator-chart.md) | eval-runtime + operator SLO ship in the operator chart, not a gitops overlay                                     | Accepted               |
-| [0009](./0009-vcluster-isolation-tier.md)     | vcluster hard-isolation tier: reconcile model, synced-SA Pod Identity, ArgoCD destination, containment, teardown | Accepted               |
-| [0010](./0010-slo-hold-single-writer.md)      | Burn-rate rollout hold: one evaluator for the objective, one writer for the AppProject                           | Accepted               |
+| [0007](./0007-eval-runtime-operator-chart.md) | The eval-runtime ships in the operator chart, not a gitops overlay                                               | Accepted               |
+| [0008](./0008-vcluster-isolation-tier.md)     | vcluster hard-isolation tier: reconcile model, synced-SA Pod Identity, ArgoCD destination, containment, teardown | Accepted               |
+| [0009](./0009-slo-hold-single-writer.md)      | Burn-rate rollout hold: one evaluator for the objective, one writer for the AppProject                           | Accepted               |
 
 ## Template
 
@@ -21,7 +20,7 @@ Each ADR follows the shape:
 # ADR <number> — <decision title>
 
 ## Status
-Accepted | Superseded by ADR-N | Rejected (YYYY-MM-DD).
+Accepted | Rejected (YYYY-MM-DD).
 
 ## Context
 The problem + the forces in play.
@@ -42,4 +41,7 @@ What we rejected and why.
 Implementation pointers + related docs + other ADRs.
 ```
 
-New ADRs land at the next sequential number. Don't reuse numbers when ADRs get superseded — mark the old one with "Superseded by ADR-N" and write the new ADR fresh.
+New ADRs land at the next sequential number. Every ADR here describes a decision the
+repository currently implements, so there is no superseded state to record: an ADR whose
+mechanism the repo no longer uses is rewritten to describe the one it does, or removed and
+the remaining numbers closed up so the sequence has no gaps.

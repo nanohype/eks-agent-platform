@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// vcluster hard-isolation tier constants. See docs/adr/0009-vcluster-isolation-tier.md.
+// vcluster hard-isolation tier constants. See docs/adr/0008-vcluster-isolation-tier.md.
 const (
 	// isolationVCluster is the Platform.spec.isolation value that layers a
 	// per-Platform virtual cluster on top of the host-side tenant provisioning.

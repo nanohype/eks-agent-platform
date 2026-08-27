@@ -4,7 +4,7 @@
 
 1. Branch from `main` with a conventional prefix: `feat/`, `fix/`, `chore/`, `docs/`, `refactor/`, `test/`.
 2. Run `task ci` locally before pushing. CI must pass.
-3. Conventional commits enforced via commitlint. Use the structured commit-message format from `~/.claude/CLAUDE.md` (section headers, file-level detail, scaled verbosity).
+3. Conventional commits enforced via commitlint. Write the body as structured documentation: section headers for large changes, file-level detail where it matters, verbosity scaled to scope.
 4. Open a PR. Reviews are required for changes under `operators/api/`, `charts/`, `terraform/components/`.
 
 ## Local prereqs
@@ -25,16 +25,16 @@
 
 ## Layout
 
-See [README.md](./README.md#what-you-get) and [ARCHITECTURE.md](./ARCHITECTURE.md).
+See [README.md](./README.md#layout) and [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Adding a CRD
 
-1. Scaffold in `operators/api/v1alpha1/` via `kubebuilder create api`.
+1. Scaffold in `operators/api/<group>/v1alpha1/` (`platform`, `agents`, or `governance`) via `kubebuilder create api`.
 2. Add a reconciler in `operators/internal/controller/`.
 3. Add cross-field validation as CEL `+kubebuilder:validation:XValidation` markers on the API types (CRD schema is the floor; CEL enforces the invariants at admission).
 4. Regenerate CRD manifests with `task operator:gen` — outputs to `operators/config/crd/bases/` and `charts/operator/crds/`.
-5. Regenerate the TS client in `packages/client/src/generated/` via `task client:gen`.
-6. Document the kind in `docs/crd-reference/<kind>.md`.
+5. Mirror any new spec/status field into the zod schemas in `packages/core/src/schemas.ts`. The TypeScript side is hand-written rather than generated, and `pnpm check:schema-drift` diffs it against the generated CRD OpenAPI so a field present on one side and not the other fails the build.
+6. Confirm `docs/crd-reference/v1alpha1.md` picked up the new kind — `make -C operators manifests` re-renders it from godoc. There are no per-kind files.
 7. Add a conformance test in `operators/test/conformance/`.
 
 ## Adding an OpenTofu component
@@ -48,7 +48,7 @@ See [README.md](./README.md#what-you-get) and [ARCHITECTURE.md](./ARCHITECTURE.m
 
 Agent cluster addons — Envoy AI Gateway, the Argo platform, and the persona dashboards — live in `eks-gitops`, not here. See its docs for adding or tuning one. This repo's job is to build the artifacts they deploy: the operator chart (`charts/operator`) and the terraform components.
 
-The operator's own eval-runtime and SLO ride inside `charts/operator` behind the `evalRuntime.*` and `slo.*` values toggles — edit the chart, not a separate addon.
+The operator's own eval-runtime rides inside `charts/operator` behind the `evalRuntime.*` values toggle — edit the chart, not a separate addon. The operator's alert rules are Grafana-managed in eks-gitops.
 
 ## Adding a TS package
 

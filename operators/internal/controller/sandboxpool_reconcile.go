@@ -153,15 +153,12 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 						{Name: "ANTHROPIC_ENVIRONMENT_KEY", ValueFrom: &corev1.EnvVarSource{
 							SecretKeyRef: &envKeyRef,
 						}},
-					}, p, platformModelFamily(p)),
+					}, p, platformModelFamily(p), r.Environment),
 					Resources:       pool.Spec.Resources,
-					SecurityContext: restrictedContainerSecurityContext(),
-					VolumeMounts:    []corev1.VolumeMount{{Name: "workspace", MountPath: "/workspace"}},
+					SecurityContext: sandboxContainerSecurityContext(),
+					VolumeMounts:    sandboxWritableMounts(workerHomeDir),
 				}},
-				Volumes: []corev1.Volume{{
-					Name:         "workspace",
-					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-				}},
+				Volumes: sandboxWritableVolumes(workerHomeDir),
 			},
 		}
 		return nil
@@ -171,6 +168,15 @@ func (r *SandboxPoolReconciler) ensureWorkerDeployment(ctx context.Context, pool
 	}
 	return nil
 }
+
+// workerHomeDir is HOME in the sandbox-worker image, which this repo builds —
+// sandbox-worker/Dockerfile creates it with `useradd --create-home worker`. Both
+// `ant` and git write under it, so with a read-only root it has to be mounted.
+//
+// Named here rather than in the shared helper because it is a fact about THIS
+// image. An AgentSandbox runs whatever image its tenant names and declares its
+// own paths instead.
+const workerHomeDir = "/home/worker"
 
 // ensureSandboxNetworkPolicy installs a NetworkPolicy selecting worker
 // pods: ingress is denied entirely; egress narrows to kube-dns and
@@ -283,7 +289,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 						{Name: "ANTHROPIC_API_KEY", ValueFrom: &corev1.EnvVarSource{
 							SecretKeyRef: pool.Spec.APIKeySecret,
 						}},
-					}, p, ""),
+					}, p, "", r.Environment),
 					Ports: []corev1.ContainerPort{{
 						Name:          "http",
 						ContainerPort: metricsShimPort,
@@ -311,7 +317,7 @@ func (r *SandboxPoolReconciler) ensureMetricsBridgeDeployment(ctx context.Contex
 							corev1.ResourceMemory: resource.MustParse("64Mi"),
 						},
 					},
-					SecurityContext: restrictedContainerSecurityContext(),
+					SecurityContext: sandboxContainerSecurityContext(),
 				}},
 			},
 		}

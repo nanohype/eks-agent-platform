@@ -122,14 +122,19 @@ func Load(ctx context.Context, ssmClient awsclients.SSM, clusterName, environmen
 // Config field. Unknown keys silently no-op — they aren't errors.
 func (c *Config) assign(suffix, value string) {
 	switch suffix {
+	// ssm-producer: landing-zone's agent-iam component, which owns this prefix.
 	case "agent-iam/operator_role_arn":
 		c.OperatorRoleARN = value
+	// ssm-producer: landing-zone's agent-iam component, which owns this prefix.
 	case "agent-iam/tenant_iam_path":
 		c.TenantIAMPath = value
+	// ssm-producer: landing-zone's agent-iam component, which owns this prefix.
 	case "agent-iam/tenant_baseline_policy_arn":
 		c.TenantBaselinePolicyARN = value
+	// ssm-producer: landing-zone's agent-iam component, which owns this prefix.
 	case "agent-iam/tenant_permissions_boundary_arn":
 		c.TenantPermissionsBoundaryARN = value
+	// ssm-producer: landing-zone's agent-iam component, which owns this prefix.
 	case "model-artifacts/bucket_name":
 		c.ArtifactsBucketName = value
 	case "bedrock/baseline_guardrail_id":

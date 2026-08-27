@@ -13,7 +13,7 @@ Initial design proposed splitting `eks-agent-platform` into five repos: operator
 One monorepo with polyglot workspaces:
 
 - `operators/` — Go (kubebuilder v4)
-- `charts/` — Helm; `charts/operator` carries the controller, the CRDs, and the operator's own runtime (eval-runtime + SLO) behind `evalRuntime.*` / `slo.*` toggles
+- `charts/` — Helm; `charts/operator` carries the controller, the CRDs, and the operator's own eval-runtime behind an `evalRuntime.*` toggle
 - `packages/` — TypeScript (pnpm + turbo)
 - `terraform/` — OpenTofu + Terragrunt (per-tenant AWS state)
 - `examples/`, `docs/`

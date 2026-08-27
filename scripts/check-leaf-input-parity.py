@@ -39,7 +39,11 @@ from __future__ import annotations
 
 import argparse
 import re
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import EXIT_CANNOT_EVALUATE
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -115,7 +119,7 @@ def check(listing: bool) -> int:
     table = collect()
     if not table:
         print(f"error: no leaves found under {LIVE}/{ENV_GLOB}", file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_EVALUATE
 
     failures = 0
     for component, by_env in sorted(table.items()):

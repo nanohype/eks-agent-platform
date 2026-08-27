@@ -56,7 +56,7 @@ flowchart LR
   Platform["<b>Platform CR</b>"] --> PR["PlatformReconciler"]
 
   PR --> Ns["tenant ns + quotas<br/>+ LimitRange + NetworkPolicy<br/>+ AppProject"]
-  PR --> IAM["IAM role<br/>&lt;env&gt;-&lt;platform&gt;-tenant<br/>+ baseline policy"]
+  PR --> IAM["IAM role<br/>&lt;cluster&gt;-&lt;platform&gt;-tenant<br/>+ baseline policy"]
   PR --> KMS["tenant-key-access policy<br/>on the tenant's OWN CMK"]
   PR --> S3["S3 bucket policy<br/>tenants/&lt;platform&gt;/* — the tenant boundary"]
 
@@ -105,7 +105,7 @@ sequenceDiagram
 | State                            | Source of truth                                                                                                                |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Per-tenant access control        | IAM role tags (operator reads `platform.nanohype.dev/suspended`)                                                               |
-| Per-tenant data encryption scope | KMS grant `EncryptionContext: {PlatformId}`                                                                                    |
+| Per-tenant data encryption scope | the tenant's own CMK ARN, named in the operator-written `tenant-key-access` IAM policy                                          |
 | Per-tenant S3 isolation          | bucket policy statements with `s3:prefix` condition                                                                            |
 | Per-tenant Bedrock spend         | CUR Athena table (`resource_tags_user_platformid`) + in-flight CloudWatch metric (`agents/Bedrock:EstimatedInvocationCostUsd`) |
 | Per-fleet scaling target         | KEDA ScaledObject (`aws-sqs-queue` when QueueURL set, else CPU)                                                                |

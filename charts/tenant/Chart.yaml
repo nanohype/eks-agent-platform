@@ -12,7 +12,12 @@ type: application
 # not reach. Off by default: it needs a real Managed Agents environment id and
 # the environment key that authenticates workers against it, and neither has a
 # sensible placeholder.
-version: 0.5.1
+# 0.5.2 is documentation only. The persona list in README.md named a model
+# family per persona — Meta Llama, Mistral, Amazon Nova — that
+# model_defaults.json does not declare; every persona there is the anthropic
+# family. Choosing a persona is the chart's one mandatory configuration step,
+# so that list is the input to the only decision it demands.
+version: 0.5.3
 appVersion: "0.1.0"
 maintainers:
   - name: stxkxs

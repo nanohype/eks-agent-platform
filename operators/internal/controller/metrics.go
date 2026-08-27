@@ -27,11 +27,16 @@ var killSwitchUnroutedTotal = prometheus.NewCounterVec(
 )
 
 // fleetReadyAgents is the operator's first-class view of AgentFleet readiness:
-// the number of agents the reconciler last observed Ready in a fleet. It is
-// the domain metric behind the persona dashboards' fleet-runtime panels — a
-// real operator-emitted series, distinct from the KSM projection of
-// AgentFleet.status.readyAgents. Set on every fleet status write and cleared
-// when the fleet is deleted so no stale series lingers.
+// the number of agents whose Deployment reported a ready replica on the last
+// reconcile. It is the domain metric behind the persona dashboards'
+// fleet-runtime panels — a real operator-emitted series, distinct from the KSM
+// projection of AgentFleet.status.readyAgents. Set on every fleet status write
+// and cleared when the fleet is deleted so no stale series lingers.
+//
+// It reads the workloads back rather than counting spec.agents, because the two
+// diverge exactly when someone is looking: a fleet rolled onto a broken image
+// keeps every declared agent and loses every ready one, and a series carrying
+// the declared number stays flat through the outage it was added to show.
 var fleetReadyAgents = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Name: "agents_fleet_ready_agents",

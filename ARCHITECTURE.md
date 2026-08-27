@@ -4,7 +4,7 @@
 
 ## Bounded contexts
 
-The system organizes around nine bounded contexts. Each gets a CRD, a reconciler in the operator binary, and (where it makes sense) an OpenTofu component and a Helm chart.
+The system organizes around nine bounded contexts. The eight CRD-backed ones each get their CRDs and reconcilers in the operator binary, and (where it makes sense) an OpenTofu component and a Helm chart.
 
 | Context           | CRD            | Reconciler | OpenTofu component             | Helm chart       | What it owns                                                                                                                                                                                                                            |
 | ----------------- | -------------- | ---------- | ------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -12,15 +12,17 @@ The system organizes around nine bounded contexts. Each gets a CRD, a reconciler
 | **Workspace**     | `Platform`     | `platform` | —                              | `tenant`         | Tenant `Namespace` (with Pod Security Standards label), `ResourceQuota`, `LimitRange`, default-deny `NetworkPolicy`, ArgoCD `AppProject`, per-Platform IAM role + Pod Identity association + KMS grant + S3 bucket policy                                         |
 | **Model access**  | `ModelGateway` | `gateway`  | `bedrock`, `agent-egress`      | `bedrock-egress` | Envoy AI Gateway `AIGatewayRoute` rule per `ModelRoute`, Bedrock model ID resolution, Bedrock Guardrails attached as request headers, per-route rate limits                                                                             |
 | **Agent runtime** | `AgentFleet`   | `runtime`  | —                              | —                | `Deployment` per agent running the tenant's own image, KEDA `ScaledObject` (SQS depth or CPU), per-fleet `NetworkPolicy`, all under the tenant `ServiceAccount` bound to the tenant IAM role via EKS Pod Identity                       |
+| **Sandboxing**    | `SandboxPool`, `AgentSandbox` | `sandbox`, `agentsandbox` | —          | `operator`       | Platform-scoped pool of self-hosted sandbox workers plus single-use per-session pods; both run Pod Security `restricted` and default-deny networked on the dedicated tainted sandbox node pool                        |
 | **Budgets**       | `BudgetPolicy` | `budget`   | `cost-pipeline`, `kill-switch` | —                | Hourly Athena rollup of the CUR table + CloudWatch in-flight estimate; writes spend/percent/conditions to `BudgetPolicy.status`; publishes `BudgetBreach` to EventBridge at ≥120%                                                       |
-| **Evals**         | `EvalSuite`    | `eval`     | `model-artifacts`              | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore` |
+| **Evals**         | `EvalSuite`    | `eval`     | `eval-runtime`                 | `operator`       | Argo `CronWorkflow` per suite referencing the `eval-runner` `WorkflowTemplate` (shipped by the operator chart behind `evalRuntime.*`); status writeback by the runner; gates Argo Rollouts via `AnalysisTemplate` on `status.lastScore` |
+| **Reliability**   | `SLOPolicy`    | `slo`      | `kill-switch`                  | `operator`       | Burn-rate evaluation over the Platform's SLI; a page-tier error-budget burn emits on the kill-switch EventBridge bus and holds the tenant's rollout                                                                    |
 | **Observability** | —              | —          | —                              | —                | OTel pipeline (from `eks-gitops`) carries `agents.tenant`, `agents.platform`, `agents.model_family` resource attrs (model id rides on the per-invocation span, not the pod resource); Bedrock invocation spans + per-invocation cost    |
 
 The CRDs are split across three capability groups under the `nanohype.dev` domain, all at version `v1alpha1`:
 
 - **`platform.nanohype.dev`** — the Tenancy and Workspace contexts: `Tenant`, `Platform`
 - **`agents.nanohype.dev`** — the Model-access and Agent-runtime contexts plus the sandbox kinds: `AgentFleet`, `ModelGateway`, `AgentSandbox`, `SandboxPool`
-- **`governance.nanohype.dev`** — the Budgets and Evals contexts: `BudgetPolicy`, `EvalSuite`
+- **`governance.nanohype.dev`** — the Budgets, Evals and Reliability contexts: `BudgetPolicy`, `EvalSuite`, `SLOPolicy`
 
 The field-level reference is regenerated from godoc on every `make manifests` into [`docs/crd-reference/v1alpha1.md`](./docs/crd-reference/v1alpha1.md).
 
@@ -28,7 +30,7 @@ The field-level reference is regenerated from godoc on every `make manifests` in
 
 ### One operator binary, nine reconcilers
 
-A single Go binary registers nine reconcilers (`tenant`, `platform`, `gateway`, `runtime`, `budget`, `eval`, `sandboxpool`, `agentsandbox`, `batch`) with one shared leader-election lease. Operationally simpler than six deployments; the split is trivial if any reconciler outgrows it.
+A single Go binary registers nine reconcilers (`tenant`, `platform`, `gateway`, `runtime`, `sandbox`, `agentsandbox`, `budget`, `slo`, `eval`) with one shared leader-election lease. Operationally simpler than nine deployments; the split is trivial if any reconciler outgrows it.
 
 ### Operator owns fast-moving AWS state; OpenTofu owns slow-moving infra
 
@@ -46,12 +48,13 @@ Same with Envoy AI Gateway: `ModelGateway` reconciles into a Gateway-API `Gatewa
 
 ### The operator carries its own runtime
 
-The operator chart (`charts/operator`) ships more than the controller and CRDs. Two of its own runtime pieces ride along behind values toggles:
+The operator chart (`charts/operator`) ships more than the controller and CRDs. One of its own runtime pieces rides along behind a values toggle:
 
 - **`evalRuntime.*`** — the eval-runtime: the `eval-runner` Argo `WorkflowTemplate`, the `AnalysisTemplate` that gates Rollouts on `status.lastScore`, and the `ServiceAccount` + RBAC the runner needs. Source under `charts/operator/{files,templates}/eval-runtime/`. The eval-runner role ARN and the report bucket are injected per-cluster by the eks-gitops addon that deploys the operator.
-- **`slo.*`** — the operator SLO: a `PrometheusRule`, an `AlertmanagerConfig`, and the kube-state-metrics CR-state config that exposes the CRDs as metrics. Source under `charts/operator/{files,templates}/slo/`.
 
-Keeping these in the chart means the operator's eval gating and its own SLO arrive with the operator instead of being a separate install step.
+Keeping it in the chart means the operator's eval gating arrives with the operator instead of being a separate install step.
+
+The operator's own SLO alerting is not in this chart. `values.schema.json` closes the top level, so `--set slo.enabled=true` fails with `additional properties 'slo' not allowed` rather than being quietly ignored. Burn-rate evaluation is the `slo` reconciler's control loop — toggled by `reconcilers.slo` — writing its verdict to `SLOPolicy.status`, which the eks-gitops kube-state-metrics addon projects as metrics; the paging rules are Grafana-managed against AMP in `eks-gitops/dashboards/base/alerting/agent-operator.yaml`. That catalog installs `prometheus-operator-crds` and no ruler, so a chart-shipped `PrometheusRule` would be applied to every cluster and evaluated by none.
 
 ### The gateway is the model plane
 
@@ -61,7 +64,7 @@ What an application holds is a route *name* and a base URL. The `ModelGateway` C
 
 Model families therefore are not a code concern. Adding one is a route on a CR; the only thing the repo tracks per family is pricing (`@eks-agent/pricing`), which the cost path needs whatever the wire format was.
 
-### Two CMKs per cluster, isolated by grant
+### One cluster CMK by default, a second only where the readers differ
 
 A cluster carries **one** customer-managed key by default, provisioned once by landing-zone's `secrets` component — not one per Platform. Both `data_kms_key_arn` and `logs_kms_key_arn` resolve to it. Setting `separate_logs_key` on that component mints a second CMK and **moves** the CloudWatch Logs and Bedrock grants onto it, which is what makes "reads logs, cannot decrypt data" a boundary rather than a sentence. It is off by default: the second key is worth its rotation, audit and cost only where the log reader and the data reader are different people.
 

@@ -1,9 +1,7 @@
 # Runbook — deploy the agent platform end-to-end
 
 How to stand up the agent platform from scratch, both locally (kx) and on real
-EKS, and tear it down. This is the verified sequence — every step here was run
-end-to-end on 2026-05-31, and the gaps that used to bite are fixed-forward
-(noted inline). Do the steps in order; each depends on the previous.
+EKS, and tear it down. Do the steps in order; each depends on the previous.
 
 Repos involved: `landing-zone` (AWS substrate), `eks-gitops` (ArgoCD addon
 catalog), `eks-agent-platform` (the operator + agent-plane mirror), `kx` (local
@@ -41,7 +39,7 @@ Envoy AI Gateway.
 
 ### B0. Prereqs
 
-- AWS creds for the target account (this org used SSO profile `stxkxs`). Confirm:
+- AWS creds for the target account. Confirm:
   `aws sts get-caller-identity --profile <profile>`.
 - Confirm Bedrock model access in the region:
   `aws bedrock list-foundation-models --region <r> --by-provider anthropic`.
@@ -136,8 +134,8 @@ eval-runner role is bound by Pod Identity, see B1b). The cluster name comes from
 SSM
 (`/eks-agent-platform/<cluster>/cluster/name`), read by the operator's config
 loader. So once B1 step 3
-landed, the operator (with the AWS reconcile ON and its eval-runtime + SLO
-bundles enabled by the chart defaults) is already on its way. Get the image
+landed, the operator (with the AWS reconcile ON and its eval-runtime bundle
+enabled by the chart defaults) is already on its way. Get the image
 published so the ApplicationSet has something to pull:
 
 - **Published (preferred):** push a release tag in `eks-agent-platform` →

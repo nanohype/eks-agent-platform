@@ -7,7 +7,7 @@ A support-desk Platform that runs **two agents on two model routes** and **scale
 - `triage-bot` pins the `triage` route; `resolver` pins `resolve` and carries its knowledge-base lookup as a tool inside its own image — so the lookup runs as the tenant, and the audit log names the agent that asked for it.
 - The fleet's KEDA `ScaledObject` scales 1→8 on the work queue's depth.
 
-Model ids are the org defaults from `nanohype/standards/llm-policy.json`. Tools are referenced by name only — the `knowledge-base-search` `ToolServer` is delivered by `addons-ai-platform` + External Secrets, not by this manifest set.
+Model ids are the org defaults from `nanohype/standards/llm-policy.json`.
 
 ## Apply
 

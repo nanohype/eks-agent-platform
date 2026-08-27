@@ -70,9 +70,15 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
+
 import re
 import subprocess
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import require_binary
 from pathlib import Path
 
 try:
@@ -146,6 +152,8 @@ def supplied_parameters(ref: str) -> set[str]:
 
 
 def main() -> int:
+    require_binary("git", "read the committed tree this compares the runtime contract against")
+
     listing = "--list" in sys.argv
 
     app_version = chart_app_version()
@@ -231,5 +239,17 @@ def main() -> int:
     return 0
 
 
+
+# Argument parsing is strict on purpose: a gate that ignores argv cannot tell a
+# renamed flag from a correct one, so a CI step naming a mode this script does
+# not have would keep exiting 0. scripts/check-gates.py asserts this for every
+# gate here.
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--list', action='store_true', help='print every contract term checked, not only the failures')
+    return ap.parse_args()
+
+
 if __name__ == "__main__":
+    _parse_args()
     sys.exit(main())

@@ -21,8 +21,8 @@ inputs = {
   # runs in the other. account_id is interpolated from env.hcl rather
   # than duplicated.
   bedrock_invoke_resource_arns = [
-    "arn:aws:bedrock:us-west-2:${local.account_id}:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "arn:aws:bedrock:us-east-1:${local.account_id}:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "arn:aws:bedrock:us-west-2:${local.account_id}:inference-profile/us.anthropic.claude-sonnet-5",
+    "arn:aws:bedrock:us-east-1:${local.account_id}:inference-profile/us.anthropic.claude-sonnet-5",
   ]
   allowed_regions = ["us-west-2", "us-east-1"]
 

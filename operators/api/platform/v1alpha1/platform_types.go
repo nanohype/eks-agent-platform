@@ -46,7 +46,7 @@ type PlatformSpec struct {
 	//   - vcluster: the same host-side containment PLUS a per-Platform virtual
 	//     cluster, so tenant code that talks to the Kubernetes API talks to its own
 	//     API server, not the host's (API-server-level isolation — NOT kernel/node
-	//     isolation; see docs/adr/0009-vcluster-isolation-tier.md and SECURITY.md).
+	//     isolation; see docs/adr/0008-vcluster-isolation-tier.md and SECURITY.md).
 	//
 	// Immutable: switching tiers on a live Platform is a migration (it would strand
 	// the virtual cluster and its synced host objects), so the tier is fixed at
@@ -92,7 +92,35 @@ type AttributionSpec struct {
 	// entry on the impersonate ClusterRole, so the SAME string binds the AWS
 	// and Kubernetes audit records. Use a canonical form (a lowercased email);
 	// it must byte-match the operator's own RBAC subject name.
+	//
+	// The pattern is a privilege boundary, not a formatting preference. Each
+	// entry is copied verbatim into the resourceNames of a ClusterRole granting
+	// `impersonate` on core users (platform_rbac.go), and the operator writes
+	// that ClusterRole holding unrestricted `impersonate` itself — which is what
+	// lets it grant a subset rather than needing the `escalate` verb, and is
+	// also what means the apiserver's RBAC escalation-prevention cannot reject
+	// any value this field carries. The apiserver checks the WRITER's
+	// permissions, and the writer holds them all; nothing downstream re-reads
+	// this field with a narrower eye. So an unconstrained field is a path from
+	// "may create a Platform CR" to "may act as any identity the cluster
+	// authenticates".
+	//
+	// Excluding ':' is the specific mitigation, and it is why the pattern is not
+	// merely an email shape: every built-in Kubernetes principal is
+	// colon-prefixed (system:admin, system:kube-controller-manager,
+	// system:serviceaccount:<ns>:<name>), so a character class without ':'
+	// cannot name one whatever else it permits. What the pattern does NOT do is
+	// stop a Platform author naming a real human administrator's own address —
+	// that residual is a question of who may create a Platform CR, and belongs
+	// to the admission policy on this CRD rather than to a field marker.
+	//
+	// MaxItems is the session-role trust policy's budget: every entry is also an
+	// sts:SourceIdentity condition value on that document, which IAM caps at
+	// 2,048 characters.
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=254
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9][a-z0-9._%+-]*@[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$`
 	Operators []string `json:"operators"`
 
 	// SessionRoleMaxDurationSeconds caps the assumed session lifetime. Because
@@ -156,6 +184,27 @@ type IdentitySpec struct {
 	// foundation models across regions, so both are granted together) and
 	// reconciles them into the role's bedrock-model-scoping policy. Scopes
 	// tighter than a family; mutually exclusive with AllowedModelFamilies.
+	//
+	// The pattern is the load-bearing marker, not the count. Each entry is
+	// expanded into the NotResource list of a Deny statement
+	// (platform_model_scoping.go modelScopingPolicyDoc), so an entry is an
+	// EXCLUSION from the deny rather than an addition to an allow: the wider an
+	// entry matches, the less the scoping policy denies. An unconstrained field
+	// therefore inverts under a wildcard — "*" expands to
+	// foundation-model/* plus inference-profile/us.*, which excludes every
+	// model from the Deny and leaves the baseline's wildcard Allow governing
+	// unopposed. Restricting the character class to a literal Bedrock model ID
+	// is what keeps an entry incapable of matching more than the one model it
+	// names. AllowedModelFamilies is closed the same way by its enum.
+	//
+	// MaxItems is derived from the inline-policy budget, not chosen: an inline
+	// role policy caps at 10,240 characters and each entry renders two ARNs of
+	// roughly 160 characters together, so 32 entries cannot overflow the
+	// document the way an unbounded list would — a LimitExceeded at reconcile
+	// on a Platform that stays Provisioning.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=128
+	// +kubebuilder:validation:items:Pattern=`^((us-gov|us|eu|apac|jp|au|global)\.)?[a-z][a-z0-9-]*\.[a-z0-9][a-z0-9-]*(:[0-9]+)?$`
 	// +optional
 	AllowedModels []string `json:"allowedModels,omitempty"`
 
@@ -175,9 +224,10 @@ type IdentitySpec struct {
 	// ExtraPolicyArns are managed IAM policies attached on top of the baseline.
 	//
 	// Every sibling on this struct is bounded — DirectSecretReads by count, length
-	// and pattern, Capabilities by count, AllowedModelFamilies by enum — and this
-	// one governs which managed IAM policies get attached to the tenant role, so it
-	// is the field where an unbounded value costs the most.
+	// and pattern, AllowedModels the same way, Capabilities by count,
+	// AllowedModelFamilies by enum — and this one governs which managed IAM
+	// policies get attached to the tenant role, so it is the field where an
+	// unbounded value costs the most.
 	//
 	// MaxItems=9 keeps the role inside AWS's default quota. "Managed policies per
 	// role" is 10 by default (raisable to 25), and the operator attaches the tenant

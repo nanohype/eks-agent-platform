@@ -87,14 +87,14 @@ declare the static count you would actually get.
 
 The `platform.persona` field drives downstream defaults across `ModelGateway` (preferred model family), Grafana dashboard panels, and CLI scaffold output. Valid values:
 
-- `sales-ops` — Anthropic Claude family; objection-handling + research agents
-- `support` — Meta Llama family; ticket-summarization + KB-article agents
-- `finance` — Amazon Nova Pro family; financial-memo + reconciliation agents
-- `ops` — Mistral family; on-call summarizer + runbook agent
-- `founder` — Claude Sonnet; strategy + memo agent
-- `eng` — Claude Sonnet; ADR + code-review agent
-- `marketing` — Claude Haiku for volume; campaign-brief + copy agents
-- `legal` — Claude Sonnet with mandatory HIPAA + PII guardrails
+- `sales-ops` — Claude Sonnet 4.6 (Nova Lite for volume); objection-handling + research agents
+- `support` — Claude Haiku 4.5 (Sonnet 4.6 on escalation); ticket-summarization + KB-article agents
+- `finance` — Claude Sonnet 4.6; financial-memo + reconciliation agents
+- `ops` — Claude Sonnet 4.6; on-call summarizer + runbook agent
+- `founder` — Claude Sonnet 4.6 (Haiku 4.5 for volume); strategy + memo agent
+- `eng` — Claude Sonnet 4.6; ADR + code-review agent
+- `marketing` — Claude Sonnet 4.6 (Nova Pro secondary); campaign-brief + copy agents
+- `legal` — Claude Sonnet 4.6 with mandatory HIPAA + PII guardrails
 - `generic` — default; no persona tilt
 
 Choosing a persona at `helm install` (or `agentctl platform new`) time is the only mandatory configuration step.

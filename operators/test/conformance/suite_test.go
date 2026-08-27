@@ -27,6 +27,7 @@ package conformance
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,30 @@ func mustCreate(ctx context.Context, t *testing.T, obj client.Object) {
 	}
 }
 
+// TestMain boots a real API server via envtest. Without the control-plane
+// binaries it skips the suite instead of panicking, so `go test ./...` — the
+// command language-toolchain names for Go and the one a contributor types
+// first — exits 0 on a clean checkout rather than aborting on a missing etcd.
+//
+// A skip that hides coverage would be the worse trade, and it cannot happen
+// here: this suite carries roughly thirty points of internal/controller
+// coverage, and the package floor is 75%, so skipping it drops the gate below
+// its floor and `make coverage-check` fails. The floor is what keeps the skip
+// honest — CI runs through that target, which sets KUBEBUILDER_ASSETS from
+// setup-envtest and therefore never takes this path.
+//
+// KUBEBUILDER_ASSETS is what envtest reads to find the binaries, so its absence
+// is the check: testing for it here reports the one actionable line rather than
+// letting envtest fail five retries deep with a fork/exec error.
 func TestMain(m *testing.M) {
+	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		fmt.Fprintln(os.Stderr,
+			"conformance: KUBEBUILDER_ASSETS is unset, so there is no API server to run against — skipping.\n"+
+				"Run `make test` (or `make coverage-check`) instead, which resolves the assets via setup-envtest.\n"+
+				"Skipping drops internal/controller below its 75% floor, so the coverage gate fails rather than passing quietly.")
+		os.Exit(0)
+	}
+
 	scheme = runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(platformv1alpha1.AddToScheme(scheme))

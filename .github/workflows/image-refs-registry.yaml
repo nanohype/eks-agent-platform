@@ -1,0 +1,52 @@
+# Resolving an image reference against the registry asks a question about the
+# WORLD, not about this commit: the same tree is green or red depending on what
+# has been published since. That cannot gate a merge without making an unrelated
+# pull request wait on a registry.
+#
+# The half a commit does control — that every image reference in the chart, the
+# Go source and the compose files agree with each other — is
+# `scripts/check-image-refs.py --offline` in ci.yaml, and that one does block
+# merges.
+#
+# This lives in its own workflow rather than behind an `if:` in ci.yaml because
+# the merge gate there requires every job in its workflow to be in the gate's
+# needs list, with no exemption. A job that cannot run on a pull request would
+# therefore be counted as a skipped dependency and fail the gate on every pull
+# request.
+name: image refs (registry)
+
+concurrency:
+  group: image-refs-registry
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Alongside the chart-drift sweep, for the case where nothing here changed
+    # and the registry did.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read   # resolve published image digests from ghcr.io
+
+jobs:
+  registry:
+    name: every image the chart names is published
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: docker login (ghcr.io)
+        # Both values reach the shell as environment variables rather than
+        # through template expansion. github.actor is attacker-influenceable on
+        # a fork PR, and an expansion is substituted into the script BEFORE the
+        # shell parses it, so a crafted value is code rather than an argument.
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+      - run: ./scripts/check-image-refs.py --list

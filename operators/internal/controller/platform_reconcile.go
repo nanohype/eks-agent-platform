@@ -83,14 +83,33 @@ func fnv1a64(s string) uint64 {
 //   - the BudgetPolicy controller's tag-based spend attribution
 //     (downstream of CUR / cost-pipeline),
 //   - dashboard filtering on `agents.platform=<name>`.
-func labelsForPlatform(p *platformv1alpha1.Platform) map[string]string {
-	return map[string]string{
+func (r *PlatformReconciler) labelsForPlatform(p *platformv1alpha1.Platform) map[string]string {
+	l := map[string]string{
+		// resource-tagging required_by_surface.k8s — the four dimensions every
+		// object on the stack carries. managed-by and component name the
+		// lifecycle owner and the workload role; environment and team are what
+		// a cost or ownership rollup groups on, and a rollup cannot recover a
+		// dimension that was never stamped.
 		"app.kubernetes.io/managed-by": "eks-agent-platform",
-		"app.kubernetes.io/part-of":    "eks-agent-platform",
-		LabelPlatform:                  p.Name,
-		LabelTenant:                    p.Spec.Tenant,
-		LabelPersona:                   p.Spec.Persona,
+		"app.kubernetes.io/component":  "tenant",
+		labelEnvironment:               r.IAMCfg.Environment,
+		labelTeam:                      p.Spec.Tenant,
+
+		"app.kubernetes.io/part-of": "eks-agent-platform",
+		LabelPlatform:               p.Name,
+		LabelTenant:                 p.Spec.Tenant,
+		LabelPersona:                p.Spec.Persona,
 	}
+	// A label VALUE may not be empty on the API server's rules, and the
+	// operator runs without --environment on a dev cluster. Drop the key rather
+	// than stamp "" — an absent dimension is recoverable by re-labelling, and a
+	// rejected object is a Platform that does not reconcile at all.
+	for k, v := range l {
+		if v == "" {
+			delete(l, k)
+		}
+	}
+	return l
 }
 
 // ensureNamespace creates (or updates labels on) the tenant workload
@@ -104,7 +123,7 @@ func (r *PlatformReconciler) ensureNamespace(ctx context.Context, p *platformv1a
 		if ns.Labels == nil {
 			ns.Labels = map[string]string{}
 		}
-		for k, v := range labelsForPlatform(p) {
+		for k, v := range r.labelsForPlatform(p) {
 			ns.Labels[k] = v
 		}
 		// Pod Security Standards — restricted profile enforced at admission.
@@ -129,7 +148,7 @@ func (r *PlatformReconciler) ensureQuota(ctx context.Context, p *platformv1alpha
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, q, func() error {
-		q.Labels = labelsForPlatform(p)
+		q.Labels = r.labelsForPlatform(p)
 		q.Spec.Hard = corev1.ResourceList{
 			corev1.ResourceRequestsCPU:    resource.MustParse("4"),
 			corev1.ResourceRequestsMemory: resource.MustParse("16Gi"),
@@ -155,7 +174,7 @@ func (r *PlatformReconciler) ensureLimitRange(ctx context.Context, p *platformv1
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, lr, func() error {
-		lr.Labels = labelsForPlatform(p)
+		lr.Labels = r.labelsForPlatform(p)
 		lr.Spec.Limits = []corev1.LimitRangeItem{
 			{
 				Type: corev1.LimitTypeContainer,
@@ -221,7 +240,7 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 		datastoreRule = append(datastoreRule, networkingv1.NetworkPolicyEgressRule{Ports: npPorts})
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
-		np.Labels = labelsForPlatform(p)
+		np.Labels = r.labelsForPlatform(p)
 		np.Spec = networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{}, // all pods in the tenant namespace
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
@@ -296,6 +315,76 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 	return err
 }
 
+// ensureTenantIngressPolicy closes the other direction of the tenant boundary.
+//
+// ensureNetworkPolicy selects every pod in the namespace but declares
+// PolicyTypes: [Egress] only, and a policy that names no Ingress type does not
+// restrict ingress at all — it is not a deny, it is an absence. AgentFleet,
+// AgentSandbox and SandboxPool pods each carry their own deny-all ingress, so
+// the gap was never the agent workloads: it was the tenant's own chart-deployed
+// application pods, which are reachable from any pod on the cluster.
+//
+// A separate policy rather than another field on the shared one, for the reason
+// ensureGatewayEgressPolicy already states: policies are additive, and the
+// tenant chart ships its own NetworkPolicy declaring whatever ingress its
+// application actually serves. Adding rules here would put the operator in the
+// business of guessing that.
+//
+// Two exceptions, and they are the two that break silently if omitted:
+//
+//   - Same-namespace to the gateway. The tenant egress rule lets an application
+//     pod SEND to its own Envoy, but a deny-all ingress on the Envoy refuses the
+//     delivery, and the failure surfaces as model calls timing out against a
+//     Gateway that reports healthy.
+//   - The monitoring namespace. A metrics scrape is ingress; without it the
+//     tenant's own series stop arriving, which reads as a quiet workload rather
+//     than as a blocked one.
+//
+// Vanilla NetworkPolicy on both engines, with no cilium twin: the tenant EGRESS
+// policy needs one only because the Pod Identity endpoint is a cilium host
+// entity that a vanilla ipBlock cannot express. Nothing here names an entity
+// outside the standard API, and Cilium enforces standard NetworkPolicy, so one
+// object covers both.
+func (r *PlatformReconciler) ensureTenantIngressPolicy(ctx context.Context, p *platformv1alpha1.Platform) error {
+	np := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tenant-ingress",
+			Namespace: PlatformNamespace(p),
+		},
+	}
+	tcp := corev1.ProtocolTCP
+	gatewayPort := intstr.FromInt(8080)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
+		np.Labels = r.labelsForPlatform(p)
+		np.Spec = networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{}, // all pods in the tenant namespace
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					// The gateway, from this namespace only. A peer with no
+					// NamespaceSelector means "this namespace".
+					From: []networkingv1.NetworkPolicyPeer{{
+						PodSelector: &metav1.LabelSelector{},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Protocol: &tcp, Port: &gatewayPort},
+					},
+				},
+				{
+					// Metrics scrape from the collector's namespace.
+					From: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": collectorNamespace},
+						},
+					}},
+				},
+			},
+		}
+		return nil
+	})
+	return err
+}
+
 // ensureGatewayEgressPolicy grants the model gateway's Envoy the one thing no
 // other tenant pod gets: outbound TLS, which is how it reaches Bedrock.
 //
@@ -329,7 +418,7 @@ func (r *PlatformReconciler) ensureGatewayEgressPolicy(ctx context.Context, p *p
 	otlpHTTP := intstr.FromInt(otlpHTTPPort)
 	xdsPort := intstr.FromInt(envoyGatewayXDSPort)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
-		np.Labels = labelsForPlatform(p)
+		np.Labels = r.labelsForPlatform(p)
 		np.Spec = networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{
 				"app.kubernetes.io/name":       "envoy",
@@ -392,7 +481,7 @@ func (r *PlatformReconciler) ensureTenantCiliumEgress(ctx context.Context, p *pl
 	if r.NetworkEngine != NetworkEngineCilium {
 		return nil
 	}
-	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "tenant-egress", map[string]interface{}{}, labelsForPlatform(p), false, datastoreEgressPorts(p), datastoreFQDNs(p, r.IAMCfg.Region))
+	return ensureCiliumEgress(ctx, r.Client, PlatformNamespace(p), "tenant-egress", map[string]interface{}{}, r.labelsForPlatform(p), false, datastoreEgressPorts(p), datastoreFQDNs(p, r.IAMCfg.Region))
 }
 
 // ensureAppProject creates an ArgoCD AppProject scoped to the tenant
@@ -409,7 +498,7 @@ func (r *PlatformReconciler) ensureAppProject(ctx context.Context, p *platformv1
 	ap.SetName(p.Name)
 	ap.SetNamespace(argoCDNamespace)
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ap, func() error {
-		labels := labelsForPlatform(p)
+		labels := r.labelsForPlatform(p)
 		ap.SetLabels(labels)
 		sourceRepos := []interface{}{
 			// Allow every nanohype org repo so a tenant Application can pull

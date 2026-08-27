@@ -99,8 +99,20 @@ Usage: scripts/check-ssm-contract.py [--verbose]
 
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _source_text import strip_comments  # noqa: E402
+
+import argparse
+
 import re
+import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import EXIT_CANNOT_EVALUATE
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -248,12 +260,28 @@ def collect() -> tuple[list[Param], set[str]]:
 
     for component_dir in sorted(p for p in COMPONENTS.iterdir() if p.is_dir()):
         files = sorted(component_dir.glob("*.tf"))
-        locals_map = parse_locals([f.read_text() for f in files])
+        locals_map = parse_locals([strip_comments(f.read_text(), "hcl") for f in files])
 
         for tf in files:
-            src = tf.read_text()
+            # TWO VIEWS OF ONE FILE, chosen by what each check is asking.
+            #
+            # `raw` carries the `# ssm-consumer:` annotations — a comment, and
+            # this gate's own vocabulary for "another repo reads this one". A
+            # stripped view erases them and every cross-repo parameter reports as
+            # unread. Measured: stripping this read turned four correctly
+            # annotated parameters into findings, including
+            # kill-switch/state_machine_arn, which the telemetry-pipeline
+            # standard names as a published discovery path.
+            #
+            # `src` is the same file with comments blanked, and the resource
+            # bodies are read from it — because a commented-out `name =` is not a
+            # published parameter, and counting it as one let a parameter nobody
+            # writes read as written.
+            raw = tf.read_text()
+            src = strip_comments(raw, "hcl")
             for m in HEADER.finditer(src):
                 body = block_body(src, m.end() - 1)
+                raw_body = block_body(raw, m.end() - 1) if m.end() - 1 < len(raw) else body
                 name_match = NAME.search(body)
                 if not name_match:
                     # A name built by something other than a literal string. Fail
@@ -265,14 +293,18 @@ def collect() -> tuple[list[Param], set[str]]:
                         "has no literal name; this check cannot resolve it",
                         file=sys.stderr,
                     )
-                    sys.exit(2)
+                    sys.exit(EXIT_CANNOT_EVALUATE)
                 resolved = normalize(name_match.group("value"), locals_map)
 
                 if m.group("kind") == "data":
                     read.add(resolved)
                     continue
 
-                declared = CONSUMER.search(leading_comments(src, m.start()))
+                # RAW: the annotation IS a comment, and it is what says another
+                # repo reads this parameter. The resource body above is read from
+                # the stripped view; this one line is the other half of the same
+                # view-per-check split.
+                declared = CONSUMER.search(leading_comments(raw, m.start()))
                 written.append(
                     Param(
                         component_dir.name,
@@ -310,6 +342,17 @@ def collect_consumed() -> list[ConsumedPath]:
     for path in sorted(OPERATORS.rglob("*.go")):
         if path.name.endswith("_test.go"):
             continue
+        # RAW, deliberately. The `// ssm-producer:` marker this function reads IS
+        # a comment — it is the gate's own vocabulary for "another repo writes
+        # this one" — so a stripped view here erases the annotation and reports
+        # every cross-repo parameter as unpublished. Measured: stripping dropped
+        # producers from 22 to 19 and turned three correctly-annotated reads into
+        # findings.
+        #
+        # The sibling sites below DO strip, and the difference is what each is
+        # asking. A commented-out `case` arm is not a live assignment and a
+        # commented-out field reference is not a use; a commented-out annotation
+        # is still the annotation.
         src = path.read_text()
         for m in PARAM_PATH_FN.finditer(src):
             lit = SSM_LITERAL.search(m.group("body"))
@@ -319,7 +362,7 @@ def collect_consumed() -> list[ConsumedPath]:
                     "/eks-agent-platform literal; this check cannot resolve what it reads",
                     file=sys.stderr,
                 )
-                sys.exit(2)
+                sys.exit(EXIT_CANNOT_EVALUATE)
             declared = PRODUCER.search(m.group(1) or "")
             found.append(
                 ConsumedPath(
@@ -336,17 +379,40 @@ def collect_consumed() -> list[ConsumedPath]:
             "satisfied",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     return found
+
+
+def operator_producers() -> set[str]:
+    """Keys whose case arm names another repo as the publisher.
+
+    Read from the RAW source: the annotation IS a comment, and the stripped view
+    this gate uses for code erases it. Same view-per-check split the terraform
+    walk makes, for the same reason.
+    """
+    raw = OPERATOR_CONFIG.read_text()
+    out: set[str] = set()
+    lines = raw.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r'\s*case\s+"([^"]+)":', line)
+        if not m:
+            continue
+        for prev in reversed(lines[max(0, i - 4) : i]):
+            if "ssm-producer:" in prev:
+                out.add(m.group(1))
+                break
+            if not prev.strip().startswith("//"):
+                break
+    return out
 
 
 def operator_keys() -> dict[str, str]:
     """{relative key: the Config field its case arm assigns}."""
-    src = OPERATOR_CONFIG.read_text()
+    src = strip_comments(OPERATOR_CONFIG.read_text(), "go")
     body = re.search(r"func \(c \*Config\) assign\(.*?\n\}", src, re.S)
     if not body:
         print(f"ERROR: cannot find Config.assign in {OPERATOR_CONFIG}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     arms = re.findall(r'case\s+"([^"]+)":\s*\n\s*c\.(\w+)\s*=', body.group(0))
     keys = dict(arms)
     if len(keys) < 10:
@@ -355,7 +421,7 @@ def operator_keys() -> dict[str, str]:
             "and every operator-consumed parameter would look like an orphan",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     return keys
 
 
@@ -371,7 +437,7 @@ def live_fields() -> set[str]:
     for path in sorted(OPERATORS.rglob("*.go")):
         if OPERATOR_CONFIG.parent in path.parents:
             continue
-        for m in re.finditer(r"\.([A-Z]\w*)\b", path.read_text()):
+        for m in re.finditer(r"\.([A-Z]\w*)\b", strip_comments(path.read_text(), "go")):
             live.add(m.group(1))
     if not live:
         print(
@@ -379,7 +445,7 @@ def live_fields() -> set[str]:
             "is not seeing the tree and every field would look dead",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(EXIT_CANNOT_EVALUATE)
     return live
 
 
@@ -414,7 +480,7 @@ def main() -> int:
 
     if not written:
         print("ERROR: no aws_ssm_parameter resources found; the walk is not seeing the tree", file=sys.stderr)
-        return 2
+        return EXIT_CANNOT_EVALUATE
 
     orphans: list[Param] = []
     consumed: list[tuple[Param, str]] = []
@@ -460,6 +526,34 @@ def main() -> int:
         f"{len(consumed_paths)} parameters consumed by name, "
         f"{len(consumed_paths) - len(unproduced)} produced, {len(unproduced)} unaccounted for"
     )
+
+    # A decoded key nothing publishes. This is a THIRD direction, and it was
+    # open: the other two compare parameters against path-built reads, while a
+    # Config.assign arm names its key as a literal and is matched by neither. A
+    # parameter that vanishes — the producer deleted, commented out, or renamed —
+    # leaves the arm decoding a key that never arrives, and the operator treats
+    # absent as not-configured, so the capability is silently off.
+    externally_produced = operator_producers()
+    undelivered = sorted(
+        (k, f) for k, f in keys.items()
+        if CLUSTER_ROOT + k not in {p.name for p in written} and k not in externally_produced
+    )
+    if undelivered:
+        print()
+        print("These keys are decoded by the operator and nothing in this repo publishes them:")
+        print()
+        for k, f in undelivered:
+            print(f"  {CLUSTER_ROOT}{k}")
+            print(f"      decoded into Config.{f}, and no aws_ssm_parameter writes it")
+        print()
+        print("The operator reads absent as 'not configured', so the capability is off while")
+        print("everything reports healthy. Either publish it here, or if another repo owns")
+        print("the prefix say so above the case arm:")
+        print()
+        print("      // ssm-producer: landing-zone's agent-iam component, which owns this prefix.")
+        print('      case "agent-iam/operator_role_arn":')
+        print()
+        return 1
 
     if unproduced:
         print()
@@ -508,5 +602,17 @@ def main() -> int:
     return 0
 
 
+
+# Argument parsing is strict on purpose: a gate that ignores argv cannot tell a
+# renamed flag from a correct one, so a CI step naming a mode this script does
+# not have would keep exiting 0. scripts/check-gates.py asserts this for every
+# gate here.
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--verbose', action='store_true', help='print every parameter compared, not only the mismatches')
+    return ap.parse_args()
+
+
 if __name__ == "__main__":
+    _parse_args()
     sys.exit(main())

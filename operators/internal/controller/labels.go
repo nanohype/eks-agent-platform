@@ -20,6 +20,21 @@ const labelPrefix = "agents.nanohype.dev"
 // Exported label keys, one per kind of object the operator labels. Each is the
 // single source of truth for both the object's metadata label and any selector
 // that matches it.
+// The platform.nanohype.dev/* dimensions the resource-tagging standard requires
+// on every k8s object (required_by_surface.k8s), alongside the two
+// app.kubernetes.io/* keys stamped in labelsForPlatform. They sit under a
+// different prefix from the agents.nanohype.dev/* keys below because the
+// standard renders them there — org dimensions under <group>.nanohype.dev, and
+// tenant/agent identity under the agents group.
+const (
+	labelEnvironment = "platform.nanohype.dev/environment"
+	labelTeam        = "platform.nanohype.dev/team"
+)
+
+// The label keys the operator stamps on everything it creates. They are exported
+// because the tenant chart, the eval runner and the conformance suite select on
+// exactly these strings, and a selector that disagrees with the stamp silently
+// matches nothing.
 const (
 	LabelPlatform      = labelPrefix + "/platform"
 	LabelTenant        = labelPrefix + "/tenant"

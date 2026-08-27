@@ -1,6 +1,6 @@
 # Runbooks
 
-Operational playbooks for the eks-agent-platform. Each is referenced by `runbook_url` on the Grafana-managed alert rules in `eks-gitops/dashboards/base/alerting/`, so a page links directly to the relevant doc. (They were previously referenced from a chart-shipped `PrometheusRule`, which was deleted — the catalog installs the prometheus-operator CRDs and no ruler, so it was applied everywhere and evaluated nowhere.)
+Operational playbooks for the eks-agent-platform. Each is referenced by `runbook_url` on the Grafana-managed alert rules in `eks-gitops/dashboards/base/alerting/`, so a page links directly to the relevant doc. (The catalog installs the prometheus-operator CRDs and no ruler, so a chart-shipped `PrometheusRule` would be applied everywhere and evaluated nowhere — alert rules belong in eks-gitops, not in this repo's charts.)
 
 ## Alert-triggered
 

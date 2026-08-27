@@ -56,7 +56,7 @@ kubectl logs -n eks-agent-platform deploy/eks-agent-platform-operator | grep -i 
 Likely causes, in order:
 
 - **The Platform reconciler is wedged or crash-looping.** It is the only writer of the
-  AppProject spec (ADR 0010), so nothing renders the window. Check operator health and
+  AppProject spec (ADR 0009), so nothing renders the window. Check operator health and
   the `OperatorDown` alert.
 - **The SLOPolicy watch is not firing.** The Platform reconciler's periodic resync is
   gated on AWS clients being wired, so on a cluster running without them the watch is
@@ -135,6 +135,6 @@ kubectl apply -f charts/operator/crds/governance.nanohype.dev_slopolicies.yaml
 
 ## Related
 
-- [ADR 0010](../adr/0010-slo-hold-single-writer.md) — why the evaluation and the write live in different reconcilers
+- [ADR 0009](../adr/0009-slo-hold-single-writer.md) — why the evaluation and the write live in different reconcilers
 - [kill-switch-fired.md](./kill-switch-fired.md) — the budget analogue, which suspends rather than holds
 - [operator-down.md](./operator-down.md) — if neither reconciler is running

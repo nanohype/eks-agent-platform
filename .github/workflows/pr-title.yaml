@@ -16,7 +16,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: read   # read the pull request title this validates
 
 concurrency:
   group: pr-title-${{ github.event.pull_request.number }}

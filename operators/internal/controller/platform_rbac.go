@@ -46,7 +46,7 @@ func (r *PlatformReconciler) ensureOperatorImpersonateRBAC(ctx context.Context, 
 
 	cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
-		cr.Labels = labelsForPlatform(p)
+		cr.Labels = r.labelsForPlatform(p)
 		cr.Rules = []rbacv1.PolicyRule{{
 			APIGroups:     []string{""},
 			Resources:     []string{"users"},
@@ -60,7 +60,7 @@ func (r *PlatformReconciler) ensureOperatorImpersonateRBAC(ctx context.Context, 
 
 	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
-		crb.Labels = labelsForPlatform(p)
+		crb.Labels = r.labelsForPlatform(p)
 		crb.RoleRef = rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "ClusterRole",
