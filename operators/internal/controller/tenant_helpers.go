@@ -11,6 +11,8 @@ import (
 	"math/big"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 )
 
 // parseDecimal accepts a CRD decimal-string field and returns a big.Float.
@@ -78,6 +80,19 @@ func conditionTenantUnderBudget() metav1.Condition {
 		Message:            "aggregate spend within tenant cap",
 		LastTransitionTime: metav1Now(),
 	}
+}
+
+// budgetLegReported reports whether a BudgetPolicy's spend is a reading from
+// this tick rather than the last value it managed to write. A reconciler that
+// could not read its spend says so on its own status; the roll-up asks rather
+// than assuming the number in front of it is current.
+func budgetLegReported(bp *governancev1alpha1.BudgetPolicy) bool {
+	for _, c := range bp.Status.Conditions {
+		if c.Type == "BudgetReconciled" {
+			return c.Status != metav1.ConditionFalse
+		}
+	}
+	return true
 }
 
 // conditionTenantBudget picks which of the three sentences this tick earned.

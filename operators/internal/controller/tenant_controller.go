@@ -171,7 +171,12 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 			spendComplete = false
 			continue
 		}
-		if v, ok := parseDecimal(bp.Status.CurrentSpendUsd); ok {
+		// The producer says whether its own number is a reading. A BudgetPolicy
+		// keeps status.currentSpendUsd at its last successful value when its
+		// spend query breaks, and publishes BudgetReconciled=False on the same
+		// object — so a leg can parse cleanly and still not have answered THIS
+		// tick. Whether the string parses is not the question.
+		if v, ok := parseDecimal(bp.Status.CurrentSpendUsd); ok && budgetLegReported(&bp) {
 			totalSpend.Add(totalSpend, v)
 		} else {
 			spendComplete = false
@@ -201,7 +206,10 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 	}
 
 	// Compare aggregate to the tenant-spec cap (if set).
-	if cap, ok := parseDecimal(t.Spec.AggregateMonthlyBudgetUsd); ok && cap.Sign() > 0 {
+	// A cap of zero is a declared cap, not an undeclared one: the shipped
+	// pattern admits "0" with no minimum, and every spend exceeds it. Reporting
+	// it as "no cap declared" is a read presence reported as an absence.
+	if cap, ok := parseDecimal(t.Spec.AggregateMonthlyBudgetUsd); ok {
 		reading.capCompared = true
 		if totalSpend.Cmp(cap) > 0 {
 			reading.overSpec = true
@@ -274,6 +282,16 @@ func (r *TenantReconciler) markAggregateUnreadable(ctx context.Context, t *platf
 			}
 			return err
 		}
+		// The budget condition beside it answered from the last successful tick
+		// and would keep answering through the outage. An operator reading one
+		// honest condition next to a stale positive claim reads the claim.
+		upsertCondition(&fresh.Status.Conditions, metav1.Condition{
+			Type:               "TenantBudgetExceeded",
+			Status:             metav1.ConditionUnknown,
+			Reason:             "AggregateUnreadable",
+			Message:            "the roll-up could not be computed, so no spend was compared against the cap this tick",
+			LastTransitionTime: metav1Now(),
+		})
 		upsertCondition(&fresh.Status.Conditions, metav1.Condition{
 			Type:               "Aggregated",
 			Status:             metav1.ConditionFalse,

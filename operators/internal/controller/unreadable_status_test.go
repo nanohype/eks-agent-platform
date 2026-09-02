@@ -476,11 +476,21 @@ func TestTheTenantBudgetConditionSeparatesNoCapFromWithinCap(t *testing.T) {
 // skips the leg, and without recording that it did, the total is short by a
 // whole platform while the condition reports a comparison that finished.
 func TestEveryLegThatDidNotAnswerLeavesTheComparisonUnfinished(t *testing.T) {
-	// One question per leg: did it contribute a number. The reasons a leg can
-	// fail to answer are not a list to enumerate — a reference naming nothing,
-	// a reference resolving to nothing, a spend that does not parse are the same
-	// answer — so each is asserted against the same property rather than against
-	// its own case.
+	// One question per leg: did it contribute a number THIS TICK. The reasons a
+	// leg can fail to answer are not a list to enumerate — a reference naming
+	// nothing, a reference resolving to nothing, a spend that does not parse,
+	// and a spend whose own controller says it is stale are the same answer.
+	//
+	// HOLDS: the aggregate comparison. A leg that did not answer leaves it
+	// unfinished, and the condition says so.
+	//
+	// DOES NOT HOLD: the aggregate NUMBER on status when no cap is declared. The
+	// condition returns on the no-cap arm before completeness is consulted, so
+	// status.aggregateSpendUsd can be short by a platform with every condition
+	// green. Nor does it hold that an arrived number is that leg's own: nothing
+	// enforces one BudgetPolicy per Platform, so a shared reference is counted
+	// twice, and status.currentSpendUsd carries no pattern, so a negative leg
+	// subtracts. Both are claims about a sum this gate does not make.
 	scheme := runtime.NewScheme()
 	if err := platformv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register platform types: %v", err)
@@ -506,6 +516,14 @@ func TestEveryLegThatDidNotAnswerLeavesTheComparisonUnfinished(t *testing.T) {
 		bp.Status.CurrentSpendUsd = spend
 		return bp
 	}
+	unreported := func(name, spend string) *governancev1alpha1.BudgetPolicy {
+		bp := policy(name, spend)
+		bp.Status.Conditions = []metav1.Condition{{
+			Type: "BudgetReconciled", Status: metav1.ConditionFalse, Reason: "ReconcileFailed",
+			LastTransitionTime: metav1.Now(),
+		}}
+		return bp
+	}
 
 	cases := []struct {
 		name    string
@@ -516,6 +534,7 @@ func TestEveryLegThatDidNotAnswerLeavesTheComparisonUnfinished(t *testing.T) {
 		{"a reference that resolves to nothing", []client.Object{platform("a", "gone")}, false},
 		{"a spend that does not parse", []client.Object{platform("a", "b"), policy("b", "not-a-number")}, false},
 		{"a spend not yet reported", []client.Object{platform("a", "b"), policy("b", "")}, false},
+		{"a leg whose own controller says it could not read", []client.Object{platform("a", "b"), unreported("b", "1.5")}, false},
 		{"every leg answered", []client.Object{platform("a", "b"), policy("b", "1.5")}, true},
 	}
 
@@ -533,6 +552,60 @@ func TestEveryLegThatDidNotAnswerLeavesTheComparisonUnfinished(t *testing.T) {
 				t.Errorf("spendComplete = %v, want %v — a leg that did not contribute a number leaves "+
 					"the aggregate short by that platform's spend, and the condition would report a "+
 					"comparison against a total that is not the total", reading.spendComplete, tc.want)
+			}
+		})
+	}
+}
+
+// TestADeclaredCapIsComparedHoweverSmall carries a spec cap through the roll-up
+// into the condition, which is the wiring neither the reading-level test nor the
+// condition-level one reached: both hand-built their inputs, so a capCompared
+// that was always true or never set survived both.
+func TestADeclaredCapIsComparedHoweverSmall(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := platformv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register platform types: %v", err)
+	}
+	if err := governancev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register governance types: %v", err)
+	}
+
+	cases := []struct {
+		name, cap, spend string
+		reason           string
+	}{
+		// Zero is a cap the tenant declared, and every spend exceeds it. Reading
+		// it as an absence reports a presence the spec carries as one it does not.
+		{"a cap of zero is a cap", "0", "0.01", "AggregateOverCap"},
+		{"a cap under which the spend sits", "100", "1.00", "WithinCap"},
+		{"no cap declared", "", "1.00", "NoAggregateCap"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tenant := &platformv1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "acme"}}
+			tenant.Spec.AggregateMonthlyBudgetUsd = tc.cap
+			p := &platformv1alpha1.Platform{
+				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ctrlTestNS},
+				Spec: platformv1alpha1.PlatformSpec{
+					Tenant: "acme",
+					Budget: platformv1alpha1.BudgetRef{Name: "b"},
+				},
+			}
+			bp := &governancev1alpha1.BudgetPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: ctrlTestNS},
+			}
+			bp.Status.CurrentSpendUsd = tc.spend
+
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant, p, bp).Build()
+			r := &TenantReconciler{Client: cl, Scheme: scheme}
+			reading, err := r.aggregate(context.Background(), tenant)
+			if err != nil {
+				t.Fatalf("aggregate: %v", err)
+			}
+			if got := conditionTenantBudget(reading).Reason; got != tc.reason {
+				t.Errorf("a tenant declaring cap %q against spend %q reports %q, want %q",
+					tc.cap, tc.spend, got, tc.reason)
 			}
 		})
 	}
