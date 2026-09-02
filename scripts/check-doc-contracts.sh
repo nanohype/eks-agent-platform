@@ -316,9 +316,11 @@ elif [ "$go_ports" != "$ref_ports" ]; then
   fail=1
 fi
 
-# The architecture diagram names the destination in prose. It said localhost,
-# which is where an SDK exports when it is given no endpoint at all — the
-# failure the operator stamps OTEL_EXPORTER_OTLP_ENDPOINT to prevent.
+# The architecture diagram names the destination in prose, where nothing reads
+# it. A diagram naming localhost describes the address an OTel SDK exports to
+# when it is given no endpoint at all — the failure the operator stamps
+# OTEL_EXPORTER_OTLP_ENDPOINT to prevent — so it is the one wrong answer a
+# reader is most likely to act on.
 arch_line=$(grep -oE 'agent pod → OTLP \([^)]*\)' ARCHITECTURE.md 2>/dev/null | head -1 || true)
 grpc_port=$(grep -oE 'otlpGRPCPort = [0-9]+' \
   operators/internal/controller/cilium_egress.go 2>/dev/null | grep -oE '[0-9]+' || true)

@@ -14,6 +14,7 @@ import (
 	"go/token"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -170,22 +171,56 @@ func telemetryEgressLegs() []telemetryEgressLeg {
 func TestEveryEgressLegAdmitsTheAddressStamped(t *testing.T) {
 	namespace, port, _ := stampedTelemetryAddress(t)
 
+	// A leg opens a PAIR, because the collector receives on both transports and
+	// a rule is written once for whichever a workload uses. The stamped endpoint
+	// names one of them, so holding a leg only to that one leaves the other half
+	// of every leg compared against nothing — and half a leg is where a literal
+	// port survives. The leg is held to the whole receiver set, in both
+	// directions: every port the collector receives on must be opened, and no
+	// port it does not receive on may be.
+	want := map[int]bool{}
+	for _, p := range otlpReceiverPortsFromSpec {
+		want[p] = true
+	}
+	if !want[port] {
+		t.Fatalf("the operator stamps port %d, which is not a port OTLP assigns any transport; "+
+			"the legs below are compared against the receiver set and this address is outside it", port)
+	}
+
 	for _, leg := range telemetryEgressLegs() {
 		t.Run(leg.name, func(t *testing.T) {
-			ports := leg.open(t, namespace)
-			if len(ports) == 0 {
+			got := map[int]bool{}
+			for _, p := range leg.open(t, namespace) {
+				got[p] = true
+			}
+			if len(got) == 0 {
 				t.Fatalf("%s opens no rule toward %q, the namespace the stamped endpoint addresses; "+
 					"a pod exporting there hits default-deny while staying Running", leg.name, namespace)
 			}
-			for _, got := range ports {
-				if got == port {
-					return
+			for p := range want {
+				if !got[p] {
+					t.Errorf("%s opens %v toward %q and not %d, which the collector receives on; "+
+						"a workload on that transport exports into a closed egress", leg.name, sortedPorts(got), namespace, p)
 				}
 			}
-			t.Errorf("the operator stamps port %d and %s opens %v toward %q; "+
-				"the address given and the address allowed are the same fact and these disagree", port, leg.name, ports, namespace)
+			for p := range got {
+				if !want[p] {
+					t.Errorf("%s opens %d toward %q, which no OTLP receiver listens on; "+
+						"the rule allows egress to nowhere and reads like a collector that is quiet", leg.name, p, namespace)
+				}
+			}
 		})
 	}
+}
+
+// sortedPorts renders a port set for a failure message in a stable order.
+func sortedPorts(set map[int]bool) []int {
+	out := make([]int, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Ints(out)
+	return out
 }
 
 // notEgressLegs are the functions that name collectorNamespace for a reason
@@ -200,9 +235,10 @@ var notEgressLegs = map[string]string{
 
 func TestEveryFunctionNamingTheCollectorIsCovered(t *testing.T) {
 	// A table of legs is a list of the ones someone thought of. The package's
-	// own source decides the membership instead: a function that names
-	// collectorNamespace either opens a path to it or hands out its address,
-	// and a sixth leg added without a row here fails this.
+	// own source decides the membership instead: a function that names the
+	// collector namespace — by the constant or by its value — either opens a
+	// path to it or hands out its address, and a leg added without a row here
+	// fails this.
 	covered := map[string]bool{}
 	for _, leg := range telemetryEgressLegs() {
 		covered[leg.name] = true
@@ -215,7 +251,7 @@ func TestEveryFunctionNamingTheCollectorIsCovered(t *testing.T) {
 		if _, ok := notEgressLegs[fn]; ok {
 			continue
 		}
-		t.Errorf("%s names collectorNamespace and no leg in telemetryEgressLegs covers it; "+
+		t.Errorf("%s names the collector namespace and no leg in telemetryEgressLegs covers it; "+
 			"its ports are never compared against the address the operator stamps", fn)
 	}
 	for name := range notEgressLegs {
@@ -226,7 +262,7 @@ func TestEveryFunctionNamingTheCollectorIsCovered(t *testing.T) {
 }
 
 // functionsNamingTheCollector returns every function in the package's shipped
-// sources whose body mentions collectorNamespace.
+// sources that names the collector namespace, by the constant or by its value.
 func functionsNamingTheCollector(t *testing.T) []string {
 	t.Helper()
 	var out []string
@@ -236,13 +272,31 @@ func functionsNamingTheCollector(t *testing.T) []string {
 			if !ok || fn.Body == nil {
 				return true
 			}
+			var enrolled bool
 			ast.Inspect(fn.Body, func(m ast.Node) bool {
-				if id, ok := m.(*ast.Ident); ok && id.Name == "collectorNamespace" {
-					out = append(out, fn.Name.Name)
+				if enrolled {
 					return false
 				}
-				return true
+				switch n := m.(type) {
+				case *ast.Ident:
+					enrolled = n.Name == "collectorNamespace"
+				case *ast.BasicLit:
+					// A leg written with the literal is still a leg. The constant
+					// exists so a rule does not spell the namespace itself, and
+					// the operator chart's own NetworkPolicy shows the spelling is
+					// reachable, so a scan keyed on the identifier alone would
+					// leave exactly that leg neither enrolled nor flagged.
+					if n.Kind == token.STRING {
+						if v, err := strconv.Unquote(n.Value); err == nil {
+							enrolled = v == collectorNamespace
+						}
+					}
+				}
+				return !enrolled
 			})
+			if enrolled {
+				out = append(out, fn.Name.Name)
+			}
 			return true
 		})
 	})
