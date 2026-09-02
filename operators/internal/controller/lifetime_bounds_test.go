@@ -352,27 +352,40 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 		t.Errorf("the %s handler does not carry the guard %s — a handler that does not exit on success "+
 			"overwrites the result the run wrote at writeback", handler, guard)
 	}
+	// The property is that the handler issues NO write to the suite on a
+	// successful run — not that it avoids one particular command. Locating a
+	// write by its spelling enforces the property for that spelling and leaves
+	// every other one green, so the branch body is read instead: its only
+	// statement is the exit, which closes every spelling at once.
 	guardAt := strings.Index(code, guard)
 	if guardAt >= 0 {
 		rest := code[guardAt+len(guard):]
 		end := strings.Index(rest, "fi")
-		switch {
-		case end < 0 || !strings.Contains(rest[:end], "exit 0"):
-			t.Errorf("the %s handler's success guard does not exit; whatever follows it runs on a "+
-				"successful run too", handler)
-		case strings.Contains(rest[:end], "kubectl patch"):
-			t.Errorf("the %s handler patches the suite INSIDE its success guard, so a run that wrote "+
-				"its own result at writeback is overwritten by the handler behind it", handler)
+		if end < 0 {
+			t.Errorf("the %s handler's success guard is never closed; what belongs to it cannot be read", handler)
+		} else {
+			var body []string
+			for _, line := range strings.Split(rest[:end], "\n") {
+				if l := strings.TrimSpace(line); l != "" {
+					body = append(body, l)
+				}
+			}
+			if len(body) != 1 || body[0] != "exit 0" {
+				t.Errorf("the %s handler's success branch runs %v; its only statement must be `exit 0`, "+
+					"because anything else there runs on a run that already wrote its own result",
+					handler, body)
+			}
 		}
 	}
 
-	// Text and an exit are not enough: the guard has to stand AHEAD of the
-	// write. Moved below it, every token above still matches and every
-	// successful run has its score blanked before the guard is ever reached.
+	// And the branch has to stand ahead of the write. Below it, a successful run
+	// reaches the patch first: its lastRunAt is later than the workflow's start,
+	// so the handler takes the phase-only branch and the suite reports Failed
+	// while keeping the score the run measured.
 	writeAt := strings.Index(code, "kubectl patch evalsuite")
 	if guardAt >= 0 && writeAt >= 0 && guardAt > writeAt {
-		t.Errorf("the %s handler writes to the suite before its success guard runs; a successful run's "+
-			"result is blanked and the guard then exits having changed it", handler)
+		t.Errorf("the %s handler writes to the suite before its success guard runs, so a run that "+
+			"succeeded is patched to Failed and the guard then exits having contradicted it", handler)
 	}
 
 	for _, req := range []struct{ token, why string }{
