@@ -48,7 +48,10 @@ var fleetReadyAgents = prometheus.NewGaugeVec(
 // evalSuiteScore is the operator's view of an EvalSuite's most recent mean
 // score (0..1), the domain metric behind the eval-quality dashboard's score
 // panels. Emitted whenever a status write observes a parseable
-// EvalSuite.status.lastScore and cleared when the suite is deleted.
+// EvalSuite.status.lastScore, and removed when it does not — a suite deleted, or
+// a run that ended without measuring one. The series tracks the score's
+// presence, not only its value: a gauge that outlived the number it mirrors
+// would report a passing score for a run that produced none.
 var evalSuiteScore = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Name: "agents_eval_suite_score",

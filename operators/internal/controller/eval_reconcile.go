@@ -44,8 +44,10 @@ const evalFinalizer = "governance.nanohype.dev/eval-finalizer"
 // Argo's default here is no deadline at all.
 //
 // Four hours is a ceiling on a run that is not progressing rather than a budget
-// for one that is: every remote call inside a run carries its own shorter bound,
-// so a run still going at four hours is stuck on something none of them cover.
+// for one that is. Not every call inside a run is bounded — the model
+// invocations are, by the eval-runner's own per-request abort, and the artifact
+// copies to and from S3 are not — so the ceiling is what stands behind the ones
+// that are not, and four hours is far past a run that is making progress.
 // The deadline fails the workflow, and the WorkflowTemplate's exit handler is
 // what turns that into a suite reporting Failed — the writeback step patches
 // status only on the path that scores, so without the handler a terminated run
@@ -273,14 +275,21 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 			"arguments":             map[string]any{"parameters": params},
 			"serviceAccountName":    r.evalRunnerServiceAccount(),
 			"activeDeadlineSeconds": evalRunActiveDeadlineSeconds,
-			"ttlStrategy": map[string]any{
-				"secondsAfterSuccess": evalRunTTLAfterSuccess,
-				"secondsAfterFailure": evalRunTTLAfterFailure,
-			},
-			"podGC": map[string]any{"strategy": "OnWorkflowSuccess"},
+			"podGC":                 map[string]any{"strategy": "OnWorkflowSuccess"},
 		}
 
 		if kind == "CronWorkflow" {
+			// ttlStrategy belongs to the CHILD workflows a schedule spawns, and
+			// only there. On the one-shot form it would delete the object this
+			// reconciler owns and recreates by a deterministic name, so the next
+			// tick — any watch event, or the informer's initial list on operator
+			// start — would find it absent and submit a fresh run against a live
+			// model. A suite that declares no schedule is documented as manual
+			// only, and a collection policy is not a licence to run it again.
+			wfSpec["ttlStrategy"] = map[string]any{
+				"secondsAfterSuccess": evalRunTTLAfterSuccess,
+				"secondsAfterFailure": evalRunTTLAfterFailure,
+			}
 			spec := map[string]any{
 				"schedule":          suite.Spec.Schedule,
 				"concurrencyPolicy": "Forbid",
@@ -445,9 +454,16 @@ func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *governancev
 	// eval-runner writes it back into status; we mirror it as a real series so
 	// the eval-quality dashboard has a first-class metric, not only a KSM
 	// projection). Skip when the suite has not completed a run yet.
+	// A run that measured nothing clears status.lastScore, and the gauge has to
+	// go with it. Leaving the last parseable value in place would keep the
+	// eval-quality dashboard reporting a passing score for a run that produced
+	// none — the same claim the status write exists to stop making, on the
+	// surface a reader is more likely to be looking at.
 	if v, ok := parseDecimal(suite.Status.LastScore); ok {
 		f, _ := v.Float64()
 		evalSuiteScore.WithLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name).Set(f)
+	} else {
+		evalSuiteScore.DeleteLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name)
 	}
 	upsertCondition(&suite.Status.Conditions, cond)
 	return r.Status().Update(ctx, suite)

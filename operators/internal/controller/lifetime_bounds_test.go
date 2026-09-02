@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -224,16 +225,28 @@ func TestSubmittedRunIsBoundedWithoutTheOperator(t *testing.T) {
 			}
 
 			// Finished runs are collected by Argo, not by a reconcile, for the
-			// same reason: the collection has to happen while nobody is watching.
+			// same reason the deadline is Argo's: the collection has to happen
+			// while nobody is watching.
+			//
+			// Only on the scheduled form. There the TTL governs the child
+			// Workflows a schedule spawns, which the reconciler does not own and
+			// will not recreate. On the one-shot form it would delete the object
+			// the reconciler owns under a deterministic name, and the next
+			// reconcile would find it absent and submit a fresh run — see
+			// TestAManualSuiteIsNotCollectedIntoRunningAgain.
 			for _, field := range []string{"secondsAfterSuccess", "secondsAfterFailure"} {
 				p := append(append([]string{}, form.path...), "ttlStrategy", field)
 				ttl, found, err := unstructured.NestedInt64(form.obj.Object, p...)
 				if err != nil {
 					t.Fatalf("read %v: %v", p, err)
 				}
-				if !found || ttl <= 0 {
-					t.Errorf("the submitted run declares no ttlStrategy.%s; finished workflows accumulate "+
+				switch {
+				case form.name == "CronWorkflow" && (!found || ttl <= 0):
+					t.Errorf("the scheduled run declares no ttlStrategy.%s; its child workflows accumulate "+
 						"in the cluster with nothing collecting them", field)
+				case form.name == "Workflow" && found:
+					t.Errorf("the one-shot run declares ttlStrategy.%s; Argo would delete the object this "+
+						"reconciler owns and recreates by name, turning collection into a re-run", field)
 				}
 			}
 
@@ -250,6 +263,42 @@ func TestSubmittedRunIsBoundedWithoutTheOperator(t *testing.T) {
 					"pods of a FAILED run, which are the only record of why it failed", strategy)
 			}
 		})
+	}
+}
+
+// TestAManualSuiteIsNotCollectedIntoRunningAgain holds the boundary between
+// collecting a finished run and starting another one.
+//
+// A suite with no schedule renders a Workflow the reconciler owns, names
+// deterministically, and CreateOrUpdates on every reconcile — every watch event
+// on the suite, and the informer's initial list on operator start. A TTL on that
+// object deletes it after it succeeds; the next reconcile finds nothing and
+// submits again, against a live model, billed. The CRD documents a suite with no
+// schedule as manual only, and that is the sentence this keeps true.
+func TestAManualSuiteIsNotCollectedIntoRunningAgain(t *testing.T) {
+	r := &EvalReconciler{
+		RunnerNamespace:      "eval-runner",
+		RunnerServiceAccount: "eval-runner-custom",
+		ReportsBucket:        testReportsBucket,
+	}
+	wf := submitEvalWorkflow(t, r)
+
+	if _, found, err := unstructured.NestedMap(wf.Object, "spec", "ttlStrategy"); err != nil {
+		t.Fatalf("read spec.ttlStrategy: %v", err)
+	} else if found {
+		t.Error("the one-shot run carries a ttlStrategy. Argo deletes the workflow when it expires, the " +
+			"next reconcile recreates it by the same name, and a suite documented as manual only runs " +
+			"itself on a timer")
+	}
+
+	// podGC stays: it collects the run's PODS, which the reconciler does not
+	// recreate, so it frees the same resources without touching the object whose
+	// absence means "run this".
+	if strategy, _, err := unstructured.NestedString(wf.Object, "spec", "podGC", "strategy"); err != nil {
+		t.Fatalf("read spec.podGC.strategy: %v", err)
+	} else if strategy == "" {
+		t.Error("the one-shot run collects neither its workflow nor its pods; a manual suite then leaves " +
+			"every run's pods behind for good")
 	}
 }
 
@@ -286,26 +335,67 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 	if body == "" {
 		t.Fatalf("onExit names %q and no template of that name carries a script; the handler runs nothing", handler)
 	}
+	// Assertions are made against the code, with the comments dropped. A shell
+	// comment satisfies a substring check exactly as well as the line it
+	// describes, so a handler whose behaviour was removed and whose explanation
+	// stayed would pass every check below.
+	code := shellCode(body)
 
-	// It has to write the failing phase, it has to write it to the suite, and it
-	// has to leave a successful run alone: that run has already written its own
-	// score, and a second patch behind it would replace the result with a blank.
+	// The guard has a direction, and a token cannot see it. Asserting that the
+	// body mentions "Succeeded" holds equally for a guard that exits on success
+	// and for its inverse — and the inverse is worse than no handler at all: it
+	// stays silent on every terminated run and blanks the score on every
+	// successful one. So the comparison is asserted as written, with the exit
+	// that belongs to it.
+	guard := `if [ "$status" = "Succeeded" ]; then`
+	if !strings.Contains(code, guard) {
+		t.Errorf("the %s handler does not carry the guard %s — a handler that does not exit on success "+
+			"overwrites the result the run wrote at writeback", handler, guard)
+	}
+	if i := strings.Index(code, guard); i >= 0 {
+		rest := code[i+len(guard):]
+		if end := strings.Index(rest, "fi"); end < 0 || !strings.Contains(rest[:end], "exit 0") {
+			t.Errorf("the %s handler's success guard does not exit; whatever follows it runs on a "+
+				"successful run too", handler)
+		}
+	}
+
 	for _, req := range []struct{ token, why string }{
 		{`phase:"Failed"`, "the handler runs on every outcome, so without this it reports nothing about a terminated run"},
 		{"kubectl patch evalsuite", "the handler writes to the suite, which is the only object a reader consults"},
-		{"Succeeded", "without a check on the outcome the handler also overwrites the score a successful run just wrote"},
+		{"kubectl get evalsuite", "the handler asks whether writeback already wrote; without the read it decides from the workflow's phase alone"},
+		{"{.status.lastRunAt}", "the read is of the stamp that says who wrote last"},
 	} {
-		if !strings.Contains(body, req.token) {
+		if !strings.Contains(code, req.token) {
 			t.Errorf("the %s handler does not carry %q: %s", handler, req.token, req.why)
 		}
 	}
 	// The score of a run that measured nothing is not the previous run's score.
 	for _, want := range []string{`lastScore:""`, `lastReportUrl:""`} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(code, want) {
 			t.Errorf("the %s handler leaves %s from the previous run in place, attributing a number to a "+
 				"run that produced none", handler, strings.TrimSuffix(want, `:""`))
 		}
 	}
+	// And the other branch: a run that DID measure keeps its numbers, so the
+	// handler needs a patch that carries the phase alone.
+	if !strings.Contains(code, `{status:{phase:"Failed"}}`) {
+		t.Errorf("the %s handler has one patch for both outcomes; a run that scored and then ended badly "+
+			"has its measured score blanked by the correction to its phase", handler)
+	}
+}
+
+// shellCode drops whole-line comments from a shell script so an assertion about
+// behaviour cannot be satisfied by prose describing it.
+func shellCode(body string) string {
+	var kept []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // sessionPod fetches the pod ensureSessionPod created.
@@ -359,4 +449,37 @@ func sandboxCeilingFromCRDDefault(t *testing.T) int32 {
 	}
 	t.Fatal("the generated AgentSandbox CRD declares no v1alpha1 schema")
 	return 0
+}
+
+// TestTheScoreGaugeGoesWithTheScore holds the metric to the same standard as the
+// status field beside it.
+//
+// A terminated run clears status.lastScore because it measured nothing. The
+// gauge mirrors that field, and a gauge that keeps its last parseable value
+// reports a passing score for the run that produced none — on the surface the
+// metric's own doc names as its reader. Status honest and metric stale is the
+// same wrong answer reached one layer out.
+func TestTheScoreGaugeGoesWithTheScore(t *testing.T) {
+	suite, platform, _ := evalFixtures()
+	cl := fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(suite, publishedGateway(platform, "chat")).WithStatusSubresource(suite).Build()
+	r := &EvalReconciler{Client: cl, RunnerNamespace: "eval-runner", ReportsBucket: testReportsBucket}
+
+	suite.Status.LastScore = "0.91"
+	if err := r.applyEvalStatus(context.Background(), suite, phaseReady, ""); err != nil {
+		t.Fatalf("applyEvalStatus with a score: %v", err)
+	}
+	if got := testutil.ToFloat64(evalSuiteScore.WithLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name)); got != 0.91 {
+		t.Fatalf("gauge = %v after a scored run, want 0.91", got)
+	}
+
+	// What the exit handler writes for a run that reached no score.
+	suite.Status.LastScore = ""
+	if err := r.applyEvalStatus(context.Background(), suite, phaseFailed, ""); err != nil {
+		t.Fatalf("applyEvalStatus with no score: %v", err)
+	}
+	if n := testutil.CollectAndCount(evalSuiteScore); n != 0 {
+		t.Errorf("%d score series survived a run that measured nothing; the dashboard still reads the "+
+			"last passing score for a suite whose status says it failed", n)
+	}
 }
