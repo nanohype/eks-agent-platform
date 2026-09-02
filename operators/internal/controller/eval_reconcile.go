@@ -30,6 +30,41 @@ import (
 // the reconciler emitted before the EvalSuite is deleted.
 const evalFinalizer = "governance.nanohype.dev/eval-finalizer"
 
+// The lifetime bounds on a submitted run. Argo enforces all three, which is the
+// point of setting them here rather than watching for a stuck run: they hold
+// while this operator is down, crashlooping or scaled to zero, and a run nobody
+// is watching is exactly the one that needs a ceiling.
+//
+// activeDeadlineSeconds is the one that matters most, and what makes it matter
+// is concurrencyPolicy. Under Forbid a run that never finishes is never
+// overtaken: it is still Running at the next tick, and the next, and every
+// scheduled run after it is skipped. The suite's status meanwhile carries the
+// last COMPLETED run's phase and score, so a hung run presents as a suite that
+// looks healthy and stopped telling the truth at a moment nobody can name.
+// Argo's default here is no deadline at all.
+//
+// Four hours is a ceiling on a run that is not progressing rather than a budget
+// for one that is. Not every call inside a run is bounded — the model
+// invocations are, by the eval-runner's own per-request abort, and the artifact
+// copies to and from S3 are not — so the ceiling is what stands behind the ones
+// that are not, and four hours is far past a run that is making progress.
+// The deadline fails the workflow, and the WorkflowTemplate's exit handler is
+// what turns that into a suite reporting Failed — the writeback step patches
+// status only on the path that scores, so without the handler a terminated run
+// patches nothing at all. The next scheduled run then proceeds: bounded silence
+// rather than permanent silence.
+//
+// The TTLs are asymmetric because the two outcomes are worth different amounts.
+// A successful run's pods carry nothing anyone needs; a failed run's pods are
+// the only record of why, so they outlive an overnight failure and are there in
+// the morning. podGC keeps the same asymmetry: it collects on SUCCESS only,
+// rather than on completion, so a failure is still inspectable.
+const (
+	evalRunActiveDeadlineSeconds int64 = 14400
+	evalRunTTLAfterSuccess       int64 = 3600
+	evalRunTTLAfterFailure       int64 = 86400
+)
+
 // defaultEvalRunnerNamespace is the fallback when the reconciler is built
 // without an EvalRunnerNamespace override (envtest / dev paths). Production
 // resolves this from SSM via operatorconfig.EvalRunnerNamespace and the
@@ -236,12 +271,25 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		}
 
 		wfSpec := map[string]any{
-			"workflowTemplateRef": map[string]any{"name": "eval-runner"},
-			"arguments":           map[string]any{"parameters": params},
-			"serviceAccountName":  r.evalRunnerServiceAccount(),
+			"workflowTemplateRef":   map[string]any{"name": "eval-runner"},
+			"arguments":             map[string]any{"parameters": params},
+			"serviceAccountName":    r.evalRunnerServiceAccount(),
+			"activeDeadlineSeconds": evalRunActiveDeadlineSeconds,
+			"podGC":                 map[string]any{"strategy": "OnWorkflowSuccess"},
 		}
 
 		if kind == "CronWorkflow" {
+			// ttlStrategy belongs to the CHILD workflows a schedule spawns, and
+			// only there. On the one-shot form it would delete the object this
+			// reconciler owns and recreates by a deterministic name, so the next
+			// tick — any watch event, or the informer's initial list on operator
+			// start — would find it absent and submit a fresh run against a live
+			// model. A suite that declares no schedule is documented as manual
+			// only, and a collection policy is not a licence to run it again.
+			wfSpec["ttlStrategy"] = map[string]any{
+				"secondsAfterSuccess": evalRunTTLAfterSuccess,
+				"secondsAfterFailure": evalRunTTLAfterFailure,
+			}
 			spec := map[string]any{
 				"schedule":          suite.Spec.Schedule,
 				"concurrencyPolicy": "Forbid",
@@ -406,9 +454,16 @@ func (r *EvalReconciler) applyEvalStatus(ctx context.Context, suite *governancev
 	// eval-runner writes it back into status; we mirror it as a real series so
 	// the eval-quality dashboard has a first-class metric, not only a KSM
 	// projection). Skip when the suite has not completed a run yet.
+	// A run that measured nothing clears status.lastScore, and the gauge has to
+	// go with it. Leaving the last parseable value in place would keep the
+	// eval-quality dashboard reporting a passing score for a run that produced
+	// none — the same claim the status write exists to stop making, on the
+	// surface a reader is more likely to be looking at.
 	if v, ok := parseDecimal(suite.Status.LastScore); ok {
 		f, _ := v.Float64()
 		evalSuiteScore.WithLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name).Set(f)
+	} else {
+		evalSuiteScore.DeleteLabelValues(suite.Namespace, suite.Spec.PlatformRef.Name, suite.Name)
 	}
 	upsertCondition(&suite.Status.Conditions, cond)
 	return r.Status().Update(ctx, suite)
