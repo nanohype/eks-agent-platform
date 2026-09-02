@@ -322,6 +322,7 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 			"suite reporting the last completed run's phase and score")
 	}
 
+	var tmplNode map[string]any
 	var body string
 	templates, _ := spec["templates"].([]any)
 	for _, raw := range templates {
@@ -329,12 +330,25 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 		if tmpl["name"] != handler {
 			continue
 		}
+		tmplNode = tmpl
 		script, _ := tmpl["script"].(map[string]any)
 		body, _ = script["source"].(string)
 	}
 	if body == "" {
 		t.Fatalf("onExit names %q and no template of that name carries a script; the handler runs nothing", handler)
 	}
+	// The handler is a pod, not a script: a container beside the script runs on
+	// every outcome too, and nothing here reads one. Rather than claim a
+	// coverage the file does not have, the template is required to carry no
+	// other container.
+	for _, key := range []string{"initContainers", "containers", "sidecars"} {
+		if _, ok := tmplNode[key]; ok {
+			t.Errorf("the %s template declares %s. The assertions below read its script alone, so a "+
+				"write issued from another container on the same template is invisible to all of them",
+				handler, key)
+		}
+	}
+
 	// Assertions are made against the code, with the comments dropped. A shell
 	// comment satisfies a substring check exactly as well as the line it
 	// describes, so a handler whose behaviour was removed and whose explanation
@@ -352,40 +366,66 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 		t.Errorf("the %s handler does not carry the guard %s — a handler that does not exit on success "+
 			"overwrites the result the run wrote at writeback", handler, guard)
 	}
-	// The property is that the handler issues NO write to the suite on a
-	// successful run — not that it avoids one particular command. Locating a
-	// write by its spelling enforces the property for that spelling and leaves
-	// every other one green, so the branch body is read instead: its only
-	// statement is the exit, which closes every spelling at once.
-	guardAt := strings.Index(code, guard)
-	if guardAt >= 0 {
-		rest := code[guardAt+len(guard):]
-		end := strings.Index(rest, "fi")
-		if end < 0 {
-			t.Errorf("the %s handler's success guard is never closed; what belongs to it cannot be read", handler)
-		} else {
-			var body []string
-			for _, line := range strings.Split(rest[:end], "\n") {
-				if l := strings.TrimSpace(line); l != "" {
-					body = append(body, l)
-				}
-			}
-			if len(body) != 1 || body[0] != "exit 0" {
-				t.Errorf("the %s handler's success branch runs %v; its only statement must be `exit 0`, "+
-					"because anything else there runs on a run that already wrote its own result",
-					handler, body)
-			}
+	// What this holds, and what it does not.
+	//
+	// HOLDS: on a successful run the handler reaches its exit having run no
+	// command at all. That is read structurally rather than by spelling — every
+	// line before the guard must be an assignment or a shell builtin, the guard
+	// must be a line of its own rather than text inside one, and its branch body
+	// must be exactly the exit. A command ahead of the guard, a trap registered
+	// there, a guard that exists only as a quoted string, and a write of any
+	// spelling inside the branch all fail here.
+	//
+	// DOES NOT HOLD: anything the exit handler does outside this script. Other
+	// containers on the template are checked for existence below and nothing
+	// reads their contents, and a write performed by the eval-runner image
+	// itself would be invisible to every assertion in this file.
+	lines := strings.Split(code, "\n")
+	guardAt, fiAt := -1, -1
+	for n, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == guard && guardAt < 0 {
+			guardAt = n
+		}
+		if guardAt >= 0 && trimmed == "fi" && fiAt < 0 {
+			fiAt = n
 		}
 	}
+	if guardAt < 0 {
+		t.Fatalf("the %s handler has no line that is exactly %s. A guard quoted inside another line is "+
+			"text, not a branch: the handler would mark every successful run failed while the check "+
+			"read the quotation", handler, guard)
+	}
 
-	// And the branch has to stand ahead of the write. Below it, a successful run
-	// reaches the patch first: its lastRunAt is later than the workflow's start,
-	// so the handler takes the phase-only branch and the suite reports Failed
-	// while keeping the score the run measured.
-	writeAt := strings.Index(code, "kubectl patch evalsuite")
-	if guardAt >= 0 && writeAt >= 0 && guardAt > writeAt {
-		t.Errorf("the %s handler writes to the suite before its success guard runs, so a run that "+
-			"succeeded is patched to Failed and the guard then exits having contradicted it", handler)
+	// Everything above the guard runs on a successful run too, so nothing above
+	// it may run at all. An assignment is inert; a command is not, whatever it
+	// is spelled, and a trap registered here fires on the branch's own exit.
+	for n := 0; n < guardAt; n++ {
+		stmt := strings.TrimSpace(lines[n])
+		if stmt == "" || strings.HasPrefix(stmt, "set ") {
+			continue
+		}
+		if name, _, ok := strings.Cut(stmt, "="); ok && name != "" && !strings.ContainsAny(name, " \t|&;()<>") {
+			continue // an assignment, including a command substitution bound to a name
+		}
+		t.Errorf("the %s handler runs %q before its success guard, so it runs on a successful run. "+
+			"Only assignments may precede the guard", handler, stmt)
+	}
+
+	if fiAt < 0 {
+		t.Errorf("the %s handler's success guard is never closed by a line that is exactly `fi`", handler)
+	} else {
+		var body []string
+		for _, line := range lines[guardAt+1 : fiAt] {
+			if l := strings.TrimSpace(line); l != "" {
+				body = append(body, l)
+			}
+		}
+		if len(body) != 1 || body[0] != "exit 0" {
+			t.Errorf("the %s handler's success branch runs %v; its only statement must be `exit 0`, "+
+				"because anything else there runs on a run that already wrote its own result",
+				handler, body)
+		}
 	}
 
 	for _, req := range []struct{ token, why string }{
