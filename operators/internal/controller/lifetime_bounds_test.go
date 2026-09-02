@@ -352,12 +352,27 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 		t.Errorf("the %s handler does not carry the guard %s — a handler that does not exit on success "+
 			"overwrites the result the run wrote at writeback", handler, guard)
 	}
-	if i := strings.Index(code, guard); i >= 0 {
-		rest := code[i+len(guard):]
-		if end := strings.Index(rest, "fi"); end < 0 || !strings.Contains(rest[:end], "exit 0") {
+	guardAt := strings.Index(code, guard)
+	if guardAt >= 0 {
+		rest := code[guardAt+len(guard):]
+		end := strings.Index(rest, "fi")
+		switch {
+		case end < 0 || !strings.Contains(rest[:end], "exit 0"):
 			t.Errorf("the %s handler's success guard does not exit; whatever follows it runs on a "+
 				"successful run too", handler)
+		case strings.Contains(rest[:end], "kubectl patch"):
+			t.Errorf("the %s handler patches the suite INSIDE its success guard, so a run that wrote "+
+				"its own result at writeback is overwritten by the handler behind it", handler)
 		}
+	}
+
+	// Text and an exit are not enough: the guard has to stand AHEAD of the
+	// write. Moved below it, every token above still matches and every
+	// successful run has its score blanked before the guard is ever reached.
+	writeAt := strings.Index(code, "kubectl patch evalsuite")
+	if guardAt >= 0 && writeAt >= 0 && guardAt > writeAt {
+		t.Errorf("the %s handler writes to the suite before its success guard runs; a successful run's "+
+			"result is blanked and the guard then exits having changed it", handler)
 	}
 
 	for _, req := range []struct{ token, why string }{
