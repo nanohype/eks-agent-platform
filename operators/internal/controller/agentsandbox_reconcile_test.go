@@ -108,10 +108,10 @@ func TestSessionPodIsConfinedToTheSandboxPool(t *testing.T) {
 	}
 }
 
-// TTLSecondsAfterFinished counts from a TERMINAL phase, so on its own it
-// collects a session that ended and says nothing about one that never does.
-// These pin the two as one mechanism: the deadline bounds the session, the TTL
-// bounds the corpse.
+// sandboxActiveDeadline resolves the spec field into the form a PodSpec takes.
+// This covers that resolution and nothing further: the value it returns reaching
+// a pod, and the coupling to the TTL that makes the ceiling load-bearing, are
+// asserted against rendered artifacts in lifetime_bounds_test.go.
 func TestSandboxActiveDeadline(t *testing.T) {
 	secs := func(v int32) *int32 { return &v }
 
@@ -133,7 +133,7 @@ func TestSandboxActiveDeadline(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "a positive ceiling reaches the pod spec",
+			name: "a positive ceiling is carried through unchanged",
 			in:   secs(14400),
 			want: func() *int64 { v := int64(14400); return &v }(),
 		},

@@ -10,11 +10,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -27,19 +29,23 @@ import (
 // terminal state, and neither reaches one on its own:
 //
 //	the AgentSandbox session pod   reconcileTTL counts from status.completedAt,
-//	                              which is written when the pod goes terminal
-//	the submitted eval run        the reconciler learns a run finished by
-//	                              reading the workflow's phase
+//	                              which the operator writes when it observes the
+//	                              pod go terminal
+//	the submitted eval run        the run patches the suite's status from inside
+//	                              itself; the reconciler does not read the
+//	                              workflow's phase, and says so at the point it
+//	                              computes the suite phase
 //
 // So for each, something OUTSIDE this operator has to guarantee the terminal
-// state arrives. That is what activeDeadlineSeconds is for on both, and it is
-// the half that was never asserted: the sandbox tests cover the helper that
-// computes the value and stop there, so deleting the field from the PodSpec
-// left the whole suite green — unit and envtest alike.
+// state arrives, and something has to report it when it arrives by force rather
+// than by the workload finishing.
 //
-// A test that reads the helper is testing arithmetic. These read the artifact,
-// because the artifact is what the cluster enforces and the operator's absence
-// is exactly the condition under which it has to.
+// The invariant these hold: a bound the operator relies on is asserted against
+// the artifact that carries it, not against the helper that computes its value.
+// A helper returns a number whatever the caller does with it, and the cluster
+// enforces only what reached the pod or the workflow — which is the whole point,
+// since the operator's absence is the condition under which the bound has to
+// work.
 
 // TestTheTTLCannotCollectASessionThatNeverEnds states the coupling both halves
 // depend on, in one place, so neither can be read alone.
@@ -93,7 +99,7 @@ func TestSessionCeilingReachesThePodForEveryDeclaration(t *testing.T) {
 		want *int64
 	}{
 		{"a declared ceiling reaches the pod", secs(600), func() *int64 { v := int64(600); return &v }()},
-		{"the shipped default reaches the pod", secs(sandboxCeilingFromCRDDefault(t)), func() *int64 {
+		{"the value the CRD defaults to is carried through", secs(sandboxCeilingFromCRDDefault(t)), func() *int64 {
 			v := int64(sandboxCeilingFromCRDDefault(t))
 			return &v
 		}()},
@@ -143,53 +149,162 @@ func TestTheShippedSandboxDefaultIsACeiling(t *testing.T) {
 	}
 }
 
-// TestSubmittedRunIsBoundedWithoutTheOperator reads the run the reconciler
-// actually submits.
-func TestSubmittedRunIsBoundedWithoutTheOperator(t *testing.T) {
+// submittedRunForms returns both shapes ensureArgoWorkflow emits, with the path
+// the run's spec sits at in each. A scheduled suite renders a CronWorkflow whose
+// run spec is nested under workflowSpec, so a test that reads only the one-shot
+// form asserts nothing about the shape the Forbid reasoning is about.
+func submittedRunForms(t *testing.T) []struct {
+	name string
+	obj  *unstructured.Unstructured
+	path []string
+} {
+	t.Helper()
 	r := &EvalReconciler{
 		RunnerNamespace:      "eval-runner",
 		RunnerServiceAccount: "eval-runner-custom",
 		ReportsBucket:        testReportsBucket,
 	}
-	wf := submitEvalWorkflow(t, r)
-
-	// Argo's default is no deadline. With concurrencyPolicy Forbid on the
-	// scheduled form, a run that never finishes is never overtaken and every
-	// later run is skipped, while the suite keeps reporting the last completed
-	// score — a suite that looks healthy and stopped being true.
-	deadline, found, err := unstructured.NestedInt64(wf.Object, "spec", "activeDeadlineSeconds")
-	if err != nil {
-		t.Fatalf("read spec.activeDeadlineSeconds: %v", err)
+	return []struct {
+		name string
+		obj  *unstructured.Unstructured
+		path []string
+	}{
+		{"Workflow", submitEvalWorkflow(t, r), []string{"spec"}},
+		{"CronWorkflow", submitScheduledEvalRun(t), []string{"spec", "workflowSpec"}},
 	}
-	if !found {
-		t.Error("the submitted run carries no activeDeadlineSeconds; a hung run then blocks every " +
-			"scheduled run after it while the suite's status still reports the last completed score")
-	} else if deadline <= 0 {
-		t.Errorf("activeDeadlineSeconds = %d, which bounds nothing", deadline)
+}
+
+// submitScheduledEvalRun renders the CronWorkflow a scheduled suite produces.
+func submitScheduledEvalRun(t *testing.T) *unstructured.Unstructured {
+	t.Helper()
+	suite, platform, fleet := evalFixtures()
+	suite.Spec.Schedule = "0 2 * * *"
+
+	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(publishedGateway(platform, "chat")).Build()
+	r := &EvalReconciler{
+		Client:               c,
+		RunnerNamespace:      "eval-runner",
+		RunnerServiceAccount: "eval-runner-custom",
+		ReportsBucket:        testReportsBucket,
+	}
+	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
+		t.Fatalf("ensureArgoWorkflow: %v", err)
+	}
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: argoWorkflowsGV.Group, Version: argoWorkflowsGV.Version, Kind: "CronWorkflow",
+	})
+	key := client.ObjectKey{Namespace: r.evalRunnerNamespace(), Name: evalWorkflowName(suite)}
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("a scheduled suite must render a CronWorkflow: %v", err)
+	}
+	return got
+}
+
+// TestSubmittedRunIsBoundedWithoutTheOperator reads the run the reconciler
+// actually submits, in both the forms it emits.
+func TestSubmittedRunIsBoundedWithoutTheOperator(t *testing.T) {
+	for _, form := range submittedRunForms(t) {
+		t.Run(form.name, func(t *testing.T) {
+			// Argo's default is no deadline. Under the scheduled form's Forbid
+			// policy a run that never finishes is never overtaken and every
+			// later run is skipped, while the suite keeps reporting the last
+			// completed score; the one-shot form simply runs forever.
+			path := append(append([]string{}, form.path...), "activeDeadlineSeconds")
+			d, found, err := unstructured.NestedInt64(form.obj.Object, path...)
+			if err != nil {
+				t.Fatalf("read %v: %v", path, err)
+			}
+			if !found {
+				t.Error("the submitted run carries no activeDeadlineSeconds; a hung run then blocks every " +
+					"scheduled run after it while the suite's status still reports the last completed score")
+			} else if d <= 0 {
+				t.Errorf("activeDeadlineSeconds = %d, which bounds nothing", d)
+			}
+
+			// Finished runs are collected by Argo, not by a reconcile, for the
+			// same reason: the collection has to happen while nobody is watching.
+			for _, field := range []string{"secondsAfterSuccess", "secondsAfterFailure"} {
+				p := append(append([]string{}, form.path...), "ttlStrategy", field)
+				ttl, found, err := unstructured.NestedInt64(form.obj.Object, p...)
+				if err != nil {
+					t.Fatalf("read %v: %v", p, err)
+				}
+				if !found || ttl <= 0 {
+					t.Errorf("the submitted run declares no ttlStrategy.%s; finished workflows accumulate "+
+						"in the cluster with nothing collecting them", field)
+				}
+			}
+
+			// A failure's pods are the only record of why it failed, so
+			// collection is on success only. OnWorkflowCompletion would take the
+			// evidence with it.
+			p := append(append([]string{}, form.path...), "podGC", "strategy")
+			strategy, _, err := unstructured.NestedString(form.obj.Object, p...)
+			if err != nil {
+				t.Fatalf("read %v: %v", p, err)
+			}
+			if strategy != "OnWorkflowSuccess" {
+				t.Errorf("podGC.strategy = %q, want OnWorkflowSuccess — a completed-run strategy deletes the "+
+					"pods of a FAILED run, which are the only record of why it failed", strategy)
+			}
+		})
+	}
+}
+
+// TestATerminatedRunIsReportedOnTheSuite covers the half a deadline alone does
+// not deliver.
+//
+// writeback is the only task that patches EvalSuite.status and it depends on
+// score, so a run terminated before scoring patches nothing: the suite keeps the
+// phase and score of the last run that finished, carried under a later
+// schedule tick. A deadline without this reports a suite that passed.
+func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(readEvalWorkflowTemplate(t)), &doc); err != nil {
+		t.Fatalf("parse the WorkflowTemplate: %v", err)
+	}
+	spec, _ := doc["spec"].(map[string]any)
+
+	handler, _ := spec["onExit"].(string)
+	if handler == "" {
+		t.Fatal("the WorkflowTemplate declares no onExit; a run that does not reach writeback leaves the " +
+			"suite reporting the last completed run's phase and score")
 	}
 
-	// Finished runs are collected by Argo, not by a reconcile, for the same
-	// reason: the collection has to happen while nobody is watching.
-	for _, field := range []string{"secondsAfterSuccess", "secondsAfterFailure"} {
-		ttl, found, err := unstructured.NestedInt64(wf.Object, "spec", "ttlStrategy", field)
-		if err != nil {
-			t.Fatalf("read spec.ttlStrategy.%s: %v", field, err)
+	var body string
+	templates, _ := spec["templates"].([]any)
+	for _, raw := range templates {
+		tmpl, _ := raw.(map[string]any)
+		if tmpl["name"] != handler {
+			continue
 		}
-		if !found || ttl <= 0 {
-			t.Errorf("the submitted run declares no ttlStrategy.%s; finished workflows accumulate "+
-				"in the cluster with nothing collecting them", field)
-		}
+		script, _ := tmpl["script"].(map[string]any)
+		body, _ = script["source"].(string)
+	}
+	if body == "" {
+		t.Fatalf("onExit names %q and no template of that name carries a script; the handler runs nothing", handler)
 	}
 
-	// A failure's pods are the only record of why it failed, so collection is on
-	// success only. OnWorkflowCompletion would take the evidence with it.
-	strategy, _, err := unstructured.NestedString(wf.Object, "spec", "podGC", "strategy")
-	if err != nil {
-		t.Fatalf("read spec.podGC.strategy: %v", err)
+	// It has to write the failing phase, it has to write it to the suite, and it
+	// has to leave a successful run alone: that run has already written its own
+	// score, and a second patch behind it would replace the result with a blank.
+	for _, req := range []struct{ token, why string }{
+		{`phase:"Failed"`, "the handler runs on every outcome, so without this it reports nothing about a terminated run"},
+		{"kubectl patch evalsuite", "the handler writes to the suite, which is the only object a reader consults"},
+		{"Succeeded", "without a check on the outcome the handler also overwrites the score a successful run just wrote"},
+	} {
+		if !strings.Contains(body, req.token) {
+			t.Errorf("the %s handler does not carry %q: %s", handler, req.token, req.why)
+		}
 	}
-	if strategy != "OnWorkflowSuccess" {
-		t.Errorf("podGC.strategy = %q, want OnWorkflowSuccess — a completed-run strategy deletes the "+
-			"pods of a FAILED run, which are the only record of why it failed", strategy)
+	// The score of a run that measured nothing is not the previous run's score.
+	for _, want := range []string{`lastScore:""`, `lastReportUrl:""`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the %s handler leaves %s from the previous run in place, attributing a number to a "+
+				"run that produced none", handler, strings.TrimSuffix(want, `:""`))
+		}
 	}
 }
 

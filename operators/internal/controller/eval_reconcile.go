@@ -35,20 +35,22 @@ const evalFinalizer = "governance.nanohype.dev/eval-finalizer"
 // while this operator is down, crashlooping or scaled to zero, and a run nobody
 // is watching is exactly the one that needs a ceiling.
 //
-// activeDeadlineSeconds is the one that matters most, because of what a
-// scheduled suite does without it. concurrencyPolicy is Forbid — correct, and
-// the reason is in TestScheduledSuiteForbidsConcurrentRuns — so a run that never
-// finishes is not overtaken: it is still Running at the next tick, and the next,
-// and every scheduled run after it is skipped. Meanwhile the suite's status
-// keeps reporting the last COMPLETED run's score, so the symptom of a hung run
-// is a suite that looks healthy and stopped telling the truth at some point
-// nobody can name. Argo's default here is no deadline at all.
+// activeDeadlineSeconds is the one that matters most, and what makes it matter
+// is concurrencyPolicy. Under Forbid a run that never finishes is never
+// overtaken: it is still Running at the next tick, and the next, and every
+// scheduled run after it is skipped. The suite's status meanwhile carries the
+// last COMPLETED run's phase and score, so a hung run presents as a suite that
+// looks healthy and stopped telling the truth at a moment nobody can name.
+// Argo's default here is no deadline at all.
 //
-// Four hours is the same ceiling the AgentSandbox session carries and for the
-// same reason: comfortably past any legitimate run, far short of one nobody
-// notices for a week. A run killed at the deadline fails loudly, the suite goes
-// Failed, and the next scheduled run proceeds — bounded silence rather than
-// permanent silence.
+// Four hours is a ceiling on a run that is not progressing rather than a budget
+// for one that is: every remote call inside a run carries its own shorter bound,
+// so a run still going at four hours is stuck on something none of them cover.
+// The deadline fails the workflow, and the WorkflowTemplate's exit handler is
+// what turns that into a suite reporting Failed — the writeback step patches
+// status only on the path that scores, so without the handler a terminated run
+// patches nothing at all. The next scheduled run then proceeds: bounded silence
+// rather than permanent silence.
 //
 // The TTLs are asymmetric because the two outcomes are worth different amounts.
 // A successful run's pods carry nothing anyone needs; a failed run's pods are
