@@ -18,6 +18,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	crconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -59,6 +60,40 @@ func metricsServerOptions(secure bool, addr string) server.Options {
 		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 	return opts
+}
+
+// reconcileTimeout is the ceiling on one Reconcile call, applied to the context
+// controller-runtime passes it.
+//
+// The bound belongs here rather than on the client. rest.Config.Timeout is the
+// obvious-looking place and is the wrong one: client-go copies it onto the
+// http.Client the REST client uses and reads it back for every request, and a
+// watch is a request. A 30s value would tear down and re-establish every
+// informer twice a minute, turning a timeout into a re-list storm against the
+// API server the operator depends on.
+//
+// What bounds a watch is the reflector, and it does so without this operator
+// setting anything: client-go puts TimeoutSeconds on each watch request,
+// randomized between a five-minute floor and twice that, under the comment "We
+// want to avoid situations of hanging watchers. Stop any watchers that do not
+// receive any events within the timeout window." The apiserver closes the
+// stream at that point and the reflector opens a new one.
+//
+// A reconcile is what was unbounded. Every remote call inside one already
+// carries a shorter bound of its own — per AWS request, per AWS operation
+// across its retries, per vcluster request — so reaching this ceiling means a
+// reconcile is stuck on something none of those cover. Ten minutes is far past
+// any legitimate first-time provision, which serializes many bounded calls, and
+// short enough that a wedged worker returns rather than being held until the
+// process restarts.
+const reconcileTimeout = 10 * time.Minute
+
+// controllerOptions carries the per-reconcile ceiling to every controller the
+// manager builds. Extracted so a test can read it: the option defaults to zero,
+// zero disables the timeout entirely, and at the call site zero is
+// indistinguishable from nobody having set it.
+func controllerOptions() crconfig.Controller {
+	return crconfig.Controller{ReconciliationTimeout: reconcileTimeout}
 }
 
 func main() {
@@ -219,6 +254,7 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       leaderElectionID,
+		Controller:             controllerOptions(),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
