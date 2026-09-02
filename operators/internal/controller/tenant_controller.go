@@ -108,9 +108,10 @@ type tenantReading struct {
 	// against at all — the field is optional, so the second is the common case.
 	capCompared bool
 	// spendComplete records that every Platform's budget leg contributed a
-	// number. A leg whose BudgetPolicy has not reported spend yet, or reported
-	// something unparseable, is skipped — so the total understates, and "within
-	// cap" computed from it is a claim about a sum that is not the sum.
+	// number. A leg that did not is skipped whatever the reason — so the total
+	// understates, and "within cap" computed from it is a claim about a sum that
+	// is not the sum. There is no list of ways to fail to answer here; there is
+	// one question per leg, and this records whether every leg answered it.
 	spendComplete bool
 }
 
@@ -153,7 +154,13 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 		// same namespace. We aggregate every BudgetPolicy referenced so
 		// the tenant sees totals across Platforms even when each has its
 		// own budget cap.
+		// One question per leg: did it contribute a number. Every way of failing
+		// to answer — no name, a name that resolves to nothing, a spend that
+		// does not parse — leaves the aggregate short by this platform, and the
+		// comparison unfinished. spec.budget is required, so an empty name is a
+		// reference naming no BudgetPolicy rather than a declared absence.
 		if p.Spec.Budget.Name == "" {
+			spendComplete = false
 			continue
 		}
 		var bp governancev1alpha1.BudgetPolicy
@@ -161,10 +168,6 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 			if client.IgnoreNotFound(err) != nil {
 				return tenantReading{}, fmt.Errorf("get budget %s/%s: %w", p.Namespace, p.Spec.Budget.Name, err)
 			}
-			// spec.budget is required, so a Platform naming a BudgetPolicy that
-			// does not exist is a dangling reference rather than a declared
-			// absence. Its spend is unknown, not zero, and the aggregate is
-			// short by a whole platform.
 			spendComplete = false
 			continue
 		}

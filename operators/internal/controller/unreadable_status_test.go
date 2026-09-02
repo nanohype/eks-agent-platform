@@ -19,6 +19,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
@@ -474,7 +475,12 @@ func TestTheTenantBudgetConditionSeparatesNoCapFromWithinCap(t *testing.T) {
 // exist is a dangling reference: its spend is unknown, not zero. The roll-up
 // skips the leg, and without recording that it did, the total is short by a
 // whole platform while the condition reports a comparison that finished.
-func TestADanglingBudgetRefLeavesTheAggregateIncomplete(t *testing.T) {
+func TestEveryLegThatDidNotAnswerLeavesTheComparisonUnfinished(t *testing.T) {
+	// One question per leg: did it contribute a number. The reasons a leg can
+	// fail to answer are not a list to enumerate — a reference naming nothing,
+	// a reference resolving to nothing, a spend that does not parse are the same
+	// answer — so each is asserted against the same property rather than against
+	// its own case.
 	scheme := runtime.NewScheme()
 	if err := platformv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register platform types: %v", err)
@@ -482,25 +488,52 @@ func TestADanglingBudgetRefLeavesTheAggregateIncomplete(t *testing.T) {
 	if err := governancev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register governance types: %v", err)
 	}
-
 	tenant := &platformv1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "acme"}}
-	p := &platformv1alpha1.Platform{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ctrlTestNS},
-		Spec: platformv1alpha1.PlatformSpec{
-			Tenant: "acme",
-			Budget: platformv1alpha1.BudgetRef{Name: "budget-that-does-not-exist"},
-		},
-	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant, p).Build()
-	r := &TenantReconciler{Client: cl, Scheme: scheme}
 
-	reading, err := r.aggregate(context.Background(), tenant)
-	if err != nil {
-		t.Fatalf("aggregate: %v", err)
+	platform := func(name, budget string) *platformv1alpha1.Platform {
+		return &platformv1alpha1.Platform{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ctrlTestNS},
+			Spec: platformv1alpha1.PlatformSpec{
+				Tenant: "acme",
+				Budget: platformv1alpha1.BudgetRef{Name: budget},
+			},
+		}
 	}
-	if reading.spendComplete {
-		t.Error("a platform whose budgetRef resolves to nothing left the roll-up marked complete; the " +
-			"aggregate is short by that platform's spend and the condition would report a comparison " +
-			"against a total that is not the total")
+	policy := func(name, spend string) *governancev1alpha1.BudgetPolicy {
+		bp := &governancev1alpha1.BudgetPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ctrlTestNS},
+		}
+		bp.Status.CurrentSpendUsd = spend
+		return bp
+	}
+
+	cases := []struct {
+		name    string
+		objects []client.Object
+		want    bool
+	}{
+		{"a reference that names nothing", []client.Object{platform("a", "")}, false},
+		{"a reference that resolves to nothing", []client.Object{platform("a", "gone")}, false},
+		{"a spend that does not parse", []client.Object{platform("a", "b"), policy("b", "not-a-number")}, false},
+		{"a spend not yet reported", []client.Object{platform("a", "b"), policy("b", "")}, false},
+		{"every leg answered", []client.Object{platform("a", "b"), policy("b", "1.5")}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := append([]client.Object{tenant}, tc.objects...)
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+			r := &TenantReconciler{Client: cl, Scheme: scheme}
+
+			reading, err := r.aggregate(context.Background(), tenant)
+			if err != nil {
+				t.Fatalf("aggregate: %v", err)
+			}
+			if reading.spendComplete != tc.want {
+				t.Errorf("spendComplete = %v, want %v — a leg that did not contribute a number leaves "+
+					"the aggregate short by that platform's spend, and the condition would report a "+
+					"comparison against a total that is not the total", reading.spendComplete, tc.want)
+			}
+		})
 	}
 }
