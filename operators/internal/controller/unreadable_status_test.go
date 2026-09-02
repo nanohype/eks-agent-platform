@@ -579,8 +579,10 @@ func TestADeclaredCapIsComparedHoweverSmall(t *testing.T) {
 		name, cap, spend string
 		reason           string
 	}{
-		// Zero is a cap the tenant declared, and every spend exceeds it. Reading
-		// it as an absence reports a presence the spec carries as one it does not.
+		// Zero is a cap the tenant declared, and any spend above nothing exceeds
+		// it — the comparison is strictly greater, so a spend equal to the cap
+		// sits within it. Reading the cap as an absence reports a presence the
+		// spec carries as one it does not.
 		{"a cap of zero is a cap", "0", "0.01", "AggregateOverCap"},
 		{"a cap under which the spend sits", "100", "1.00", "WithinCap"},
 		{"no cap declared", "", "1.00", "NoAggregateCap"},
