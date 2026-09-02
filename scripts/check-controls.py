@@ -478,6 +478,18 @@ CONTROLS = [
         expect_output='impersonate',
     ),
     Control(
+        gate="check-chart-rbac.py",
+        path="charts/operator/templates/rbac.yaml",
+        before='  - apiGroups: [""]\n    resources: ["users"]\n    verbs: ["impersonate"]',
+        after='  - apiGroups: [""]\n    resources: ["users"]\n    verbs: ["impersonate"]\n'
+        '  - apiGroups: [""]\n    resources: ["nodes"]\n    verbs: ["list", "watch"]',
+        catches="a grant added to the chart's ClusterRole that no kubebuilder marker generates and "
+        "nothing accounts for. The gate's first direction only ever asked whether the chart keeps "
+        "the markers' promises, so a permission the code never asks for could be added and kept "
+        "indefinitely — nobody can remove it later, because nothing records why it is there",
+        expect_output="nodes",
+    ),
+    Control(
         gate="check-image-refs.py",
         path="charts/operator/values.yaml",
         before="repository: ghcr.io/nanohype/eks-agent-platform/operator",
