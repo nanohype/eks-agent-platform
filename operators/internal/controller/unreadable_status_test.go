@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
@@ -57,10 +58,10 @@ import (
 // avoids making that claim without looking.
 var problemNamedConditions = map[string]string{
 	"BurnRateBreach":                   "Unknown/SignalUnavailable when the burn rate could not be read",
-	"RolloutHeld":                      "Unknown/SignalUnavailable on a tick with no reading, and Unknown/AppProjectAbsent when the hold's effect is unverifiable",
+	"RolloutHeld":                      "Unknown/PlatformNotFound when the platformRef does not resolve, and Unknown/AppProjectAbsent when the hold's effect is unverifiable",
 	"ImportedRouteGuardrailUnenforced": "Unknown/RoutesNotEvaluated on every path that returns before the routes are walked",
 	"Suspended":                        "Unknown/SuspensionUnreadable when no IAM client is wired, so the role's tag was not read",
-	"TenantBudgetExceeded":             "Unknown/NoAggregateCap when the tenant declares no cap to be within",
+	"TenantBudgetExceeded":             "Unknown/SpendIncomplete when a platform's spend leg could not be read; a declared absence of a cap is False/NoAggregateCap, which is an answer",
 	"KillSwitchUnrouted":               alwaysEvaluated,
 }
 
@@ -463,5 +464,43 @@ func TestTheTenantBudgetConditionSeparatesNoCapFromWithinCap(t *testing.T) {
 	got = conditionTenantBudget(tenantReading{capCompared: true, overSpec: true})
 	if got.Status != metav1.ConditionTrue {
 		t.Errorf("a tenant over its cap reports %s, want True", got.Status)
+	}
+}
+
+// TestADanglingBudgetRefLeavesTheAggregateIncomplete covers the path between a
+// declared absence and an unread value.
+//
+// spec.budget is required, so a Platform naming a BudgetPolicy that does not
+// exist is a dangling reference: its spend is unknown, not zero. The roll-up
+// skips the leg, and without recording that it did, the total is short by a
+// whole platform while the condition reports a comparison that finished.
+func TestADanglingBudgetRefLeavesTheAggregateIncomplete(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := platformv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register platform types: %v", err)
+	}
+	if err := governancev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register governance types: %v", err)
+	}
+
+	tenant := &platformv1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "acme"}}
+	p := &platformv1alpha1.Platform{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ctrlTestNS},
+		Spec: platformv1alpha1.PlatformSpec{
+			Tenant: "acme",
+			Budget: platformv1alpha1.BudgetRef{Name: "budget-that-does-not-exist"},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant, p).Build()
+	r := &TenantReconciler{Client: cl, Scheme: scheme}
+
+	reading, err := r.aggregate(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+	if reading.spendComplete {
+		t.Error("a platform whose budgetRef resolves to nothing left the roll-up marked complete; the " +
+			"aggregate is short by that platform's spend and the condition would report a comparison " +
+			"against a total that is not the total")
 	}
 }

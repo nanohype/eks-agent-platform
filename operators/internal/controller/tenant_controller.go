@@ -161,6 +161,11 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 			if client.IgnoreNotFound(err) != nil {
 				return tenantReading{}, fmt.Errorf("get budget %s/%s: %w", p.Namespace, p.Spec.Budget.Name, err)
 			}
+			// spec.budget is required, so a Platform naming a BudgetPolicy that
+			// does not exist is a dangling reference rather than a declared
+			// absence. Its spend is unknown, not zero, and the aggregate is
+			// short by a whole platform.
+			spendComplete = false
 			continue
 		}
 		if v, ok := parseDecimal(bp.Status.CurrentSpendUsd); ok {
