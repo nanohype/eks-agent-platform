@@ -87,7 +87,7 @@ The operator detects the tag on its next reconcile (≤60s in production), sets 
 Every signal flows through the OTel Collector already installed by `eks-gitops`. This repo adds a `eks-agent-platform` pipeline:
 
 ```
-agent pod → OTLP (localhost:4317) → OTel Collector
+agent pod → OTLP (telemetry.monitoring.svc.cluster.local:4317) → OTel Collector
    → memory_limiter
    → resource processor (adds tenant, platform, workspace, model_family)
    → transform processor (PII redaction on log bodies)

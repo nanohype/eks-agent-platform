@@ -275,6 +275,71 @@ elif [ "$collector_ns" != "$chart_ns" ]; then
   fail=1
 fi
 
+# The same reference, one field further in. The namespace above is templated
+# from values.yaml and compared; the OTLP ports beside it are YAML literals that
+# nothing reads, and the architecture diagram states the destination a third
+# time. All three are the address the operator opens in Go, so all three are
+# answerable to the same two constants.
+#
+# A wrong port here fails the way a wrong namespace does — silently. A rule
+# opening 4319 to a collector listening on 4317 is a valid NetworkPolicy, admits
+# nothing, and looks exactly like a collector that is simply quiet.
+go_ports=$(grep -oE 'otlp(GRPC|HTTP)Port = [0-9]+' \
+  operators/internal/controller/cilium_egress.go 2>/dev/null \
+  | grep -oE '[0-9]+' | sort -n | tr '\n' ' ' | sed 's/ $//' || true)
+
+# Only the ports inside the rule that names the observability namespace. The
+# reference opens 8080 to the gateway a few lines above, and a gate that
+# collected every port in the file would compare that against the OTLP pair and
+# fail on a correct reference.
+ref_ports=$(awk '
+  /observabilityNamespace/ { inrule = 1; next }
+  inrule && /^[[:space:]]*- to:/ { inrule = 0 }
+  inrule && /^[[:space:]]*- port:/ { gsub(/[^0-9]/, "", $0); print }
+' charts/bedrock-egress/templates/networkpolicy-template.yaml 2>/dev/null \
+  | sort -n | tr '\n' ' ' | sed 's/ $//' || true)
+
+if [ -z "$go_ports" ]; then
+  echo "cilium_egress.go declares no otlpGRPCPort/otlpHTTPPort; this gate cannot compare anything"
+  fail=1
+elif [ -z "$ref_ports" ]; then
+  echo "charts/bedrock-egress/templates/networkpolicy-template.yaml opens no port toward the"
+  echo "observability namespace. The reference someone copies would allow egress to the"
+  echo "collector on no port at all, which denies every export while reading as a rule."
+  fail=1
+elif [ "$go_ports" != "$ref_ports" ]; then
+  echo "the egress reference opens OTLP ports '$ref_ports'; the operator opens '$go_ports'."
+  echo "The operator's values govern — it builds the real policy in Go from those constants,"
+  echo "and the same two are the port in the OTEL_EXPORTER_OTLP_ENDPOINT it stamps on pods."
+  echo "A reference opening a different port is what someone copies into a tenant policy, and"
+  echo "a rule opening a port nothing listens on denies every export while looking correct."
+  fail=1
+fi
+
+# The architecture diagram names the destination in prose, where nothing reads
+# it. A diagram naming localhost describes the address an OTel SDK exports to
+# when it is given no endpoint at all — the failure the operator stamps
+# OTEL_EXPORTER_OTLP_ENDPOINT to prevent — so it is the one wrong answer a
+# reader is most likely to act on.
+arch_line=$(grep -oE 'agent pod → OTLP \([^)]*\)' ARCHITECTURE.md 2>/dev/null | head -1 || true)
+grpc_port=$(grep -oE 'otlpGRPCPort = [0-9]+' \
+  operators/internal/controller/cilium_egress.go 2>/dev/null | grep -oE '[0-9]+' || true)
+
+if [ -z "$arch_line" ]; then
+  echo "ARCHITECTURE.md no longer states the OTLP destination; this gate cannot compare it"
+  fail=1
+elif [ -z "$collector_ns" ] || [ -z "$grpc_port" ]; then
+  : # already reported above
+elif ! printf '%s' "$arch_line" | grep -q "$collector_ns"; then
+  echo "ARCHITECTURE.md describes OTLP going to '$arch_line'; the operator stamps the"
+  echo "'$collector_ns' namespace. A diagram naming a different destination is what a reader"
+  echo "trusts when the series do not arrive."
+  fail=1
+elif ! printf '%s' "$arch_line" | grep -q "$grpc_port"; then
+  echo "ARCHITECTURE.md describes OTLP going to '$arch_line'; the operator stamps port $grpc_port."
+  fail=1
+fi
+
 # THE OPPOSITE DIRECTION from the floors in no-placeholders.sh, and the reason
 # the default cannot be copied between them: here NON-zero is the failing value,
 # so an undetermined counter must default to non-zero. Defaulting it to 0 would
@@ -284,4 +349,4 @@ fail=${fail:-1}
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM + KMS key names + CUR filterability + cost-tag activation)"
+echo "✓ doc contracts hold (agent-iam path + cluster-keyed SSM + KMS key names + CUR filterability + cost-tag activation + OTLP destination)"
