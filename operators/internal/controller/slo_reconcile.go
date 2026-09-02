@@ -821,14 +821,18 @@ func rolloutHeldCondition(sp *governancev1alpha1.SLOPolicy, reading sloReading, 
 		ObservedGeneration: sp.Generation,
 	}
 	switch {
-	case reading.signalMissing:
-		// A tick with no reading never seeded holdEngaged, so it would otherwise
-		// fall into NotHeld below and report a hold released that status.holdEngagedAt
-		// still records as engaged. Same first-arm placement, and the same
-		// reason, as burnRateCondition above.
+	case reading.platformName == "":
+		// The hold's state does not come from the burn-rate signal: holdEngaged
+		// is seeded from status.HoldEngagedAt and observeHold reads the tenant's
+		// AppProject, both of which happen on a tick whose metric store is
+		// unreachable. Only an unresolved platformRef returns before either, and
+		// that is what this arm is for — the same discriminator
+		// sloEvaluatedCondition uses for the same reading. Keying on
+		// signalMissing instead would answer Unknown on every tick that lost the
+		// metric store while the hold was observed as engaged.
 		cond.Status = metav1.ConditionUnknown
-		cond.Reason = "SignalUnavailable"
-		cond.Message = "the hold could not be evaluated this tick; whatever hold was engaged is left in place"
+		cond.Reason = "PlatformNotFound"
+		cond.Message = "this policy's platformRef does not resolve, so the hold was neither applied nor read this tick; whatever hold was engaged is left in place"
 	case !reading.holdEngaged:
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = "NotHeld"

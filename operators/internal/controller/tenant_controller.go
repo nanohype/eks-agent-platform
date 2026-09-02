@@ -107,6 +107,11 @@ type tenantReading struct {
 	// spend measured against a cap and found under it, and no cap to measure
 	// against at all — the field is optional, so the second is the common case.
 	capCompared bool
+	// spendComplete records that every Platform's budget leg contributed a
+	// number. A leg whose BudgetPolicy has not reported spend yet, or reported
+	// something unparseable, is skipped — so the total understates, and "within
+	// cap" computed from it is a claim about a sum that is not the sum.
+	spendComplete bool
 }
 
 // aggregate walks every Platform whose spec.tenant matches this Tenant
@@ -130,6 +135,7 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 	reading := tenantReading{}
 	totalSpend := new(big.Float).SetPrec(64)
 	totalBudget := new(big.Float).SetPrec(64)
+	spendComplete := true
 
 	for i := range platforms.Items {
 		p := &platforms.Items[i]
@@ -159,12 +165,15 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 		}
 		if v, ok := parseDecimal(bp.Status.CurrentSpendUsd); ok {
 			totalSpend.Add(totalSpend, v)
+		} else {
+			spendComplete = false
 		}
 		if v, ok := parseDecimal(bp.Spec.MonthlyUsd); ok {
 			totalBudget.Add(totalBudget, v)
 		}
 	}
 
+	reading.spendComplete = spendComplete
 	reading.aggregateSpend = totalSpend.Text('f', 6)
 	reading.aggregateBudget = totalBudget.Text('f', 6)
 

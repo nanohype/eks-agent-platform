@@ -376,14 +376,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			platform.Status.SuspendedAt = &now
 		}
 		platform.Status.SuspendedReason = susp.Reason
-		upsertCondition(&platform.Status.Conditions, metav1.Condition{
-			Type:               "Suspended",
-			Status:             metav1.ConditionTrue,
-			Reason:             "KillSwitchActive",
-			Message:            fmt.Sprintf("tenant role tagged suspended (%s); baseline policy not reattached", susp.Reason),
-			LastTransitionTime: metav1.Now(),
-			ObservedGeneration: platform.Generation,
-		})
+		upsertCondition(&platform.Status.Conditions, suspendedCondition(platform, true, susp))
 	} else {
 		platform.Status.Phase = phaseReady
 		platform.Status.SuspendedAt = nil
@@ -443,26 +436,7 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			setVClusterReady(platform, metav1.ConditionTrue, "Provisioned",
 				"virtual cluster installed; tenant ServiceAccount synced and bound via Pod Identity")
 		}
-		// Clear any prior Suspended condition that lingered — but only having
-		// looked. ensureIamRole returns a zero result when no IAM client is
-		// wired, which is the shape of a role with no kill-switch tag and also
-		// the shape of a role nobody read; the two conditions written just above
-		// take the same care for the same reason. False here is a claim that the
-		// tag is absent, so a pass that could not read it says Unknown instead.
-		suspCond := metav1.Condition{
-			Type:               "Suspended",
-			Status:             metav1.ConditionFalse,
-			Reason:             "NotSuspended",
-			Message:            "kill-switch tag not set on the tenant role",
-			LastTransitionTime: metav1.Now(),
-			ObservedGeneration: platform.Generation,
-		}
-		if r.IAM == nil {
-			suspCond.Status = metav1.ConditionUnknown
-			suspCond.Reason = "SuspensionUnreadable"
-			suspCond.Message = "no IAM client is wired, so the tenant role's kill-switch tag was not read this tick"
-		}
-		upsertCondition(&platform.Status.Conditions, suspCond)
+		upsertCondition(&platform.Status.Conditions, suspendedCondition(platform, r.IAM != nil, susp))
 	}
 	// Report the declared datastores' resolved identity (ARN + deterministic
 	// endpoint) so consumers read one predictable place instead of hand-wiring it
@@ -507,6 +481,37 @@ func requeueJitter(base time.Duration) time.Duration {
 // setVClusterReady upserts the VClusterReady condition on a Platform. A single
 // helper so every vcluster-tier code path (converging, failed-closed, ready)
 // writes the condition the same way — and a PrometheusRule can alert on it.
+// suspendedCondition reports the kill-switch tag on the tenant role, including
+// that it was not read.
+//
+// tagRead is what separates the two: ensureIamRole returns a zero result when no
+// IAM client is wired, which has the same shape as a role carrying no tag. False
+// is a claim that the tag is absent, so a pass that could not look says Unknown
+// — the same care the ModelAccessScoped and CapabilitiesGranted conditions take
+// on the same branch, for the same reason.
+func suspendedCondition(p *platformv1alpha1.Platform, tagRead bool, susp iamReconcileResult) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               "Suspended",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: p.Generation,
+	}
+	switch {
+	case !tagRead:
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = "SuspensionUnreadable"
+		cond.Message = "no IAM client is wired, so the tenant role's kill-switch tag was not read this tick"
+	case susp.Suspended:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "KillSwitchActive"
+		cond.Message = fmt.Sprintf("tenant role tagged suspended (%s); baseline policy not reattached", susp.Reason)
+	default:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "NotSuspended"
+		cond.Message = "kill-switch tag not set on the tenant role"
+	}
+	return cond
+}
+
 func setVClusterReady(p *platformv1alpha1.Platform, status metav1.ConditionStatus, reason, message string) {
 	upsertCondition(&p.Status.Conditions, metav1.Condition{
 		Type:               conditionVClusterReady,

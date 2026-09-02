@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // A condition whose Type names a PROBLEM reads differently from one that names a
@@ -31,13 +32,25 @@ import (
 //
 // So the problem-named conditions are the ones that can answer a question from
 // an evaluation that never ran, and they are the class this enumerates. The
-// remedy is already in the tree twice, in two spellings: an Unknown status with
-// a Reason naming the absent input, and a distinct Reason on a condition whose
-// False was already unambiguous.
+// remedy is in the tree in two spellings: an Unknown status with a Reason naming
+// the absent input, and a distinct Reason on a condition whose False was already
+// unambiguous.
 //
-// The table below is not the list of conditions someone remembered. Every
-// condition type the package writes is swept out of the source, and one absent
-// from both tables fails.
+// The mirror-image error costs as much. A value the reconciler read and found
+// absent — an optional spec field left unset — is a definite answer, and
+// reporting Unknown for it turns the common case into a permanent "did not
+// look". Unknown is for a question that could not be asked, not for one whose
+// answer is nothing.
+//
+// Every condition type the package writes is swept from its own source, and the
+// sweep resolves a Type written as a literal, as a package constant or as a
+// local holding one, because the shipped code uses all three; an unresolved Type
+// fails the sweep. A condition in neither table below fails it too.
+//
+// What the sweep does NOT establish is that any particular un-evaluated path is
+// reachable as Unknown: it credits an Unknown to every condition the enclosing
+// function builds. That is a tripwire, and the arm-reading tests further down
+// are what hold each problem-named condition to its own paths.
 
 // problemNamedConditions are the conditions whose Type names something wrong, so
 // False is a claim that it was looked for and not found. Each maps to how it
@@ -68,6 +81,7 @@ var stateNamedConditions = map[string]bool{
 	"EvalReconciled":      true,
 	"ModelAccessScoped":   true,
 	"NamespaceReady":      true,
+	"VClusterReady":       true,
 	"RoutesReconciled":    true,
 	"SessionReconciled":   true,
 	"SLOEvaluated":        true,
@@ -190,6 +204,33 @@ type conditionWriter struct {
 	unknown bool
 }
 
+// isConditionLiteral reports whether a composite literal builds a
+// metav1.Condition.
+func isConditionLiteral(lit *ast.CompositeLit) bool {
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Condition" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "metav1"
+}
+
+// conditionTypeField returns the literal's Type entry, or nil when it sets none
+// — a condition built in pieces sets it by assignment instead, and those are
+// reached through the enclosing function's other writes.
+func conditionTypeField(lit *ast.CompositeLit) *ast.KeyValueExpr {
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Type" {
+			return kv
+		}
+	}
+	return nil
+}
+
 // conditionTypesWritten returns every condition Type this package's shipped
 // source constructs.
 func conditionTypesWritten(t *testing.T) map[string]bool {
@@ -205,6 +246,12 @@ func conditionTypesWritten(t *testing.T) map[string]bool {
 
 // conditionWriters maps a condition Type to the functions that construct it,
 // recording whether each can produce an Unknown status.
+//
+// A Type is resolved whether it is written as a literal, as a package constant
+// or as a local variable holding one — the shipped code uses all three, and a
+// sweep that reads only literals would leave the constant spelling as an escape
+// hatch from the classification. A Type it cannot resolve fails the sweep rather
+// than being dropped from it.
 func conditionWriters(t *testing.T) map[string][]conditionWriter {
 	t.Helper()
 	out := map[string][]conditionWriter{}
@@ -224,34 +271,102 @@ func conditionWriters(t *testing.T) map[string][]conditionWriter {
 	sort.Strings(names)
 
 	fset := token.NewFileSet()
+	files := make([]*ast.File, 0, len(names))
 	for _, name := range names {
 		f, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
+		files = append(files, f)
+	}
+
+	// Package-level string constants, collected first: a Type may be declared in
+	// one file and written in another.
+	consts := map[string]string{}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			vs, ok := n.(*ast.ValueSpec)
+			if !ok {
+				return true
+			}
+			for i, id := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if v, err := strconv.Unquote(lit.Value); err == nil {
+						consts[id.Name] = v
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	for i, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			fn, ok := n.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
 				return true
 			}
+			// Locals holding a string, for the `condType := "..."` spelling.
+			locals := map[string]string{}
+			ast.Inspect(fn.Body, func(m ast.Node) bool {
+				as, ok := m.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for j, lhs := range as.Lhs {
+					id, ok := lhs.(*ast.Ident)
+					if !ok || j >= len(as.Rhs) {
+						continue
+					}
+					if lit, ok := as.Rhs[j].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						if v, err := strconv.Unquote(lit.Value); err == nil {
+							locals[id.Name] = v
+						}
+					}
+				}
+				return true
+			})
+
 			types := map[string]bool{}
 			unknown := false
 			ast.Inspect(fn.Body, func(m ast.Node) bool {
 				if sel, ok := m.(*ast.SelectorExpr); ok && sel.Sel.Name == "ConditionUnknown" {
 					unknown = true
 				}
-				kv, ok := m.(*ast.KeyValueExpr)
-				if !ok {
+				// Only a metav1.Condition's Type. Plenty of other literals carry
+				// a Type field — a seccomp profile, a LimitRange item — and they
+				// are not conditions.
+				lit, ok := m.(*ast.CompositeLit)
+				if !ok || !isConditionLiteral(lit) {
 					return true
 				}
-				key, ok := kv.Key.(*ast.Ident)
-				if !ok || key.Name != "Type" {
+				kv := conditionTypeField(lit)
+				if kv == nil {
 					return true
 				}
-				if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					if v, err := strconv.Unquote(lit.Value); err == nil {
-						types[v] = true
+				switch v := kv.Value.(type) {
+				case *ast.BasicLit:
+					if v.Kind == token.STRING {
+						if s, err := strconv.Unquote(v.Value); err == nil {
+							types[s] = true
+						}
 					}
+				case *ast.Ident:
+					if s, ok := locals[v.Name]; ok {
+						types[s] = true
+					} else if s, ok := consts[v.Name]; ok {
+						types[s] = true
+					} else {
+						t.Errorf("%s in %s writes a condition whose Type is %s, which this sweep cannot "+
+							"resolve to a string. An unresolved Type is invisible to the classification, "+
+							"which is the escape hatch the sweep exists to close", fn.Name.Name, names[i], v.Name)
+					}
+				default:
+					t.Errorf("%s in %s writes a condition whose Type is not a string, a constant or a "+
+						"local holding one; teach the sweep its shape rather than leaving it out", fn.Name.Name, names[i])
 				}
 				return true
 			})
@@ -265,43 +380,86 @@ func conditionWriters(t *testing.T) map[string][]conditionWriter {
 }
 
 // The structural check above asks whether a writer CAN say "did not look". It
-// cannot tell one un-evaluated case from another, and a condition with more than
-// one keeps passing when a single arm is removed. These read the arm itself.
+// credits that to every condition the function builds, and it cannot tell one
+// un-evaluated case from another. These read the arm itself, for each condition
+// whose False is a claim about the world.
 func TestTheHoldConditionSeparatesUnevaluatedFromNotHeld(t *testing.T) {
 	sp := &governancev1alpha1.SLOPolicy{}
 	now := metav1.Now()
 
-	// A tick that never resolved the Platform never seeded holdEngaged, so
-	// without its own arm this falls into NotHeld and reports a hold released
-	// that status.holdEngagedAt still records as engaged.
-	got := rolloutHeldCondition(sp, sloReading{signalMissing: true}, now)
-	if got.Status != metav1.ConditionUnknown || got.Reason != "SignalUnavailable" {
-		t.Errorf("a tick with no reading reports %s/%s; it did not evaluate the hold and must say so",
-			got.Status, got.Reason)
+	// An unresolved platformRef is the one path that returns before the hold is
+	// either applied or read. A missing burn-rate signal is NOT: holdEngaged is
+	// seeded from status, and the AppProject is read, on a tick whose metric
+	// store is unreachable — so answering Unknown there would deny a hold the
+	// reconciler observed.
+	got := rolloutHeldCondition(sp, sloReading{platformName: ""}, now)
+	if got.Status != metav1.ConditionUnknown || got.Reason != "PlatformNotFound" {
+		t.Errorf("a policy whose platformRef does not resolve reports %s/%s; the hold was neither applied "+
+			"nor read, and the condition must say so", got.Status, got.Reason)
 	}
 
-	got = rolloutHeldCondition(sp, sloReading{holdEngaged: false}, now)
+	got = rolloutHeldCondition(sp, sloReading{platformName: "acme", signalMissing: true, holdEngaged: true}, now)
+	if got.Status == metav1.ConditionUnknown {
+		t.Errorf("a tick that lost the burn-rate signal reports Unknown for a hold it observed as engaged; "+
+			"the hold's state does not come from that signal, and an operator sent here by the alert "+
+			"would find the condition denying what fired it (reason %q)", got.Reason)
+	}
+
+	got = rolloutHeldCondition(sp, sloReading{platformName: "acme"}, now)
 	if got.Status != metav1.ConditionFalse || got.Reason != "NotHeld" {
 		t.Errorf("a tick that read no engaged hold reports %s/%s, want False/NotHeld", got.Status, got.Reason)
 	}
 }
 
+func TestTheSuspendedConditionSeparatesUnreadFromUntagged(t *testing.T) {
+	p := &platformv1alpha1.Platform{}
+
+	// The zero result ensureIamRole returns with no IAM client wired has the
+	// same shape as a role carrying no tag, and --disable-aws reaches it in
+	// shipped configuration.
+	got := suspendedCondition(p, false, iamReconcileResult{})
+	if got.Status != metav1.ConditionUnknown || got.Reason != "SuspensionUnreadable" {
+		t.Errorf("with no IAM client the condition reports %s/%s about a tag nothing read", got.Status, got.Reason)
+	}
+
+	got = suspendedCondition(p, true, iamReconcileResult{})
+	if got.Status != metav1.ConditionFalse || got.Reason != "NotSuspended" {
+		t.Errorf("a role read and found untagged reports %s/%s, want False/NotSuspended; a reconcile that "+
+			"looked must give a definite answer", got.Status, got.Reason)
+	}
+
+	got = suspendedCondition(p, true, iamReconcileResult{Suspended: true, Reason: "budget"})
+	if got.Status != metav1.ConditionTrue || got.Reason != "KillSwitchActive" {
+		t.Errorf("a suspended role reports %s/%s, want True/KillSwitchActive", got.Status, got.Reason)
+	}
+}
+
 func TestTheTenantBudgetConditionSeparatesNoCapFromWithinCap(t *testing.T) {
-	// spec.aggregateMonthlyBudgetUsd is optional, so "no cap declared" is the
-	// common case, and a tenant with nothing to be within must not report that
-	// it is within it.
+	// spec.aggregateMonthlyBudgetUsd is optional, and its absence is READ: the
+	// reconciler holds the spec and gets a definite answer. That is a
+	// nothing-to-report, which this controller reports as False with a Reason of
+	// its own — not a could-not-look.
 	got := conditionTenantBudget(tenantReading{})
-	if got.Status != metav1.ConditionUnknown || got.Reason != "NoAggregateCap" {
-		t.Errorf("a tenant declaring no cap reports %s/%s; there was no comparison to report",
-			got.Status, got.Reason)
+	if got.Status != metav1.ConditionFalse || got.Reason != "NoAggregateCap" {
+		t.Errorf("a tenant declaring no cap reports %s/%s; the absence was read, so the answer is "+
+			"definite", got.Status, got.Reason)
 	}
 
+	// An unread spend leg is the opposite: the sum understates, so "within cap"
+	// would be a claim about a total that is not the total.
 	got = conditionTenantBudget(tenantReading{capCompared: true})
-	if got.Status != metav1.ConditionFalse || got.Reason != "WithinCap" {
-		t.Errorf("a tenant compared against its cap and found under it reports %s/%s, want False/WithinCap",
-			got.Status, got.Reason)
+	if got.Status != metav1.ConditionUnknown || got.Reason != "SpendIncomplete" {
+		t.Errorf("a comparison against an understated sum reports %s/%s; at least one platform's spend "+
+			"was not readable", got.Status, got.Reason)
 	}
 
+	got = conditionTenantBudget(tenantReading{capCompared: true, spendComplete: true})
+	if got.Status != metav1.ConditionFalse || got.Reason != "WithinCap" {
+		t.Errorf("a complete comparison found under the cap reports %s/%s, want False/WithinCap", got.Status, got.Reason)
+	}
+
+	// A partial sum already over the cap is a finding whatever the missing legs
+	// would have added.
 	got = conditionTenantBudget(tenantReading{capCompared: true, overSpec: true})
 	if got.Status != metav1.ConditionTrue {
 		t.Errorf("a tenant over its cap reports %s, want True", got.Status)

@@ -87,15 +87,37 @@ func conditionTenantUnderBudget() metav1.Condition {
 func conditionTenantBudget(reading tenantReading) metav1.Condition {
 	switch {
 	case !reading.capCompared:
+		// A tenant that declares no cap was read, not unread:
+		// spec.aggregateMonthlyBudgetUsd is optional, and its absence is a
+		// definite answer the reconciler holds in hand. False with a Reason of
+		// its own is what the rest of this controller uses for a genuine
+		// nothing-to-report; Unknown is for a question that could not be asked,
+		// and this one was.
 		return metav1.Condition{
 			Type:               "TenantBudgetExceeded",
-			Status:             metav1.ConditionUnknown,
+			Status:             metav1.ConditionFalse,
 			Reason:             "NoAggregateCap",
-			Message:            "this tenant declares no aggregate monthly cap, so its spend was not compared against one",
+			Message:            "this tenant declares no aggregate monthly cap, so there is none to be within",
 			LastTransitionTime: metav1Now(),
 		}
 	case reading.overSpec:
+		// A partial sum that already exceeds the cap is a finding whatever the
+		// missing legs would have added, so this arm does not care about
+		// completeness.
 		return conditionTenantOverBudget(reading)
+	case !reading.spendComplete:
+		// The comparison ran against a total that is not the total: a Platform's
+		// BudgetPolicy reported no spend, or something unparseable, and that leg
+		// was skipped. Under-cap computed from an understated sum is the
+		// positive claim this condition must not make from a reading that did
+		// not finish.
+		return metav1.Condition{
+			Type:               "TenantBudgetExceeded",
+			Status:             metav1.ConditionUnknown,
+			Reason:             "SpendIncomplete",
+			Message:            "at least one platform's budget reported no readable spend, so the aggregate below understates and was not compared against the cap",
+			LastTransitionTime: metav1Now(),
+		}
 	default:
 		return conditionTenantUnderBudget()
 	}
