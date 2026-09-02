@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -93,6 +94,28 @@ var modelFamilyExpansions = map[string]modelFamilyExpansion{
 // anything else is a foundation-model ID.
 var inferenceProfileGeoPrefixes = []string{"us.", "eu.", "apac.", "us-gov.", "jp.", "au.", "global."}
 
+// modelIDPattern is the shape of a Bedrock model ID with any cross-region geo
+// prefix already removed: a vendor segment, a name, and a version token. It
+// mirrors the marker on Platform spec.identity.allowedModels, and exists
+// because that marker is not the last word on the value.
+//
+// Two things it catches that the marker cannot. An entry is expanded with a
+// trailing star (wildcardSuffix), so an entry that stops short of a whole model
+// ID is a family prefix: "anthropic.claude" lands in the NotResource of the
+// Deny as anthropic.claude*, excluding every Anthropic model the author did not
+// name. And the marker's vendor class admits the longer geo tokens — "apac",
+// "global", "us-gov" — as vendors, which the apiserver's RE2 engine cannot
+// forbid without negative lookahead; "apac.claude-5" therefore reaches here
+// parsed one way by the marker and the other way by geoPrefix. Re-deriving the
+// prefix from inferenceProfileGeoPrefixes and matching the remainder makes one
+// parse authoritative at the point the policy document is written.
+//
+// It is also the only check that runs when the CRD installed in the cluster is
+// older than the operator reading it — the state a chart shipping CRDs in its
+// crds/ directory leaves behind, because Helm installs those once and never
+// updates them on upgrade.
+var modelIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{2,}\.[a-z0-9][a-z0-9-]*-(v?[0-9][a-z0-9-]*)(:[0-9]+)?$`)
+
 // arnScope carries the partition/region/account triple the expansion needs to
 // mint concrete ARN patterns. Zero values wildcard the corresponding field so
 // dev/test paths (no real role ARN, no configured region) stay functional.
@@ -120,13 +143,14 @@ func (s arnScope) inferenceProfileARN(prefix string) string {
 	return fmt.Sprintf("arn:%s:bedrock:%s:%s:inference-profile/%s", s.partition(), s.region(), s.account(), wildcardSuffix(prefix))
 }
 
-// wildcardSuffix appends a trailing * so an ID pattern covers version
-// suffixes (":0", "-v1:0") and dated snapshots, unless the caller already
-// wrote a wildcard.
+// wildcardSuffix appends the trailing * that lets an ID pattern cover version
+// suffixes (":0", "-v1:0") and dated snapshots. It is unconditional, and that
+// is what makes the callers' inputs load-bearing: every caller passes either a
+// prefix out of modelFamilyExpansions or a string modelIDPattern has already
+// accepted, so the star always lands on a whole model ID or a whole family
+// prefix. An entry carrying its own star would be a family written as a model;
+// expandModelResources refuses it rather than passing it through here.
 func wildcardSuffix(id string) string {
-	if strings.HasSuffix(id, "*") {
-		return id
-	}
 	return id + "*"
 }
 
@@ -146,12 +170,12 @@ func arnScopeFromRole(roleARN, region string) arnScope {
 // expandModelResources turns spec.identity's model declaration into the
 // Bedrock ARN patterns the tenant role may invoke:
 //
-//   - AllowedModels entries expand individually. A geo-prefixed entry
-//     (us.…, eu.…, apac.…) is a cross-region inference-profile ID and yields
-//     its profile ARN plus the underlying foundation-model ARN (the profile
-//     fans invocations out to foundation models, so both are required). A
-//     bare model ID yields its foundation-model ARN plus the `us.` profile
-//     ARN it implies.
+//   - AllowedModels entries expand individually, each checked against
+//     modelIDPattern first. A geo-prefixed entry (us.…, eu.…, apac.…) is a
+//     cross-region inference-profile ID and yields its profile ARN plus the
+//     underlying foundation-model ARN (the profile fans invocations out to
+//     foundation models, so both are required). A bare model ID yields its
+//     foundation-model ARN plus the `us.` profile ARN it implies.
 //   - AllowedModelFamilies entries expand through modelFamilyExpansions:
 //     every family yields its foundation-model prefix ARN, and families with
 //     cross-region profiles also yield the `us.` profile prefix ARN.
@@ -161,7 +185,10 @@ func arnScopeFromRole(roleARN, region string) arnScope {
 // than a family. An empty spec returns nil — the caller renders that as a
 // deny-everything policy. Unknown families are an error, not a silent skip:
 // silently dropping a family would widen nothing but would let a typo ship a
-// deny-by-default Platform whose owner believes models were granted.
+// deny-by-default Platform whose owner believes models were granted. A model
+// entry that is not a whole model ID is an error for the opposite reason —
+// dropping it would narrow, but expanding it widens, and neither is what the
+// author asked for.
 func expandModelResources(identity platformv1alpha1.IdentitySpec, scope arnScope) ([]string, error) {
 	set := map[string]struct{}{}
 
@@ -171,9 +198,14 @@ func expandModelResources(identity platformv1alpha1.IdentitySpec, scope arnScope
 			if m == "" {
 				continue
 			}
-			if geo := geoPrefix(m); geo != "" {
+			geo := geoPrefix(m)
+			body := strings.TrimPrefix(m, geo)
+			if !modelIDPattern.MatchString(body) {
+				return nil, fmt.Errorf("allowed model %q is not a Bedrock model ID (<vendor>.<name>-<version>, optionally behind one of %s); the expansion appends a wildcard, so a shorter entry excludes every model beneath it from the Deny", m, strings.Join(inferenceProfileGeoPrefixes, ", "))
+			}
+			if geo != "" {
 				set[scope.inferenceProfileARN(m)] = struct{}{}
-				set[scope.foundationModelARN(strings.TrimPrefix(m, geo))] = struct{}{}
+				set[scope.foundationModelARN(body)] = struct{}{}
 				continue
 			}
 			set[scope.foundationModelARN(m)] = struct{}{}
