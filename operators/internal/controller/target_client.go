@@ -137,11 +137,12 @@ func (f *cachedVClusterClientFactory) ClientFor(ctx context.Context, p *platform
 	// one inherits none. That matters more here than for the host client: the
 	// vcluster API server is a pod inside the tenant's own namespace, which
 	// makes it the one API server in this operator that can be slow, wedged or
-	// evicted without anything else noticing — and controller-runtime does not
-	// decorate the reconcile context with a deadline, so an unbounded call pins
-	// a reconcile worker until the process restarts. The same reasoning and the
-	// same ceiling as awsclients.awsHTTPTimeout, applied to the other remote
-	// this operator talks to.
+	// evicted without anything else noticing. The reconcile's own ceiling would
+	// eventually release the worker, but it is measured in minutes and covers a
+	// whole reconcile, so a per-request bound is what keeps one wedged tenant
+	// from spending another tenant's reconcile. The same ceiling as
+	// awsclients.awsHTTPTimeout, applied to the other remote this operator
+	// talks to.
 	restCfg.Timeout = vclusterRequestTimeout
 	c, err := client.New(restCfg, client.Options{Scheme: f.scheme})
 	if err != nil {
