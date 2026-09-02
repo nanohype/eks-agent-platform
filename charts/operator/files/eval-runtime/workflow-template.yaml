@@ -244,9 +244,16 @@ spec:
           seccompProfile:
             type: RuntimeDefault
         # run-cases is the AI workload of the pipeline — it invokes the agent
-        # under test. Carry the platform-tenant-contract OTel resource
-        # attributes (agents.tenant / agents.platform) so eval-run telemetry
-        # attributes to the owning tenant, same as any other operator-run pod.
+        # under test. The value is the platform-tenant-contract's resource
+        # attributes, in the env var an OpenTelemetry SDK reads them from.
+        #
+        # No SDK reads it here: packages/eval-runner declares no OpenTelemetry
+        # dependency and the step sets no auto-instrumentation, so this step
+        # exports nothing and is deliberately given no OTLP endpoint — an
+        # endpoint for an exporter that does not exist would describe a pipeline
+        # rather than build one. What the attribute carries is the attribution
+        # any instrumentation added to this image inherits without a second
+        # place to wire the tenant identity.
         env:
           - name: OTEL_RESOURCE_ATTRIBUTES
             value: "agents.tenant={{workflow.parameters.tenant}},agents.platform={{workflow.parameters.platform}},agents.fleet={{workflow.parameters.fleet}}"
