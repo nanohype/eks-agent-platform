@@ -353,17 +353,24 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 
 	// What this holds, and what it does not.
 	//
-	// HOLDS: on a successful run the handler issues no command at all. That is
-	// established by RUNNING it — under a shell, with a stub on the path in
-	// place of every command that could reach the cluster, and the workflow
-	// status set to Succeeded. Nothing here reads the script, so no spelling
-	// defeats it: a different verb, a command substitution, a builtin, a trap,
-	// or a guard hidden inside a quotation all make the same observable call or
-	// fail to suppress one.
+	// HOLDS: on a successful run the handler makes no kubectl call resolved
+	// through the path. That is established by RUNNING it — under a shell, with
+	// a stub ahead of PATH in place of kubectl and the workflow status set to
+	// Succeeded — so the spelling of the call does not matter: a command after
+	// an assignment, a command substitution bound to a name, a trap, and a guard
+	// hidden inside a quotation all resolve the same name and are seen.
 	//
-	// DOES NOT HOLD: anything outside this script. Other containers on the
-	// handler's template, and a podSpecPatch that grafts one on, are checked for
-	// existence below because nothing here executes them.
+	// DOES NOT HOLD: a write that reaches the cluster by any other route. An
+	// absolute path is a spelling this does not watch — the project's own image
+	// installs kubectl at /usr/local/bin — and so is an HTTP call to the
+	// apiserver from any binary in the image. Rather than claim a coverage the
+	// harness does not have, what it watches is named: one command, found on the
+	// path.
+	//
+	// Nor does it hold for anything outside this script. The handler's template
+	// is required below to declare no initContainers, sidecars or podSpecPatch,
+	// because a container beside the script runs on every outcome and nothing
+	// here executes one.
 	assertHandlerCalls(t, handler, body, "Succeeded", 0)
 
 	// What follows still reads text, and reads it with comments dropped. These
@@ -502,8 +509,10 @@ func TestTheScoreGaugeGoesWithTheScore(t *testing.T) {
 	}
 }
 
-// assertHandlerCalls runs the handler's script and counts the commands it issues
-// that could reach the cluster.
+// assertHandlerCalls runs the handler's script and counts the kubectl calls it
+// resolves through the path. That is the whole of what it observes; a call made
+// by absolute path, or a request made by anything other than kubectl, is not
+// watched here.
 //
 // The script is Argo source, so its parameter references are substituted first;
 // then it runs under sh with a directory ahead of PATH holding a stub for every
@@ -554,10 +563,10 @@ func assertHandlerCalls(t *testing.T, handler, source, status string, want int) 
 	}
 	switch {
 	case status == "Succeeded" && calls != want:
-		t.Errorf("the %s handler issued %d cluster call(s) on a SUCCEEDED run; a run that wrote its own "+
+		t.Errorf("the %s handler made %d kubectl call(s) on a SUCCEEDED run; a run that wrote its own "+
 			"result at writeback must receive none. Calls:\n%s", handler, calls, readFileOrEmpty(log))
 	case status != "Succeeded" && calls < want:
-		t.Errorf("the %s handler issued no cluster call on a %s run, so this harness cannot tell a quiet "+
+		t.Errorf("the %s handler made no kubectl call on a %s run, so this harness cannot tell a quiet "+
 			"handler from a stub that never fires", handler, status)
 	}
 }
