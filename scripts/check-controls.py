@@ -16,6 +16,13 @@ mean something:
   the gates someone remembered — which is the same silent-absence failure the
   gates themselves are written against.
 
+  AN ANCHOR IS NOT A VALUE. A control that names its edit by quoting a version,
+  a pinned tool release or a default model id stops matching the moment ordinary
+  work moves that value, and a control that matches nothing mutates nothing.
+  Controls over such text derive their anchor from the file's shape instead —
+  see Control — and the run fails when the shape moves, which is the change that
+  should be read.
+
   CLEAN BEFORE MUTATING. Every control asserts the gate passes on the unmodified
   tree first. Without that a non-zero exit proves nothing: the gate might have
   been failing all along for an unrelated reason, and the control would report a
@@ -50,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -73,17 +81,64 @@ EXEMPT = {
 }
 
 
+class ControlAnchorError(Exception):
+    """The control could not decide what to edit in this file."""
+
+
+# Text that carries a VALUE rather than a shape: a dotted version, a v-prefixed
+# release, an image digest, a model id's version suffix. A literal anchor
+# quoting one of these has an expiry date it does not state — the next Renovate
+# bump, chart release or model refresh removes it, the control stops matching,
+# and a control that matches nothing mutates nothing while still being counted
+# as declared.
+#
+# Enforced at construction rather than described, because the description is
+# what was already there: the chart-version control quoted a version, the
+# paragraph above the class said to anchor on shape, and the control expired
+# anyway. There is no opt-out. A control that needs to sit on such a line
+# derives its anchor instead, which is strictly more capable — a pattern can
+# always name the literal it replaces.
+VALUE_SHAPED = re.compile(r"\d+\.\d+(\.\d+)?|\bv\d+\.\d+|sha256:[0-9a-f]{8,}|-v\d+(:\d+)?\b")
+
+
 class Control:
-    """One (file, edit) pair that must make a gate fail."""
+    """One (file, edit) pair that must make a gate fail.
+
+    The edit is named in one of two forms, and which one is correct is a
+    property of what the anchor text IS.
+
+      LITERAL (before / after) — right when the anchor is a declaration whose
+      wording is itself the thing under test: a type union, a permissions block,
+      a resource name. Changing it is the deliberate act the gate exists to
+      catch, so a control that stops matching is telling the truth.
+
+      DERIVED (anchor / rewrite) — required when the anchor carries a VALUE that
+      ordinary work moves: a chart version, a pinned tool release, a default
+      model id. A literal there is a control with an expiry date. It does not
+      fail loudly at the moment it expires — it fails on whatever unrelated
+      commit next moves the value, in a run whose author has no reason to think
+      about this file, and the message is about an anchor rather than about the
+      gate. `anchor` is a regex that must match EXACTLY ONCE, and `rewrite`
+      turns that match into the replacement, so the edit is described by the
+      file's shape and the value it holds is the file's business.
+
+    A derived control also has to keep the property that makes the mutation
+    evidence: the replacement must make the gate reject whatever the file
+    currently says. Choosing a value that is invalid by construction — a version
+    below every version, an id no vocabulary contains — is what buys that,
+    rather than a value chosen by looking at the file once.
+    """
 
     def __init__(
         self,
         gate: str,
         path: str,
-        before: str,
-        after: str,
         catches: str,
         expect_output: str,
+        before: str | None = None,
+        after: str | None = None,
+        anchor: str | None = None,
+        rewrite=None,
         args: list[str] | None = None,
         expect_reject: bool = True,
         # Seconds this gate is given. The default suits a gate that reads the
@@ -92,8 +147,26 @@ class Control:
     ):
         self.gate = gate
         self.path = ROOT / path
+        literal = before is not None and after is not None
+        derived = anchor is not None and rewrite is not None
+        if literal == derived:
+            raise ValueError(
+                f"control for {gate} must name its edit exactly one way: before+after (literal) "
+                "or anchor+rewrite (derived from the file's shape)"
+            )
+        if literal:
+            carried = VALUE_SHAPED.search(before)
+            if carried:
+                raise ValueError(
+                    f"control for {gate} anchors on the literal {before[:60]!r}, which carries the "
+                    f"value {carried.group(0)!r}. A value moves on ordinary work and takes the "
+                    "anchor with it. Give this control anchor= (a regex naming the line's shape) "
+                    "and rewrite= instead."
+                )
         self.before = before
         self.after = after
+        self.anchor = re.compile(anchor) if anchor else None
+        self.rewrite = rewrite
         self.catches = catches
         self.args = args or []
         # REQUIRED. The gate must not only reject — its rejection must NAME the
@@ -114,6 +187,38 @@ class Control:
         # and a gate rejecting everything would pass every control it has.
         self.expect_reject = expect_reject
         self.timeout = timeout
+
+    def resolve(self, text: str) -> tuple[str, str]:
+        """The (before, after) pair for THIS text.
+
+        Raises rather than returning a sentinel: a control that cannot find what
+        it edits has to stop the run, and a caller that forgets to check a
+        sentinel would record the control as proven.
+        """
+        if self.anchor is None:
+            if self.before not in text:
+                raise ControlAnchorError(
+                    "the control's anchor text is gone, so it mutates nothing and proves nothing. "
+                    "Re-point the control at the current shape of the file — and if the text that "
+                    "vanished was a value ordinary work moves, give the control an anchor pattern "
+                    "instead of a literal."
+                )
+            return self.before, self.after
+        hits = list(self.anchor.finditer(text))
+        if not hits:
+            raise ControlAnchorError(
+                f"the control's anchor pattern {self.anchor.pattern!r} matches nothing in the file, "
+                "so it mutates nothing and proves nothing. The file's SHAPE moved, which is the one "
+                "thing a derived anchor is not allowed to survive silently."
+            )
+        if len(hits) > 1:
+            raise ControlAnchorError(
+                f"the control's anchor pattern {self.anchor.pattern!r} matches {len(hits)} places, so "
+                "which one it mutates is decided by the file rather than by the control. Narrow the "
+                "pattern until it names one."
+            )
+        match = hits[0]
+        return match.group(0), self.rewrite(match)
 
 
 # Exit codes that are NOT a verdict about the tree. Every one of them exits
@@ -160,8 +265,12 @@ CONTROLS = [
     Control(
         gate="check-version-pins.py",
         path=".github/workflows/security.yaml",
-        before='GITLEAKS_VERSION: "8.30.1"',
-        after='GITLEAKS_VERSION: "8.30.1"\n          UNWATCHED_TOOL_VERSION: "1.0.0"',
+        # Derived: the anchor is a version Renovate exists to move, so a literal
+        # here expires on a bot's schedule rather than a person's. The pattern
+        # names the pin's SHAPE and carries its indentation into the line the
+        # mutation adds, so the fixture stays valid YAML wherever the block sits.
+        anchor=r'(?m)^([ \t]*)GITLEAKS_VERSION: "[^"]+"$',
+        rewrite=lambda m: f'{m.group(0)}\n{m.group(1)}UNWATCHED_TOOL_VERSION: "1.0.0"',
         catches="a new pinned tool version with no Renovate customManager watching it",
         expect_output='UNWATCHED_TOOL_VERSION',
     ),
@@ -223,8 +332,11 @@ CONTROLS = [
     Control(
         gate="check-model-tiers.py",
         path="operators/internal/agentctl/model_defaults.json",
-        before='"default": "us.anthropic.claude-sonnet-5"',
-        after='"default": "us.anthropic.claude-zzsynthetic-drifted-tier"',
+        # Derived: the value is a model id, and the file's own instruction is to
+        # bump model ids here. A literal anchor would be a control that expires
+        # on the next model refresh — the edit this control is closest to.
+        anchor=r'(?m)^(\s*)"default": "[^"]+",$',
+        rewrite=lambda m: f'{m.group(1)}"default": "us.anthropic.claude-zzsynthetic-drifted-tier",',
         catches="the scaffolder's model tiers drifting from the org LLM policy — the drift that "
         "shipped a full generation behind while the file's own comment claimed it mirrored the "
         "standard. The marker is a synthetic id so it cannot already appear in the tree",
@@ -456,16 +568,18 @@ CONTROLS = [
     Control(
         gate="check-chart-version-bump.py",
         path="charts/operator/Chart.yaml",
-        # The anchor is the version KEY, and the mutation comments the value out
-        # behind a version below every published one. Quoting the value instead
-        # would tie this control to a number the next chart release moves, and a
-        # control whose anchor is gone mutates nothing while still being counted.
+        # Derived, and this is the control that taught the distinction: it
+        # anchored on the literal version and went vacuous on the first bump
+        # after it was written — reported not as "the control expired" but as an
+        # anchor failure on a security change that had nothing to do with it.
         #
-        # 0.0.0 makes the rejection independent of what the base branch says: it
-        # is either strictly below the published version, which is the backwards
-        # case, or equal to it, which is the no-bump case. Both are rejections.
-        before="\nversion: ",
-        after="\nversion: 0.0.0 # ",
+        # 0.0.0 is chosen so the rejection does not depend on what the base
+        # branch says. It is either strictly below the published version, which
+        # is the backwards case, or equal to it, which is the no-bump case. Both
+        # are rejections, so the mutation cannot become a no-op by the chart
+        # moving underneath it.
+        anchor=r"(?m)^version: \d+\.\d+\.\d+$",
+        rewrite=lambda m: "version: 0.0.0",
         catches="packaged chart content changing while the chart version stays put — an OCI tag is "
         "mutable, so the second push silently replaces the bytes behind a version already deployed",
         expect_output="0.0.0",
@@ -598,6 +712,60 @@ def harness_self_test() -> list[str]:
     if ok:
         problems.append("harness: a pre-existing marker was reported as a landed mutation")
 
+    # A DERIVED anchor has two ways to stop deciding what it edits, and both
+    # have to raise rather than pick something. Silently matching nothing is the
+    # vacuity a literal anchor already produced once; silently matching several
+    # places is the same failure inverted — the control still runs, and what it
+    # edits is chosen by whichever occurrence comes first in the file.
+    def probe(anchor, text):
+        c = Control(
+            gate="check-controls.py", path="scripts/check-controls.py",
+            anchor=anchor, rewrite=lambda m: "x",
+            catches="probe", expect_output="x",
+        )
+        try:
+            c.resolve(text)
+        except ControlAnchorError as e:
+            return str(e)
+        return None
+
+    if probe(r"^delta$", base) is None:
+        problems.append("harness: a derived anchor matching NOTHING was resolved instead of raising")
+    if probe(r"(?m)^[a-z]+$", base) is None:
+        problems.append("harness: a derived anchor matching THREE places was resolved instead of raising")
+    if probe(r"(?m)^beta$", base) is not None:
+        problems.append("harness: a derived anchor matching exactly once failed to resolve")
+
+    # A literal anchor quoting a value is refused, and the same text is fine as a
+    # derived anchor — which is what makes the rule a redirection rather than a
+    # ban on controlling those files.
+    try:
+        Control(gate="check-controls.py", path="scripts/check-controls.py",
+                before="version: 1.2.3", after="version: 0.0.0",
+                catches="probe", expect_output="x")
+        problems.append("harness: a literal anchor quoting a version was accepted")
+    except ValueError:
+        pass
+    try:
+        Control(gate="check-controls.py", path="scripts/check-controls.py",
+                anchor=r"(?m)^version: \d+\.\d+\.\d+$", rewrite=lambda m: "version: 0.0.0",
+                catches="probe", expect_output="x")
+    except ValueError:
+        problems.append("harness: a derived anchor over the same line was refused")
+
+    # Naming an edit both ways, or neither, is a control that has not said what
+    # it does. Caught at construction so it cannot reach a run.
+    for kwargs in (
+        {"before": "a", "after": "b", "anchor": r"a", "rewrite": lambda m: "b"},
+        {},
+    ):
+        try:
+            Control(gate="check-controls.py", path="scripts/check-controls.py",
+                    catches="probe", expect_output="x", **kwargs)
+        except ValueError:
+            continue
+        problems.append(f"harness: a control declaring {sorted(kwargs) or 'no edit'} was accepted")
+
     ok, why = mutation_landed(base, "alpha\nbeta\ndelta\n", "delta")
     if not ok:
         problems.append(f"harness: a genuine mutation was rejected ({why})")
@@ -710,7 +878,16 @@ def main() -> int:
         )
         if head.returncode != 0:
             continue
-        if c.after and c.after not in c.before and c.after in head.stdout and c.before not in head.stdout:
+        try:
+            before, after = c.resolve(head.stdout)
+        except ControlAnchorError:
+            # The committed form does not carry what this control edits, so it
+            # cannot be carrying that control's mutation either. Whether the
+            # anchor is stale is the loop below's question, against the file on
+            # disk; answering it twice here would report it against the wrong
+            # tree.
+            continue
+        if after and after not in before and after in head.stdout and before not in head.stdout:
             debris.append(f"{rel}: carries the mutation from the {c.gate} control")
     if debris:
         print(
@@ -761,11 +938,10 @@ def main() -> int:
               continue
           original = c.path.read_text(encoding="utf-8")
           touched.setdefault(c.path, original)
-          if c.before not in original:
-              failures.append(
-                  f"{label}: the control's anchor text is gone, so it mutates nothing and proves nothing. "
-                  "Re-point the control at the current shape of the file."
-              )
+          try:
+              before, after = c.resolve(original)
+          except ControlAnchorError as e:
+              failures.append(f"{label}: {e}")
               continue
 
           # CLEAN FIRST. A non-zero exit after mutating means nothing if the gate
@@ -786,7 +962,7 @@ def main() -> int:
               )
               continue
 
-          mutated = original.replace(c.before, c.after, 1)
+          mutated = original.replace(before, after, 1)
 
           # PROVE THE MUTATION LANDED. A control that silently fails to mutate
           # hands the gate an unchanged fixture, the gate correctly passes it, and
@@ -798,7 +974,7 @@ def main() -> int:
           # shell one-liner: sed address ranges, in-place flags and character
           # classes differ between BSD and GNU, so the same control can mutate on
           # one machine and no-op on the other.
-          landed, why = mutation_landed(original, mutated, c.after)
+          landed, why = mutation_landed(original, mutated, after)
           if not landed:
               failures.append(f"{label}: {why}")
               continue
