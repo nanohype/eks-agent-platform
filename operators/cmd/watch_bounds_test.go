@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -102,25 +104,141 @@ func TestTheManagerCarriesAReconcileCeiling(t *testing.T) {
 		}
 	}
 
-	got := controllerOptions(time.Hour).ReconciliationTimeout
-	if got <= 0 {
-		t.Fatalf("ReconciliationTimeout is %v; zero is controller-runtime's default and disables the "+
-			"deadline, so a reconcile stuck on a call none of the per-request bounds cover holds its "+
-			"worker until the process restarts", got)
+	// The declared bounds are compared against the SMALLEST ceiling any
+	// configuration produces, not against one chosen interval. A constant that
+	// clears the ceiling at the shipped default and not at a shorter one is a
+	// reconcile cancelled on a call it is waiting for, on a cluster that only
+	// tightened a flag.
+	floor := reconcileCeiling(0)
+	for _, interval := range []time.Duration{0, time.Nanosecond, time.Minute, time.Hour, 24 * time.Hour} {
+		if c := reconcileCeiling(interval); c < floor {
+			floor = c
+		}
+	}
+	if floor <= 0 {
+		t.Fatalf("the smallest reconcile ceiling any configuration produces is %v; zero is "+
+			"controller-runtime's default and disables the deadline", floor)
 	}
 
-	// And the declared bounds, swept from the module's own source. A constant
-	// this cannot evaluate is a failure rather than a silent omission: the
-	// comparison is only worth what it covers.
+	// A constant this cannot evaluate is a failure rather than a silent
+	// omission: the comparison is only worth what it covers.
 	for name, d := range declaredTimeouts(t) {
 		if strings.HasPrefix(name, "reconcile") {
 			continue
 		}
-		if d >= got {
-			t.Errorf("%s is %v and the reconcile ceiling is %v; a reconcile making that call would be "+
-				"cancelled before the call it is waiting on could return", name, d, got)
+		if d >= floor {
+			t.Errorf("%s is %v and the smallest reconcile ceiling any flag configuration produces is %v; "+
+				"a reconcile making that call would be cancelled before the call it is waiting on could "+
+				"return", name, d, floor)
 		}
 	}
+}
+
+// TestEveryDurationFlagIsWeighedAgainstTheCeiling closes the shape the ceiling
+// gate cannot otherwise see: a bound computed from a flag is invisible to a
+// sweep of declared constants, and the next such flag is invisible to a
+// comparison written against the one that exists today.
+//
+// Every duration flag the binary declares is either read by reconcileCeiling —
+// so widening it widens the ceiling — or recorded here with why it cannot
+// lengthen a reconcile.
+func TestEveryDurationFlagIsWeighedAgainstTheCeiling(t *testing.T) {
+	// Flags that bound nothing a reconcile waits on. A requeue interval is how
+	// often a reconcile STARTS; it lengthens a reconcile only where something
+	// derives a call bound from it, which is what the budget reconciler does and
+	// these do not.
+	cannotLengthenAReconcile := map[string]string{
+		"slo-requeue-interval":    "how often the SLO reconciler ticks; no call bound is derived from it",
+		"tenant-requeue-interval": "how often the Tenant reconciler re-aggregates; no call bound is derived from it",
+	}
+	readByTheCeiling := map[string]bool{"budget-requeue-interval": true}
+
+	for _, name := range durationFlagNames(t) {
+		if readByTheCeiling[name] || cannotLengthenAReconcile[name] != "" {
+			continue
+		}
+		t.Errorf("--%s is a duration flag the reconcile ceiling neither reads nor accounts for. If any "+
+			"call bound is derived from it, widening the flag widens a wait the ceiling would then cut; "+
+			"pass it to reconcileCeiling, or record why it cannot lengthen a reconcile", name)
+	}
+	for name := range readByTheCeiling {
+		if !slices.Contains(durationFlagNames(t), name) {
+			t.Errorf("the ceiling reads --%s, which the binary no longer declares", name)
+		}
+	}
+	for name := range cannotLengthenAReconcile {
+		if !slices.Contains(durationFlagNames(t), name) {
+			t.Errorf("a flag record names --%s, which the binary no longer declares; delete the entry", name)
+		}
+	}
+}
+
+// TestNoControllerOverridesTheCeiling reads the setup path rather than the
+// option: controller-runtime lets a controller carry its own
+// ReconciliationTimeout, which replaces the manager's for that controller alone
+// and is read by nothing here.
+func TestNoControllerOverridesTheCeiling(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatalf("resolve the module root: %v", err)
+	}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		if rel == "cmd/main.go" {
+			return nil // where the manager-wide ceiling is set
+		}
+		body, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if strings.Contains(string(body), "ReconciliationTimeout") {
+			t.Errorf("%s sets a ReconciliationTimeout of its own. A per-controller value replaces the "+
+				"manager's for that controller, so the ceiling every other gate here reasons about "+
+				"stops applying to it", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the module: %v", err)
+	}
+}
+
+// durationFlagNames returns every duration flag cmd/main.go declares.
+func durationFlagNames(t *testing.T) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "DurationVar" || len(call.Args) < 2 {
+			return true
+		}
+		if lit, ok := call.Args[1].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			if v, err := strconv.Unquote(lit.Value); err == nil {
+				out = append(out, v)
+			}
+		}
+		return true
+	})
+	if len(out) == 0 {
+		t.Fatal("main.go declares no duration flag, which cannot be true; the sweep is matching nothing")
+	}
+	sort.Strings(out)
+	return out
 }
 
 // declaredTimeouts returns every duration constant in the module whose name ends
