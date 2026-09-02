@@ -292,11 +292,10 @@ func (r *PlatformReconciler) ensureNetworkPolicy(ctx context.Context, p *platfor
 					},
 				},
 				{
-					// The OTel collector gateway, on :4317 + :4318. The
-					// namespace is `monitoring` — that is where the catalog
-					// deploys the collector and where the stable
-					// `telemetry.monitoring.svc` Service every tenant chart
-					// wires against lives.
+					// The OTel collector gateway. Namespace and ports come
+					// from the constants otelExporterEndpoint renders the
+					// stamped address from, so this rule opens the port that
+					// address names.
 					To: []networkingv1.NetworkPolicyPeer{{
 						NamespaceSelector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{"kubernetes.io/metadata.name": collectorNamespace},

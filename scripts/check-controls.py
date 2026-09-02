@@ -440,6 +440,18 @@ CONTROLS = [
         expect_output="zzsynthetic_renamed_check_block",
     ),
     Control(
+        gate="check-doc-contracts.sh",
+        path="charts/bedrock-egress/templates/networkpolicy-template.yaml",
+        before="            - port: 4317\n",
+        after="            - port: 4319\n",
+        catches="the published egress reference opening an OTLP port the operator does not open. "
+        "The namespace half of this reference was already compared and the ports beside it were "
+        "not, so a reference allowing egress to the collector on a port nothing listens on was a "
+        "valid NetworkPolicy, indistinguishable from a collector that is simply quiet, and the "
+        "thing someone copies into a tenant policy",
+        expect_output="4319",
+    ),
+    Control(
         gate="check-project-resources.py",
         path="operators/PROJECT",
         before="    kind: Tenant",
