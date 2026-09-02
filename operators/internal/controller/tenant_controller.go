@@ -175,7 +175,8 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 		// keeps status.currentSpendUsd at its last successful value when its
 		// spend query breaks, and publishes BudgetReconciled=False on the same
 		// object — so a leg can parse cleanly and still not have answered THIS
-		// tick. Whether the string parses is not the question.
+		// tick. Whether the string parses is not the question. Nor is False on
+		// its own: a fired kill switch is False about a number that was read.
 		if v, ok := parseDecimal(bp.Status.CurrentSpendUsd); ok && budgetLegReported(&bp) {
 			totalSpend.Add(totalSpend, v)
 		} else {
@@ -207,8 +208,9 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 
 	// Compare aggregate to the tenant-spec cap (if set).
 	// A cap of zero is a declared cap, not an undeclared one: the shipped
-	// pattern admits "0" with no minimum, and every spend exceeds it. Reporting
-	// it as "no cap declared" is a read presence reported as an absence.
+	// pattern admits "0" with no minimum, and any spend above nothing exceeds
+	// it. Reporting it as "no cap declared" is a read presence reported as an
+	// absence.
 	if cap, ok := parseDecimal(t.Spec.AggregateMonthlyBudgetUsd); ok {
 		reading.capCompared = true
 		if totalSpend.Cmp(cap) > 0 {

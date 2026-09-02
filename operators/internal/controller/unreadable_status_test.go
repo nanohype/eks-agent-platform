@@ -516,10 +516,10 @@ func TestEveryLegThatDidNotAnswerLeavesTheComparisonUnfinished(t *testing.T) {
 		bp.Status.CurrentSpendUsd = spend
 		return bp
 	}
-	unreported := func(name, spend string) *governancev1alpha1.BudgetPolicy {
+	withReason := func(name, spend, reason string) *governancev1alpha1.BudgetPolicy {
 		bp := policy(name, spend)
 		bp.Status.Conditions = []metav1.Condition{{
-			Type: "BudgetReconciled", Status: metav1.ConditionFalse, Reason: "ReconcileFailed",
+			Type: "BudgetReconciled", Status: metav1.ConditionFalse, Reason: reason,
 			LastTransitionTime: metav1.Now(),
 		}}
 		return bp
@@ -534,7 +534,12 @@ func TestEveryLegThatDidNotAnswerLeavesTheComparisonUnfinished(t *testing.T) {
 		{"a reference that resolves to nothing", []client.Object{platform("a", "gone")}, false},
 		{"a spend that does not parse", []client.Object{platform("a", "b"), policy("b", "not-a-number")}, false},
 		{"a spend not yet reported", []client.Object{platform("a", "b"), policy("b", "")}, false},
-		{"a leg whose own controller says it could not read", []client.Object{platform("a", "b"), unreported("b", "1.5")}, false},
+		{"a leg whose own controller says it could not read", []client.Object{platform("a", "b"), withReason("b", "1.5", "ReconcileFailed")}, false},
+		// False is not the question. The kill-switch verdict is False ABOUT a
+		// number the same pass measured, so the leg answered — dropping it turns
+		// a definite reading into an absence, which is this class inverted.
+		{"a leg that fired its kill switch answered", []client.Object{platform("a", "b"), withReason("b", "1.5", "KillSwitchFired")}, true},
+		{"a leg over its alert threshold answered", []client.Object{platform("a", "b"), withReason("b", "1.5", "ThresholdCrossed")}, true},
 		{"every leg answered", []client.Object{platform("a", "b"), policy("b", "1.5")}, true},
 	}
 
