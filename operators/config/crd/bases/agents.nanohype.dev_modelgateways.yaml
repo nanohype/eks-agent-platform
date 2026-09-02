@@ -191,6 +191,19 @@ spec:
               state.
             properties:
               conditions:
+                description: "Conditions carry what the last reconcile learned. Two
+                  are written:\n\n\tRoutesReconciled                  the routes were
+                  emitted (False while\n\t                                  waiting
+                  on the Platform or the\n\t                                  Gateway-API
+                  CRDs)\n\tImportedRouteGuardrailUnenforced  whether any imported
+                  route is served\n\t                                  without its
+                  guardrail\n\nThe second is three-valued, and the three are three
+                  different sentences.\nTrue names the routes. False says the routes
+                  were walked and none of them\nis unguarded. Unknown says the walk
+                  did not happen — which is every pass\nthat returns before the routes
+                  are reached — so a reader deciding whether\nto point sensitive traffic
+                  at an imported route must treat Unknown as an\nunanswered question
+                  rather than as an absence of findings."
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

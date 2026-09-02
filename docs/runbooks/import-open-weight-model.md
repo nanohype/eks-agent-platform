@@ -123,7 +123,10 @@ model.
   raises an `ImportedRouteGuardrailUnenforced` condition naming the route rather
   than serving it silently unguarded; enforcement via `ApplyGuardrail` is a
   tracked follow-up. Check the condition before pointing sensitive traffic at an
-  imported route.
+  imported route, and read its three statuses as three different answers: `True`
+  names the unguarded routes, `False` says the routes were walked and none of
+  them is unguarded, and `Unknown` says this gateway has not reached its routes
+  — a question not yet answered, not a clean bill.
 
 ## Non-goal
 
