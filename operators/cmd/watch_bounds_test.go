@@ -126,7 +126,7 @@ func TestTheManagerCarriesAReconcileCeiling(t *testing.T) {
 	// reconcile can wait on, which is a failure, or it is recorded below with
 	// why a reconcile never waits on it.
 	for name, d := range declaredTimeouts(t) {
-		if name == "reconcileFloor" {
+		if strings.HasSuffix(name, ":reconcileFloor") {
 			continue // the ceiling's own floor, which is what everything else is measured against
 		}
 		if notAReconcileWait[name] != "" {
@@ -215,16 +215,17 @@ func TestNoControllerOverridesTheCeiling(t *testing.T) {
 	}
 }
 
-// durationFlagNames returns every duration flag cmd/main.go declares.
+// durationFlagNames returns every duration flag package main declares, across
+// every file of the package rather than one filename.
 func durationFlagNames(t *testing.T) []string {
 	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parse main.go: %v", err)
+		t.Fatalf("read the package directory: %v", err)
 	}
 	var out []string
-	ast.Inspect(f, func(n ast.Node) bool {
+	visit := func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -251,9 +252,20 @@ func durationFlagNames(t *testing.T) []string {
 			}
 		}
 		return true
-	})
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, perr := parser.ParseFile(fset, name, nil, 0)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", name, perr)
+		}
+		ast.Inspect(f, visit)
+	}
 	if len(out) == 0 {
-		t.Fatal("main.go declares no duration flag, which cannot be true; the sweep is matching nothing")
+		t.Fatal("package main declares no duration flag, which cannot be true; the sweep is matching nothing")
 	}
 	sort.Strings(out)
 	return out
@@ -262,19 +274,29 @@ func durationFlagNames(t *testing.T) []string {
 // notAReconcileWait records durations the module declares that no reconcile
 // waits on, with the reason. An entry is a claim about what the value is for.
 var notAReconcileWait = map[string]string{
-	"killSwitchMaxRefireBackoff": "the ceiling on the interval BETWEEN re-publishes of an unrouted breach, " +
+	"internal/controller/budget_reconcile.go:killSwitchMaxRefireBackoff": "the ceiling on the interval BETWEEN re-publishes of an unrouted breach, " +
 		"compared against wall-clock time across reconciles; no reconcile waits on it",
 }
 
-// mentionsTimeUnit reports whether an expression names a time unit, which is
-// what makes it a duration the gate has to be able to evaluate. A constant whose
-// value is an int or a string is not a duration however it is named — several in
-// this module carry TTL or Duration in the name and hold a count of seconds.
-func mentionsTimeUnit(e ast.Expr) bool {
+// isDurationExpr reports whether an expression is a duration the gate has to be
+// able to evaluate: it names a time unit, or it is built from an identifier the
+// sweep has already resolved as one. The second half is what stops a duration
+// composed of other durations from being dropped without a word — the shape the
+// module uses whenever a window is expressed against an interval.
+//
+// A constant whose value is an int or a string is not a duration however it is
+// named; several in this module carry TTL or Duration in the name and hold a
+// count of seconds.
+func isDurationExpr(e ast.Expr, seen map[string]bool) bool {
 	found := false
 	ast.Inspect(e, func(n ast.Node) bool {
-		if sel, ok := n.(*ast.SelectorExpr); ok {
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "time" {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == "time" {
+				found = true
+			}
+		case *ast.Ident:
+			if seen[v.Name] {
 				found = true
 			}
 		}
@@ -283,6 +305,21 @@ func mentionsTimeUnit(e ast.Expr) bool {
 	return found
 }
 
+// declaredTimeouts returns the durations this gate can weigh, and its scope is
+// the honest half of the claim above.
+//
+// HOLDS: every duration DECLARED in this module — any package-level constant or
+// variable, whatever it is named — whose value is built from literals, time
+// units, or other declared durations. One that cannot be evaluated fails the
+// gate rather than being dropped from it.
+//
+// DOES NOT HOLD: a duration this module never declares. Three shapes are known
+// to be outside it and are not claimed — one built inline at a call site, one
+// read from the environment at startup, and one whose value comes from a CRD
+// field default. Each would be a wait no gate here compares, and closing them
+// needs a reader of a different kind: a call-site walk, an env inventory, and
+// the CRD schemas respectively.
+//
 // declaredTimeouts returns every duration constant in the module whose name ends
 // in Timeout, keyed by name.
 func declaredTimeouts(t *testing.T) map[string]time.Duration {
@@ -292,57 +329,63 @@ func declaredTimeouts(t *testing.T) map[string]time.Duration {
 		t.Fatalf("resolve the module root: %v", err)
 	}
 	out := map[string]time.Duration{}
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == "bin" || d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
+	seen := map[string]bool{}
+
+	// Two passes: the first resolves the durations written against a time unit,
+	// the second the ones written against those. Keys carry the file, so two
+	// packages declaring one identifier cannot erase each other's value or
+	// inherit each other's excuse.
+	for pass := 0; pass < 2; pass++ {
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+			if werr != nil {
+				return werr
 			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		f, perr := parser.ParseFile(fset, path, nil, 0)
-		if perr != nil {
-			t.Fatalf("parse %s: %v", path, perr)
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			vs, ok := n.(*ast.ValueSpec)
-			if !ok {
-				return true
-			}
-			for i, name := range vs.Names {
-				if i >= len(vs.Values) {
-					continue
+			if d.IsDir() {
+				if d.Name() == "bin" || d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".") {
+					return fs.SkipDir
 				}
-				d, ok := durationValue(vs.Values[i])
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			rel, _ := filepath.Rel(root, path)
+			fset := token.NewFileSet()
+			f, perr := parser.ParseFile(fset, path, nil, 0)
+			if perr != nil {
+				t.Fatalf("parse %s: %v", rel, perr)
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				vs, ok := n.(*ast.ValueSpec)
 				if !ok {
-					if !mentionsTimeUnit(vs.Values[i]) {
-						continue // an int, a string: not a duration at all
-					}
-					// Silently dropping the ones it cannot read is how a sweep
-					// comes to cover less than it claims — and the shapes it
-					// cannot read are the unusual ones, which is where a bound
-					// longer than the ceiling is most likely to be written.
-					t.Errorf("%s in %s is a timeout this sweep cannot evaluate, so it is compared against "+
-						"nothing. Teach durationValue its shape rather than leaving it out", name.Name, path)
-					continue
+					return true
 				}
-				out[name.Name] = d
-			}
-			return true
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					if v, ok := durationValue(vs.Values[i]); ok {
+						out[rel+":"+name.Name] = v
+						seen[name.Name] = true
+						continue
+					}
+					if pass == 0 || !isDurationExpr(vs.Values[i], seen) {
+						continue
+					}
+					t.Errorf("%s in %s is a duration this sweep cannot evaluate, so it is compared "+
+						"against nothing. Teach durationValue its shape rather than leaving it out",
+						name.Name, rel)
+				}
+				return true
+			})
+			return nil
 		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk the module: %v", err)
+		if err != nil {
+			t.Fatalf("walk the module: %v", err)
+		}
 	}
 	if len(out) == 0 {
-		t.Fatal("the sweep found no timeout constant in the module, so the comparison below covers nothing")
+		t.Fatal("the sweep found no duration constant in the module, so the comparison covers nothing")
 	}
 	return out
 }
