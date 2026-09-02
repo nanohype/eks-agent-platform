@@ -57,6 +57,19 @@ DOES NOT HOLD: a grant that needs two booleans away from their defaults at once,
 and a grant behind a value that is not a boolean — a name, a count, a list. Both
 would be rendered by a matrix this does not build.
 
+WHICH ROLE IS READ
+
+The role is found by name: each render must contain exactly one ClusterRole whose
+name carries `manager`, and two is a failure naming both. Reading the first match
+would compare one role and stay silent about the rest, so a second role bound to
+the operator could grant anything and a role sorting ahead of the real one would
+be read in its place — reporting every permission the real role holds as missing.
+
+DOES NOT HOLD: a ClusterRole bound to the operator under a name carrying no
+`manager`. Its grants are outside what this compares. Closing that means deriving
+the role from the binding graph — which ServiceAccount the Deployment runs as,
+and which roles are bound to it — rather than from a name.
+
 Compares at (apiGroup, resource, verb) granularity rather than per-rule, because
 the two files legitimately group resources differently — only the effective
 permission set has to match.
@@ -198,17 +211,32 @@ def boolean_settings():
 
 
 def render(overrides):
-    """helm template the operator chart and return the manager ClusterRole's rules."""
+    """helm template the operator chart and return the manager ClusterRole's rules.
+
+    Every match is collected and exactly one is required. Returning the first hit
+    reads one role and says nothing about the others: a second ClusterRole the
+    operator is bound to carries grants this comparison never sees, and one that
+    sorts ahead of the real role is read in its place, which reports the real
+    role's whole permission set as missing.
+    """
     argv = ["helm", "template", "rbac-check", str(CHART_DIR)]
     for path, value in overrides:
         argv += ["--set", f"{path}={str(value).lower()}"]
+    where = " ".join(argv[4:]) or "the chart defaults"
     out = subprocess.run(argv, capture_output=True, text=True, timeout=180)
     if out.returncode != 0:
         sys.exit(f"helm template failed, so there is no rendered role to read:\n{out.stderr.strip()}")
-    for doc in yaml.safe_load_all(out.stdout):
-        if doc and doc.get("kind") == "ClusterRole" and "manager" in str(doc["metadata"]["name"]):
-            return doc.get("rules", [])
-    sys.exit(f"this render carries no manager ClusterRole: {' '.join(argv[4:]) or 'the chart defaults'}")
+    matches = [
+        doc for doc in yaml.safe_load_all(out.stdout)
+        if doc and doc.get("kind") == "ClusterRole" and "manager" in str(doc["metadata"]["name"])
+    ]
+    if len(matches) != 1:
+        named = ", ".join(sorted(str(doc["metadata"]["name"]) for doc in matches)) or "none"
+        sys.exit(
+            f"{len(matches)} ClusterRoles in this render are named as the manager role, and this "
+            f"compares one: {named}. Rendered with {where}."
+        )
+    return matches[0].get("rules", [])
 
 
 def render_matrix():
