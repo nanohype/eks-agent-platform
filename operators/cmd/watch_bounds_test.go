@@ -120,10 +120,16 @@ func TestTheManagerCarriesAReconcileCeiling(t *testing.T) {
 			"controller-runtime's default and disables the deadline", floor)
 	}
 
-	// A constant this cannot evaluate is a failure rather than a silent
-	// omission: the comparison is only worth what it covers.
+	// Every duration the module declares, whatever it is named. A comparison set
+	// chosen by a naming convention is a list, and a wait named anything else
+	// escapes it — so a duration at or above the floor is either a bound a
+	// reconcile can wait on, which is a failure, or it is recorded below with
+	// why a reconcile never waits on it.
 	for name, d := range declaredTimeouts(t) {
-		if strings.HasPrefix(name, "reconcile") {
+		if name == "reconcileFloor" {
+			continue // the ceiling's own floor, which is what everything else is measured against
+		}
+		if notAReconcileWait[name] != "" {
 			continue
 		}
 		if d >= floor {
@@ -224,10 +230,22 @@ func durationFlagNames(t *testing.T) []string {
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "DurationVar" || len(call.Args) < 2 {
+		if !ok || len(call.Args) < 2 {
 			return true
 		}
-		if lit, ok := call.Args[1].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+		// Both stdlib spellings: DurationVar binds into a variable, Duration
+		// returns a pointer. A sweep that knows one of them is a sweep over a
+		// spelling rather than over the flags the binary declares.
+		var nameArg ast.Expr
+		switch sel.Sel.Name {
+		case "DurationVar":
+			nameArg = call.Args[1]
+		case "Duration":
+			nameArg = call.Args[0]
+		default:
+			return true
+		}
+		if lit, ok := nameArg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 			if v, err := strconv.Unquote(lit.Value); err == nil {
 				out = append(out, v)
 			}
@@ -239,6 +257,30 @@ func durationFlagNames(t *testing.T) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// notAReconcileWait records durations the module declares that no reconcile
+// waits on, with the reason. An entry is a claim about what the value is for.
+var notAReconcileWait = map[string]string{
+	"killSwitchMaxRefireBackoff": "the ceiling on the interval BETWEEN re-publishes of an unrouted breach, " +
+		"compared against wall-clock time across reconciles; no reconcile waits on it",
+}
+
+// mentionsTimeUnit reports whether an expression names a time unit, which is
+// what makes it a duration the gate has to be able to evaluate. A constant whose
+// value is an int or a string is not a duration however it is named — several in
+// this module carry TTL or Duration in the name and hold a count of seconds.
+func mentionsTimeUnit(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "time" {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 // declaredTimeouts returns every duration constant in the module whose name ends
@@ -274,11 +316,14 @@ func declaredTimeouts(t *testing.T) map[string]time.Duration {
 				return true
 			}
 			for i, name := range vs.Names {
-				if !strings.HasSuffix(name.Name, "Timeout") || i >= len(vs.Values) {
+				if i >= len(vs.Values) {
 					continue
 				}
 				d, ok := durationValue(vs.Values[i])
 				if !ok {
+					if !mentionsTimeUnit(vs.Values[i]) {
+						continue // an int, a string: not a duration at all
+					}
 					// Silently dropping the ones it cannot read is how a sweep
 					// comes to cover less than it claims — and the shapes it
 					// cannot read are the unusual ones, which is where a bound
