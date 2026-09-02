@@ -250,11 +250,13 @@ func NewVersionCmd(buildVersion string) *cobra.Command {
 	}
 }
 
-// clusterRequestTimeout bounds one API-server request made by this CLI. It is
-// the same ceiling the operator applies to the other remotes it talks to, for
-// the same reason: comfortably past the slowest single call any command makes,
-// and short enough that an unreachable API server returns an error rather than
-// appearing to hang.
+// clusterRequestTimeout bounds one API-server request made by this CLI. Thirty
+// seconds is what the operator's own API-server and AWS request bounds use; the
+// AMP query path is bounded tighter still, at half of it, because a burn-rate
+// tick issues several. Here the shape of the wait is what sets it: comfortably
+// past the slowest single call any command makes, and short enough that an
+// unreachable API server returns an error rather than appearing to hang while
+// someone watches.
 const clusterRequestTimeout = 30 * time.Second
 
 // clusterRESTConfig resolves the API-server config this CLI talks through and

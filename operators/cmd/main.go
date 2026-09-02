@@ -62,38 +62,54 @@ func metricsServerOptions(secure bool, addr string) server.Options {
 	return opts
 }
 
-// reconcileTimeout is the ceiling on one Reconcile call, applied to the context
-// controller-runtime passes it.
+// reconcileFloor is the ceiling on one Reconcile call when nothing configured is
+// longer, and reconcileCeiling is what the manager is actually given.
 //
-// The bound belongs here rather than on the client. rest.Config.Timeout is the
-// obvious-looking place and is the wrong one: client-go copies it onto the
+// The bound belongs on the reconcile rather than on the client. rest.Config.Timeout
+// is the obvious-looking place and is the wrong one: client-go copies it onto the
 // http.Client the REST client uses and reads it back for every request, and a
-// watch is a request. A 30s value would tear down and re-establish every
-// informer twice a minute, turning a timeout into a re-list storm against the
-// API server the operator depends on.
+// watch is a request. A 30s value would tear down and re-establish every informer
+// twice a minute, turning a timeout into a re-list storm against the API server
+// the operator depends on.
 //
 // What bounds a watch is the reflector, and it does so without this operator
 // setting anything: client-go puts TimeoutSeconds on each watch request,
 // randomized between a five-minute floor and twice that, under the comment "We
 // want to avoid situations of hanging watchers. Stop any watchers that do not
-// receive any events within the timeout window." The apiserver closes the
-// stream at that point and the reflector opens a new one.
+// receive any events within the timeout window." The apiserver closes the stream
+// at that point and the reflector opens a new one.
 //
-// A reconcile is what was unbounded. Every remote call inside one already
-// carries a shorter bound of its own — per AWS request, per AWS operation
-// across its retries, per vcluster request — so reaching this ceiling means a
-// reconcile is stuck on something none of those cover. Ten minutes is far past
-// any legitimate first-time provision, which serializes many bounded calls, and
-// short enough that a wedged worker returns rather than being held until the
-// process restarts.
-const reconcileTimeout = 10 * time.Minute
+// A reconcile is what was unbounded, and the host API-server calls it makes are
+// the calls with no shorter bound of their own — every other remote this operator
+// talks to carries one per request. So this ceiling is not a backstop behind
+// tighter limits; for the host client it is the only limit there is, which is why
+// it is generous rather than tight.
+//
+// It must still exceed every bound a reconcile can wait on, and one of those is
+// derived rather than declared: the budget reconciler bounds its Athena poll at
+// half its requeue interval, so an operator that widens the interval widens that
+// bound with it. A ceiling below it would cancel the cost query every tick, and a
+// cost query that never completes is a budget cap that is never enforced while
+// the scan is billed each time. The ceiling is therefore computed from the same
+// flag, not fixed.
+const reconcileFloor = 10 * time.Minute
+
+// reconcileCeiling is the per-reconcile deadline for a given configuration: the
+// floor, or the longest configured inner bound plus the floor, whichever is
+// larger. The floor is the margin — a reconcile is more than its slowest call.
+func reconcileCeiling(budgetRequeueInterval time.Duration) time.Duration {
+	if inner := controller.BudgetQueryTimeout(budgetRequeueInterval); inner > 0 {
+		return inner + reconcileFloor
+	}
+	return reconcileFloor
+}
 
 // controllerOptions carries the per-reconcile ceiling to every controller the
 // manager builds. Extracted so a test can read it: the option defaults to zero,
 // zero disables the timeout entirely, and at the call site zero is
 // indistinguishable from nobody having set it.
-func controllerOptions() crconfig.Controller {
-	return crconfig.Controller{ReconciliationTimeout: reconcileTimeout}
+func controllerOptions(budgetRequeueInterval time.Duration) crconfig.Controller {
+	return crconfig.Controller{ReconciliationTimeout: reconcileCeiling(budgetRequeueInterval)}
 }
 
 func main() {
@@ -254,7 +270,7 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       leaderElectionID,
-		Controller:             controllerOptions(),
+		Controller:             controllerOptions(budgetRequeueInterval),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
 // The host API-server client is the one remote this operator talks to without a
@@ -63,28 +65,55 @@ func TestAWatchIsBoundedWithoutTheClientConfig(t *testing.T) {
 
 	// And the bound that does fit: controller-runtime deadlines the context it
 	// hands Reconcile, when asked to.
+	// The call, not the names. "ReconciliationTimeout" appears on struct fields
+	// and in a field copy whether or not a deadline is ever applied, and
+	// "context.WithTimeout" matches WithTimeoutCause as a substring while a
+	// literal context.WithTimeout also sits on the unrelated cache-sync path. A
+	// check on either survives the guardrail's removal.
 	ctlr := dependencyFile(t, dependencySource(t, "sigs.k8s.io/controller-runtime"), "pkg/internal/controller/controller.go")
-	for _, token := range []string{"ReconciliationTimeout", "context.WithTimeout"} {
-		if !strings.Contains(ctlr, token) {
-			t.Errorf("controller-runtime's controller no longer mentions %q; the per-reconcile ceiling this "+
-				"operator sets would then bound nothing", token)
-		}
+	const applied = "context.WithTimeoutCause(ctx, c.ReconciliationTimeout"
+	if !strings.Contains(ctlr, applied) {
+		t.Errorf("controller-runtime no longer applies the reconcile deadline as %q; the ceiling this "+
+			"operator sets would then bound nothing, and every reconcile would run with the context "+
+			"controller-runtime hands it unmodified", applied)
 	}
 }
 
 func TestTheManagerCarriesAReconcileCeiling(t *testing.T) {
-	got := controllerOptions().ReconciliationTimeout
+	// The bound this ceiling has to clear is not declared anywhere as a
+	// constant: the budget reconciler computes it from its requeue interval, so
+	// it moves with a flag. A sweep of declared constants cannot see it, which
+	// is why it is compared directly, across the interval's range rather than at
+	// one value.
+	for _, interval := range []time.Duration{
+		0,                // unset: the reconciler falls back to its own default
+		time.Minute,      // shorter than the poll's floor
+		30 * time.Minute, // shorter than the shipped default
+		time.Hour,        // the shipped default
+		6 * time.Hour,    // an operator that widens it
+		24 * time.Hour,
+	} {
+		ceiling := reconcileCeiling(interval)
+		inner := controller.BudgetQueryTimeout(interval)
+		if ceiling <= inner {
+			t.Errorf("with --budget-requeue-interval=%v the Athena poll bounds itself at %v and the "+
+				"reconcile ceiling is %v; the cost query is cancelled every tick, so the spend is never "+
+				"read and the cap is never enforced while the scan is billed each time", interval, inner, ceiling)
+		}
+	}
+
+	got := controllerOptions(time.Hour).ReconciliationTimeout
 	if got <= 0 {
 		t.Fatalf("ReconciliationTimeout is %v; zero is controller-runtime's default and disables the "+
 			"deadline, so a reconcile stuck on a call none of the per-request bounds cover holds its "+
 			"worker until the process restarts", got)
 	}
 
-	// A ceiling shorter than a call it contains aborts healthy work. Every
-	// timeout this module declares is swept out of its own source, so the
-	// comparison covers the ones added after this was written too.
+	// And the declared bounds, swept from the module's own source. A constant
+	// this cannot evaluate is a failure rather than a silent omission: the
+	// comparison is only worth what it covers.
 	for name, d := range declaredTimeouts(t) {
-		if name == "reconcileTimeout" {
+		if strings.HasPrefix(name, "reconcile") {
 			continue
 		}
 		if d >= got {
@@ -130,9 +159,17 @@ func declaredTimeouts(t *testing.T) map[string]time.Duration {
 				if !strings.HasSuffix(name.Name, "Timeout") || i >= len(vs.Values) {
 					continue
 				}
-				if d, ok := durationValue(vs.Values[i]); ok {
-					out[name.Name] = d
+				d, ok := durationValue(vs.Values[i])
+				if !ok {
+					// Silently dropping the ones it cannot read is how a sweep
+					// comes to cover less than it claims — and the shapes it
+					// cannot read are the unusual ones, which is where a bound
+					// longer than the ceiling is most likely to be written.
+					t.Errorf("%s in %s is a timeout this sweep cannot evaluate, so it is compared against "+
+						"nothing. Teach durationValue its shape rather than leaving it out", name.Name, path)
+					continue
 				}
+				out[name.Name] = d
 			}
 			return true
 		})
@@ -147,38 +184,59 @@ func declaredTimeouts(t *testing.T) map[string]time.Duration {
 	return out
 }
 
-// durationValue evaluates the `<n> * time.<Unit>` form these constants are
-// written in, and reports false for anything else rather than guessing.
+// durationValue evaluates the duration forms these constants are written in —
+// `<n> * time.<Unit>`, the same reversed, and a bare `time.<Unit>` — and reports
+// false for anything else rather than guessing. A false is a gate failure at the
+// caller, not an omission.
 func durationValue(e ast.Expr) (time.Duration, bool) {
-	bin, ok := e.(*ast.BinaryExpr)
-	if !ok || bin.Op != token.MUL {
-		return 0, false
+	switch v := e.(type) {
+	case *ast.SelectorExpr: // time.Hour
+		return timeUnit(v)
+	case *ast.BinaryExpr:
+		if v.Op != token.MUL {
+			return 0, false
+		}
+		// Either operand may carry the count: 30 * time.Second and
+		// time.Minute * 20 are the same duration written two ways.
+		if n, ok := intLiteral(v.X); ok {
+			if unit, ok := durationValue(v.Y); ok {
+				return time.Duration(n) * unit, true
+			}
+		}
+		if n, ok := intLiteral(v.Y); ok {
+			if unit, ok := durationValue(v.X); ok {
+				return time.Duration(n) * unit, true
+			}
+		}
 	}
-	lit, ok := bin.X.(*ast.BasicLit)
-	if !ok || lit.Kind != token.INT {
-		return 0, false
-	}
-	n, err := strconv.Atoi(lit.Value)
-	if err != nil {
-		return 0, false
-	}
-	sel, ok := bin.Y.(*ast.SelectorExpr)
-	if !ok {
-		return 0, false
-	}
+	return 0, false
+}
+
+func timeUnit(sel *ast.SelectorExpr) (time.Duration, bool) {
 	pkg, ok := sel.X.(*ast.Ident)
 	if !ok || pkg.Name != "time" {
 		return 0, false
 	}
 	switch sel.Sel.Name {
+	case "Millisecond":
+		return time.Millisecond, true
 	case "Second":
-		return time.Duration(n) * time.Second, true
+		return time.Second, true
 	case "Minute":
-		return time.Duration(n) * time.Minute, true
+		return time.Minute, true
 	case "Hour":
-		return time.Duration(n) * time.Hour, true
+		return time.Hour, true
 	}
 	return 0, false
+}
+
+func intLiteral(e ast.Expr) (int, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.INT {
+		return 0, false
+	}
+	n, err := strconv.Atoi(lit.Value)
+	return n, err == nil
 }
 
 // dependencySource returns a module's on-disk source directory, so a claim about
@@ -236,7 +294,20 @@ func TestTheManagerIsGivenTheCeiling(t *testing.T) {
 				if !ok {
 					continue
 				}
-				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Controller" {
+				key, ok := kv.Key.(*ast.Ident)
+				if !ok || key.Name != "Controller" {
+					continue
+				}
+				// The key alone says nothing. `Controller: crconfig.Controller{}`
+				// is present and zero, and zero is the value that disables the
+				// deadline — the state this test exists to catch, wearing the
+				// shape it checks for. So the VALUE has to be the call that
+				// computes the ceiling.
+				call, ok := kv.Value.(*ast.CallExpr)
+				if !ok {
+					continue
+				}
+				if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "controllerOptions" {
 					carriesController = true
 				}
 			}
@@ -248,7 +319,8 @@ func TestTheManagerIsGivenTheCeiling(t *testing.T) {
 		t.Fatal("main.go builds no manager; this test is reading the wrong file")
 	}
 	if !carriesController {
-		t.Error("the manager options carry no Controller field, so the per-reconcile ceiling reaches no " +
-			"controller and every Reconcile runs with the context controller-runtime hands it unmodified")
+		t.Error("the manager options do not pass controllerOptions() as their Controller field. A field " +
+			"that is absent, or present and zero, leaves the ceiling reaching no controller — and zero " +
+			"is controller-runtime's default, so the two are the same outcome")
 	}
 }
