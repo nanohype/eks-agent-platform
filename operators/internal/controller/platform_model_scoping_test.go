@@ -138,13 +138,44 @@ func TestExpandModelResources(t *testing.T) {
 			},
 		},
 		{
-			name:     "entries already carrying a wildcard are not double-starred",
+			// The star is the expansion's to add. An entry carrying one is a
+			// family written in the field that takes models, and passing it
+			// through would put anthropic.claude-* in the NotResource of the
+			// Deny — every Anthropic model excluded on an entry that names
+			// none.
+			name:     "an entry carrying its own wildcard is refused, not passed through",
 			identity: platformv1alpha1.IdentitySpec{AllowedModels: []string{"anthropic.claude-*"}},
 			scope:    prodScope,
-			want: []string{
-				"arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
-				"arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-*",
-			},
+			wantErr:  `allowed model "anthropic.claude-*" is not a Bedrock model ID`,
+		},
+		{
+			// The truncation the star form's refusal does not cover: no
+			// metacharacter, admitted by the character class the field shipped
+			// with, and expanded to anthropic.claude* all the same.
+			name:     "a truncated model id is refused",
+			identity: platformv1alpha1.IdentitySpec{AllowedModels: []string{"anthropic.claude"}},
+			scope:    prodScope,
+			wantErr:  `allowed model "anthropic.claude" is not a Bedrock model ID`,
+		},
+		{
+			// us.<letter> is the shape that inverts the whole document: the
+			// expansion reads "us." as the cross-region prefix and mints
+			// foundation-model/a*, so twenty-six entries — inside MaxItems=32 —
+			// exclude every foundation model from the Deny.
+			name:     "a single-letter model behind a cross-region prefix is refused",
+			identity: platformv1alpha1.IdentitySpec{AllowedModels: []string{"us.a"}},
+			scope:    prodScope,
+			wantErr:  `allowed model "us.a" is not a Bedrock model ID`,
+		},
+		{
+			// The residual the CRD marker cannot express: RE2 has no negative
+			// lookahead, so "apac" satisfies the marker's vendor class while
+			// geoPrefix reads it as the cross-region prefix. The two parses
+			// disagree; this check is where one of them wins.
+			name:     "a geo token standing in for a vendor is refused",
+			identity: platformv1alpha1.IdentitySpec{AllowedModels: []string{"apac.claude-5"}},
+			scope:    prodScope,
+			wantErr:  `allowed model "apac.claude-5" is not a Bedrock model ID`,
 		},
 		{
 			name:     "blank entries are skipped",

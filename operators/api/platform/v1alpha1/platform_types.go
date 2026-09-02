@@ -169,8 +169,11 @@ const (
 // `bedrock-model-scoping` inline policy onto the tenant role (and the
 // attribution session role, when spec.attribution is set) that denies the
 // Bedrock model-invoke actions (InvokeModel, InvokeModelWithResponseStream,
-// Converse, ConverseStream) on every resource outside the set that
-// AllowedModels / AllowedModelFamilies expand to. The baseline policy's broad
+// InvokeModelWithBidirectionalStream, Converse, ConverseStream) on every
+// resource outside the set that AllowedModels / AllowedModelFamilies expand
+// to. The list is the Deny's Action array and must name every action the
+// baseline's InvokeModel* grant reaches: an action the Allow covers and the
+// Deny omits is an unscoped path to any model. The baseline policy's broad
 // invoke grant is thereby narrowed to exactly the declared models; when
 // neither field is set the policy denies all model invocation
 // (deny-by-default).
@@ -193,9 +196,37 @@ type IdentitySpec struct {
 	// therefore inverts under a wildcard — "*" expands to
 	// foundation-model/* plus inference-profile/us.*, which excludes every
 	// model from the Deny and leaves the baseline's wildcard Allow governing
-	// unopposed. Restricting the character class to a literal Bedrock model ID
-	// is what keeps an entry incapable of matching more than the one model it
-	// names. AllowedModelFamilies is closed the same way by its enum.
+	// unopposed. AllowedModelFamilies is closed the same way by its enum.
+	//
+	// Refusing the star form is not enough, because the expansion appends one:
+	// every entry reaches IAM as <entry>*, so an entry that stops short of a
+	// whole model ID is a family prefix written without a star.
+	// "anthropic.claude" excludes every Anthropic model from the Deny; the
+	// entry the author typed names one. The pattern therefore requires the
+	// three parts a Bedrock model ID has — a vendor segment, a name, and a
+	// version token (a hyphen-separated token opening with a digit or v<digit>,
+	// optionally carrying a :<n> revision). A vendor plus a partial name has no
+	// version token and is refused.
+	//
+	// The vendor segment's three-character minimum is the other half, and it is
+	// about the geo alternation rather than about vendors: no Bedrock vendor is
+	// shorter than three characters, while "us", "eu", "jp" and "au" are two.
+	// Without the minimum, "us.a" parses here as vendor "us" and name "a" and is
+	// admitted, while expandModelResources reads the same string as the
+	// cross-region prefix "us." over model "a" and mints foundation-model/a* —
+	// one letter of the alphabet per entry, and the alphabet fits inside
+	// MaxItems. The minimum removes that parse.
+	//
+	// The marker cannot close the case completely: the longer geo tokens
+	// ("apac", "global", "us-gov") satisfy the vendor class, and RE2 — the
+	// engine the apiserver compiles this with — has no negative lookahead to
+	// forbid them there. expandModelResources re-derives the geo prefix from
+	// its own vocabulary and rejects an entry whose remainder is not a model
+	// ID, so the two parses cannot disagree at the point the policy is written.
+	// That check is also what holds when the operator runs against a Platform
+	// CRD older than itself — the state a chart shipping CRDs in its crds/
+	// directory leaves behind, because Helm installs those once and never
+	// updates them on upgrade.
 	//
 	// MaxItems is derived from the inline-policy budget, not chosen: an inline
 	// role policy caps at 10,240 characters and each entry renders two ARNs of
@@ -204,7 +235,7 @@ type IdentitySpec struct {
 	// on a Platform that stays Provisioning.
 	// +kubebuilder:validation:MaxItems=32
 	// +kubebuilder:validation:items:MaxLength=128
-	// +kubebuilder:validation:items:Pattern=`^((us-gov|us|eu|apac|jp|au|global)\.)?[a-z][a-z0-9-]*\.[a-z0-9][a-z0-9-]*(:[0-9]+)?$`
+	// +kubebuilder:validation:items:Pattern=`^((us-gov|us|eu|apac|jp|au|global)\.)?[a-z][a-z0-9-]{2,}\.[a-z0-9][a-z0-9-]*-(v?[0-9][a-z0-9-]*)(:[0-9]+)?$`
 	// +optional
 	AllowedModels []string `json:"allowedModels,omitempty"`
 
