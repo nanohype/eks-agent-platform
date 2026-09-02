@@ -19,6 +19,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 )
 
 // A condition whose Type names a PROBLEM reads differently from one that names a
@@ -42,11 +44,11 @@ import (
 // avoids making that claim without looking.
 var problemNamedConditions = map[string]string{
 	"BurnRateBreach":                   "Unknown/SignalUnavailable when the burn rate could not be read",
-	"RolloutHeld":                      "Unknown when the hold's effect is unverifiable",
+	"RolloutHeld":                      "Unknown/SignalUnavailable on a tick with no reading, and Unknown/AppProjectAbsent when the hold's effect is unverifiable",
 	"ImportedRouteGuardrailUnenforced": "Unknown/RoutesNotEvaluated on every path that returns before the routes are walked",
+	"Suspended":                        "Unknown/SuspensionUnreadable when no IAM client is wired, so the role's tag was not read",
+	"TenantBudgetExceeded":             "Unknown/NoAggregateCap when the tenant declares no cap to be within",
 	"KillSwitchUnrouted":               alwaysEvaluated,
-	"Suspended":                        alwaysEvaluated,
-	"TenantBudgetExceeded":             alwaysEvaluated,
 }
 
 // alwaysEvaluated marks a condition that cannot be written without its
@@ -260,4 +262,48 @@ func conditionWriters(t *testing.T) map[string][]conditionWriter {
 		})
 	}
 	return out
+}
+
+// The structural check above asks whether a writer CAN say "did not look". It
+// cannot tell one un-evaluated case from another, and a condition with more than
+// one keeps passing when a single arm is removed. These read the arm itself.
+func TestTheHoldConditionSeparatesUnevaluatedFromNotHeld(t *testing.T) {
+	sp := &governancev1alpha1.SLOPolicy{}
+	now := metav1.Now()
+
+	// A tick that never resolved the Platform never seeded holdEngaged, so
+	// without its own arm this falls into NotHeld and reports a hold released
+	// that status.holdEngagedAt still records as engaged.
+	got := rolloutHeldCondition(sp, sloReading{signalMissing: true}, now)
+	if got.Status != metav1.ConditionUnknown || got.Reason != "SignalUnavailable" {
+		t.Errorf("a tick with no reading reports %s/%s; it did not evaluate the hold and must say so",
+			got.Status, got.Reason)
+	}
+
+	got = rolloutHeldCondition(sp, sloReading{holdEngaged: false}, now)
+	if got.Status != metav1.ConditionFalse || got.Reason != "NotHeld" {
+		t.Errorf("a tick that read no engaged hold reports %s/%s, want False/NotHeld", got.Status, got.Reason)
+	}
+}
+
+func TestTheTenantBudgetConditionSeparatesNoCapFromWithinCap(t *testing.T) {
+	// spec.aggregateMonthlyBudgetUsd is optional, so "no cap declared" is the
+	// common case, and a tenant with nothing to be within must not report that
+	// it is within it.
+	got := conditionTenantBudget(tenantReading{})
+	if got.Status != metav1.ConditionUnknown || got.Reason != "NoAggregateCap" {
+		t.Errorf("a tenant declaring no cap reports %s/%s; there was no comparison to report",
+			got.Status, got.Reason)
+	}
+
+	got = conditionTenantBudget(tenantReading{capCompared: true})
+	if got.Status != metav1.ConditionFalse || got.Reason != "WithinCap" {
+		t.Errorf("a tenant compared against its cap and found under it reports %s/%s, want False/WithinCap",
+			got.Status, got.Reason)
+	}
+
+	got = conditionTenantBudget(tenantReading{capCompared: true, overSpec: true})
+	if got.Status != metav1.ConditionTrue {
+		t.Errorf("a tenant over its cap reports %s, want True", got.Status)
+	}
 }

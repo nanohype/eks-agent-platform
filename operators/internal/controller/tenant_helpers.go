@@ -79,3 +79,24 @@ func conditionTenantUnderBudget() metav1.Condition {
 		LastTransitionTime: metav1Now(),
 	}
 }
+
+// conditionTenantBudget picks which of the three sentences this tick earned.
+// "Within cap" is a comparison, and spec.aggregateMonthlyBudgetUsd is optional:
+// a tenant that declares no cap has nothing to be within, and saying so is not
+// the same as saying the spend is fine.
+func conditionTenantBudget(reading tenantReading) metav1.Condition {
+	switch {
+	case !reading.capCompared:
+		return metav1.Condition{
+			Type:               "TenantBudgetExceeded",
+			Status:             metav1.ConditionUnknown,
+			Reason:             "NoAggregateCap",
+			Message:            "this tenant declares no aggregate monthly cap, so its spend was not compared against one",
+			LastTransitionTime: metav1Now(),
+		}
+	case reading.overSpec:
+		return conditionTenantOverBudget(reading)
+	default:
+		return conditionTenantUnderBudget()
+	}
+}

@@ -102,6 +102,11 @@ type tenantReading struct {
 	aggregateBudget string
 	pct             int32
 	overSpec        bool // aggregate spend > spec.aggregateMonthlyBudgetUsd
+	// capCompared records that a cap was declared and the comparison ran.
+	// Without it, overSpec=false carries two meanings a reader cannot separate:
+	// spend measured against a cap and found under it, and no cap to measure
+	// against at all — the field is optional, so the second is the common case.
+	capCompared bool
 }
 
 // aggregate walks every Platform whose spec.tenant matches this Tenant
@@ -180,6 +185,7 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 
 	// Compare aggregate to the tenant-spec cap (if set).
 	if cap, ok := parseDecimal(t.Spec.AggregateMonthlyBudgetUsd); ok && cap.Sign() > 0 {
+		reading.capCompared = true
 		if totalSpend.Cmp(cap) > 0 {
 			reading.overSpec = true
 		}
@@ -225,11 +231,7 @@ func (r *TenantReconciler) applyStatus(ctx context.Context, t *platformv1alpha1.
 		}
 
 		upsertCondition(&fresh.Status.Conditions, conditionForReading(reading))
-		if reading.overSpec {
-			upsertCondition(&fresh.Status.Conditions, conditionTenantOverBudget(reading))
-		} else {
-			upsertCondition(&fresh.Status.Conditions, conditionTenantUnderBudget())
-		}
+		upsertCondition(&fresh.Status.Conditions, conditionTenantBudget(reading))
 		return r.Status().Update(ctx, &fresh)
 	})
 }
