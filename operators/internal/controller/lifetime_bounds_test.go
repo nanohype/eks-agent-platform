@@ -9,7 +9,9 @@ package controller
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -341,7 +343,7 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 	// every outcome too, and nothing here reads one. Rather than claim a
 	// coverage the file does not have, the template is required to carry no
 	// other container.
-	for _, key := range []string{"initContainers", "containers", "sidecars"} {
+	for _, key := range []string{"initContainers", "sidecars", "podSpecPatch"} {
 		if _, ok := tmplNode[key]; ok {
 			t.Errorf("the %s template declares %s. The assertions below read its script alone, so a "+
 				"write issued from another container on the same template is invisible to all of them",
@@ -349,84 +351,32 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 		}
 	}
 
-	// Assertions are made against the code, with the comments dropped. A shell
-	// comment satisfies a substring check exactly as well as the line it
-	// describes, so a handler whose behaviour was removed and whose explanation
-	// stayed would pass every check below.
-	code := shellCode(body)
-
-	// The guard has a direction, and a token cannot see it. Asserting that the
-	// body mentions "Succeeded" holds equally for a guard that exits on success
-	// and for its inverse — and the inverse is worse than no handler at all: it
-	// stays silent on every terminated run and blanks the score on every
-	// successful one. So the comparison is asserted as written, with the exit
-	// that belongs to it.
-	guard := `if [ "$status" = "Succeeded" ]; then`
-	if !strings.Contains(code, guard) {
-		t.Errorf("the %s handler does not carry the guard %s — a handler that does not exit on success "+
-			"overwrites the result the run wrote at writeback", handler, guard)
-	}
 	// What this holds, and what it does not.
 	//
-	// HOLDS: on a successful run the handler reaches its exit having run no
-	// command at all. That is read structurally rather than by spelling — every
-	// line before the guard must be an assignment or a shell builtin, the guard
-	// must be a line of its own rather than text inside one, and its branch body
-	// must be exactly the exit. A command ahead of the guard, a trap registered
-	// there, a guard that exists only as a quoted string, and a write of any
-	// spelling inside the branch all fail here.
+	// HOLDS: on a successful run the handler issues no command at all. That is
+	// established by RUNNING it — under a shell, with a stub on the path in
+	// place of every command that could reach the cluster, and the workflow
+	// status set to Succeeded. Nothing here reads the script, so no spelling
+	// defeats it: a different verb, a command substitution, a builtin, a trap,
+	// or a guard hidden inside a quotation all make the same observable call or
+	// fail to suppress one.
 	//
-	// DOES NOT HOLD: anything the exit handler does outside this script. Other
-	// containers on the template are checked for existence below and nothing
-	// reads their contents, and a write performed by the eval-runner image
-	// itself would be invisible to every assertion in this file.
-	lines := strings.Split(code, "\n")
-	guardAt, fiAt := -1, -1
-	for n, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == guard && guardAt < 0 {
-			guardAt = n
-		}
-		if guardAt >= 0 && trimmed == "fi" && fiAt < 0 {
-			fiAt = n
-		}
-	}
-	if guardAt < 0 {
-		t.Fatalf("the %s handler has no line that is exactly %s. A guard quoted inside another line is "+
-			"text, not a branch: the handler would mark every successful run failed while the check "+
-			"read the quotation", handler, guard)
-	}
+	// DOES NOT HOLD: anything outside this script. Other containers on the
+	// handler's template, and a podSpecPatch that grafts one on, are checked for
+	// existence below because nothing here executes them.
+	assertHandlerCalls(t, handler, body, "Succeeded", 0)
 
-	// Everything above the guard runs on a successful run too, so nothing above
-	// it may run at all. An assignment is inert; a command is not, whatever it
-	// is spelled, and a trap registered here fires on the branch's own exit.
-	for n := 0; n < guardAt; n++ {
-		stmt := strings.TrimSpace(lines[n])
-		if stmt == "" || strings.HasPrefix(stmt, "set ") {
-			continue
-		}
-		if name, _, ok := strings.Cut(stmt, "="); ok && name != "" && !strings.ContainsAny(name, " \t|&;()<>") {
-			continue // an assignment, including a command substitution bound to a name
-		}
-		t.Errorf("the %s handler runs %q before its success guard, so it runs on a successful run. "+
-			"Only assignments may precede the guard", handler, stmt)
-	}
+	// What follows still reads text, and reads it with comments dropped. These
+	// are claims about what the FAILING path writes — which arm it takes and
+	// what it clears — and a run of that path observes the calls but not their
+	// content, since the stub answers rather than a cluster. A token absent here
+	// is a handler that stopped saying something; it is not the success-path
+	// property above, which is settled by execution.
+	code := shellCode(body)
 
-	if fiAt < 0 {
-		t.Errorf("the %s handler's success guard is never closed by a line that is exactly `fi`", handler)
-	} else {
-		var body []string
-		for _, line := range lines[guardAt+1 : fiAt] {
-			if l := strings.TrimSpace(line); l != "" {
-				body = append(body, l)
-			}
-		}
-		if len(body) != 1 || body[0] != "exit 0" {
-			t.Errorf("the %s handler's success branch runs %v; its only statement must be `exit 0`, "+
-				"because anything else there runs on a run that already wrote its own result",
-				handler, body)
-		}
-	}
+	// The same harness on the failing path, so a run of it that observes nothing
+	// is telling us the stub works rather than that the handler is quiet.
+	assertHandlerCalls(t, handler, body, "Failed", 1)
 
 	for _, req := range []struct{ token, why string }{
 		{`phase:"Failed"`, "the handler runs on every outcome, so without this it reports nothing about a terminated run"},
@@ -550,4 +500,72 @@ func TestTheScoreGaugeGoesWithTheScore(t *testing.T) {
 		t.Errorf("%d score series survived a run that measured nothing; the dashboard still reads the "+
 			"last passing score for a suite whose status says it failed", n)
 	}
+}
+
+// assertHandlerCalls runs the handler's script and counts the commands it issues
+// that could reach the cluster.
+//
+// The script is Argo source, so its parameter references are substituted first;
+// then it runs under sh with a directory ahead of PATH holding a stub for every
+// such command, each of which records that it was called and exits 0. What the
+// handler is observed to do replaces every previous attempt to work it out by
+// reading, because a reading can be defeated by how something is written and an
+// execution cannot.
+func assertHandlerCalls(t *testing.T, handler, source, status string, want int) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+
+	script := strings.ReplaceAll(source, "{{inputs.parameters.workflow-status}}", status)
+	script = regexp.MustCompile(`\{\{[^}]*\}\}`).ReplaceAllString(script, "probe")
+
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("make the stub directory: %v", err)
+	}
+	for _, name := range []string{"kubectl"} {
+		stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + log + "\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(stub), 0o755); err != nil {
+			t.Fatalf("write the %s stub: %v", name, err)
+		}
+	}
+	// jq is not a cluster call, but the handler pipes through it and `set -eu`
+	// would abort on a missing one.
+	jq := "#!/bin/sh\nprintf '{}'\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "jq"), []byte(jq), 0o755); err != nil {
+		t.Fatalf("write the jq stub: %v", err)
+	}
+
+	path := filepath.Join(dir, "handler.sh")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write the handler script: %v", err)
+	}
+
+	cmd := exec.Command("/bin/sh", path)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the %s handler failed to run with status %s: %v\n%s", handler, status, err, out)
+	}
+
+	var calls int
+	if body, rerr := os.ReadFile(log); rerr == nil {
+		calls = len(strings.Split(strings.TrimSpace(string(body)), "\n"))
+	}
+	switch {
+	case status == "Succeeded" && calls != want:
+		t.Errorf("the %s handler issued %d cluster call(s) on a SUCCEEDED run; a run that wrote its own "+
+			"result at writeback must receive none. Calls:\n%s", handler, calls, readFileOrEmpty(log))
+	case status != "Succeeded" && calls < want:
+		t.Errorf("the %s handler issued no cluster call on a %s run, so this harness cannot tell a quiet "+
+			"handler from a stub that never fires", handler, status)
+	}
+}
+
+func readFileOrEmpty(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
