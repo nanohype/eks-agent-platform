@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
@@ -248,6 +250,34 @@ func NewVersionCmd(buildVersion string) *cobra.Command {
 	}
 }
 
+// clusterRequestTimeout bounds one API-server request made by this CLI. It is
+// the same ceiling the operator applies to the other remotes it talks to, for
+// the same reason: comfortably past the slowest single call any command makes,
+// and short enough that an unreachable API server returns an error rather than
+// appearing to hang.
+const clusterRequestTimeout = 30 * time.Second
+
+// clusterRESTConfig resolves the API-server config this CLI talks through and
+// bounds a request on it.
+//
+// A kubeconfig carries no request timeout, so a client built straight from one
+// inherits none, and a CLI without one does not fail — it stops returning, with
+// a person waiting on it.
+//
+// Setting it here is safe in a way it would not be inside the operator. A
+// rest.Config timeout reaches every request the client issues and a watch is a
+// request, so on a client backing an informer it tears the watch down and
+// forces a re-list on each expiry. This client opens none: the commands issue
+// one-shot reads and writes and hold no cache.
+func clusterRESTConfig() (*rest.Config, error) {
+	cfg, err := config.GetConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kube config: %w", err)
+	}
+	cfg.Timeout = clusterRequestTimeout
+	return cfg, nil
+}
+
 // newClusterClient builds a controller-runtime client from KUBECONFIG
 // (or in-cluster config when running inside a pod). Surfaces a clear
 // error when neither path is configured, rather than the cryptic
@@ -256,9 +286,9 @@ func newClusterClient() (client.Client, error) {
 	if !hasKubeconfigContext() {
 		return nil, fmt.Errorf("no Kubernetes context available: set KUBECONFIG, log in with `aws eks update-kubeconfig`, or run inside a pod with a ServiceAccount")
 	}
-	cfg, err := config.GetConfig()
+	cfg, err := clusterRESTConfig()
 	if err != nil {
-		return nil, fmt.Errorf("kube config: %w", err)
+		return nil, err
 	}
 	scheme := runtime.NewScheme()
 	if err := platformv1alpha1.AddToScheme(scheme); err != nil {
