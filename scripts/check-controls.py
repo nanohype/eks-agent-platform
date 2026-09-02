@@ -328,6 +328,18 @@ CONTROLS = [
         expect_output="zzsynthetic_renamed_check_block",
     ),
     Control(
+        gate="check-doc-contracts.sh",
+        path="charts/bedrock-egress/templates/networkpolicy-template.yaml",
+        before="            - port: 4317\n",
+        after="            - port: 4319\n",
+        catches="the published egress reference opening an OTLP port the operator does not open. "
+        "The namespace half of this reference was already compared and the ports beside it were "
+        "not, so a reference allowing egress to the collector on a port nothing listens on was a "
+        "valid NetworkPolicy, indistinguishable from a collector that is simply quiet, and the "
+        "thing someone copies into a tenant policy",
+        expect_output="4319",
+    ),
+    Control(
         gate="check-project-resources.py",
         path="operators/PROJECT",
         before="    kind: Tenant",
@@ -444,11 +456,19 @@ CONTROLS = [
     Control(
         gate="check-chart-version-bump.py",
         path="charts/operator/Chart.yaml",
-        before="version: 0.6.9",
-        after="version: 0.6.8",
+        # The anchor is the version KEY, and the mutation comments the value out
+        # behind a version below every published one. Quoting the value instead
+        # would tie this control to a number the next chart release moves, and a
+        # control whose anchor is gone mutates nothing while still being counted.
+        #
+        # 0.0.0 makes the rejection independent of what the base branch says: it
+        # is either strictly below the published version, which is the backwards
+        # case, or equal to it, which is the no-bump case. Both are rejections.
+        before="\nversion: ",
+        after="\nversion: 0.0.0 # ",
         catches="packaged chart content changing while the chart version stays put — an OCI tag is "
         "mutable, so the second push silently replaces the bytes behind a version already deployed",
-        expect_output='operator',
+        expect_output="0.0.0",
     ),
     # Two spellings, two code paths. `permissions: write-all` is a STRING at the
     # top level and `{id-token: write}` is a mapping; a gate that only walks the

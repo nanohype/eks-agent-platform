@@ -157,9 +157,11 @@ func TestOTelEndpointAndProtocolAgree(t *testing.T) {
 	if got[otelProtocolEnvName] != "grpc" {
 		t.Errorf("protocol = %q, want grpc", got[otelProtocolEnvName])
 	}
-	if got[otelProtocolEnvName] == "grpc" && !strings.HasSuffix(got[otelEndpointEnvName], fmt.Sprint(otlpGRPCPort)) {
-		t.Errorf("protocol is grpc but the endpoint %q does not address the gRPC port", got[otelEndpointEnvName])
-	}
+	// Which port that protocol has to address is asserted in
+	// telemetry_address_test.go, against the port OTLP assigns the transport
+	// rather than against the constant the endpoint was built from. Repeating it
+	// here guarded by `== "grpc"` would be a check that only runs when it passes:
+	// change the protocol and this line stops running rather than failing.
 }
 
 // A tenant-supplied destination is dropped, not merged: the waist exists so a
