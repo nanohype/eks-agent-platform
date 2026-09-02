@@ -490,6 +490,18 @@ CONTROLS = [
         expect_output="nodes",
     ),
     Control(
+        gate="check-chart-rbac.py",
+        path="charts/operator/templates/rbac.yaml",
+        before='    resources: ["deployments", "statefulsets"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]',
+        after='    resources: ["deployments", "statefulsets"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "escalate"]',
+        catches="a verb added to a resource the record already covers. Matching on group and resource alone "
+        "would read the whole rule as accounted for, so any verb — escalate, or a bare wildcard — could be "
+        "widened onto a grant whose record still describes the narrower one",
+        expect_output="not escalate",
+    ),
+    Control(
         gate="check-image-refs.py",
         path="charts/operator/values.yaml",
         before="repository: ghcr.io/nanohype/eks-agent-platform/operator",
