@@ -42,9 +42,14 @@ vet: ## go vet
 	go vet ./...
 
 .PHONY: test
+# -count=1 because several tests read files this module does not declare as
+# inputs — the eval WorkflowTemplate and the generated CRDs, both outside the
+# package. Go's test cache keys on the package's own sources, so a cached PASS
+# survives an edit to the artifact under test, and the run reports success over
+# a chart it never read.
 test: generate fmt vet ## Unit + conformance tests with envtest (merged coverage profile)
 	@KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" \
-	  go test ./... -coverpkg=./internal/... -coverprofile=cover.out
+	  go test ./... -count=1 -coverpkg=./internal/... -coverprofile=cover.out
 	@go tool cover -func=cover.out | tail -1
 
 .PHONY: coverage-check

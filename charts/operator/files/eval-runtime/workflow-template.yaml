@@ -24,6 +24,10 @@
 #      s3://<eval-reports>/<platform>/runs/<suite>/<runId>/.
 #   4. writeback      — patch EvalSuite.status with lastScore, lastRunAt,
 #      lastReportUrl, phase (Passed/Failed).
+#
+# onExit: run-outcome — runs after the workflow whatever its outcome, and
+#      reports a run that never reached step 4. See the handler for the ways a
+#      run can stop without reaching the handler either.
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
@@ -101,6 +105,17 @@ spec:
         value: "REPLACE_BY_EVALSUITE"
 
   entrypoint: pipeline
+
+  # What the suite reports when a run does not reach its writeback step.
+  #
+  # writeback is the only task that patches EvalSuite.status, and it depends on
+  # score, so a run that is terminated — by the workflow deadline, by a step
+  # failing, by eviction — patches nothing. The suite keeps the phase and the
+  # score of the last run that DID finish, under a later schedule tick, and
+  # reads as a suite that passed. Argo runs the exit handler on the workflow's
+  # own outcome — including the three above — which makes it the only place that
+  # sees those. The handler names the ways a run can stop without reaching it.
+  onExit: run-outcome
 
   templates:
     # ─────────────── orchestration ───────────────
@@ -346,6 +361,86 @@ spec:
         # status.lastReportUrl points at. An artifact declaration here would
         # be a second, differently-permissioned copy of a delivery that has
         # already happened.
+
+    # ─────────────── exit handler ───────────────
+    # Reports a run that did not reach writeback. Runs on the workflow's own
+    # outcome — deadline expiry, a step failing, eviction — and NOT on every
+    # way a run can stop: Argo skips exit handlers under the Terminate shutdown
+    # strategy (`argo terminate`, and `activeDeadlineSeconds: 0` set on a running
+    # workflow), a deleted Workflow runs nothing, and this handler is a single
+    # pod with no retryStrategy, so its own failure leaves the suite reporting
+    # the last run that finished.
+    - name: run-outcome
+      inputs:
+        parameters:
+          - name: workflow-status
+            value: "{{workflow.status}}"
+          - name: suite-name
+            value: "{{workflow.parameters.suite-name}}"
+          - name: suite-namespace
+            value: "{{workflow.parameters.suite-namespace}}"
+      script:
+        image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
+        command: ["/bin/sh", "-c"]
+        # PSS restricted, per container. The pod-level block covers
+        # runAsNonRoot/seccompProfile; these two are container-scoped and have no
+        # pod-level equivalent. Verified against the eval-runner image: every
+        # binary the steps invoke (node, aws, jq, kubectl, evaluate, score) execs
+        # cleanly under --cap-drop ALL as uid 1000, so unlike CoreDNS nothing here
+        # carries file capabilities that an empty bounding set would break.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        source: |
+          set -eu
+          status='{{inputs.parameters.workflow-status}}'
+          # A run that succeeded wrote its own result at step 4; a second patch
+          # behind it would replace that result with a blank one.
+          if [ "$status" = "Succeeded" ]; then
+            exit 0
+          fi
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          started='{{workflow.creationTimestamp.RFC3339}}'
+
+          # Whether writeback ran is not the same question as how the workflow
+          # ended. Its patch is issued from the main container, so a node can
+          # still end Failed or Error after the patch has landed — a wait
+          # container failing, a pod evicted once the write was through. Blanking
+          # on the workflow's phase alone would then discard a score that was
+          # measured.
+          #
+          # status.lastRunAt is stamped by whoever wrote last, and both stamps
+          # are UTC in the same layout, so a lexicographic compare orders them.
+          # A lastRunAt after this workflow started is writeback's, from this run.
+          wrote="$(kubectl get evalsuite '{{inputs.parameters.suite-name}}' \
+            --namespace '{{inputs.parameters.suite-namespace}}' \
+            -o jsonpath='{.status.lastRunAt}' 2>/dev/null || true)"
+          newest="$(printf '%s\n%s\n' "$started" "$wrote" | sort | tail -1)"
+
+          if [ -n "$wrote" ] && [ "$newest" = "$wrote" ] && [ "$wrote" != "$started" ]; then
+            # Measured, then the run ended badly: correct the phase, keep the
+            # numbers the run actually produced.
+            patch="$(jq -nc '{status:{phase:"Failed"}}')"
+          else
+            # Nothing was measured. Clearing lastScore and lastReportUrl is the
+            # point: leaving the previous run's score beside this run's timestamp
+            # attributes a number to a run that never produced one.
+            patch="$(jq -nc --arg t "$now" '{status:{phase:"Failed",lastRunAt:$t,lastScore:"",lastReportUrl:""}}')"
+          fi
+
+          kubectl patch evalsuite '{{inputs.parameters.suite-name}}' \
+            --namespace '{{inputs.parameters.suite-namespace}}' \
+            --subresource status \
+            --type merge \
+            --patch "$patch"
+        resources:
+          requests: { cpu: 100m, memory: 128Mi }
+          limits: { cpu: 500m, memory: 256Mi }
 
     # ─────────────── 4. writeback ───────────────
     # PATCH EvalSuite.status with the computed mean score + phase. Uses
