@@ -238,7 +238,7 @@ _Appears in:_
 | `endpoint` _string_ | Endpoint is the cluster-internal hostname of the gateway. It addresses<br />the gateway, not any one API on it — see Routes for the base URL a<br />client is actually configured with. |  | Optional: \{\} <br /> |
 | `routes` _[RouteStatus](#routestatus) array_ | Routes is the per-route client contract: the resolved wire format and<br />the base URL that format is served at. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the last spec.generation reconciled. |  | Optional: \{\} <br /> |
-| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions carry what the last reconcile learned. Two are written:<br />	RoutesReconciled                  the routes were emitted (False while<br />	                                  waiting on the Platform or the<br />	                                  Gateway-API CRDs)<br />	ImportedRouteGuardrailUnenforced  whether any imported route is served<br />	                                  without its guardrail<br />The second is three-valued, and the three are three different sentences.<br />True names the routes. False says the routes were walked and none of them<br />is unguarded. Unknown says the walk did not happen — which is every pass<br />that returns before the routes are reached — so a reader deciding whether<br />to point sensitive traffic at an imported route must treat Unknown as an<br />unanswered question rather than as an absence of findings. |  | Optional: \{\} <br /> |
 
 
 #### ModelRouteSpec
