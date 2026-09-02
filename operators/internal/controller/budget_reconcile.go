@@ -813,12 +813,28 @@ func (r *BudgetReconciler) applyKillSwitchEffectCondition(bp *governancev1alpha1
 	upsertCondition(&bp.Status.Conditions, cond)
 }
 
+// statusWriteTimeout bounds a status write made after the reconcile's own
+// context is gone. Short: it is one API-server call on the recovery path, and a
+// worker held there is a worker not reconciling anything else.
+const statusWriteTimeout = 15 * time.Second
+
 // applyBudgetStatusError records a BudgetReconciled=False condition so
 // operators can distinguish "reconciler failing" from "reconciler not
 // running" without inspecting logs. LastReconciled is not bumped — the
 // existing timestamp keeps reflecting the last successful tick, which is
 // what the budget-stale alert wants.
 func (r *BudgetReconciler) applyBudgetStatusError(ctx context.Context, bp *governancev1alpha1.BudgetPolicy, reason string, cause error) error {
+	// The write that records WHY a reconcile failed must not fail for the same
+	// reason. When the cause is the per-reconcile ceiling, ctx is already past
+	// its deadline and this update would be refused before it left the process,
+	// leaving no condition at all for the failure mode most in need of one. A
+	// fresh context with its own short bound, the same shape the Athena
+	// cancellation path uses.
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), statusWriteTimeout)
+		defer cancel()
+	}
 	upsertCondition(&bp.Status.Conditions, metav1.Condition{
 		Type:               "BudgetReconciled",
 		Status:             metav1.ConditionFalse,
@@ -834,11 +850,23 @@ func (r *BudgetReconciler) applyBudgetStatusError(ctx context.Context, bp *gover
 // by the reconciler's RequeueInterval so a stuck query doesn't outlive
 // the next tick. Lower bound is 30s to leave room for cold CUR scans.
 func (r *BudgetReconciler) queryTimeout() time.Duration {
+	return BudgetQueryTimeout(r.RequeueInterval)
+}
+
+// BudgetQueryTimeout is the Athena poll bound for a given requeue interval.
+//
+// Exported because it is the one bound in this operator that is DERIVED rather
+// than declared, and a per-reconcile ceiling has to exceed it: a ceiling shorter
+// than this cancels the poll every tick, and a cost query that never completes
+// is a budget cap that is never enforced while the scan is billed each time.
+// The caller that sets the ceiling reads it from here rather than restating the
+// formula, so widening the interval widens both together.
+func BudgetQueryTimeout(requeueInterval time.Duration) time.Duration {
 	const minTimeout = 30 * time.Second
-	if r.RequeueInterval <= 0 {
+	if requeueInterval <= 0 {
 		return 2 * time.Minute
 	}
-	cap := r.RequeueInterval / 2
+	cap := requeueInterval / 2
 	if cap < minTimeout {
 		return minTimeout
 	}

@@ -184,6 +184,20 @@ type ModelGatewayStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// Conditions carry what the last reconcile learned. Two are written:
+	//
+	//	RoutesReconciled                  the routes were emitted (False while
+	//	                                  waiting on the Platform or the
+	//	                                  Gateway-API CRDs)
+	//	ImportedRouteGuardrailUnenforced  whether any imported route is served
+	//	                                  without its guardrail
+	//
+	// The second is three-valued, and the three are three different sentences.
+	// True names the routes. False says the routes were walked and none of them
+	// is unguarded. Unknown says the walk did not happen — which is every pass
+	// that returns before the routes are reached — so a reader deciding whether
+	// to point sensitive traffic at an imported route must treat Unknown as an
+	// unanswered question rather than as an absence of findings.
 	// +optional
 	// +listType=map
 	// +listMapKey=type

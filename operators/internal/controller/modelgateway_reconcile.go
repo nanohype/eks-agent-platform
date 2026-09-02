@@ -738,6 +738,37 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 	}, nil
 }
 
+// guardrailCondition reports what this reconcile learned about imported routes
+// served without their guardrail — including that it learned nothing.
+//
+// The three statuses are three different sentences. True names the routes.
+// False says the routes were walked and none of them is unguarded. Unknown says
+// the walk did not happen, which is every path that returns before
+// ensureGatewayResources: a reader who cannot tell that from False is reading a
+// safety claim the operator never made.
+func guardrailCondition(mg *agentsv1alpha1.ModelGateway, phase string, unenforced []string) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               "ImportedRouteGuardrailUnenforced",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: mg.Generation,
+	}
+	switch {
+	case phase != phaseReady:
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = "RoutesNotEvaluated"
+		cond.Message = "the gateway's routes were not reached this tick, so whether any imported route is served without its guardrail is unknown"
+	case len(unenforced) > 0:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "InlineGuardrailNotApplicable"
+		cond.Message = fmt.Sprintf("imported route(s) %s served without an inline guardrail (Bedrock inline guardrails are foundation-model-only); enforcement for imported models requires ApplyGuardrail", strings.Join(unenforced, ", "))
+	default:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "NotApplicable"
+		cond.Message = "no imported route is missing guardrail enforcement"
+	}
+	return cond
+}
+
 // modelGatewayApplyStatus writes the computed phase + endpoint + routes +
 // conditions.
 func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg *agentsv1alpha1.ModelGateway, res gatewayReconcileResult) error {
@@ -768,20 +799,19 @@ func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg
 	// an unguarded imported route is visible rather than silent. True = at least
 	// one imported route is served without its guardrail; enforcement via
 	// ApplyGuardrail is a tracked follow-up.
-	gcond := metav1.Condition{
-		Type:               "ImportedRouteGuardrailUnenforced",
-		Status:             metav1.ConditionFalse,
-		Reason:             "NotApplicable",
-		Message:            "no imported route is missing guardrail enforcement",
-		LastTransitionTime: metav1.Now(),
-		ObservedGeneration: mg.Generation,
-	}
-	if len(unenforcedGuardrail) > 0 {
-		gcond.Status = metav1.ConditionTrue
-		gcond.Reason = "InlineGuardrailNotApplicable"
-		gcond.Message = fmt.Sprintf("imported route(s) %s served without an inline guardrail (Bedrock inline guardrails are foundation-model-only); enforcement for imported models requires ApplyGuardrail", strings.Join(unenforcedGuardrail, ", "))
-	}
-	upsertCondition(&mg.Status.Conditions, gcond)
+	//
+	// False on this condition is a positive safety claim — it says every
+	// imported route carries its guardrail — and the value that produces it is
+	// an empty list. An empty list is also what every path that returns before
+	// the routes are walked leaves behind: no Platform, a Platform not yet
+	// Ready, the Gateway-API CRDs absent. Reporting False there would answer a
+	// question about guardrails from a reconcile that never reached one, which
+	// is the same wrong answer whether the routes are safe or not.
+	//
+	// Unknown is what separates them, in the shape burnRateCondition uses for an
+	// absent signal: it is not a claim about the routes, it is the absence of
+	// one.
+	upsertCondition(&mg.Status.Conditions, guardrailCondition(mg, phase, unenforcedGuardrail))
 
 	return r.Status().Update(ctx, mg)
 }

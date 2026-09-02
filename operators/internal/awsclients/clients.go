@@ -48,11 +48,13 @@ type Clients struct {
 	AWSConfig aws.Config
 }
 
-// awsHTTPTimeout bounds every AWS SDK request. controller-runtime does not
-// decorate the reconcile context with a per-call deadline, and the SDK's
-// default transport sets no overall request timeout — so without this a
-// connection that establishes then stalls before responding would pin a
-// bounded reconcile worker indefinitely, eventually starving the pool. 30s
+// awsHTTPTimeout bounds every AWS SDK request. The SDK's default transport sets
+// no overall request timeout, and the reconcile's own ceiling is a backstop
+// measured in minutes — so without this a connection that establishes then
+// stalls before responding would hold a bounded reconcile worker for that whole
+// ceiling rather than for the length of one call, eventually starving the
+// pool. This is the bound that makes the ceiling a backstop rather than the
+// first thing to fire. 30s
 // comfortably covers the slowest single control-plane call; the Athena poll
 // path bounds its own multi-call loop separately (budget_reconcile.go).
 const awsHTTPTimeout = 30 * time.Second

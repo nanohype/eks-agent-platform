@@ -102,6 +102,17 @@ type tenantReading struct {
 	aggregateBudget string
 	pct             int32
 	overSpec        bool // aggregate spend > spec.aggregateMonthlyBudgetUsd
+	// capCompared records that a cap was declared and the comparison ran.
+	// Without it, overSpec=false carries two meanings a reader cannot separate:
+	// spend measured against a cap and found under it, and no cap to measure
+	// against at all — the field is optional, so the second is the common case.
+	capCompared bool
+	// spendComplete records that every Platform's budget leg contributed a
+	// number. A leg that did not is skipped whatever the reason — so the total
+	// understates, and "within cap" computed from it is a claim about a sum that
+	// is not the sum. There is no list of ways to fail to answer here; there is
+	// one question per leg, and this records whether every leg answered it.
+	spendComplete bool
 }
 
 // aggregate walks every Platform whose spec.tenant matches this Tenant
@@ -125,6 +136,7 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 	reading := tenantReading{}
 	totalSpend := new(big.Float).SetPrec(64)
 	totalBudget := new(big.Float).SetPrec(64)
+	spendComplete := true
 
 	for i := range platforms.Items {
 		p := &platforms.Items[i]
@@ -142,7 +154,13 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 		// same namespace. We aggregate every BudgetPolicy referenced so
 		// the tenant sees totals across Platforms even when each has its
 		// own budget cap.
+		// One question per leg: did it contribute a number. Every way of failing
+		// to answer — no name, a name that resolves to nothing, a spend that
+		// does not parse — leaves the aggregate short by this platform, and the
+		// comparison unfinished. spec.budget is required, so an empty name is a
+		// reference naming no BudgetPolicy rather than a declared absence.
 		if p.Spec.Budget.Name == "" {
+			spendComplete = false
 			continue
 		}
 		var bp governancev1alpha1.BudgetPolicy
@@ -150,16 +168,26 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 			if client.IgnoreNotFound(err) != nil {
 				return tenantReading{}, fmt.Errorf("get budget %s/%s: %w", p.Namespace, p.Spec.Budget.Name, err)
 			}
+			spendComplete = false
 			continue
 		}
-		if v, ok := parseDecimal(bp.Status.CurrentSpendUsd); ok {
+		// The producer says whether its own number is a reading. A BudgetPolicy
+		// keeps status.currentSpendUsd at its last successful value when its
+		// spend query breaks, and publishes BudgetReconciled=False on the same
+		// object — so a leg can parse cleanly and still not have answered THIS
+		// tick. Whether the string parses is not the question. Nor is False on
+		// its own: a fired kill switch is False about a number that was read.
+		if v, ok := parseDecimal(bp.Status.CurrentSpendUsd); ok && budgetLegReported(&bp) {
 			totalSpend.Add(totalSpend, v)
+		} else {
+			spendComplete = false
 		}
 		if v, ok := parseDecimal(bp.Spec.MonthlyUsd); ok {
 			totalBudget.Add(totalBudget, v)
 		}
 	}
 
+	reading.spendComplete = spendComplete
 	reading.aggregateSpend = totalSpend.Text('f', 6)
 	reading.aggregateBudget = totalBudget.Text('f', 6)
 
@@ -179,7 +207,12 @@ func (r *TenantReconciler) aggregate(ctx context.Context, t *platformv1alpha1.Te
 	}
 
 	// Compare aggregate to the tenant-spec cap (if set).
-	if cap, ok := parseDecimal(t.Spec.AggregateMonthlyBudgetUsd); ok && cap.Sign() > 0 {
+	// A cap of zero is a declared cap, not an undeclared one: the shipped
+	// pattern admits "0" with no minimum, and any spend above nothing exceeds
+	// it. Reporting it as "no cap declared" is a read presence reported as an
+	// absence.
+	if cap, ok := parseDecimal(t.Spec.AggregateMonthlyBudgetUsd); ok {
+		reading.capCompared = true
 		if totalSpend.Cmp(cap) > 0 {
 			reading.overSpec = true
 		}
@@ -225,11 +258,7 @@ func (r *TenantReconciler) applyStatus(ctx context.Context, t *platformv1alpha1.
 		}
 
 		upsertCondition(&fresh.Status.Conditions, conditionForReading(reading))
-		if reading.overSpec {
-			upsertCondition(&fresh.Status.Conditions, conditionTenantOverBudget(reading))
-		} else {
-			upsertCondition(&fresh.Status.Conditions, conditionTenantUnderBudget())
-		}
+		upsertCondition(&fresh.Status.Conditions, conditionTenantBudget(reading))
 		return r.Status().Update(ctx, &fresh)
 	})
 }
@@ -255,6 +284,16 @@ func (r *TenantReconciler) markAggregateUnreadable(ctx context.Context, t *platf
 			}
 			return err
 		}
+		// The budget condition beside it answered from the last successful tick
+		// and would keep answering through the outage. An operator reading one
+		// honest condition next to a stale positive claim reads the claim.
+		upsertCondition(&fresh.Status.Conditions, metav1.Condition{
+			Type:               "TenantBudgetExceeded",
+			Status:             metav1.ConditionUnknown,
+			Reason:             "AggregateUnreadable",
+			Message:            "the roll-up could not be computed, so no spend was compared against the cap this tick",
+			LastTransitionTime: metav1Now(),
+		})
 		upsertCondition(&fresh.Status.Conditions, metav1.Condition{
 			Type:               "Aggregated",
 			Status:             metav1.ConditionFalse,
