@@ -30,6 +30,37 @@ import (
 // the reconciler emitted before the EvalSuite is deleted.
 const evalFinalizer = "governance.nanohype.dev/eval-finalizer"
 
+// The lifetime bounds on a submitted run. Argo enforces all three, which is the
+// point of setting them here rather than watching for a stuck run: they hold
+// while this operator is down, crashlooping or scaled to zero, and a run nobody
+// is watching is exactly the one that needs a ceiling.
+//
+// activeDeadlineSeconds is the one that matters most, because of what a
+// scheduled suite does without it. concurrencyPolicy is Forbid — correct, and
+// the reason is in TestScheduledSuiteForbidsConcurrentRuns — so a run that never
+// finishes is not overtaken: it is still Running at the next tick, and the next,
+// and every scheduled run after it is skipped. Meanwhile the suite's status
+// keeps reporting the last COMPLETED run's score, so the symptom of a hung run
+// is a suite that looks healthy and stopped telling the truth at some point
+// nobody can name. Argo's default here is no deadline at all.
+//
+// Four hours is the same ceiling the AgentSandbox session carries and for the
+// same reason: comfortably past any legitimate run, far short of one nobody
+// notices for a week. A run killed at the deadline fails loudly, the suite goes
+// Failed, and the next scheduled run proceeds — bounded silence rather than
+// permanent silence.
+//
+// The TTLs are asymmetric because the two outcomes are worth different amounts.
+// A successful run's pods carry nothing anyone needs; a failed run's pods are
+// the only record of why, so they outlive an overnight failure and are there in
+// the morning. podGC keeps the same asymmetry: it collects on SUCCESS only,
+// rather than on completion, so a failure is still inspectable.
+const (
+	evalRunActiveDeadlineSeconds int64 = 14400
+	evalRunTTLAfterSuccess       int64 = 3600
+	evalRunTTLAfterFailure       int64 = 86400
+)
+
 // defaultEvalRunnerNamespace is the fallback when the reconciler is built
 // without an EvalRunnerNamespace override (envtest / dev paths). Production
 // resolves this from SSM via operatorconfig.EvalRunnerNamespace and the
@@ -236,9 +267,15 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		}
 
 		wfSpec := map[string]any{
-			"workflowTemplateRef": map[string]any{"name": "eval-runner"},
-			"arguments":           map[string]any{"parameters": params},
-			"serviceAccountName":  r.evalRunnerServiceAccount(),
+			"workflowTemplateRef":   map[string]any{"name": "eval-runner"},
+			"arguments":             map[string]any{"parameters": params},
+			"serviceAccountName":    r.evalRunnerServiceAccount(),
+			"activeDeadlineSeconds": evalRunActiveDeadlineSeconds,
+			"ttlStrategy": map[string]any{
+				"secondsAfterSuccess": evalRunTTLAfterSuccess,
+				"secondsAfterFailure": evalRunTTLAfterFailure,
+			},
+			"podGC": map[string]any{"strategy": "OnWorkflowSuccess"},
 		}
 
 		if kind == "CronWorkflow" {
