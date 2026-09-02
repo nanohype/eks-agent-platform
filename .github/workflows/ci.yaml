@@ -440,14 +440,27 @@ jobs:
   # ArgoCD Application was Healthy. helm lint, helm template, kubeconform and trivy
   # all passed: the manifests were valid, they just granted less than the code needs.
   #
-  # A marker is a promise the chart has to keep. This asserts it does.
+  # A marker is a promise the chart has to keep. This asserts it does, and the
+  # converse the first direction leaves open: a grant the chart carries that no
+  # marker generates is a permission the operator holds for a reason nothing in
+  # the code records. Those are not failures by themselves — leader election
+  # needs a grant no controller declares — so each one is either marked or
+  # recorded with the verbs it permits, and the record is compared against the
+  # render. What that forbids is the silent extra.
   chart-rbac:
-    name: chart rbac covers markers
+    name: chart rbac and markers agree both ways
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          # Helm renders the charts these gates compare against, so its version is
+          # part of the verdict. Unpinned, an unrelated pull request goes red or
+          # green on a helm release rather than on a change here.
+          # renovate: datasource=github-releases depName=helm/helm
+          version: v4.0.5
       - run: pip install pyyaml
       - run: ./scripts/check-chart-rbac.py
 

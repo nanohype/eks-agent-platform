@@ -62,6 +62,14 @@ func metricsServerOptions(secure bool, addr string) server.Options {
 	return opts
 }
 
+// Leader election is the manager's own need rather than any controller's, so
+// controller-gen generates nothing for it from the reconcilers' markers. Without
+// this the operator starts, wins no lease and reconciles nothing, on a pod that
+// reports Running — so the grant is declared here, beside the option that
+// requires it, rather than living only in the chart where nothing ties it to a
+// reason.
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
+
 // reconcileFloor is the ceiling on one Reconcile call when nothing configured is
 // longer, and reconcileCeiling is what the manager is actually given.
 //

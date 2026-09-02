@@ -17,7 +17,15 @@ rules:
   # sync, and every Platform hung in phase=Provisioning. Both rules are restored at
   # the bottom of this list.
   #
-  # If you add a kubebuilder rbac marker, add it here too.
+  # Superset is necessary and not sufficient. A grant here that no marker
+  # generates is a permission with no record of why the operator holds it, so
+  # scripts/check-chart-rbac.py reads both directions: every marker has to be
+  # covered here, and every rule here that no marker generates has to carry a
+  # marker of its own or an UNMARKED_GRANTS record naming its verbs. Verbs are
+  # compared, so widening a rule that already has a record is a new grant.
+  #
+  # If you add a kubebuilder rbac marker, add it here too. If you add a rule no
+  # marker generates, account for it.
   - apiGroups: ["platform.nanohype.dev"]
     resources: ["tenants", "platforms"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

@@ -478,6 +478,55 @@ CONTROLS = [
         expect_output='impersonate',
     ),
     Control(
+        gate="check-chart-rbac.py",
+        path="charts/operator/templates/rbac.yaml",
+        before='  - apiGroups: [""]\n    resources: ["users"]\n    verbs: ["impersonate"]',
+        after='  - apiGroups: [""]\n    resources: ["users"]\n    verbs: ["impersonate"]\n'
+        '  - apiGroups: [""]\n    resources: ["nodes"]\n    verbs: ["list", "watch"]',
+        catches="a grant added to the chart's ClusterRole that no kubebuilder marker generates and "
+        "nothing accounts for. The gate's first direction only ever asked whether the chart keeps "
+        "the markers' promises, so a permission the code never asks for could be added and kept "
+        "indefinitely — nobody can remove it later, because nothing records why it is there",
+        expect_output="nodes",
+    ),
+    Control(
+        gate="check-chart-rbac.py",
+        path="charts/operator/templates/rbac.yaml",
+        before='    resources: ["deployments", "statefulsets"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]',
+        after='    resources: ["deployments", "statefulsets"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "escalate"]',
+        catches="a verb added to a resource the record already covers. Matching on group and resource alone "
+        "would read the whole rule as accounted for, so any verb — escalate, or a bare wildcard — could be "
+        "widened onto a grant whose record still describes the narrower one",
+        expect_output="not escalate",
+    ),
+    Control(
+        gate="check-chart-rbac.py",
+        path="charts/operator/templates/rbac.yaml",
+        before='    resources: ["clusterroles", "clusterrolebindings"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]\n'
+        "---\n",
+        after='    resources: ["clusterroles", "clusterrolebindings"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]\n'
+        "---\n"
+        "apiVersion: rbac.authorization.k8s.io/v1\n"
+        "kind: ClusterRole\n"
+        "metadata:\n"
+        '  name: {{ include "operator.fullname" . }}-manager-vcluster\n'
+        "rules:\n"
+        '  - apiGroups: ["*"]\n'
+        '    resources: ["*"]\n'
+        '    verbs: ["*"]\n'
+        "---\n",
+        catches="a second ClusterRole carrying manager in its name. Resolving the role by returning the "
+        "first match compares one role and says nothing about the rest, so this one — everything on "
+        "everything — would be granted with no part of it compared against anything, and a decoy "
+        "sorting ahead of the real role would be read in its place, blaming the real file for every "
+        "permission it does carry",
+        expect_output="manager-vcluster",
+    ),
+    Control(
         gate="check-image-refs.py",
         path="charts/operator/values.yaml",
         before="repository: ghcr.io/nanohype/eks-agent-platform/operator",
