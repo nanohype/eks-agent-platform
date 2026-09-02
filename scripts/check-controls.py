@@ -502,6 +502,31 @@ CONTROLS = [
         expect_output="not escalate",
     ),
     Control(
+        gate="check-chart-rbac.py",
+        path="charts/operator/templates/rbac.yaml",
+        before='    resources: ["clusterroles", "clusterrolebindings"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]\n'
+        "---\n",
+        after='    resources: ["clusterroles", "clusterrolebindings"]\n'
+        '    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]\n'
+        "---\n"
+        "apiVersion: rbac.authorization.k8s.io/v1\n"
+        "kind: ClusterRole\n"
+        "metadata:\n"
+        '  name: {{ include "operator.fullname" . }}-manager-vcluster\n'
+        "rules:\n"
+        '  - apiGroups: ["*"]\n'
+        '    resources: ["*"]\n'
+        '    verbs: ["*"]\n'
+        "---\n",
+        catches="a second ClusterRole carrying manager in its name. Resolving the role by returning the "
+        "first match compares one role and says nothing about the rest, so this one — everything on "
+        "everything — would be granted with no part of it compared against anything, and a decoy "
+        "sorting ahead of the real role would be read in its place, blaming the real file for every "
+        "permission it does carry",
+        expect_output="manager-vcluster",
+    ),
+    Control(
         gate="check-image-refs.py",
         path="charts/operator/values.yaml",
         before="repository: ghcr.io/nanohype/eks-agent-platform/operator",
