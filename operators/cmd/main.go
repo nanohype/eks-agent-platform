@@ -334,22 +334,14 @@ func main() {
 			platformReconciler.S3 = awsClients.S3
 			platformReconciler.SSM = awsClients.SSM
 			platformReconciler.Scheduler = awsClients.Scheduler
-			platformReconciler.IAMCfg = controller.IAMConfig{
-				TenantIAMPath:                opConfig.TenantIAMPath,
-				TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,
-				TenantPermissionsBoundaryARN: opConfig.TenantPermissionsBoundaryARN,
-				ClusterName:                  opConfig.ClusterName,
-				Environment:                  environment,
-				Region:                       opConfig.Region,
-				CostCenter:                   costCenter,
-				BusinessUnit:                 businessUnit,
-				DataClassification:           dataClassification,
-				Compliance:                   compliance,
-			}
-			platformReconciler.AWSCfg = controller.PlatformAWSConfig{
-				ArtifactsBucketName: opConfig.ArtifactsBucketName,
-				Environment:         environment,
-			}
+			platformReconciler.IAMCfg = iamConfigFrom(opConfig, orgTags{
+				Environment:        environment,
+				CostCenter:         costCenter,
+				BusinessUnit:       businessUnit,
+				DataClassification: dataClassification,
+				Compliance:         compliance,
+			})
+			platformReconciler.AWSCfg = platformAWSConfigFrom(opConfig, environment)
 		}
 		if err := platformReconciler.SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("register the Platform reconciler: %w", err)
@@ -551,6 +543,56 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
+	}
+}
+
+// orgTags are the deploy-config tag values a tenant role carries. They come from
+// flags rather than from the substrate, which is why they are a separate
+// argument: the mapping below is what turns published values into the config a
+// reconciler is given, and mixing the two would hide which is which.
+type orgTags struct {
+	Environment        string
+	CostCenter         string
+	BusinessUnit       string
+	DataClassification string
+	Compliance         string
+}
+
+// iamConfigFrom and platformAWSConfigFrom are the whole route from a value the
+// substrate published to the config a reconciler reads.
+//
+// They are named rather than inline because that route is where a required value
+// can go missing without anything failing: a key can be swept out of SSM,
+// decoded into a Config field, listed as required — and then not carried across
+// here, so the operator refuses to start without a value it never uses. A test
+// in this package drives every required key from a parameter store through Load
+// and into one of these, which is a claim about behaviour rather than about the
+// shape of a struct literal.
+//
+// The reconcilers deliberately do not import operatorconfig, so this is the last
+// point that can see both sides. What happens after — the config field reaching
+// an AWS call — is asserted in the controller package's own tests. Neither gate
+// spans the boundary alone, and the boundary is a design decision rather than an
+// oversight.
+func iamConfigFrom(cfg *operatorconfig.Config, tags orgTags) controller.IAMConfig {
+	return controller.IAMConfig{
+		TenantIAMPath:                cfg.TenantIAMPath,
+		TenantBaselinePolicyARN:      cfg.TenantBaselinePolicyARN,
+		TenantPermissionsBoundaryARN: cfg.TenantPermissionsBoundaryARN,
+		ClusterName:                  cfg.ClusterName,
+		Region:                       cfg.Region,
+		Environment:                  tags.Environment,
+		CostCenter:                   tags.CostCenter,
+		BusinessUnit:                 tags.BusinessUnit,
+		DataClassification:           tags.DataClassification,
+		Compliance:                   tags.Compliance,
+	}
+}
+
+func platformAWSConfigFrom(cfg *operatorconfig.Config, environment string) controller.PlatformAWSConfig {
+	return controller.PlatformAWSConfig{
+		ArtifactsBucketName: cfg.ArtifactsBucketName,
+		Environment:         environment,
 	}
 }
 
