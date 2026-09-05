@@ -523,6 +523,28 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-crd-instantiation.py
 
+  # ── Custom resource admissibility ────────────────────────────────────────
+  # examples/ is the tree a person copies from and no gate read it: the two
+  # above walk chart renders, and an example is rendered by no chart. An
+  # AgentFleet with no spec.agents[].image shipped for that reason.
+  #
+  # The reading that decides admissibility is shared — scripts/crd_admissibility.py,
+  # which the chart-crd-parity gate above consumes as well — because the same
+  # question answered separately in several places gets a different answer in
+  # each, and a custom resource is then only as validated as the reading that
+  # saw it. The corpus beside it is checked from both sides: this job holds the
+  # reading to the headers, and the operator suite creates the same files on a
+  # real API server and holds the headers to it.
+  cr-admissibility:
+    name: shipped custom resources are admissible, by one reading
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-cr-admissibility.py
+
   # ── PROJECT parity ───────────────────────────────────────────────────────
   # operators/PROJECT is kubebuilder's scaffolding record and nothing reads it at
   # runtime, which is exactly why it drifts. Deleting the batch tier removed its
@@ -957,6 +979,7 @@ jobs:
         chart-rbac,
         chart-crd-parity,
         crd-instantiation,
+        cr-admissibility,
         project-resources,
         chart-args,
         chart-version-bump,

@@ -1,0 +1,47 @@
+# Thirty-three model ids where the cap is thirty-two. Every entry is well formed.
+#
+# admissibility: refused maxItems spec.identity.allowedModels
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-too-many-models
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  budget:
+    name: corpus-too-many-models-budget
+  identity:
+    allowedModels:
+        - anthropic.claude-x1-v1
+        - anthropic.claude-x2-v1
+        - anthropic.claude-x3-v1
+        - anthropic.claude-x4-v1
+        - anthropic.claude-x5-v1
+        - anthropic.claude-x6-v1
+        - anthropic.claude-x7-v1
+        - anthropic.claude-x8-v1
+        - anthropic.claude-x9-v1
+        - anthropic.claude-x10-v1
+        - anthropic.claude-x11-v1
+        - anthropic.claude-x12-v1
+        - anthropic.claude-x13-v1
+        - anthropic.claude-x14-v1
+        - anthropic.claude-x15-v1
+        - anthropic.claude-x16-v1
+        - anthropic.claude-x17-v1
+        - anthropic.claude-x18-v1
+        - anthropic.claude-x19-v1
+        - anthropic.claude-x20-v1
+        - anthropic.claude-x21-v1
+        - anthropic.claude-x22-v1
+        - anthropic.claude-x23-v1
+        - anthropic.claude-x24-v1
+        - anthropic.claude-x25-v1
+        - anthropic.claude-x26-v1
+        - anthropic.claude-x27-v1
+        - anthropic.claude-x28-v1
+        - anthropic.claude-x29-v1
+        - anthropic.claude-x30-v1
+        - anthropic.claude-x31-v1
+        - anthropic.claude-x32-v1
+        - anthropic.claude-x33-v1

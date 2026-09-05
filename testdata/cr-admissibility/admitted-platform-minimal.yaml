@@ -1,0 +1,17 @@
+# A Platform carrying only what the schema requires. The admitted cases are the
+# half a corpus of rejections cannot assert: a reading that refuses everything
+# agrees with every rejection and is still wrong.
+#
+# admissibility: admitted
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-minimal
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  budget:
+    name: corpus-minimal-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic

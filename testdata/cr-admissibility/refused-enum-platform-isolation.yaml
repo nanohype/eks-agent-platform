@@ -1,0 +1,16 @@
+# An isolation tier the enum does not carry.
+#
+# admissibility: refused enum spec.isolation
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-bad-isolation
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  isolation: sandbox
+  budget:
+    name: corpus-bad-isolation-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic

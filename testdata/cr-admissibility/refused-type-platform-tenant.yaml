@@ -1,0 +1,15 @@
+# A number where the schema declares a string.
+#
+# admissibility: refused type spec.tenant
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-bad-type
+  namespace: eks-agent-platform
+spec:
+  tenant: 12345
+  budget:
+    name: corpus-bad-type-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic

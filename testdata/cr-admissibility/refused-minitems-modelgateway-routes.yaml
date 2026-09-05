@@ -1,0 +1,13 @@
+# A gateway with no routes. The property is present and correctly typed, which
+# is as far as a reading built on required and pruning gets.
+#
+# admissibility: refused minItems spec.routes
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: ModelGateway
+metadata:
+  name: corpus-no-routes
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: corpus-minimal
+  routes: []

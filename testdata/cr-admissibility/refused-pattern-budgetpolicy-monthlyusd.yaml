@@ -1,0 +1,12 @@
+# A budget that is not a number.
+#
+# admissibility: refused pattern spec.monthlyUsd
+apiVersion: governance.nanohype.dev/v1alpha1
+kind: BudgetPolicy
+metadata:
+  name: corpus-bad-budget
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: corpus-minimal
+  monthlyUsd: one hundred

@@ -1,0 +1,24 @@
+# Two entries that both omit the key the list is keyed on. The entries differ,
+# so a reading that compares whole entries finds nothing; an unset key is a
+# value and the two identities are equal. The key is also required here, which
+# is why three findings are declared: the uniqueness rule fires on an omission
+# that another rule already refuses, and both are what the reading reports.
+#
+# admissibility: refused list-map spec.datastores[1]
+# admissibility: refused required spec.datastores[0].name
+# admissibility: refused required spec.datastores[1].name
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-unset-key
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  budget:
+    name: corpus-unset-key-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+  datastores:
+    - kind: objectStore
+    - kind: queue

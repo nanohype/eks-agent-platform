@@ -1,0 +1,14 @@
+# A cluster-scoped kind with no namespace. The namespace a namespaced object
+# lands in comes from the request, so its absence here is not a defect and the
+# reading must not report one.
+#
+# admissibility: admitted
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Tenant
+metadata:
+  name: corpus-tenant
+spec:
+  displayName: Corpus tenant
+  aggregateMonthlyBudgetUsd: "100"
+  contact:
+    billingEmail: platform@example.com

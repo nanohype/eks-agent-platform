@@ -1,0 +1,17 @@
+# An agent with no image. Every other required property is present, so a reading
+# that stops at the document's shape admits it and the API server refuses the
+# whole object — the Platform and BudgetPolicy in the same apply with it.
+#
+# admissibility: refused required spec.agents[0].image
+apiVersion: agents.nanohype.dev/v1alpha1
+kind: AgentFleet
+metadata:
+  name: corpus-fleet-no-image
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: corpus-minimal
+  agents:
+    - name: assistant
+      systemPrompt: "You are a helpful assistant."
+      modelRoute: primary
