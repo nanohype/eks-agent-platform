@@ -368,7 +368,7 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 	// path.
 	//
 	// Nor does it hold for anything outside this script. The handler's template
-	// is required below to declare no initContainers, sidecars or podSpecPatch,
+	// is required above to declare no initContainers, sidecars or podSpecPatch,
 	// because a container beside the script runs on every outcome and nothing
 	// here executes one.
 	assertHandlerCalls(t, handler, body, "Succeeded", 0)

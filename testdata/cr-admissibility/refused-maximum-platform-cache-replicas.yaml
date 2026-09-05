@@ -1,0 +1,20 @@
+# More read replicas than the schema's ceiling.
+#
+# admissibility: refused maximum spec.datastores[0].cache.replicas
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-many-replicas
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  budget:
+    name: corpus-many-replicas-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+  datastores:
+    - name: cache
+      kind: cache
+      cache:
+        replicas: 9

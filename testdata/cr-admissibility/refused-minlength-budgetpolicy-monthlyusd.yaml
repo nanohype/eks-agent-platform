@@ -1,0 +1,14 @@
+# An empty budget string. It is short and it does not match, and the reading
+# declares both rather than the one its author happened to think of.
+#
+# admissibility: refused pattern spec.monthlyUsd
+# admissibility: refused minLength spec.monthlyUsd
+apiVersion: governance.nanohype.dev/v1alpha1
+kind: BudgetPolicy
+metadata:
+  name: corpus-empty-budget
+  namespace: eks-agent-platform
+spec:
+  platformRef:
+    name: corpus-minimal
+  monthlyUsd: ""

@@ -1,0 +1,18 @@
+# A misspelled property inside the spec. The API server creates the object and
+# drops the key, so nothing fails and the setting never reaches a cluster —
+# which is why this is a separate verdict rather than a rejection.
+#
+# admissibility: pruned property spec.retentionDays
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-pruned-spec
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  retentionDays: 30
+  budget:
+    name: corpus-pruned-spec-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic

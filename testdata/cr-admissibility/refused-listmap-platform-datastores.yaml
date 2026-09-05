@@ -1,0 +1,22 @@
+# Two datastores named main. Every required property is present and nothing is
+# undeclared, so required-and-pruning alone admits this. The list is declared
+# `x-kubernetes-list-type: map` keyed on name, and the API server refuses it.
+#
+# admissibility: refused list-map spec.datastores[1]
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-dup-ds
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  budget:
+    name: corpus-dup-ds-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+  datastores:
+    - name: main
+      kind: objectStore
+    - name: main
+      kind: queue

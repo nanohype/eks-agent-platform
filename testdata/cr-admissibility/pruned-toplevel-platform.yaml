@@ -1,0 +1,16 @@
+# A key beside spec that the schema does not declare.
+#
+# admissibility: pruned property policy
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-pruned-top
+  namespace: eks-agent-platform
+policy: strict
+spec:
+  tenant: corpus
+  budget:
+    name: corpus-pruned-top-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic

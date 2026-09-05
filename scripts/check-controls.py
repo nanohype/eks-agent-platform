@@ -559,6 +559,43 @@ CONTROLS = [
         expect_output='notACrdField',
     ),
     Control(
+        gate="check-cr-admissibility.py",
+        path="examples/blank-tenant/platform.yaml",
+        before="  identity:\n    allowedModelFamilies:\n      - anthropic\n",
+        after="  identity:\n    allowedModelFamilies:\n      - anthropic\n"
+        "  datastores:\n"
+        "    - name: main\n"
+        "      kind: objectStore\n"
+        "    - name: main\n"
+        "      kind: queue\n",
+        catches="a worked example the API server refuses whole. Both datastores carry every required "
+        "property and declare nothing undeclared, so a reading built from `required` and pruning "
+        "admits it; the list is keyed on name and the apiserver answers `Duplicate value`. This is "
+        "the tree a person copies from, and it was read by no gate at all",
+        expect_output="spec.datastores[1]",
+    ),
+    Control(
+        gate="check-cr-admissibility.py",
+        path="scripts/crd_admissibility.py",
+        before='    list_type = schema.get("x-kubernetes-list-type")\n    if list_type == "set":',
+        after='    list_type = None\n    if list_type == "set":',
+        catches="the shared reading losing a rule. Narrowing it back to what one of the earlier "
+        "readings knew leaves every example passing — the defect is in no example — and the corpus "
+        "is what notices, because a fixture declares what the API server does and the reading no "
+        "longer says it",
+        expect_output="does not report it",
+    ),
+    Control(
+        gate="check-editorconfig.py",
+        path="operators/Makefile",
+        before=".PHONY: vet\nvet: ## go vet\n",
+        after=".PHONY: vet \nvet: ## go vet\n",
+        catches="trailing whitespace in a file no formatter owns. gofmt reads the Go sources beside "
+        "it and biome reads none of this, so .editorconfig is the only thing that declares the rule "
+        "and this is the only thing that reads it",
+        expect_output="trailing whitespace",
+    ),
+    Control(
         gate="check-workflow-triggers.py",
         path=".github/workflows/pr-title.yaml",
         before="    types: [opened, edited, synchronize, reopened]",

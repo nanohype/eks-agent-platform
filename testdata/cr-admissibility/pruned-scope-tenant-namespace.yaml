@@ -1,0 +1,20 @@
+# A namespace on a cluster-scoped kind. Nothing in the schema describes this —
+# scope is a property of the definition, not of the document's spec — so a
+# reading that walks the spec alone cannot see it.
+#
+# The API server does not refuse this. It drops the namespace and creates the
+# object cluster-wide, which is worse than a rejection for a declaration a person
+# reads: the file says the Tenant belongs to one namespace and the cluster
+# disagrees, with nothing failing.
+#
+# admissibility: pruned scope metadata.namespace
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Tenant
+metadata:
+  name: corpus-namespaced-tenant
+  namespace: eks-agent-platform
+spec:
+  displayName: Corpus namespaced tenant
+  aggregateMonthlyBudgetUsd: "100"
+  contact:
+    billingEmail: platform@example.com

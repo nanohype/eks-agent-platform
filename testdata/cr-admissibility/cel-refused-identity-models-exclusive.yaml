@@ -1,0 +1,27 @@
+# A defect only a CEL rule sees. Both model lists are well formed, in bounds,
+# and declared by the schema, so the reading admits it and the API server
+# refuses it — `allowedModels and allowedModelFamilies are mutually exclusive`.
+#
+# This is here to hold the gap open. The reading evaluates no CEL rule, because
+# a rule is a program and running it needs the environment the API server
+# builds, including the `oldSelf` a transition rule compares against, which does
+# not exist before an object does. A limit stated in a docstring goes stale in
+# silence; a limit with a case behind it is measured every run — the reading is
+# required to say nothing about this file, and the API server is required to
+# refuse it.
+#
+# admissibility: cel-refused models-exclusive spec.identity
+apiVersion: platform.nanohype.dev/v1alpha1
+kind: Platform
+metadata:
+  name: corpus-cel-exclusive
+  namespace: eks-agent-platform
+spec:
+  tenant: corpus
+  budget:
+    name: corpus-cel-exclusive-budget
+  identity:
+    allowedModelFamilies:
+      - anthropic
+    allowedModels:
+      - anthropic.claude-sonnet-5
