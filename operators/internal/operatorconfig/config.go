@@ -161,25 +161,22 @@ func (c *Config) assign(suffix, value string) {
 	}
 }
 
-// Validate returns a list of required-but-missing field names. The required
-// set is the fields whose absence makes tenant IAM reconciliation unsafe
-// rather than merely degraded — in particular TenantPermissionsBoundaryARN:
-// without it the operator would mint tenant roles with no permissions
-// boundary, silently. A non-empty result must abort startup (see cmd/main.go);
-// optional integrations (guardrails, kill-switch, cost pipeline) are not in
-// this set and degrade per-reconciler instead.
+// Validate returns a list of required-but-missing field names. The required set
+// is the fields whose absence makes the operator do something other than what
+// the substrate specified — in particular TenantPermissionsBoundaryARN: without
+// it the operator mints tenant roles with no permissions boundary, silently.
+// Optional integrations (guardrails, kill-switch, cost pipeline) are not in this
+// set and degrade per-reconciler instead.
+//
+// The set itself is declared once, beside the SSM key that carries each field,
+// and both this and MissingKeys read it. Two hand-kept copies of one set drift
+// into disagreeing about what is required, and the disagreement is silent in
+// whichever direction is smaller.
 func (c *Config) Validate() []string {
 	missing := []string{}
-	required := map[string]string{
-		"OperatorRoleARN":              c.OperatorRoleARN,
-		"TenantIAMPath":                c.TenantIAMPath,
-		"TenantBaselinePolicyARN":      c.TenantBaselinePolicyARN,
-		"TenantPermissionsBoundaryARN": c.TenantPermissionsBoundaryARN,
-		"ArtifactsBucketName":          c.ArtifactsBucketName,
-	}
-	for k, v := range required {
-		if v == "" {
-			missing = append(missing, k)
+	for _, r := range requiredKeys {
+		if r.Get(c) == "" {
+			missing = append(missing, r.Field)
 		}
 	}
 	return missing

@@ -80,16 +80,44 @@ import (
 // in this package drives every key here THROUGH assign and requires the getter
 // to see it, so the two cannot drift into disagreeing about what a key means.
 type requiredKey struct {
-	Key string
-	Get func(*Config) string
+	Key   string
+	Field string
+	Get   func(*Config) string
 }
 
+// WHAT MAKES A VALUE REQUIRED
+//
+// Each of these is a value whose ABSENCE MAKES THE OPERATOR DO SOMETHING OTHER
+// THAN WHAT THE SUBSTRATE SPECIFIED, silently. Empty, the boundary is not set on
+// a tenant role, the baseline policy is not attached, the bucket policy is not
+// written, and the role is created at a path this code picked instead of the one
+// the landing zone published. Every one of those is a smaller grant or a
+// different placement than the substrate asked for, with nothing failing.
+//
+// That is the test, and it is not "the substrate publishes it". The operator's
+// own role ARN is published beside these four and is not here: no code path in
+// this binary reads it, so its absence changes nothing the operator does, and
+// requiring it would refuse to reconcile any tenant over a value that reconciles
+// nothing. Its consumer is the kill-switch component, which reads the parameter
+// out of SSM itself.
+//
+// A test in cmd drives every key here from a parameter store through Load and
+// into the config struct a reconciler is given, so a key that reaches no
+// consumer fails rather than sitting in this list.
 var requiredKeys = []requiredKey{
-	{"agent-iam/operator_role_arn", func(c *Config) string { return c.OperatorRoleARN }},
-	{"agent-iam/tenant_iam_path", func(c *Config) string { return c.TenantIAMPath }},
-	{"agent-iam/tenant_baseline_policy_arn", func(c *Config) string { return c.TenantBaselinePolicyARN }},
-	{"agent-iam/tenant_permissions_boundary_arn", func(c *Config) string { return c.TenantPermissionsBoundaryARN }},
-	{"model-artifacts/bucket_name", func(c *Config) string { return c.ArtifactsBucketName }},
+	{"agent-iam/tenant_iam_path", "TenantIAMPath", func(c *Config) string { return c.TenantIAMPath }},
+	{"agent-iam/tenant_baseline_policy_arn", "TenantBaselinePolicyARN", func(c *Config) string { return c.TenantBaselinePolicyARN }},
+	{"agent-iam/tenant_permissions_boundary_arn", "TenantPermissionsBoundaryARN", func(c *Config) string { return c.TenantPermissionsBoundaryARN }},
+	{"model-artifacts/bucket_name", "ArtifactsBucketName", func(c *Config) string { return c.ArtifactsBucketName }},
+}
+
+// RequiredKeys is the SSM keys whose absence stops the operator reconciling.
+func RequiredKeys() []string {
+	out := make([]string, 0, len(requiredKeys))
+	for _, r := range requiredKeys {
+		out = append(out, r.Key)
+	}
+	return out
 }
 
 // MissingKeys is what to go and look at, for a Config that does not validate.
