@@ -145,6 +145,8 @@ func main() {
 	var evalWorkers int
 	var tenantWorkers int
 	var tenantRequeueInterval time.Duration
+	var configPollInterval time.Duration
+	var configAbsentReportAfter time.Duration
 
 	// shimImage is the operator image; the SandboxPool reconciler runs it
 	// as the KEDA metrics bridge (the /metrics-shim binary) for queue-depth
@@ -197,6 +199,18 @@ func main() {
 	flag.IntVar(&evalWorkers, "eval-workers", 2, "MaxConcurrentReconciles for the EvalSuite reconciler.")
 	flag.IntVar(&tenantWorkers, "tenant-workers", 1, "MaxConcurrentReconciles for the Tenant reconciler.")
 	flag.DurationVar(&tenantRequeueInterval, "tenant-requeue-interval", 5*time.Minute, "How often the Tenant reconciler re-aggregates owned Platforms.")
+	flag.DurationVar(&configPollInterval, "config-poll-interval", 15*time.Second,
+		"How often to re-read the operator substrate from SSM while it is incomplete. This bounds the "+
+			"idle time between the substrate arriving and this operator noticing, which is the cost being "+
+			"removed: exiting instead hands that interval to CrashLoopBackOff, whose backoff is exponential, "+
+			"caps at five minutes, and is unrelated to how long the dependency actually took.")
+	flag.DurationVar(&configAbsentReportAfter, "config-absent-report-after", 15*time.Minute,
+		"How long the substrate may be absent before the wait is reported at error level. It is not a "+
+			"deadline and nothing changes when it passes except the volume: the operator keeps waiting, "+
+			"because absence at any single moment cannot tell a substrate that has not been applied yet "+
+			"from one that never will be. What crossing this reports is the persistence, which is the only "+
+			"thing that does separate them. Set it above the ordering window between the catalog that "+
+			"installs this operator and the landing zone that publishes what it reads.")
 	flag.StringVar(&shimImage, "shim-image", os.Getenv("AGENTS_SHIM_IMAGE"), "Operator image used for the SandboxPool KEDA metrics bridge. Empty disables queue-depth autoscaling.")
 	flag.StringVar(&environment, "environment", os.Getenv("AGENTS_ENVIRONMENT"), "Environment name (development/staging/production). Stamped on every operator-created object as the platform.nanohype.dev/environment label, and on the pods it builds as the OTel deployment.environment resource attribute. Omitted from both when unset rather than emitted empty.")
 	flag.StringVar(&clusterName, "cluster-name", os.Getenv("AGENTS_CLUSTER_NAME"), "Full EKS cluster name this operator serves (e.g. dev-analytics). Keys the SSM-config subtree and prefixes every resource the operator mints, isolating co-located sibling clusters.")
@@ -238,38 +252,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	// AWS client + SSM config bootstrap. If disable-aws is set (unit/dev
-	// path) we skip both; the reconcilers see r.IAM == nil and short-circuit
-	// the AWS-side steps.
+	// AWS clients. Building them is local: it resolves the SDK's configuration
+	// chain and constructs service clients, and it reaches nothing. A failure
+	// here is this process's own environment, it does not become correct later,
+	// and so it exits.
+	//
+	// The substrate those clients READ is a different question, and it is no
+	// longer answered here. It is published by another system on another clock —
+	// the catalog installs this operator as soon as the cluster exists, and the
+	// landing zone applies the roles and parameters afterwards — so its absence at
+	// this instant says nothing about whether it is coming. Waiting for it happens
+	// beside a running manager, in the Arrival runnable below.
 	var awsClients *awsclients.Clients
-	var opConfig *operatorconfig.Config
 	if !disableAWS {
-		ctx := context.Background()
 		var awsErr error
-		awsClients, awsErr = awsclients.New(ctx, region)
+		awsClients, awsErr = awsclients.New(context.Background(), region)
 		if awsErr != nil {
-			setupLog.Error(awsErr, "unable to build AWS clients")
+			setupLog.Error(awsErr, "unable to build AWS clients; refusing to start")
 			os.Exit(1)
 		}
-		opConfig, awsErr = operatorconfig.Load(ctx, awsClients.SSM, clusterName, environment, region)
-		if awsErr != nil {
-			setupLog.Error(awsErr, "unable to load operator config from SSM", "clusterName", clusterName)
-			os.Exit(1)
-		}
-		if missing := opConfig.Validate(); len(missing) > 0 {
-			// Fail closed: the required set is what makes tenant IAM
-			// reconciliation safe (permissions boundary, baseline policy,
-			// IAM path). Running without any of them would mint
-			// under-constrained tenant roles, silently.
-			setupLog.Error(nil, "operator config missing required fields; refusing to start",
-				"missing", missing, "ssmPrefix", "/eks-agent-platform/"+clusterName+"/")
-			os.Exit(1)
-		}
-		setupLog.Info("AWS substrate loaded", "clusterName", clusterName, "environment", environment, "region", region,
-			"operatorRoleARN", opConfig.OperatorRoleARN, "tenantIAMPath", opConfig.TenantIAMPath)
 	} else {
 		setupLog.Info("--disable-aws set; running without AWS clients (k8s-side only)")
-		opConfig = &operatorconfig.Config{ClusterName: clusterName, Environment: environment, Region: region}
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -307,199 +310,239 @@ func main() {
 	}
 	vclusterFactory := controller.NewVClusterClientFactory(mgr.GetClient(), mgr.GetScheme())
 
-	platformReconciler := &controller.PlatformReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Concurrency:   platformWorkers,
-		NetworkEngine: networkEngine,
-		VCluster:      vclusterFactory,
-		VClusterCfg:   vclusterCfg,
-		// Recorder carries the warnings a status condition alone would not
-		// reach: `kubectl describe platform` and anything watching events see a
-		// declared capability that resolved to no grant, without polling the CR.
-		Recorder: mgr.GetEventRecorder("platform-controller"),
-	}
-	if awsClients != nil {
-		platformReconciler.IAM = awsClients.IAM
-		platformReconciler.EKS = awsClients.EKS
-		platformReconciler.S3 = awsClients.S3
-		platformReconciler.SSM = awsClients.SSM
-		platformReconciler.Scheduler = awsClients.Scheduler
-		platformReconciler.IAMCfg = controller.IAMConfig{
-			TenantIAMPath:                opConfig.TenantIAMPath,
-			TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,
-			TenantPermissionsBoundaryARN: opConfig.TenantPermissionsBoundaryARN,
-			ClusterName:                  opConfig.ClusterName,
-			Environment:                  environment,
-			Region:                       opConfig.Region,
-			CostCenter:                   costCenter,
-			BusinessUnit:                 businessUnit,
-			DataClassification:           dataClassification,
-			Compliance:                   compliance,
+	// Registering the reconcilers needs the substrate, so it is a function of it.
+	// Nothing here runs until a Config that validates exists — a reconciler
+	// registered against absent values and short-circuiting on a nil client would
+	// be a control plane running over a dead data path, which looks exactly like a
+	// working one for as long as anybody looks.
+	wire := func(ctx context.Context, opConfig *operatorconfig.Config) error {
+		platformReconciler := &controller.PlatformReconciler{
+			Client:        mgr.GetClient(),
+			Scheme:        mgr.GetScheme(),
+			Concurrency:   platformWorkers,
+			NetworkEngine: networkEngine,
+			VCluster:      vclusterFactory,
+			VClusterCfg:   vclusterCfg,
+			// Recorder carries the warnings a status condition alone would not
+			// reach: `kubectl describe platform` and anything watching events see a
+			// declared capability that resolved to no grant, without polling the CR.
+			Recorder: mgr.GetEventRecorder("platform-controller"),
 		}
-		platformReconciler.AWSCfg = controller.PlatformAWSConfig{
-			ArtifactsBucketName: opConfig.ArtifactsBucketName,
-			Environment:         environment,
+		if awsClients != nil {
+			platformReconciler.IAM = awsClients.IAM
+			platformReconciler.EKS = awsClients.EKS
+			platformReconciler.S3 = awsClients.S3
+			platformReconciler.SSM = awsClients.SSM
+			platformReconciler.Scheduler = awsClients.Scheduler
+			platformReconciler.IAMCfg = controller.IAMConfig{
+				TenantIAMPath:                opConfig.TenantIAMPath,
+				TenantBaselinePolicyARN:      opConfig.TenantBaselinePolicyARN,
+				TenantPermissionsBoundaryARN: opConfig.TenantPermissionsBoundaryARN,
+				ClusterName:                  opConfig.ClusterName,
+				Environment:                  environment,
+				Region:                       opConfig.Region,
+				CostCenter:                   costCenter,
+				BusinessUnit:                 businessUnit,
+				DataClassification:           dataClassification,
+				Compliance:                   compliance,
+			}
+			platformReconciler.AWSCfg = controller.PlatformAWSConfig{
+				ArtifactsBucketName: opConfig.ArtifactsBucketName,
+				Environment:         environment,
+			}
 		}
-	}
-	if err := platformReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "Platform")
-		os.Exit(1)
-	}
-	gatewayReconciler := &controller.ModelGatewayReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		Concurrency: gatewayWorkers,
-		Region:      region,
-	}
-	if opConfig != nil {
-		gatewayReconciler.GuardrailID = opConfig.BaselineGuardrailID
-		gatewayReconciler.GuardrailVersion = opConfig.BaselineGuardrailVersion
-	}
-	if err := gatewayReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "ModelGateway")
-		os.Exit(1)
-	}
-	if err := (&controller.AgentFleetReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Concurrency:   runtimeWorkers,
-		NetworkEngine: networkEngine,
-		Region:        region,
-		Environment:   environment,
-		VCluster:      vclusterFactory,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "AgentFleet")
-		os.Exit(1)
-	}
-	if err := (&controller.SandboxPoolReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		Concurrency: sandboxWorkers,
-		ShimImage:   shimImage,
-		Environment: environment,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "SandboxPool")
-		os.Exit(1)
-	}
-	if err := (&controller.AgentSandboxReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		Concurrency: agentSandboxWorkers,
-		VCluster:    vclusterFactory,
-		Environment: environment,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "AgentSandbox")
-		os.Exit(1)
-	}
-	budgetReconciler := &controller.BudgetReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		Concurrency:     budgetWorkers,
-		RequeueInterval: budgetRequeueInterval,
-		// Identity, not an AWS client — set on every path, including --disable-aws.
-		// It is guaranteed non-empty by the guard above. Setting it alongside the
-		// clients would leave it empty whenever they are absent, which is the one
-		// arrangement where an identity silently loses its discriminator.
-		ClusterName:              clusterName,
-		KillSwitchGraceIntervals: killSwitchGraceIntervals,
-		KillSwitchMaxRefires:     killSwitchMaxRefires,
-	}
-	if awsClients != nil {
-		budgetReconciler.Athena = awsClients.Athena
-		budgetReconciler.CloudWatch = awsClients.CloudWatch
-		budgetReconciler.EventBridge = awsClients.EventBridge
-		budgetReconciler.AthenaCfg = controller.AthenaConfig{
-			Workgroup:    opConfig.AthenaWorkgroup,
-			Database:     opConfig.AthenaDatabase,
-			CURTableName: opConfig.CURTableName,
+		if err := platformReconciler.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the Platform reconciler: %w", err)
 		}
-		budgetReconciler.KillSwitchEventBusName = opConfig.KillSwitchEventBusName
-	}
-	if err := budgetReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "Budget")
-		os.Exit(1)
-	}
-	sloReconciler := &controller.SLOReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		Concurrency:        sloWorkers,
-		RequeueInterval:    sloRequeueInterval,
-		HoldGraceIntervals: sloHoldGraceIntervals,
-	}
-	if awsClients != nil {
-		sloReconciler.EventBridge = awsClients.EventBridge
-		sloReconciler.KillSwitchEventBusName = opConfig.KillSwitchEventBusName
-		// The AMP query client can only be built here, not in awsclients.New:
-		// its endpoint comes from SSM, and reading SSM needs the clients New
-		// returns. A cluster without managed-monitoring publishes no endpoint,
-		// and the reconciler degrades to a MetricStoreUnavailable condition
-		// rather than failing startup — enable_managed_monitoring is opt-in.
-		if opConfig.AMPEndpoint != "" {
-			ampQuery, err := awsclients.NewPrometheusQuery(awsClients.AWSConfig, opConfig.AMPEndpoint)
-			if err != nil {
-				setupLog.Error(err, "unable to build the AMP query client; SLO burn-rate evaluation is disabled", "endpoint", opConfig.AMPEndpoint)
+		gatewayReconciler := &controller.ModelGatewayReconciler{
+			Client:      mgr.GetClient(),
+			Scheme:      mgr.GetScheme(),
+			Concurrency: gatewayWorkers,
+			Region:      region,
+		}
+		if opConfig != nil {
+			gatewayReconciler.GuardrailID = opConfig.BaselineGuardrailID
+			gatewayReconciler.GuardrailVersion = opConfig.BaselineGuardrailVersion
+		}
+		if err := gatewayReconciler.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the ModelGateway reconciler: %w", err)
+		}
+		if err := (&controller.AgentFleetReconciler{
+			Client:        mgr.GetClient(),
+			Scheme:        mgr.GetScheme(),
+			Concurrency:   runtimeWorkers,
+			NetworkEngine: networkEngine,
+			Region:        region,
+			Environment:   environment,
+			VCluster:      vclusterFactory,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the AgentFleet reconciler: %w", err)
+		}
+		if err := (&controller.SandboxPoolReconciler{
+			Client:      mgr.GetClient(),
+			Scheme:      mgr.GetScheme(),
+			Concurrency: sandboxWorkers,
+			ShimImage:   shimImage,
+			Environment: environment,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the SandboxPool reconciler: %w", err)
+		}
+		if err := (&controller.AgentSandboxReconciler{
+			Client:      mgr.GetClient(),
+			Scheme:      mgr.GetScheme(),
+			Concurrency: agentSandboxWorkers,
+			VCluster:    vclusterFactory,
+			Environment: environment,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the AgentSandbox reconciler: %w", err)
+		}
+		budgetReconciler := &controller.BudgetReconciler{
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			Concurrency:     budgetWorkers,
+			RequeueInterval: budgetRequeueInterval,
+			// Identity, not an AWS client — set on every path, including --disable-aws.
+			// It is guaranteed non-empty by the guard above. Setting it alongside the
+			// clients would leave it empty whenever they are absent, which is the one
+			// arrangement where an identity silently loses its discriminator.
+			ClusterName:              clusterName,
+			KillSwitchGraceIntervals: killSwitchGraceIntervals,
+			KillSwitchMaxRefires:     killSwitchMaxRefires,
+		}
+		if awsClients != nil {
+			budgetReconciler.Athena = awsClients.Athena
+			budgetReconciler.CloudWatch = awsClients.CloudWatch
+			budgetReconciler.EventBridge = awsClients.EventBridge
+			budgetReconciler.AthenaCfg = controller.AthenaConfig{
+				Workgroup:    opConfig.AthenaWorkgroup,
+				Database:     opConfig.AthenaDatabase,
+				CURTableName: opConfig.CURTableName,
+			}
+			budgetReconciler.KillSwitchEventBusName = opConfig.KillSwitchEventBusName
+		}
+		if err := budgetReconciler.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the Budget reconciler: %w", err)
+		}
+		sloReconciler := &controller.SLOReconciler{
+			Client:             mgr.GetClient(),
+			Scheme:             mgr.GetScheme(),
+			Concurrency:        sloWorkers,
+			RequeueInterval:    sloRequeueInterval,
+			HoldGraceIntervals: sloHoldGraceIntervals,
+		}
+		if awsClients != nil {
+			sloReconciler.EventBridge = awsClients.EventBridge
+			sloReconciler.KillSwitchEventBusName = opConfig.KillSwitchEventBusName
+			// The AMP query client can only be built here, not in awsclients.New:
+			// its endpoint comes from SSM, and reading SSM needs the clients New
+			// returns. A cluster without managed-monitoring publishes no endpoint,
+			// and the reconciler degrades to a MetricStoreUnavailable condition
+			// rather than failing startup — enable_managed_monitoring is opt-in.
+			if opConfig.AMPEndpoint != "" {
+				ampQuery, err := awsclients.NewPrometheusQuery(awsClients.AWSConfig, opConfig.AMPEndpoint)
+				if err != nil {
+					setupLog.Error(err, "unable to build the AMP query client; SLO burn-rate evaluation is disabled", "endpoint", opConfig.AMPEndpoint)
+				} else {
+					sloReconciler.Prometheus = ampQuery
+				}
 			} else {
-				sloReconciler.Prometheus = ampQuery
+				setupLog.Info("no managed-monitoring AMP endpoint published for this cluster; SLO burn-rate evaluation will retry from SSM")
 			}
-		} else {
-			setupLog.Info("no managed-monitoring AMP endpoint published for this cluster; SLO burn-rate evaluation will retry from SSM")
-		}
 
-		// The endpoint can appear after this process starts, and on a first
-		// install it usually does: managed-monitoring publishes the parameter,
-		// and it is applied AFTER the cluster that hosts this operator. The
-		// endpoint is not a chart value, so ArgoCD sees no manifest change when
-		// it lands and nothing restarts the pod — which made a nil client at
-		// boot permanent, on a cluster whose AMP workspace was up.
-		//
-		// Re-reading only the one parameter, rather than calling
-		// operatorconfig.Load again, keeps this to a single SSM GetParameter and
-		// leaves every other startup-validated value exactly as validated.
-		sloReconciler.ResolvePrometheus = func(ctx context.Context) (awsclients.PrometheusQuery, error) {
-			endpoint, err := operatorconfig.AMPEndpoint(ctx, awsClients.SSM, clusterName, environment, region)
-			if err != nil {
-				return nil, err
+			// The endpoint can appear after this process starts, and on a first
+			// install it usually does: managed-monitoring publishes the parameter,
+			// and it is applied AFTER the cluster that hosts this operator. The
+			// endpoint is not a chart value, so ArgoCD sees no manifest change when
+			// it lands and nothing restarts the pod — which made a nil client at
+			// boot permanent, on a cluster whose AMP workspace was up.
+			//
+			// Re-reading only the one parameter, rather than calling
+			// operatorconfig.Load again, keeps this to a single SSM GetParameter and
+			// leaves every other startup-validated value exactly as validated.
+			sloReconciler.ResolvePrometheus = func(ctx context.Context) (awsclients.PrometheusQuery, error) {
+				endpoint, err := operatorconfig.AMPEndpoint(ctx, awsClients.SSM, clusterName, environment, region)
+				if err != nil {
+					return nil, err
+				}
+				if endpoint == "" {
+					return nil, nil
+				}
+				return awsclients.NewPrometheusQuery(awsClients.AWSConfig, endpoint)
 			}
-			if endpoint == "" {
-				return nil, nil
-			}
-			return awsclients.NewPrometheusQuery(awsClients.AWSConfig, endpoint)
 		}
-	}
-	if err := sloReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "SLO")
-		os.Exit(1)
-	}
-	evalReconciler := &controller.EvalReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		Concurrency: evalWorkers,
-	}
-	if opConfig != nil {
-		evalReconciler.RunnerNamespace = opConfig.EvalRunnerNamespace
-		evalReconciler.RunnerServiceAccount = opConfig.EvalRunnerServiceAccount
-		evalReconciler.ReportsBucket = opConfig.EvalReportsBucket
-	}
-	if err := evalReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "Eval")
-		os.Exit(1)
-	}
-	if err := (&controller.TenantReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		Concurrency:     tenantWorkers,
-		RequeueInterval: tenantRequeueInterval,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to register reconciler", "controller", "Tenant")
-		os.Exit(1)
+		if err := sloReconciler.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the SLO reconciler: %w", err)
+		}
+		evalReconciler := &controller.EvalReconciler{
+			Client:      mgr.GetClient(),
+			Scheme:      mgr.GetScheme(),
+			Concurrency: evalWorkers,
+		}
+		if opConfig != nil {
+			evalReconciler.RunnerNamespace = opConfig.EvalRunnerNamespace
+			evalReconciler.RunnerServiceAccount = opConfig.EvalRunnerServiceAccount
+			evalReconciler.ReportsBucket = opConfig.EvalReportsBucket
+		}
+		if err := evalReconciler.SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the Eval reconciler: %w", err)
+		}
+		if err := (&controller.TenantReconciler{
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			Concurrency:     tenantWorkers,
+			RequeueInterval: tenantRequeueInterval,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("register the Tenant reconciler: %w", err)
+		}
+		setupLog.Info("reconcilers registered against the operator substrate",
+			"clusterName", opConfig.ClusterName, "environment", opConfig.Environment, "region", opConfig.Region,
+			"operatorRoleARN", opConfig.OperatorRoleARN, "tenantIAMPath", opConfig.TenantIAMPath)
+		return nil
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+
+	// healthz stays a ping. A pod waiting for a value that has not been published
+	// is alive, and a liveness probe answering for the substrate would restart it
+	// — which is the loop this exists to remove, rebuilt one layer down.
+	//
+	// readyz answers for the substrate, because that is the thing that can be
+	// absent. Not ready is the honest report while it is: no reconciler is
+	// registered, so nothing this operator exists to do is happening, and the
+	// pod's own status carries that instead of a restart count.
+	readyz := healthz.Ping
+	if disableAWS {
+		// No substrate to wait for: --disable-aws is the local path, where the
+		// reconcilers run k8s-side only and every AWS step short-circuits.
+		if err := wire(context.Background(), &operatorconfig.Config{
+			ClusterName: clusterName, Environment: environment, Region: region,
+		}); err != nil {
+			setupLog.Error(err, "unable to register reconcilers; refusing to start")
+			os.Exit(1)
+		}
+	} else {
+		arrival := &operatorconfig.Arrival{
+			Awaiter: &operatorconfig.Awaiter{
+				SSM:         awsClients.SSM,
+				ClusterName: clusterName,
+				Environment: environment,
+				Region:      region,
+				Interval:    configPollInterval,
+				ReportAfter: configAbsentReportAfter,
+				Log:         setupLog,
+			},
+			Wire: wire,
+		}
+		if err := mgr.Add(arrival); err != nil {
+			setupLog.Error(err, "unable to add the substrate-arrival runnable")
+			os.Exit(1)
+		}
+		readyz = arrival.Readyz
+	}
+	if err := mgr.AddReadyzCheck("readyz", readyz); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}

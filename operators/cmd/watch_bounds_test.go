@@ -156,6 +156,12 @@ func TestEveryDurationFlagIsWeighedAgainstTheCeiling(t *testing.T) {
 	cannotLengthenAReconcile := map[string]string{
 		"slo-requeue-interval":    "how often the SLO reconciler ticks; no call bound is derived from it",
 		"tenant-requeue-interval": "how often the Tenant reconciler re-aggregates; no call bound is derived from it",
+		"config-poll-interval": "how often the substrate is re-read while it is incomplete. It runs in a " +
+			"manager runnable that finishes before any reconciler is registered, so no reconcile is ever " +
+			"inside it and there is no ceiling for it to exceed",
+		"config-absent-report-after": "when a still-absent substrate is reported at error level. It " +
+			"bounds nothing at all — no call, no wait a reconcile makes — and changes only the level a " +
+			"log line is written at",
 	}
 	readByTheCeiling := map[string]bool{"budget-requeue-interval": true}
 
