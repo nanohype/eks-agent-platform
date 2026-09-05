@@ -166,8 +166,12 @@ func mentions(message, path string) bool {
 	return false
 }
 
-// nested walks a dotted path with optional [i] segments through a decoded object.
-func nested(obj map[string]any, path string) (any, bool) {
+// carries reports whether a decoded object has a dotted path, with optional [i]
+// segments. Presence is the whole question a pruning verdict asks — whether the
+// fixture set the path, and whether the object came back still holding it — so
+// the value found is not returned. A signature that hands back a value no caller
+// reads claims a variability the function does not have.
+func carries(obj map[string]any, path string) bool {
 	var cursor any = obj
 	for _, segment := range strings.Split(path, ".") {
 		name := segment
@@ -179,28 +183,28 @@ func nested(obj map[string]any, path string) (any, bool) {
 			}
 			i, err := strconv.Atoi(strings.Trim(name[loc[0]:loc[1]], "[]"))
 			if err != nil {
-				return nil, false
+				return false
 			}
 			indexes = append([]int{i}, indexes...)
 			name = name[:loc[0]]
 		}
 		asMap, ok := cursor.(map[string]any)
 		if !ok {
-			return nil, false
+			return false
 		}
 		cursor, ok = asMap[name]
 		if !ok {
-			return nil, false
+			return false
 		}
 		for _, i := range indexes {
 			asList, ok := cursor.([]any)
 			if !ok || i >= len(asList) {
-				return nil, false
+				return false
 			}
 			cursor = asList[i]
 		}
 	}
-	return cursor, true
+	return true
 }
 
 func decode(t *testing.T, body string) []*unstructured.Unstructured {
@@ -321,10 +325,10 @@ func TestCorpusMatchesTheAPIServer(t *testing.T) {
 				t.Fatalf("read back: %v", err)
 			}
 			for _, e := range pruned {
-				if _, found := nested(live.Object, e.path); found {
+				if carries(live.Object, e.path) {
 					t.Errorf("declares `pruned %s` and the API server kept it — the object came back carrying that path", e.path)
 				}
-				if _, found := nested(sent.Object, e.path); !found {
+				if !carries(sent.Object, e.path) {
 					t.Errorf("declares `pruned %s` and the fixture never set it, so nothing was there to drop", e.path)
 				}
 			}
