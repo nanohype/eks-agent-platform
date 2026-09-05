@@ -100,10 +100,18 @@ spec:
             httpGet:
               path: /healthz
               port: probe
-            # Cold start = leader election + AWS client build + SSM config load +
-            # manager start. Allow up to 30 × 5s = 150s before liveness takes
-            # over, so a slow bootstrap never trips the restart loop this probe
-            # exists to prevent.
+            # Cold start = leader election + AWS client build + manager start.
+            # Allow up to 30 × 5s = 150s before liveness takes over, so a slow
+            # bootstrap never trips the restart loop this probe exists to
+            # prevent.
+            #
+            # Reading the substrate is NOT in this window. It is published by
+            # another system on another clock, and its absence at any single
+            # moment cannot say whether it is late or wrong — so the operator
+            # waits for it beside a running manager and reports not-ready,
+            # rather than exiting and handing the interval to CrashLoopBackOff.
+            # /healthz stays a liveness answer about the process; a pod waiting
+            # for a value it has not been given is alive.
             failureThreshold: 30
             periodSeconds: 5
           livenessProbe:
@@ -115,6 +123,12 @@ spec:
             httpGet:
               path: /readyz
               port: probe
+            # /readyz answers for the substrate, so a pod stays out of service
+            # and its Deployment stays un-Available until the values the
+            # operator reads have arrived and its reconcilers are registered.
+            # That is the honest signal for "config has arrived", and it is what
+            # a `kubectl wait --for=condition=Available` upstream of this is
+            # actually asking about.
             initialDelaySeconds: 5
             periodSeconds: 10
           resources: {{- toYaml .Values.resources | nindent 12 }}

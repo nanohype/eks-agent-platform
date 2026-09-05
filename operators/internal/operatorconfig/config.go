@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -194,6 +195,38 @@ const ampEndpointKey = "managed-monitoring/amp_endpoint"
 // Keyed by the full cluster name so co-located sibling clusters stay isolated.
 func clusterPrefix(clusterName string) string {
 	return "/eks-agent-platform/" + clusterName + "/"
+}
+
+// segment is what a single level of an SSM parameter path may contain. The
+// cluster name becomes one level of clusterPrefix, so a name outside this makes
+// a path that is not a path.
+var segment = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+
+// ValidPath refuses a cluster name that cannot appear in a parameter path.
+//
+// This is the one thing about the request that settles at startup, and it
+// settles because the request is ours: the path is built here, from this name,
+// so a name that cannot occupy a path level makes a call that is illegal now
+// and illegal after any amount of waiting. Refusing it is not a guess about
+// intent — it is a statement about a string this process constructed.
+//
+// It is deliberately narrow. It checks the shape of one path level and nothing
+// else, so SSM may still refuse a path this accepts, for a rule not modelled
+// here. Such a refusal arrives as an error from the sweep and is treated as an
+// absence — waited on and reported — because from here it is indistinguishable
+// from a substrate that has not been published yet.
+func ValidPath(clusterName string) error {
+	if clusterName == "" {
+		return fmt.Errorf("operatorconfig: cluster name is required; it is the SSM subtree this operator reads")
+	}
+	if !segment.MatchString(clusterName) {
+		return fmt.Errorf(
+			"operatorconfig: cluster name %q cannot appear in an SSM parameter path, so %q is not a "+
+				"path SSM can answer. A path level carries letters, digits and `_ . -`. This does not "+
+				"become true later, so it is refused rather than waited on",
+			clusterName, clusterPrefix(clusterName))
+	}
+	return nil
 }
 
 // AMPEndpoint reads just the managed-monitoring AMP endpoint.

@@ -25,6 +25,10 @@ type fakeSSM struct {
 	err       error
 	paginate  bool // serve the params across two pages
 	pageCalls int
+	// calls counts every sweep, paginated or not. pageCalls only moves on the
+	// paginated path, so a test asking "was this called at all" needs its own
+	// counter rather than one that is zero for a reason unrelated to the answer.
+	calls int
 }
 
 func (f *fakeSSM) GetParameter(context.Context, *ssm.GetParameterInput, ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
@@ -32,6 +36,7 @@ func (f *fakeSSM) GetParameter(context.Context, *ssm.GetParameterInput, ...func(
 }
 
 func (f *fakeSSM) GetParametersByPath(_ context.Context, in *ssm.GetParametersByPathInput, _ ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error) {
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
