@@ -294,10 +294,20 @@ jobs:
       # nothing observed those on the rest of the tree — YAML, HCL, Markdown,
       # shell, the chart templates.
       #
-      # Indentation checks stay off, because the three formatters above are the
-      # authority there and a Makefile needs tabs for its recipes and spaces for
-      # the continuation lines inside them. This takes the rules nothing else owns.
-      - run: pnpm editorconfig
+      # Indentation stays with those three, because a Makefile needs tabs in its
+      # recipes and spaces in the continuation lines inside them. This takes the
+      # rules nothing else owns, and it reads the tree: the reader before it
+      # resolved a release through the GitHub API and downloaded a binary at
+      # check time, so a merge waited on a third party and went red — naming
+      # `format` — when that call failed.
+      # The self-test first, because the two verdicts it keeps apart are the
+      # reason this gate is a script here. A tree that breaks a rule and a
+      # ruleset the gate cannot decide both exit non-zero, and a reader of a red
+      # build can act on neither until they are told apart. check-controls.py
+      # proves the rejection and refuses to score the other — an exit meaning
+      # "nothing was checked" is not a rejection — so that half is proven here.
+      - run: ./scripts/check-editorconfig.py --self-test
+      - run: ./scripts/check-editorconfig.py
 
   tofu:
     name: tofu validate

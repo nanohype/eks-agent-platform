@@ -586,6 +586,16 @@ CONTROLS = [
         expect_output="does not report it",
     ),
     Control(
+        gate="check-editorconfig.py",
+        path="operators/Makefile",
+        before=".PHONY: vet\nvet: ## go vet\n",
+        after=".PHONY: vet \nvet: ## go vet\n",
+        catches="trailing whitespace in a file no formatter owns. gofmt reads the Go sources beside "
+        "it and biome reads none of this, so .editorconfig is the only thing that declares the rule "
+        "and this is the only thing that reads it",
+        expect_output="trailing whitespace",
+    ),
+    Control(
         gate="check-workflow-triggers.py",
         path=".github/workflows/pr-title.yaml",
         before="    types: [opened, edited, synchronize, reopened]",
