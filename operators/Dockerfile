@@ -5,7 +5,7 @@
 # index, but the exact bytes are fixed. Refresh a digest with
 # `docker buildx imagetools inspect <image>:<tag>` and bump the tag comment
 # alongside it.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS builder
 
 WORKDIR /workspace
 
