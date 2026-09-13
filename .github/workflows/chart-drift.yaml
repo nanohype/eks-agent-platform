@@ -49,7 +49,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.0.5
+          version: v4.3.0
       - run: ./scripts/check-chart-version-bump.py --self-test
       - run: ./scripts/check-chart-version-bump.py --published
 
