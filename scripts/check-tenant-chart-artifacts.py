@@ -2,8 +2,8 @@
 """The tenant chart ships the per-environment deltas the contract requires.
 
 platform-tenant-contract lists `<app>/chart/values-{dev,staging,production}.yaml`
-among the required artifacts and says so again in its do_not list: every chart
-has three deltas even if some are empty.
+among the required artifacts and states it again as rule `per-env-values`: every
+chart carries all three per-env deltas, even when some are empty.
 
 The reason the empty ones still have to exist is the one that gets argued away.
 Three files that ALWAYS exist mean a deploy path can name one unconditionally.
@@ -13,9 +13,10 @@ values into production, which is the failure this rule prevents and the failure
 that produces no error when it happens.
 
 Also asserted: no per-env delta hardcodes an AWS account id, a region, or a KMS
-key ARN. The same contract forbids those in chart values because per-env values
-plumb them from landing-zone outputs at deploy time, and a delta file is exactly
-where someone reaches for a literal.
+key ARN. The same contract forbids those in chart values (rule
+`no-hardcoded-account-values`) because per-env values plumb them from
+landing-zone outputs at deploy time, and a delta file is exactly where someone
+reaches for a literal.
 
     scripts/check-tenant-chart-artifacts.py [--list]
 """
