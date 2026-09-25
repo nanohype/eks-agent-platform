@@ -47,11 +47,16 @@ func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agent
 	return getReferencedPlatform(ctx, r.Client, fleet.Namespace, fleet.Spec.PlatformRef.Name, errPlatformNotFound)
 }
 
-// ensureTenantServiceAccount creates the ServiceAccount tenant pods assume —
-// both AgentFleet agent pods and AgentSandbox session pods. SA name + namespace
-// match the Pod Identity association the operator creates in platform_iam.go
-// (tenants-<platform>:tenant-runtime), which binds it to the tenant IAM role.
-// The SA carries no role-arn annotation: Pod Identity is the binding.
+// ensureTenantServiceAccount creates the ServiceAccount tenant pods run under —
+// AgentFleet agent pods, AgentSandbox session pods, the ModelGateway's Envoy
+// proxy, and the tenant app chart's pods, which reference it with
+// serviceAccount.create: false rather than creating their own. SA name +
+// namespace match the Pod Identity association the operator creates in
+// platform_iam.go (tenants-<platform>:tenant-runtime) under namespace
+// isolation; under spec.isolation: vcluster the client is the virtual
+// cluster's and the association targets the SA's synced host copy. The
+// association binds it to the tenant IAM role. The SA carries no role-arn
+// annotation: Pod Identity is the binding.
 func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platformv1alpha1.Platform) error {
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
