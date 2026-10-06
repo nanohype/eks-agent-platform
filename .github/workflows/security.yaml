@@ -78,7 +78,7 @@ jobs:
           # falls over on required values without overrides — those
           # errors aren't security findings.
           skip-dirs: "charts"
-      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+      - uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         if: always()
         with:
           sarif_file: trivy-config.sarif
@@ -128,7 +128,7 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
           skip-dirs: "node_modules,**/.terraform"
-      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+      - uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         if: always()
         with:
           sarif_file: trivy-fs.sarif
@@ -221,7 +221,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6
+      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6
         with:
           # Pinned, not `latest`. Resolving "latest" is itself an unauthenticated
           # GitHub API call, and an unpinned linter means a new rule release can
@@ -253,10 +253,10 @@ jobs:
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
-      - uses: securego/gosec@9e75c0576c9878035d4221392108d458abe10fc3 # v2.28.0
+      - uses: securego/gosec@deb54465fea23d19a77f037e11e6589021f8501d # v2.29.0
         with:
           args: -severity medium -fmt sarif -out gosec.sarif ./operators/...
-      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+      - uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         if: always()
         with:
           sarif_file: gosec.sarif
@@ -338,7 +338,7 @@ jobs:
     # merges come from pull requests; on push it is skipped and gates nothing.
     if: always() && github.event_name == 'pull_request'
     steps:
-      - uses: nanohype/.github/actions/merge-gate@90af851a854ca24dd6626ccc660b0b1b245c406a # main
+      - uses: nanohype/.github/actions/merge-gate@cb1c34008a390e775dcb69a4542b7e960abe72bb # main
         with:
           needs: ${{ toJSON(needs) }}
           gate-job-id: merge-gate-security
