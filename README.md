@@ -41,17 +41,17 @@ Sits on top of [landing-zone](https://github.com/nanohype/landing-zone) (Terragr
 
 Split across three capability groups under the `nanohype.dev` domain (version `v1alpha1`): `platform.nanohype.dev` (Tenant, Platform), `agents.nanohype.dev` (AgentFleet, ModelGateway, AgentSandbox, SandboxPool), `governance.nanohype.dev` (BudgetPolicy, EvalSuite, SLOPolicy). Agents are plain Deployments running the tenant's own image under the tenant's identity.
 
-| Kind           | Scope      | Owns                                                                                     |
-| -------------- | ---------- | ---------------------------------------------------------------------------------------- |
-| `Tenant`       | Cluster    | Aggregate budget + readiness + suspension across a tenant's Platforms                    |
-| `Platform`     | Namespaced | Tenant workload namespace, IAM role + Pod Identity association, KMS grant, S3 bucket policy, ArgoCD AppProject |
-| `ModelGateway` | Namespaced | Envoy AI Gateway route per ModelRoute (Bedrock backend + Guardrail attachment)          |
-| `AgentFleet`   | Namespaced | Deployment per agent (tenant image, tenant identity), KEDA ScaledObject (SQS or CPU), NetworkPolicy |
-| `SandboxPool`  | Namespaced | Pull-based pool of always-on Managed Agents sandbox workers, on the dedicated tainted node pool behind a default-deny NetworkPolicy |
-| `AgentSandbox` | Namespaced | Single-use isolated pod for one agent role-session — same hardening as the pool, push-dispatched and run-once |
-| `BudgetPolicy` | Namespaced | Hourly Athena CUR aggregation + CloudWatch in-flight estimate; kill-switch event at 120% |
-| `EvalSuite`    | Namespaced | Argo Workflow/CronWorkflow against the fleet; status writeback by the runner template    |
-| `SLOPolicy`    | Namespaced | Burn-rate alerting on the Platform's objective; page-tier burn raises a kill-switch event and holds the tenant's rollout |
+| Kind           | Scope      | Owns                                                                                                                                            |
+| -------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Tenant`       | Cluster    | Aggregate budget + readiness + suspension across a tenant's Platforms                                                                           |
+| `Platform`     | Namespaced | Tenant workload namespace, `tenant-runtime` ServiceAccount, IAM role + Pod Identity association, KMS grant, S3 bucket policy, ArgoCD AppProject |
+| `ModelGateway` | Namespaced | Envoy AI Gateway route per ModelRoute (Bedrock backend + Guardrail attachment)                                                                  |
+| `AgentFleet`   | Namespaced | Deployment per agent (tenant image, tenant identity), KEDA ScaledObject (SQS or CPU), NetworkPolicy                                             |
+| `SandboxPool`  | Namespaced | Pull-based pool of always-on Managed Agents sandbox workers, on the dedicated tainted node pool behind a default-deny NetworkPolicy             |
+| `AgentSandbox` | Namespaced | Single-use isolated pod for one agent role-session — same hardening as the pool, push-dispatched and run-once                                   |
+| `BudgetPolicy` | Namespaced | Hourly Athena CUR aggregation + CloudWatch in-flight estimate; kill-switch event at 120%                                                        |
+| `EvalSuite`    | Namespaced | Argo Workflow/CronWorkflow against the fleet; status writeback by the runner template                                                           |
+| `SLOPolicy`    | Namespaced | Burn-rate alerting on the Platform's objective; page-tier burn raises a kill-switch event and holds the tenant's rollout                        |
 
 ## Quickstart
 

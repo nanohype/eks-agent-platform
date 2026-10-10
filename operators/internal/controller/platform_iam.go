@@ -228,9 +228,10 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		path += "/"
 	}
 
-	// The tenant ServiceAccount (tenantSAName, created by the AgentFleet /
-	// AgentSandbox reconcilers) is bound to this role by a Pod Identity
-	// association below; the trust policy itself is the fixed EKS-service trust.
+	// The tenant ServiceAccount (tenantSAName, created by this reconciler and
+	// ensured again by the AgentFleet / AgentSandbox reconcilers) is bound to
+	// this role by a Pod Identity association below; the trust policy itself is
+	// the fixed EKS-service trust.
 	trust, err := assumeRolePolicyForPodIdentity()
 	if err != nil {
 		// assumeRolePolicyForPodIdentity only errors on a marshal that cannot

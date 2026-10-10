@@ -28,9 +28,9 @@ import (
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
 )
 
-// scopingEnv is the environment string the model-scoping conformance tests
-// run their reconciler under; role names follow the ADR 0003 contract
-// <env>-<platform>-tenant.
+// scopingEnv is the cluster name and environment string the model-scoping
+// conformance tests run their reconciler under; role names follow the ADR 0003
+// contract <cluster-name>-<platform>-tenant.
 const scopingEnv = "conformance"
 
 // scopingPolicyName mirrors the operator's inline policy name (the CRD/ADR

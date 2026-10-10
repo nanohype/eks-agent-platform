@@ -28,7 +28,7 @@ const defaultSessionRoleMaxDuration int32 = 3600
 
 // sessionRoleName returns the attribution session role minted for a Platform:
 //
-//	<env>-<platform.name>-session
+//	<cluster-name>-<platform.name>-session
 //
 // Same 64-char cap + FNV-1a hash-truncation scheme as tenantRoleName, so the
 // two role names never collide and both stay within IAM's role-name limit.

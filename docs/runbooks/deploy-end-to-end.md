@@ -110,7 +110,7 @@ lz-cluster); `TF_VAR_node_role_name` (lz-cluster, changes on cluster recreate) �
 then apply in dependency order:
 
 ```bash
-task tofu:apply ENVIRONMENT=<env> COMPONENT=all   # terragrunt run --all resolves the graph
+task tofu:apply CLUSTER=<cluster> COMPONENT=all   # terragrunt run --all resolves the graph
 ```
 
 Verify the Pod Identity associations bound:
@@ -201,17 +201,29 @@ ApplicationSet, with per-env values from `tofu output`.
 ```
 
 Spot-check: tenant IAM role exists at `…:role/eks-agent-platform/tenants/<cluster>-<platform>-tenant`
-with the permissions boundary attached and a trust policy scoped to exactly
-`system:serviceaccount:tenants-<platform>:tenant-runtime`; tenant `/readyz` green.
+with the permissions boundary attached and a trust policy admitting only
+`pods.eks.amazonaws.com`. The `(namespace, service-account)` binding lives in the
+Pod Identity association, not the trust policy: `Platform.status.podIdentity`
+names it, and `aws eks list-pod-identity-associations --cluster-name <cluster>
+--namespace <status.podIdentity.namespace> --service-account
+<status.podIdentity.serviceAccount>` returns its association id;
+`aws eks describe-pod-identity-association --cluster-name <cluster>
+--association-id <id>` shows a `roleArn` equal to `status.podIdentity.roleArn`.
+The ServiceAccount is `tenant-runtime` under namespace isolation and the
+vcluster-translated host name under `spec.isolation: vcluster`. Tenant `/readyz`
+green.
 
 ### B5. Teardown (reverse order — stops spend)
 
 1. **Delete the Platform CRs first** so the operator finalizer reaps the
    operator-created tenant IAM roles (they're outside Terraform state — if you
    skip this they orphan). Confirm `aws iam get-role` → NoSuchEntity.
-2. `terragrunt destroy` each `<app>-platform`, then `agent-iam`, then
+2. From `eks-agent-platform/`, with the B1b exports set,
+   `task tofu:destroy CLUSTER=<cluster> COMPONENT=all` (the B1b tree). Then from
+   `landing-zone/live/aws/<account>/<region>/<env>/`,
+   `terragrunt destroy` `tenant-substrate`, then `agent-iam`, then
    `cluster-bootstrap` (uninstalls cilium/argocd — do it while the cluster's up),
-   then `cluster`, then `network`.
+   then `managed-monitoring`, then `cluster`, then `network`.
 3. Confirm zero billable resources: `aws eks list-clusters`,
    `aws ec2 describe-nat-gateways --filter Name=state,Values=available`,
    `aws ec2 describe-vpcs --filters Name=tag:Project,Values=landing-zone`.
@@ -239,4 +251,4 @@ with the permissions boundary attached and a trust policy scoped to exactly
   envoy-ai-gateway) — they fail to render. (Fixed in the ApplicationSets.)
 - **Operator IAM idempotency GetRole:** authorizes against the bare-name (root)
   ARN before the role exists, so the operator role allows GetRole on the
-  `<env>-*-tenant` name pattern as well as the scoped path. (In `agent-iam`.)
+  `<cluster>-*-tenant` name pattern as well as the scoped path. (In `agent-iam`.)
