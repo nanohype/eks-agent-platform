@@ -6,7 +6,7 @@ IMG ?= ghcr.io/nanohype/eks-agent-platform/operator:$(VERSION)
 CONTROLLER_GEN ?= go tool controller-gen
 ENVTEST ?= go tool setup-envtest
 CRD_REF_DOCS ?= go tool crd-ref-docs
-ENVTEST_K8S_VERSION ?= 1.33
+ENVTEST_K8S_VERSION ?= 1.37
 
 .PHONY: help
 help:
