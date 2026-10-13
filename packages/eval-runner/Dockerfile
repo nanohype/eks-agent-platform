@@ -6,7 +6,7 @@
 # real userland rather than being distroless like the operator.
 
 # ── build stage: bundle the CLI to a single file ────────────────────────────
-FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS builder
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
 WORKDIR /src
 
 # corepack pins pnpm from the root package.json's packageManager field.
@@ -26,7 +26,7 @@ RUN pnpm --filter "...@eks-agent/eval-runner" build \
     && pnpm --filter @eks-agent/eval-runner bundle
 
 # ── runtime stage: slim node + the OS tools the workflow shells to ──────────
-FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runtime
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 
 ARG TARGETARCH
 # Pinned tool versions (resolved from upstream at image authoring time).
