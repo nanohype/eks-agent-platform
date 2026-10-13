@@ -257,7 +257,7 @@ jobs:
           persist-credentials: false
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -318,7 +318,7 @@ jobs:
           persist-credentials: false
       - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
         with:
-          tofu_version: "1.12.6"
+          tofu_version: "1.13.1"
       - name: validate every component
         run: |
           for d in terraform/components/*/; do
@@ -813,7 +813,7 @@ jobs:
     name: go test (envtest)
     runs-on: ubuntu-latest
     env:
-      GOLANGCI_VERSION: v2.12.2
+      GOLANGCI_VERSION: v2.14.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -834,7 +834,7 @@ jobs:
       # a green suite that executed none of those cases.
       - name: install promtool
         env:
-          PROMTOOL_VERSION: "3.14.0"
+          PROMTOOL_VERSION: "3.15.0"
         run: |
           set -euo pipefail
           ver="${PROMTOOL_VERSION}"
