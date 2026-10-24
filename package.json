@@ -11,7 +11,7 @@
   },
   "license": "Apache-2.0",
   "author": "stxkxs",
-  "packageManager": "pnpm@11.28.5",
+  "packageManager": "pnpm@11.28.6",
   "engines": {
     "node": ">=24.14.0",
     "pnpm": ">=11.8.0"
