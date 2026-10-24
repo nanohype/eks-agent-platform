@@ -26,7 +26,7 @@ RUN apt-get update \
 # tampered, swapped, or truncated download fails the build instead of shipping
 # an unverified binary into the sandbox. Bump both the version and the two
 # digests together when moving to a new `ant` release.
-ARG ANT_VERSION=1.9.1
+ARG ANT_VERSION=1.44.0
 ARG TARGETARCH=amd64
 ARG ANT_SHA256_amd64=221abeda39d65e202f8c07a85c94744023d2bddef7b0906301715b73d78a1cfc
 ARG ANT_SHA256_arm64=5cd4bda9ea9c9621a7403d27e256d37b18bfd95a85ba97435b717e2fd03462c7

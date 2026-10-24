@@ -183,7 +183,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       # This job runs EVERY gate for real, so it needs every binary any gate
       # asserts a precondition on — not only the ones its own name suggests.
       # check-vcluster-chart resolves the operator constants with go.
@@ -470,7 +470,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       - run: pip install pyyaml
       - run: ./scripts/check-chart-rbac.py
 
@@ -500,7 +500,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       - run: pip install pyyaml
       - run: ./scripts/check-chart-crd-parity.py
 
@@ -529,7 +529,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       - run: pip install pyyaml
       - run: ./scripts/check-crd-instantiation.py
 
@@ -617,7 +617,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       - run: ./scripts/check-chart-version-bump.py --self-test
       # base_ref is a ref name the PR author does not control, but it is still a
       # template expansion landing inside a command line; passing it through the
@@ -653,7 +653,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       - run: pip install pyyaml
       - run: ./scripts/check-eval-workflow.py
 
@@ -718,7 +718,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       - run: pip install pyyaml
       - run: ./scripts/check-vcluster-chart.py
 
@@ -757,7 +757,7 @@ jobs:
           # part of the verdict. Unpinned, an unrelated pull request goes red or
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
-          version: v4.3.0
+          version: v4.3.1
       - run: |
           for d in charts/*/; do
             name=$(basename "$d")
@@ -813,7 +813,7 @@ jobs:
     name: go test (envtest)
     runs-on: ubuntu-latest
     env:
-      GOLANGCI_VERSION: v2.14.0
+      GOLANGCI_VERSION: v2.15.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
