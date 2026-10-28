@@ -70,7 +70,7 @@ importers:
         version: 2.9.1
       zod:
         specifier: ^4.4.3
-        version: 4.6.5
+        version: 4.6.7
 
   examples/agent-fleet: {}
 
@@ -96,7 +96,7 @@ importers:
     dependencies:
       zod:
         specifier: ^4.4.3
-        version: 4.6.5
+        version: 4.6.7
     devDependencies:
       typescript:
         specifier: ^6.0.3
@@ -115,7 +115,7 @@ importers:
         version: link:../pricing
       zod:
         specifier: ^4.4.3
-        version: 4.6.5
+        version: 4.6.7
     devDependencies:
       esbuild:
         specifier: ^0.28.1
@@ -131,7 +131,7 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.133.0
-        version: 0.133.0(zod@4.6.5)
+        version: 0.133.0(zod@4.6.7)
     devDependencies:
       tsx:
         specifier: ^4.20.6
@@ -1513,8 +1513,8 @@ packages:
   magicast@0.5.5:
     resolution: {integrity: sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==}
 
-  markdown-it@14.3.2:
-    resolution: {integrity: sha512-sHHjZ5fJKlgrG4qns2YwVcdNep35h5fERrfkD2YNsb9UFk0UIHarbiTaHKVMlPuWAoiilyK8Fv/jAm11slsY7Q==}
+  markdown-it@14.3.3:
+    resolution: {integrity: sha512-L//tDAkjTjJCU6pBUSBTgs3Kg4InVaZuUZog/b6V12UKhcDQ7S78877ibbCanRExwPuYP1CZD7Gd2dxSy1GXRg==}
     hasBin: true
 
   math-intrinsics@1.1.0:
@@ -1986,17 +1986,17 @@ packages:
     resolution: {integrity: sha512-9OpKOLeaoNFecEp7P6iYbzze/5CqWoH7N3SMs/6y1XF4nMvFMspEGZzJ6uFi9MmQwXhyzqYoSEKO3tvA3Z/o2w==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=23}
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.133.0(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.133.0(zod@4.6.7)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
-      zod: 4.6.5
+      zod: 4.6.7
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -3210,7 +3210,7 @@ snapshots:
       '@babel/types': 7.29.8
       source-map-js: 1.2.2
 
-  markdown-it@14.3.2:
+  markdown-it@14.3.3:
     dependencies:
       argparse: 2.0.1
       entities: 4.5.0
@@ -3520,7 +3520,7 @@ snapshots:
     dependencies:
       '@gerrit0/mini-shiki': 3.23.0
       lunr: 2.3.9
-      markdown-it: 14.3.2
+      markdown-it: 14.3.3
       minimatch: 10.2.6
       typescript: 6.0.3
       yaml: 2.9.1
@@ -3633,4 +3633,4 @@ snapshots:
       y18n: 5.0.8
       yargs-parser: 22.0.0
 
-  zod@4.6.5: {}
+  zod@4.6.7: {}
