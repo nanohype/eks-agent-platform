@@ -13,6 +13,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Every job below that runs a gate parsing YAML installs PyYAML at this one
+  # version. The parser is part of a gate's verdict, so an unpinned install lets
+  # a PyYAML release turn an unrelated pull request red or green.
+  PYYAML_VERSION: "6.0.3"
+
 jobs:
   placeholders:
     name: zero-placeholder gate
@@ -124,7 +130,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-workflow-permissions.py --list
 
   merge-gate-reachable:
@@ -134,7 +140,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-merge-gate.py --list
 
   empty-tree:
@@ -144,7 +150,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-empty-tree.py --list
 
   named-paths:
@@ -198,7 +204,7 @@ jobs:
         with:
           node-version-file: package.json
           package-manager-cache: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-controls.py --list
 
   # A gate over the gates. A check that cannot fail is worse than no check,
@@ -213,7 +219,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-gates.py --self-test
       - run: ./scripts/check-gates.py --list
 
@@ -239,7 +245,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-workflow-triggers.py --list
 
   # Three environments run the same component on the same substrate shape, so a
@@ -478,7 +484,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-chart-rbac.py
 
   # ── Chart↔CRD parity gate ────────────────────────────────────────────────
@@ -508,7 +514,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-chart-crd-parity.py
 
   # ── CRD instantiation ────────────────────────────────────────────────────
@@ -537,7 +543,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-crd-instantiation.py
 
   # ── Custom resource admissibility ────────────────────────────────────────
@@ -559,7 +565,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-cr-admissibility.py
 
   # ── PROJECT parity ───────────────────────────────────────────────────────
@@ -661,8 +667,28 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-eval-workflow.py
+
+  # ── Argo script splice gate ──────────────────────────────────────────────
+  # Argo substitutes {{...}} into a template's text before the pod exists, so an
+  # expression inside a script's source or a shell's -c program becomes part of
+  # the program. The eval steps handle tenant-authored cases and model replies,
+  # and a quote in either would run as shell beside the eval-runner role and
+  # kubectl. This fails on any expression in code outside an allowlist of
+  # Argo-generated values, in every tracked workflow manifest. The self-test
+  # runs first: it proves the rule rejects the splices it names and accepts
+  # delivery through env values and raw artifacts.
+  argo-script-splices:
+    name: no template expression is spliced into code a step runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
+      - run: ./scripts/check-argo-script-splices.py --self-test
+      - run: ./scripts/check-argo-script-splices.py --list
 
   # ── eval-runner image ────────────────────────────────────────────────────
   # The image is what the eval WorkflowTemplate runs, and outside this job only
@@ -771,7 +797,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-runtime-contract.py --list
 
   # ── vcluster chart acceptance gate ───────────────────────────────────────
@@ -805,7 +831,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-vcluster-chart.py
 
   # helm lint, template rendering and CRD parity all read the chart against
@@ -928,9 +954,13 @@ jobs:
             | tar -xz -C /tmp
           sudo install -m 0755 "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
           promtool --version
+      # REQUIRE_PYTHON3 makes the same skip a failure for the test that runs the
+      # splice gate's tag grammar beside the step harness's. The runner image
+      # ships python3, and the comparison needs no package beyond it.
       - name: go test with envtest + coverage floors
         env:
           REQUIRE_PROMTOOL: "1"
+          REQUIRE_PYTHON3: "1"
         run: cd operators && make coverage-check
       # verify: false because the JSONSchema check it performs by default is a
       # network fetch of https://golangci-lint.run/jsonschema/... on every run,
@@ -1080,6 +1110,7 @@ jobs:
         chart-args,
         chart-version-bump,
         eval-workflow,
+        argo-script-splices,
         eval-runner-image,
         runtime-contract,
         vcluster-chart,

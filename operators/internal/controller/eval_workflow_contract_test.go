@@ -292,17 +292,46 @@ func TestWorkflowTemplateConsumesEveryParameterTheOperatorSends(t *testing.T) {
 	}
 }
 
-// TestWritebackPatchesTheSuiteNamespace reads the step's own script. The
-// parameter can be threaded correctly all the way to the writeback template
-// and still be unused by the kubectl invocation inside it.
+// TestWritebackPatchesTheSuiteNamespace runs both steps that patch a suite's
+// status, writeback and the run-outcome exit handler, with the values the
+// pipeline binds to them. A parameter can be threaded correctly all the way to
+// a step and still be unused by the kubectl invocation inside it, or reach it
+// through an env entry naming another input. The tenant and the suite's
+// namespace are given different values, so a call addressed by tenant fails
+// here: a tenant name is not a namespace, and a patch there addresses one that
+// need not exist.
 func TestWritebackPatchesTheSuiteNamespace(t *testing.T) {
-	template := readEvalWorkflowTemplate(t)
-
-	if !strings.Contains(template, "--namespace '{{inputs.parameters.suite-namespace}}'") {
-		t.Error("the writeback step does not patch in the suite's namespace")
+	steps := evalScriptSteps(t)
+	g := wiringGlobals()
+	if g["workflow.parameters.suite-namespace"] == g["workflow.parameters.tenant"] {
+		t.Fatal("the suite's namespace and the tenant share a value, so this check cannot tell them apart")
 	}
-	if strings.Contains(template, "--namespace '{{inputs.parameters.tenant}}'") {
-		t.Error("the writeback step patches in a namespace named after the tenant; a tenant name is not a namespace")
+	wired := wiredValues(t, g)
+	suite, namespace := g["workflow.parameters.suite-name"], g["workflow.parameters.suite-namespace"]
+
+	// writeback makes the one status patch. The exit handler, on a run that did
+	// not succeed, reads the suite's status and then patches it.
+	for _, s := range []struct {
+		step  string
+		calls int
+	}{{"writeback", 1}, {"run-outcome", 2}} {
+		step, ok := steps[s.step]
+		if !ok {
+			t.Fatalf("the WorkflowTemplate has no %s script step", s.step)
+		}
+		calls := runEvalStep(t, step, wired[s.step]).commands("kubectl")
+		if len(calls) != s.calls {
+			t.Errorf("the %s step made %d kubectl call(s), want %d: %q", s.step, len(calls), s.calls, calls)
+			continue
+		}
+		for _, c := range calls {
+			if ns, _ := flagValue(c, "--namespace"); ns != namespace {
+				t.Errorf("the %s step runs kubectl %s in namespace %q, want the suite's %q", s.step, c[1], ns, namespace)
+			}
+			if name, _ := flagValue(c, "evalsuite"); name != suite {
+				t.Errorf("the %s step runs kubectl %s on evalsuite %q, want the suite named by suite-name %q", s.step, c[1], name, suite)
+			}
+		}
 	}
 }
 

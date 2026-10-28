@@ -42,6 +42,7 @@ with no entry is an error rather than a guess.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -65,7 +66,7 @@ PROBES = {
 
 
 def require_binary(name: str, why: str, probe: list[str] | None = None) -> None:
-    """Assert a binary exists AND runs, or exit 2 naming it.
+    """Assert a binary exists AND runs, or exit EXIT_PRECONDITION (3) naming it.
 
     The probe comes from PROBES. A binary with no entry there is a programming
     error in the caller, not a finding about the machine.
@@ -102,3 +103,24 @@ def require_binary(name: str, why: str, probe: list[str] | None = None) -> None:
             file=sys.stderr,
         )
         sys.exit(EXIT_PRECONDITION)
+
+
+def run_tool(
+    cmd: list[str], timeout: float, cwd: str | os.PathLike[str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run a tool a gate's verdict rests on, or exit EXIT_CANNOT_EVALUATE (3).
+
+    A call that does not finish within `timeout` seconds, or cannot be started,
+    decided nothing. Left to escape, either one is a traceback, and a traceback
+    exits 1: the code a gate uses for a finding about the tree. The caller reads
+    the returned process's exit status itself, since what a non-zero exit means
+    is the caller's to say.
+    """
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        why = f"did not finish within {timeout}s"
+    except OSError as e:
+        why = f"could not be started ({e})"
+    print(f"{sys.argv[0]}: `{' '.join(cmd)}` {why}. Nothing was checked.", file=sys.stderr)
+    sys.exit(EXIT_CANNOT_EVALUATE)

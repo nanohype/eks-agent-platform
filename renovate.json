@@ -41,6 +41,14 @@
       "datasourceTemplate": "pypi"
     },
     {
+      "description": "PyYAML, installed from PyPI at the one workflow-level version by every ci.yaml job that runs a gate parsing YAML.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["PYYAML_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],
+      "depNameTemplate": "pyyaml",
+      "datasourceTemplate": "pypi"
+    },
+    {
       "description": "govulncheck, installed with `go install` by the security workflow.",
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],

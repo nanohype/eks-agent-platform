@@ -26,7 +26,8 @@ Exit status:
   0  no changed path is an image input
   1  at least one is, so the image has to be built
   2  usage error
-  3  the scope could not be decided: git or pnpm missing, or the workspace
+  3  the scope could not be decided: git or pnpm missing, a call to either
+     that did not finish in time or could not be started, or the workspace
      graph did not resolve
 
 --base defaults to HEAD and --head to the working tree, which then includes
@@ -39,13 +40,14 @@ passes the merge commit's first parent and the merge commit.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import pathlib
-import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from _tooling import EXIT_CANNOT_EVALUATE, require_binary  # noqa: E402
+from _tooling import EXIT_CANNOT_EVALUATE, require_binary, run_tool  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -114,10 +116,7 @@ def package_dirs(listing: str) -> list[str] | None:
 def workspace_package_dirs() -> list[str]:
     """eval-runner and every workspace package it depends on. Exits 3 if the
     graph does not resolve."""
-    r = subprocess.run(
-        ["pnpm", "--filter", SELECTOR, "ls", "--depth", "-1", "--json"],
-        capture_output=True, text=True, cwd=ROOT, timeout=120,
-    )
+    r = run_tool(["pnpm", "--filter", SELECTOR, "ls", "--depth", "-1", "--json"], timeout=120, cwd=ROOT)
     dirs = package_dirs(r.stdout) if r.returncode == 0 else None
     if dirs is None:
         print(
@@ -132,7 +131,7 @@ def workspace_package_dirs() -> list[str]:
 
 
 def git_lines(*args: str) -> list[str]:
-    r = subprocess.run(["git", *args], capture_output=True, text=True, cwd=ROOT, timeout=120)
+    r = run_tool(["git", *args], timeout=120, cwd=ROOT)
     if r.returncode != 0:
         print(
             f"check-eval-runner-image-scope: `git {' '.join(args)}` exited {r.returncode}: "
@@ -155,8 +154,9 @@ def changed_paths(base: str, head: str | None) -> list[str]:
 
 
 def self_test() -> int:
-    """The matching rules against a fixed graph, and the reading of pnpm's
-    listing, without running git or pnpm."""
+    """The matching rules against a fixed graph, the reading of pnpm's listing,
+    and the exit a hung or unstartable tool call takes, without running git or
+    pnpm."""
     packages = ["packages/eval-runner/", "packages/core/", "packages/pricing/"]
     cases = [
         ("packages/pricing/src/data/bedrock-pricing.json", True, "a file in a dependency package"),
@@ -194,13 +194,32 @@ def self_test() -> int:
     for what, text in unresolved.items():
         if package_dirs(text) is not None:
             failures.append(f"{what} was read as a scope rather than as no answer")
+
+    # A tool call that decides nothing must exit 3, never 1: CI reads 1 as "build".
+    undecided = {
+        "a call that outlives its timeout": ([sys.executable, "-c", "import time; time.sleep(30)"], 0.5),
+        "a binary that cannot be started": ([str(ROOT / "scripts" / "no-such-tool")], 5),
+    }
+    for what, (cmd, timeout) in undecided.items():
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                run_tool(cmd, timeout)
+        except SystemExit as e:
+            if e.code != EXIT_CANNOT_EVALUATE:
+                failures.append(f"{what} exited {e.code}, not {EXIT_CANNOT_EVALUATE}")
+        except Exception as e:  # noqa: BLE001 - the escape itself is the finding
+            failures.append(f"{what} raised {type(e).__name__}, which exits 1 and reads as a build")
+        else:
+            failures.append(f"{what} returned a result instead of exiting {EXIT_CANNOT_EVALUATE}")
+
     if failures:
         for f in failures:
             print(f"self-test: {f}", file=sys.stderr)
         return 1
     print(
         f"✓ check-eval-runner-image-scope self-test: {len(cases)} paths classified as expected, "
-        f"and {len(unresolved)} unresolved graphs refused"
+        f"{len(unresolved)} unresolved graphs refused, and {len(undecided)} undecided tool calls "
+        f"exit {EXIT_CANNOT_EVALUATE}"
     )
     return 0
 
