@@ -6,10 +6,12 @@ name: release
 # else does, and that is the point rather than an omission: keyless OIDC signing
 # from a branch push produces a certificate whose subject ends
 # `release.yaml@refs/heads/<branch>`, and eks-gitops' Kyverno `verify-images`
-# policy admits only `release\.ya?ml@refs/tags/.+` (Enforce on staging and
-# production), so a branch-built image is denied at admission on every cluster
-# it was built for. The same policy requires an SPDX SBOM attestation from that
-# identity, read as a Sigstore bundle attached to the image digest.
+# ImageValidatingPolicy accepts only `release\.ya?ml@refs/tags/.+`, so a
+# branch-built image is denied at admission on staging and production (Deny)
+# and reported on development (Audit). The same policy requires an SPDX SBOM
+# attestation from that identity beside the signature. It is defined in
+# eks-gitops/policies/kyverno/supply-chain and lands in eks-gitops together with
+# the Kyverno 3.9.2 chart it runs on; SECURITY.md states its full contract.
 #
 # The invariant a branch build would defend is held by
 # `scripts/check-image-refs.py`, a required check: a PR that points the chart at
@@ -92,10 +94,11 @@ jobs:
           go-version-file: operators/go.mod
           cache: false
       # cosign v3 writes each signature and attestation as a Sigstore bundle
-      # attached to the image digest as an OCI referrer, which is the format the
-      # eks-gitops `verify-images` ImageValidatingPolicy reads. The cosign release
-      # is pinned here rather than taken from the installer's default, so the
-      # signature format the clusters verify moves only through a reviewed bump.
+      # attached to the image digest as an OCI referrer, a format the
+      # `verify-images` ImageValidatingPolicy named in the header reads. The
+      # cosign release is pinned here rather than taken from the installer's
+      # default, so the signature format the clusters verify moves only through
+      # a reviewed bump.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: "v3.1.4"
