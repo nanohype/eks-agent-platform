@@ -954,9 +954,10 @@ jobs:
             | tar -xz -C /tmp
           sudo install -m 0755 "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
           promtool --version
-      # REQUIRE_PYTHON3 makes the same skip a failure for the test that runs the
-      # splice gate's tag grammar beside the step harness's. The runner image
-      # ships python3, and the comparison needs no package beyond it.
+      # REQUIRE_PYTHON3 turns TestArgoTagGrammarMatchesTheGate's skip when
+      # python3 is absent into a failure: that test runs the splice gate's tag
+      # grammar beside the step harness's. The runner image ships python3, and
+      # the comparison needs no package beyond it.
       - name: go test with envtest + coverage floors
         env:
           REQUIRE_PROMTOOL: "1"

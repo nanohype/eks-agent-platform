@@ -46,17 +46,19 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
+import os
 import pathlib
 import re
-import shutil
-import subprocess
-import argparse
 import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from _tooling import require_binary
 import tarfile
 import tempfile
+from typing import Any, Callable
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _tooling import EXIT_CANNOT_EVALUATE, require_binary, run_tool  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CHARTS = ROOT / "charts"
@@ -72,6 +74,12 @@ REGISTRY = "oci://ghcr.io/nanohype/eks-agent-platform/charts"
 # waving the chart through on a comparison it never made.
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$")
 
+# Seconds each tool call is given. Every call goes through run_tool, so one that
+# outlives its budget exits 3, the code for "nothing was checked", instead of
+# holding the job until the runner kills it. A registry pull crosses the network
+# and gets the longer budget.
+LOCAL_TIMEOUT = 120.0
+REGISTRY_TIMEOUT = 300.0
 
 
 # tarfile's `filter=` argument — which refuses members that would escape the
@@ -98,7 +106,7 @@ def _safe_extractall(tf, dest) -> None:
 
 
 def run(*args: str, cwd: pathlib.Path | None = None) -> str:
-    proc = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+    proc = run_tool(list(args), timeout=LOCAL_TIMEOUT, cwd=cwd)
     if proc.returncode != 0:
         raise RuntimeError(f"`{' '.join(args)}` exited {proc.returncode}\n{proc.stderr.strip()}")
     return proc.stdout
@@ -161,21 +169,12 @@ def version_moved_forward(old: str, new: str) -> tuple[bool, str]:
 
 def base_chart(ref: str, name: str, dest: pathlib.Path) -> pathlib.Path | None:
     """Materialize charts/<name> as it was at `ref`. None if it did not exist."""
-    listed = subprocess.run(
-        ["git", "ls-tree", "--name-only", ref, f"charts/{name}/"],
-        capture_output=True, text=True, cwd=ROOT,
-    )
+    listed = run_tool(["git", "ls-tree", "--name-only", ref, f"charts/{name}/"], timeout=LOCAL_TIMEOUT, cwd=ROOT)
     if listed.returncode != 0 or not listed.stdout.strip():
         return None
     dest.mkdir(parents=True, exist_ok=True)
-    archive = subprocess.run(
-        ["git", "archive", ref, "--", f"charts/{name}"],
-        capture_output=True, cwd=ROOT,
-    )
-    if archive.returncode != 0:
-        raise RuntimeError(f"git archive {ref} charts/{name} failed")
     tar_path = dest / "base.tar"
-    tar_path.write_bytes(archive.stdout)
+    run("git", "archive", f"--output={tar_path}", ref, "--", f"charts/{name}", cwd=ROOT)
     with tarfile.open(tar_path) as tf:
         _safe_extractall(tf, dest)
     return dest / "charts" / name
@@ -184,9 +183,8 @@ def base_chart(ref: str, name: str, dest: pathlib.Path) -> pathlib.Path | None:
 def registry_chart(name: str, version: str, dest: pathlib.Path) -> pathlib.Path | None:
     """Pull the published chart. None if the registry has no such version."""
     dest.mkdir(parents=True, exist_ok=True)
-    pull = subprocess.run(
-        ["helm", "pull", f"{REGISTRY}/{name}", "--version", version, "-d", str(dest)],
-        capture_output=True, text=True,
+    pull = run_tool(
+        ["helm", "pull", f"{REGISTRY}/{name}", "--version", version, "-d", str(dest)], timeout=REGISTRY_TIMEOUT
     )
     if pull.returncode != 0:
         err = pull.stderr
@@ -307,7 +305,7 @@ appVersion: "1.0.0"
 {comment}"""
 
 
-def _write_chart(root: pathlib.Path, spec: dict) -> pathlib.Path:
+def _write_chart(root: pathlib.Path, spec: dict[str, Any]) -> pathlib.Path:
     d = root / "probe"
     (d / "templates").mkdir(parents=True, exist_ok=True)
     (d / "Chart.yaml").write_text(
@@ -320,14 +318,69 @@ def _write_chart(root: pathlib.Path, spec: dict) -> pathlib.Path:
     return d
 
 
+# A tool that never answers, and a git that lists a chart and then never
+# answers, so the archive call after the listing is reached.
+HANGS = "#!/bin/sh\nexec sleep 10\n"
+LISTS_THEN_HANGS = '#!/bin/sh\n[ "$1" = ls-tree ] && { echo charts/probe/Chart.yaml; exit 0; }\nexec sleep 10\n'
+
+
+def _hung_tool_failures(spec: dict[str, Any]) -> list[str]:
+    """Each path that calls a tool, run against a helm and a git that never
+    answer, has to exit 3. An unbounded call holds the job instead, and an
+    escape exits 1, the code for a chart that changed without a bump."""
+    global LOCAL_TIMEOUT, REGISTRY_TIMEOUT
+    failures: list[str] = []
+    budgets = LOCAL_TIMEOUT, REGISTRY_TIMEOUT
+    path = os.environ.get("PATH", "")
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        chart = _write_chart(tmp / "src", spec)
+        calls: list[tuple[str, str, Callable[[], object]]] = [
+            ("helm show chart", HANGS, lambda: chart_version(chart)),
+            ("helm package", HANGS, lambda: packaged_tree(chart, tmp / "pkg")),
+            ("helm pull", HANGS, lambda: registry_chart("probe", "1.0.0", tmp / "reg")),
+            ("git merge-base", HANGS, lambda: check_against_base("HEAD", tmp / "work")),
+            ("git ls-tree", HANGS, lambda: base_chart("HEAD", "probe", tmp / "base-ls")),
+            ("git archive", LISTS_THEN_HANGS, lambda: base_chart("HEAD", "probe", tmp / "base-ar")),
+        ]
+        try:
+            LOCAL_TIMEOUT = REGISTRY_TIMEOUT = 0.5
+            for label, git, call in calls:
+                shims = tmp / f"bin-{label.replace(' ', '-')}"
+                shims.mkdir()
+                for tool, body in (("helm", HANGS), ("git", git)):
+                    (shims / tool).write_text(body)
+                    (shims / tool).chmod(0o755)
+                os.environ["PATH"] = f"{shims}{os.pathsep}{path}"
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        call()
+                except SystemExit as e:
+                    got = f"exits {e.code}"
+                except Exception as e:  # noqa: BLE001 - the escape itself is the finding
+                    got = f"raises {type(e).__name__}, which exits 1"
+                else:
+                    got = "returns as if it had an answer"
+                want = f"exits {EXIT_CANNOT_EVALUATE}"
+                print(f"  {'ok  ' if got == want else 'BAD '}a {label} that never answers -> {got}")
+                if got != want:
+                    failures.append(f"a {label} that never answers {got}, want {want}")
+        finally:
+            os.environ["PATH"] = path
+            LOCAL_TIMEOUT, REGISTRY_TIMEOUT = budgets
+    return failures
+
+
 def self_test() -> int:
-    """Seven cases. Three must stay GREEN — a gate that fails everything is not a
-    gate. The comment-only case is what proves the comparison is of packaged bytes
-    rather than of the working tree, and the added-file case is the shape the real
-    defect took: values.schema.json appeared under an already-published version."""
+    """Seven comparison cases, then a hung tool on each path that calls one.
+
+    Four comparison cases must stay GREEN — a gate that fails everything is not
+    a gate. The comment-only case is what proves the comparison is of packaged
+    bytes rather than of the working tree, and the added-file case is a
+    values.schema.json appearing under an already-published version."""
     a = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n"
     b = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: b\n"
-    cases = [
+    cases: list[tuple[str, dict[str, Any], dict[str, Any], bool]] = [
         ("identical content, same version",
          {"version": "1.0.0", "body": a}, {"version": "1.0.0", "body": a}, False),
         ("template changed, same version",
@@ -347,7 +400,7 @@ def self_test() -> int:
          {"version": "1.0.0", "body": a}, {"version": "1.0.1-rc.1", "body": b}, False),
     ]
 
-    failures = []
+    failures: list[str] = []
     for label, old_spec, new_spec, want_fail in cases:
         ov, nv = old_spec["version"], new_spec["version"]
         with tempfile.TemporaryDirectory() as td:
@@ -365,14 +418,17 @@ def self_test() -> int:
             if got_fail != want_fail:
                 failures.append(f"{label}: expected {'fail' if want_fail else 'pass'}, got {state}")
 
+    failures.extend(_hung_tool_failures({"version": "1.0.0", "body": a}))
+
     if failures:
         print(f"\nFAIL  self-test: {len(failures)} case(s) behaved wrongly")
         for f in failures:
             print(f"  - {f}")
         return 1
     greens = sum(1 for c in cases if not c[3])
-    print(f"\nOK    self-test: all {len(cases)} cases behaved as specified "
-          f"({greens} of them must stay green, and did).")
+    print(f"\nOK    self-test: all {len(cases)} comparison cases behaved as specified "
+          f"({greens} of them must stay green, and did), and every tool call that never answered exited "
+          f"{EXIT_CANNOT_EVALUATE}.")
     return 0
 
 
@@ -383,12 +439,8 @@ def main() -> int:
     ap.add_argument("--base", help="git ref to diff against")
     args = ap.parse_args()
 
-    # This gate held its own inline check for helm, which named the tool but
-    # exited 1 — the code a finding about the tree uses — and ran before
-    # parse_args, so --help failed without a binary it does not need to print
-    # usage. Both are the shared assertion's job: exit 3, after argument
-    # handling, and git asserted too rather than left to raise from the first
-    # call.
+    # Asserted after argument handling, so --help needs neither binary, and a
+    # missing one exits 3 rather than 1, the code for a finding about the tree.
     require_binary("helm", "render the chart whose version this compares across refs")
     require_binary("git", "read the base ref this compares the working tree against")
 

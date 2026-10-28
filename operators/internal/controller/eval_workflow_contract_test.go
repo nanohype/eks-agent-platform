@@ -301,12 +301,13 @@ func TestWorkflowTemplateConsumesEveryParameterTheOperatorSends(t *testing.T) {
 // here: a tenant name is not a namespace, and a patch there addresses one that
 // need not exist.
 func TestWritebackPatchesTheSuiteNamespace(t *testing.T) {
-	steps := evalScriptSteps(t)
+	w := parseEvalWorkflow(t)
+	steps := w.steps
 	g := wiringGlobals()
 	if g["workflow.parameters.suite-namespace"] == g["workflow.parameters.tenant"] {
 		t.Fatal("the suite's namespace and the tenant share a value, so this check cannot tell them apart")
 	}
-	wired := wiredValues(t, g)
+	wired := w.wiredValues(t, g)
 	suite, namespace := g["workflow.parameters.suite-name"], g["workflow.parameters.suite-namespace"]
 
 	// writeback makes the one status patch. The exit handler, on a run that did

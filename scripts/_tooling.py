@@ -43,6 +43,7 @@ with no entry is an error rather than a guess.
 from __future__ import annotations
 
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -65,6 +66,11 @@ PROBES = {
 }
 
 
+def _gate() -> str:
+    """The name a gate prints its own messages under: its file name without the suffix."""
+    return pathlib.Path(sys.argv[0]).stem
+
+
 def require_binary(name: str, why: str, probe: list[str] | None = None) -> None:
     """Assert a binary exists AND runs, or exit EXIT_PRECONDITION (3) naming it.
 
@@ -73,7 +79,7 @@ def require_binary(name: str, why: str, probe: list[str] | None = None) -> None:
     """
     if shutil.which(name) is None:
         print(
-            f"{sys.argv[0]}: PRECONDITION FAILED — {name!r} is not on PATH, and it is needed to "
+            f"{_gate()}: PRECONDITION FAILED — {name!r} is not on PATH, and it is needed to "
             f"{why}. This is not a finding about the tree: nothing was checked. Install {name} and "
             "re-run.\n",
             file=sys.stderr,
@@ -90,14 +96,14 @@ def require_binary(name: str, why: str, probe: list[str] | None = None) -> None:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as e:
         print(
-            f"{sys.argv[0]}: PRECONDITION FAILED — {name!r} resolves on PATH but could not be run "
+            f"{_gate()}: PRECONDITION FAILED — {name!r} resolves on PATH but could not be run "
             f"({e}). Nothing was checked.\n",
             file=sys.stderr,
         )
         sys.exit(EXIT_PRECONDITION)
     if r.returncode != 0:
         print(
-            f"{sys.argv[0]}: PRECONDITION FAILED — `{' '.join(cmd)}` exited {r.returncode}, so "
+            f"{_gate()}: PRECONDITION FAILED — `{' '.join(cmd)}` exited {r.returncode}, so "
             f"{name!r} resolves but does not run. Nothing was checked.\n"
             f"  stderr: {r.stderr.strip()[:300]}\n",
             file=sys.stderr,
@@ -122,5 +128,5 @@ def run_tool(
         why = f"did not finish within {timeout}s"
     except OSError as e:
         why = f"could not be started ({e})"
-    print(f"{sys.argv[0]}: `{' '.join(cmd)}` {why}. Nothing was checked.", file=sys.stderr)
+    print(f"{_gate()}: `{' '.join(cmd)}` {why}. Nothing was checked.", file=sys.stderr)
     sys.exit(EXIT_CANNOT_EVALUATE)
