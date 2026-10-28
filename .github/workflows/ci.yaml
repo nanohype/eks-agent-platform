@@ -948,9 +948,13 @@ jobs:
             | tar -xz -C /tmp
           sudo install -m 0755 "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
           promtool --version
+      # REQUIRE_PYTHON3 makes the same skip a failure for the test that runs the
+      # splice gate's tag grammar beside the step harness's. The runner image
+      # ships python3, and the comparison needs no package beyond it.
       - name: go test with envtest + coverage floors
         env:
           REQUIRE_PROMTOOL: "1"
+          REQUIRE_PYTHON3: "1"
         run: cd operators && make coverage-check
       # verify: false because the JSONSchema check it performs by default is a
       # network fetch of https://golangci-lint.run/jsonschema/... on every run,

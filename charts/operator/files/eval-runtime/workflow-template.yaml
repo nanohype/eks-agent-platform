@@ -14,8 +14,9 @@
 #
 # Pipeline:
 #   1. resolve-cases  — emit the case list as JSON to /tmp/cases.json
-#      (inline branch reads from parameter directly; manifest branch
-#      pulls from s3://<eval-reports>/<platform>/manifests/<name>.json)
+#      (inline branch copies the inline-cases raw artifact, which Argo
+#      writes to /tmp/inline-cases.json; manifest branch pulls from
+#      s3://<eval-reports>/<platform>/manifests/<name>.json)
 #   2. run-cases      — iterate cases, invoke the agent under test via
 #      the Platform's ModelGateway, capture latency + output. Emits
 #      per-case JSON results to /tmp/results.json.

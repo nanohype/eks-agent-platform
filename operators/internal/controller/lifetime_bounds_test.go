@@ -513,11 +513,10 @@ func TestTheScoreGaugeGoesWithTheScore(t *testing.T) {
 // watched here.
 //
 // runEvalStep delivers the step the way Argo does — the workflow status reaches
-// the script through the environment the template declares — and runs it under
-// sh with a stub ahead of PATH for every command that reaches the cluster, each
-// of which records its call and exits 0. What the handler is observed to do
-// settles what a reading of it cannot, because a reading can be defeated by how
-// something is written and an execution cannot.
+// the script through the environment the template declares — and runs it with
+// each of stubbedCommands replaced by a stub that records its call. What the
+// handler is observed to do settles what a reading of it cannot, because a
+// reading can be defeated by how something is written and an execution cannot.
 func assertHandlerCalls(t *testing.T, handler, status string, want int) {
 	t.Helper()
 	step, ok := evalScriptSteps(t)[handler]
