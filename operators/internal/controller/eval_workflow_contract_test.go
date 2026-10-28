@@ -96,7 +96,7 @@ func submitEvalWorkflow(t *testing.T, r *EvalReconciler) *unstructured.Unstructu
 	suite, platform, fleet := evalFixtures()
 
 	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
-		WithObjects(publishedGateway(platform, "chat")).Build()
+		WithObjects(publishedGateway(platform, "chat"), evalIdentityAccount(r, platform)).Build()
 	r.Client = c
 
 	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
@@ -195,9 +195,8 @@ func workflowParams(t *testing.T, obj *unstructured.Unstructured) map[string]str
 // nothing ever read.
 func TestSubmittedWorkflowCarriesTheValuesTheOperatorHolds(t *testing.T) {
 	r := &EvalReconciler{
-		RunnerNamespace:      "eval-runner",
-		RunnerServiceAccount: "eval-runner-custom",
-		ReportsBucket:        testReportsBucket,
+		RunnerNamespace: "evals",
+		ReportsBucket:   testReportsBucket,
 	}
 	obj := submitEvalWorkflow(t, r)
 	params := workflowParams(t, obj)
@@ -217,15 +216,22 @@ func TestSubmittedWorkflowCarriesTheValuesTheOperatorHolds(t *testing.T) {
 		t.Errorf("suite-namespace and tenant are both %q; the fixture is meant to keep them distinct", params["tenant"])
 	}
 
-	// The ServiceAccount the Workflow runs under. The chart makes this name a
-	// value, so a hardcoded literal here binds Workflows to a ServiceAccount
-	// that need not exist.
+	// The namespace the run lands in: the configured eval runtime namespace,
+	// the one holding the WorkflowTemplate the run references by name.
+	if ns := obj.GetNamespace(); ns != "evals" {
+		t.Errorf("workflow namespace = %q, want the configured eval runtime namespace %q", ns, "evals")
+	}
+
+	// The ServiceAccount the Workflow runs under: the Platform's own eval
+	// identity, never a shared account. A shared one reaches every Platform's
+	// prefixes in the reports bucket, which is the boundary the per-Platform
+	// role exists to draw.
 	sa, found, err := unstructured.NestedString(obj.Object, "spec", "serviceAccountName")
 	if err != nil || !found {
 		t.Fatalf("submitted workflow has no spec.serviceAccountName (found=%v err=%v)", found, err)
 	}
-	if sa != "eval-runner-custom" {
-		t.Errorf("serviceAccountName = %q, want the configured %q", sa, "eval-runner-custom")
+	if sa != "eval-analytics" {
+		t.Errorf("serviceAccountName = %q, want the Platform's eval ServiceAccount %q", sa, "eval-analytics")
 	}
 }
 
@@ -401,14 +407,13 @@ func TestScheduledSuiteForbidsConcurrentRuns(t *testing.T) {
 	suite, platform, fleet := evalFixtures()
 	suite.Spec.Schedule = "0 2 * * *"
 
-	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
-		WithObjects(publishedGateway(platform, "chat")).Build()
 	r := &EvalReconciler{
-		Client:               c,
-		RunnerNamespace:      "eval-runner",
-		RunnerServiceAccount: "eval-runner-custom",
-		ReportsBucket:        testReportsBucket,
+		RunnerNamespace: "eval-runner",
+		ReportsBucket:   testReportsBucket,
 	}
+	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(publishedGateway(platform, "chat"), evalIdentityAccount(r, platform)).Build()
+	r.Client = c
 	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
 		t.Fatalf("ensureArgoWorkflow: %v", err)
 	}

@@ -80,7 +80,6 @@ func TestLoad_DecodesEveryKnownKeyAcrossPages(t *testing.T) {
 			"cost-pipeline/athena_database":             "db",
 			"cost-pipeline/cur_table_name":              "cur_table",
 			"eval-runtime/runner_namespace":             "evals",
-			"eval-runtime/runner_service_account":       "eval-runner",
 			"eval-runtime/eval_reports_bucket":          "eval-reports",
 			"unrecognized/key":                          "ignored",
 		},
@@ -106,7 +105,6 @@ func TestLoad_DecodesEveryKnownKeyAcrossPages(t *testing.T) {
 		"AthenaDatabase":               cfg.AthenaDatabase,
 		"CURTableName":                 cfg.CURTableName,
 		"EvalRunnerNamespace":          cfg.EvalRunnerNamespace,
-		"EvalRunnerServiceAccount":     cfg.EvalRunnerServiceAccount,
 		"EvalReportsBucket":            cfg.EvalReportsBucket,
 	}
 	for field, got := range checks {

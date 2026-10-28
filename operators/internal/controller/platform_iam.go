@@ -87,17 +87,22 @@ type iamReconcileResult struct {
 // of the same name without their tenant roles colliding. Capped at 64 chars (IAM
 // role-name limit); long platform names get hash-truncated like PlatformNamespace.
 func tenantRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	const suffix = "-tenant"
-	const maxLen = 64
-	full := clusterName + "-" + p.Name + suffix
-	if len(full) <= maxLen {
-		return full
+	return boundedName(clusterName+"-", p.Name, "-tenant", iamRoleNameMax)
+}
+
+// iamRoleNameMax is IAM's role-name length limit.
+const iamRoleNameMax = 64
+
+// tenantPath is the IAM path every operator-minted tenant-scoped role is
+// created under, normalized to the trailing slash IAM requires. The operator's
+// own IAM grants are scoped to this path, so a role created anywhere else is
+// one it cannot manage afterwards.
+func (c IAMConfig) tenantPath() string {
+	path := orDefault(c.TenantIAMPath, "/eks-agent-platform/tenants/")
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
 	}
-	prefix := clusterName + "-"
-	// budget = maxLen - len(prefix) - len(suffix) - 1(hyphen) - 8(hash)
-	budget := maxLen - len(prefix) - len(suffix) - 1 - 8
-	h := fnv1a64(p.Name)
-	return fmt.Sprintf("%s%s-%08x%s", prefix, p.Name[:budget], h&0xffffffff, suffix)
+	return path
 }
 
 // assumeRolePolicyForPodIdentity returns the trust policy JSON for a role
@@ -201,6 +206,20 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 	}
 }
 
+// roleTagsWithComponent is tenantRoleTags with the Component tag set to
+// component. Every other role the operator mints for a Platform carries the
+// tenant role's tag set, so cost attribution and the cloudgov tag gate group it
+// under the Platform, and Component is what tells the roles apart.
+func roleTagsWithComponent(p *platformv1alpha1.Platform, cfg IAMConfig, component string) []iamtypes.Tag {
+	tags := tenantRoleTags(p, cfg)
+	for i := range tags {
+		if aws.ToString(tags[i].Key) == "Component" {
+			tags[i].Value = aws.String(component)
+		}
+	}
+	return tags
+}
+
 // ensureIamRole creates (or no-ops if already present) the tenant role
 // for a Platform, attaches the baseline policy, reconciles the
 // bedrock-model-scoping inline policy from spec.identity, binds the tenant
@@ -220,13 +239,6 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		return iamReconcileResult{}, nil
 	}
 	name := tenantRoleName(cfg.ClusterName, p)
-	path := cfg.TenantIAMPath
-	if path == "" {
-		path = "/eks-agent-platform/tenants/"
-	}
-	if !strings.HasSuffix(path, "/") {
-		path += "/"
-	}
 
 	// The tenant ServiceAccount (tenantSAName, created by this reconciler and
 	// ensured again by the AgentFleet / AgentSandbox reconcilers) is bound to
@@ -289,7 +301,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 
 	createInput := &iam.CreateRoleInput{
 		RoleName:                 aws.String(name),
-		Path:                     aws.String(path),
+		Path:                     aws.String(cfg.tenantPath()),
 		AssumeRolePolicyDocument: aws.String(trust),
 		Description:              aws.String(fmt.Sprintf("Tenant role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
 		Tags:                     tenantRoleTags(p, cfg),

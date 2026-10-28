@@ -45,22 +45,31 @@ const (
 // Distinct from the management namespace where the Platform CR itself lives
 // (typically `eks-agent-platform`).
 //
-// The namespace name must fit the RFC 1123 subdomain label limit of 63 chars.
-// For Platform names longer than what fits with the `tenants-` prefix, we
-// truncate the name and append a short FNV-1a hash so it remains unique.
+// The namespace name must fit the RFC 1123 label limit of 63 chars. A Platform
+// name too long to fit behind the `tenants-` prefix is cut and suffixed with a
+// short FNV-1a hash of the full name (boundedName), so it remains unique.
 func PlatformNamespace(p *platformv1alpha1.Platform) string {
-	const prefix = "tenants-"
-	const maxLabel = 63
-	full := prefix + p.Name
-	if len(full) <= maxLabel {
+	return boundedName("tenants-", p.Name, "", 63)
+}
+
+// boundedName joins prefix, name and suffix and keeps the result within maxLen.
+// A join that does not fit cuts name and appends "-" plus 8 hex digits of its
+// FNV-1a hash before the suffix: two long names that share the cut prefix still
+// map to different results (~32 bits of collision resistance), and the suffix
+// survives intact, which matters because IAM grants and the kill-switch match
+// role names on it. Every per-Platform name the operator derives — the tenant
+// namespace, the eval ServiceAccount, the tenant, session, eval and
+// scheduler-invoke role names — goes through here, so they truncate alike.
+//
+// A prefix and suffix that leave no room for the hash yield a name over maxLen;
+// the API that receives it rejects it by name, which is the actionable failure.
+func boundedName(prefix, name, suffix string, maxLen int) string {
+	full := prefix + name + suffix
+	if len(full) <= maxLen {
 		return full
 	}
-	// 8-char hex hash gives ~32 bits of collision resistance. Trim original
-	// name to: 63 - len(prefix) - 1(hyphen) - 8(hash) = 46 chars.
-	h := fnv1a64(p.Name)
-	hashHex := fmt.Sprintf("%08x", h&0xffffffff)
-	trimTo := maxLabel - len(prefix) - 1 - 8
-	return prefix + p.Name[:trimTo] + "-" + hashHex
+	budget := max(maxLen-len(prefix)-len(suffix)-1-8, 0)
+	return fmt.Sprintf("%s%s-%08x%s", prefix, name[:budget], fnv1a64(name)&0xffffffff, suffix)
 }
 
 // fnv1a64 implements FNV-1a 64-bit without importing hash/fnv — keeps the

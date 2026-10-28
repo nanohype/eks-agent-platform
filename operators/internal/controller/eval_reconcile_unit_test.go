@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -26,13 +27,22 @@ func evalScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
-		platformv1alpha1.AddToScheme, agentsv1alpha1.AddToScheme, governancev1alpha1.AddToScheme,
+		corev1.AddToScheme, platformv1alpha1.AddToScheme, agentsv1alpha1.AddToScheme, governancev1alpha1.AddToScheme,
 	} {
 		if err := add(s); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return s
+}
+
+// evalIdentityAccount is the per-Platform ServiceAccount the Platform
+// reconciler creates in the eval runtime namespace, and the precondition the
+// EvalSuite reconciler checks before submitting a run under it.
+func evalIdentityAccount(r *EvalReconciler, p *platformv1alpha1.Platform) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: EvalServiceAccountName(p), Namespace: r.evalRunnerNamespace(),
+	}}
 }
 
 func evalSuite() *governancev1alpha1.EvalSuite {

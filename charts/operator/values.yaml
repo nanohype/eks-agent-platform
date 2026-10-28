@@ -195,24 +195,25 @@ vcluster:
 
 # ── eval-runtime ─────────────────────────────────────────────────────────────
 # The Argo Workflows runtime the operator submits EvalSuite runs to: a
-# WorkflowTemplate (eval-runner), the gating AnalysisTemplate, and the SA + RBAC
-# the workflow pods run under. Ships with the operator so the product owns its
-# own runtime; eks-gitops deploys the chart. Enabled by default (it was applied
-# unconditionally by the former gitops overlay).
+# WorkflowTemplate (eval-runner), the gating AnalysisTemplate, and the RBAC the
+# workflow pods run with. Ships with the operator so the product owns its own
+# runtime; eks-gitops deploys the chart.
+#
+# The chart creates no ServiceAccount for the runs. Each run holds its Platform's
+# own eval identity — a ServiceAccount the operator creates in this namespace,
+# bound by EKS Pod Identity to a role scoped to that Platform's prefixes in the
+# eval-reports bucket — so no role ARN or account name is configured here.
 #
 # Requires the Argo Workflows CRD on the cluster (eks-gitops addons-argo-platform).
 evalRuntime:
   enabled: true
   # Create the eval-runner namespace. Disable if it is provisioned elsewhere.
   createNamespace: true
-  # Name/namespace are byte-pinned to the terraform/components/eval-runtime IRSA
-  # trust (system:serviceaccount:eval-runner:eval-runner). Change both the chart
-  # and that component together, or IRSA breaks.
+  # Must equal the runner_namespace terraform/components/eval-runtime publishes
+  # to SSM: the operator submits runs and creates each Platform's eval
+  # ServiceAccount in the namespace it reads there, and this chart installs the
+  # WorkflowTemplate and the run RBAC in this one.
   namespace: eval-runner
-  serviceAccount:
-    # Bound to its IAM role by an EKS Pod Identity association (created by
-    # terraform/components/eval-runtime) — no role-arn annotation.
-    name: eval-runner
   # S3 bucket the eval workflow writes reports to (terraform eval-runtime output).
   # Injected per-cluster; empty in the base chart.
   evalReportsBucket: ""

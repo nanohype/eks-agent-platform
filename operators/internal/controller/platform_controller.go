@@ -40,7 +40,10 @@ import (
 //   - the ArgoCD AppProject scoped to that namespace + Platform source repos,
 //   - the per-Platform tenant IAM role (baseline attachment + the
 //     bedrock-model-scoping inline policy reconciled from spec.identity),
-//     and the per-tenant S3 bucket-policy statement.
+//     and the per-tenant S3 bucket-policy statement,
+//   - the per-Platform eval identity: a ServiceAccount in the eval runtime
+//     namespace bound to a role scoped to the Platform's own eval-reports
+//     prefixes (platform_eval_identity.go).
 //
 // The k8s-side reconciliation runs first and unconditionally; AWS-side
 // state is reconciled behind interface-injected clients (IAM/S3) that
@@ -90,6 +93,9 @@ type PlatformReconciler struct {
 	// AWSCfg carries the SSM-resolved values the S3 step needs:
 	// ArtifactsBucketName, Environment.
 	AWSCfg PlatformAWSConfig
+	// Eval locates the eval runtime each Platform's eval identity is minted
+	// into. The zero value (no reports bucket) reconciles no eval identity.
+	Eval EvalIdentityConfig
 
 	// VCluster builds the per-Platform virtual-cluster client for the vcluster
 	// isolation tier. nil in the namespace tier and in k8s-only test paths; the
@@ -182,6 +188,10 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			// Attribution resources (no-ops when attribution was never enabled).
 			if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.ClusterName); err != nil {
 				logger.Error(err, "session role cleanup failed; will retry")
+				return ctrl.Result{}, err
+			}
+			if err := r.deleteEvalIdentity(ctx, platform); err != nil {
+				logger.Error(err, "eval identity cleanup failed; will retry")
 				return ctrl.Result{}, err
 			}
 			if err := r.deleteOperatorImpersonateRBAC(ctx, platform); err != nil {
@@ -296,6 +306,13 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			logger.Error(err, "ensureBucketPolicy failed")
 			return ctrl.Result{}, err
 		}
+	}
+
+	// The identity the Platform's eval runs hold. Not gated on suspension: the
+	// eval role carries no model access for the kill-switch to withdraw.
+	if err := r.ensureEvalIdentity(ctx, platform); err != nil {
+		logger.Error(err, "ensureEvalIdentity failed")
+		return ctrl.Result{}, err
 	}
 
 	// Update status. status.phase = Suspended when the kill-switch tag is

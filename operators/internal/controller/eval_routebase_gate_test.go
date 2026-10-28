@@ -31,8 +31,9 @@ func submitEvalRun(t *testing.T, p *platformv1alpha1.Platform, mg *agentsv1alpha
 	suite := evalSuite()
 	suite.Spec.Cases = []governancev1alpha1.EvalCase{{Name: "greet", Input: "hi"}}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, fleet, mg).Build()
-	r := &EvalReconciler{Client: cl, Scheme: s, ReportsBucket: testReportsBucket}
+	r := &EvalReconciler{Scheme: s, ReportsBucket: testReportsBucket}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, fleet, mg, evalIdentityAccount(r, p)).Build()
+	r.Client = cl
 
 	if err := r.ensureArgoWorkflow(ctx, suite, p, fleet); err != nil {
 		t.Fatalf("ensureArgoWorkflow: %v", err)

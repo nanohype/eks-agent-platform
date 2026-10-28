@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -33,16 +32,7 @@ const defaultSessionRoleMaxDuration int32 = 3600
 // Same 64-char cap + FNV-1a hash-truncation scheme as tenantRoleName, so the
 // two role names never collide and both stay within IAM's role-name limit.
 func sessionRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	const suffix = "-session"
-	const maxLen = 64
-	full := clusterName + "-" + p.Name + suffix
-	if len(full) <= maxLen {
-		return full
-	}
-	prefix := clusterName + "-"
-	budget := maxLen - len(prefix) - len(suffix) - 1 - 8
-	h := fnv1a64(p.Name)
-	return fmt.Sprintf("%s%s-%08x%s", prefix, p.Name[:budget], h&0xffffffff, suffix)
+	return boundedName(clusterName+"-", p.Name, "-session", iamRoleNameMax)
 }
 
 // sessionRoleTrustPolicy builds the trust policy for the attribution session
@@ -78,13 +68,7 @@ func sessionRoleTrustPolicy(tenantRoleARN string, operators []string) (string, e
 // sessionRoleTags mirrors tenantRoleTags but marks the role's Component as
 // session-iam so cloudgov tagging + cost attribution tell the two roles apart.
 func sessionRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag {
-	tags := tenantRoleTags(p, cfg)
-	for i := range tags {
-		if aws.ToString(tags[i].Key) == "Component" {
-			tags[i].Value = aws.String("session-iam")
-		}
-	}
-	return tags
+	return roleTagsWithComponent(p, cfg, "session-iam")
 }
 
 // sessionRoleMaxDuration reads the per-Platform cap, defaulting to 3600.
@@ -148,16 +132,9 @@ func (r *PlatformReconciler) ensureSessionRole(
 		return "", fmt.Errorf("iam GetRole %s: %w", name, getErr)
 	}
 
-	path := cfg.TenantIAMPath
-	if path == "" {
-		path = "/eks-agent-platform/tenants/"
-	}
-	if !strings.HasSuffix(path, "/") {
-		path += "/"
-	}
 	createInput := &iam.CreateRoleInput{
 		RoleName:                 aws.String(name),
-		Path:                     aws.String(path),
+		Path:                     aws.String(cfg.tenantPath()),
 		AssumeRolePolicyDocument: aws.String(trust),
 		Description:              aws.String(fmt.Sprintf("Attribution session role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
 		MaxSessionDuration:       aws.Int32(sessionRoleMaxDuration(p)),

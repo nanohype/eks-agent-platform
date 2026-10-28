@@ -15,7 +15,7 @@ what they own has exactly one instance per account. The rest are per-cluster.
 | `cost-access`       | cluster | this cluster's Athena workgroup + the operator's cost-read grant, and the SSM republish the operator reads |
 | `agent-egress`      | cluster | VPC interface + gateway endpoints + optional WAF on the model gateway ALB                                  |
 | `kill-switch`       | cluster | EventBridge bus + Step Functions state machine for budget-breach detach                                    |
-| `eval-runtime`      | cluster | Pod Identity role for the eval runner + its controller log group                                           |
+| `eval-runtime`      | cluster | the eval runtime's SSM contract (namespace, reports bucket) + its controller log group; eval runs hold per-Platform roles the operator mints, not one from here |
 
 There is no `model-artifacts` component in this tree. The buckets are owned by landing-zone's
 `agent-iam`, which is their sole writer; components here read their ARNs from the per-cluster SSM
@@ -50,7 +50,7 @@ landing-zone component applied before any of them; this tree only reads its SSM 
 
 ## Wiring `landing-zone` outputs
 
-Across all environments, the landing-zone-supplied infrastructure identifiers — KMS key ARNs, VPC/subnet IDs, route tables, the cluster security group, and the Karpenter node-role name — are passed in as `TF_VAR_*` environment variables by the orchestrator (the leaf `variables.tf` declares them; the `terragrunt.hcl` files don't pin them). For a manual run, `export` them alongside `AWS_ACCOUNT_ID`. Operator-side values — the operator role and tenant baseline — are read in-component from landing-zone's `agent-iam` SSM contract; the eval-runner role binds to its ServiceAccount via an EKS Pod Identity association, so no OIDC issuer is consumed here. A future step may replace the `TF_VAR_*` handoff with `aws_ssm_parameter` data sources reading a stable `/landing-zone/<env>/*` output contract.
+Across all environments, the landing-zone-supplied infrastructure identifiers — KMS key ARNs, VPC/subnet IDs, route tables, the cluster security group, and the Karpenter node-role name — are passed in as `TF_VAR_*` environment variables by the orchestrator (the leaf `variables.tf` declares them; the `terragrunt.hcl` files don't pin them). For a manual run, `export` them alongside `AWS_ACCOUNT_ID`. Operator-side values — the operator role and tenant baseline — are read in-component from landing-zone's `agent-iam` SSM contract; every operator-minted role, each Platform's eval role among them, binds to its ServiceAccount via an EKS Pod Identity association, so no OIDC issuer is consumed here. A future step may replace the `TF_VAR_*` handoff with `aws_ssm_parameter` data sources reading a stable `/landing-zone/<env>/*` output contract.
 
 ## Outputs
 

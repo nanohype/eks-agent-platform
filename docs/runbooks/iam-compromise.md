@@ -44,20 +44,21 @@ The operator's legitimate API surface is documented in [ADR 0003](../adr/0003-th
 
 ## Sweep operator-minted roles created during the window
 
-The operator mints three role shapes, and only two of them live under the
+The operator mints four role shapes, and only three of them live under the
 tenant path. A path-prefix list misses the rest:
 
 | Shape            | Name formula                            | Path                           | `Component` tag    |
 | ---------------- | --------------------------------------- | ------------------------------ | ------------------ |
 | tenant           | `<cluster>-<platform>-tenant`           | `/eks-agent-platform/tenants/` | `tenant-iam`       |
 | session          | `<cluster>-<platform>-session`          | `/eks-agent-platform/tenants/` | `session-iam`      |
+| eval             | `<cluster>-<platform>-eval`             | `/eks-agent-platform/tenants/` | `eval-iam`         |
 | scheduler-invoke | `<cluster>-<platform>-scheduler-invoke` | `/` (root)                     | `scheduler-invoke` |
 
 Every role the operator creates carries `ManagedBy=eks-agent-platform`. Sweep
 by that tag — not by path — so root-path invoke roles show up too.
 
 ```bash
-# Every operator-minted role (tenant, session, scheduler-invoke), regardless of path.
+# Every operator-minted role (tenant, session, eval, scheduler-invoke), regardless of path.
 # resourcegroupstaggingapi is the enumeration surface; IAM list-roles --path-prefix
 # cannot see the root-path scheduler-invoke roles.
 aws resourcegroupstaggingapi get-resources \
@@ -96,7 +97,7 @@ kubectl get platforms -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{en
   | sed "s|^|${CLUSTER}-|" | sort > /tmp/legit-platforms.txt
 
 # Anything whose PlatformId is not in the cluster is orphan — investigate + delete.
-# Scheduler-invoke and session roles share PlatformId with their parent Platform.
+# Session, eval and scheduler-invoke roles share PlatformId with their parent Platform.
 #
 # Sanity-check before acting: if EVERY role comes back as an orphan, the two sides
 # are not in the same namespace of names. Re-read the qualification above rather

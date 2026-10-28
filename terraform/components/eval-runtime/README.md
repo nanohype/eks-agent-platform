@@ -1,37 +1,61 @@
 # components/eval-runtime
 
-AWS-side substrate for `EvalSuite` reconciliation. The Kubernetes-side
-(the `eval-runner` `WorkflowTemplate` + Argo Rollouts `AnalysisTemplate`
+AWS-side substrate for `EvalSuite` reconciliation. The Kubernetes side — the
+`eval-runner` `WorkflowTemplate`, the Argo Rollouts `AnalysisTemplate` and the
+RBAC an eval run holds — ships inside the operator chart at
+`charts/operator/templates/eval-runtime/` (with manifests under
+`charts/operator/files/eval-runtime/`), gated behind the chart's
+`evalRuntime.*` values. Argo Workflows itself is installed by the eks-gitops
+`addons-argo-platform` ApplicationSet, which satisfies the runtime's
+precondition.
 
-- SA/RBAC) ships inside the operator chart at
-  `charts/operator/templates/eval-runtime/` (with manifests under
-  `charts/operator/files/eval-runtime/`), gated behind the chart's
-  `evalRuntime.*` values. Argo Workflows itself is installed by the
-  eks-gitops `addons-argo-platform` ApplicationSet, which satisfies the
-  runtime's precondition.
-
-* **Pod Identity-bound role** for the `eval-runner` ServiceAccount. Bedrock invoke
-  (region-scoped via `aws:RequestedRegion`), S3 PutObject on the
-  eval-reports bucket for HTML + junit artifacts, S3 GetObject scoped to
-  `*/manifests/*` for `EvalSuite.spec.casesFromManifest`, KMS decrypt
-  via `s3.<region>.amazonaws.com` for the SSE-KMS bucket.
 * **Controller log group** (`/aws/eks/<cluster>/eval-runner`) with
   retention separate from per-Workflow pod logs so controller-level
   errors (template parse failures, scheduling) have their own retention
   policy.
 * **SSM outputs** the operator picks up at startup:
-  `/eks-agent-platform/<cluster>/eval-runtime/` — `runner_namespace`,
-  `runner_service_account` and `eval_reports_bucket`. All three reach the
-  submitted Argo `Workflow`: the namespace is its destination, and the other
-  two become `spec.serviceAccountName` and the `eval-reports-bucket` argument.
+  `/eks-agent-platform/<cluster>/eval-runtime/` — `runner_namespace` and
+  `eval_reports_bucket`. The namespace is where every eval `Workflow` is
+  submitted and where each Platform's eval ServiceAccount is created; the
+  bucket is the `eval-reports-bucket` argument every run uploads to and the
+  bucket each Platform's eval role is scoped into.
 
-  There is deliberately no `runner_role_arn`. The role binds to its
-  ServiceAccount through an EKS Pod Identity association created here, so no
-  consumer ever needs the ARN — publishing it was a parameter with one side.
+## Identity: per Platform, minted by the operator
+
+This component creates no IAM. An eval run holds its Platform's own identity,
+which the operator reconciles alongside the rest of the Platform
+(`operators/internal/controller/platform_eval_identity.go`):
+
+| Object                   | Name                            | Where                                                            |
+| ------------------------ | ------------------------------- | ---------------------------------------------------------------- |
+| IAM role                 | `<cluster>-<platform>-eval`     | tenant IAM path, tenant permissions boundary, Pod Identity trust |
+| ServiceAccount           | `eval-<platform>`               | `runner_namespace`                                               |
+| Pod Identity association | that ServiceAccount → that role | the cluster                                                      |
+
+The role's one inline policy, `eval-reports-access`, is generated from the
+Platform name and the bucket:
+
+- `s3:GetObject` on `<bucket>/<platform>/manifests/*` — the cases manifest
+- `s3:PutObject` on `<bucket>/<platform>/runs/*` — `report.html` and `junit.xml`
+- `kms:Decrypt` and `kms:GenerateDataKey`, only with `kms:ViaService` S3 in the
+  operator's region and `kms:EncryptionContext:aws:s3:arn` equal to the bucket
+  ARN — the context S3 uses for every key request on a bucket with an S3 Bucket
+  Key
+
+A run for one Platform reads no other Platform's cases and writes no other
+Platform's reports; the bucket is shared, so that role is the only boundary
+inside it. The role carries no Bedrock grant: eval-runner reaches the model
+through the Platform's `ModelGateway` over HTTP.
+
+The operator's pre-create `GetRole` — and the finalizer's calls against a role
+that was never created — authorize against the root-path name ARN, so the
+operator identity needs read on `role/<cluster>-*-eval` beside the tenant-path
+grants it already holds.
 
 The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 `spec.schedule` is set) into `runner_namespace` referencing the
-`eval-runner` `WorkflowTemplate`. The template:
+`eval-runner` `WorkflowTemplate` and naming the Platform's eval
+ServiceAccount. The template:
 
 1. Pulls the cases (inline or from S3 manifest),
 2. Invokes the agent under test via the Platform's `ModelGateway`,
@@ -43,16 +67,18 @@ The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 
 ## Inputs
 
-| Variable                                              | Description                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------------- |
-| `environment`, `region`, `cluster_name`               | identifying                                                      |
-| `eval_reports_bucket_arn`, `eval_reports_bucket_name` | from `model-artifacts`                                           |
-| `bedrock_invoke_resource_arns`                        | default `["*"]`; production should pin to inference profile ARNs |
-| `allowed_regions`                                     | `aws:RequestedRegion` ABAC for Bedrock                           |
-| `data_kms_key_arn`, `logs_kms_key_arn`                | the data key and the log-path key from landing-zone; the same CMK unless `separate_logs_key` is set |
+| Variable                | Description                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `cluster_name`          | identifying; keys the SSM contract                                                |
+| `eval_runner_namespace` | where eval Workflows run; must equal the operator chart's `evalRuntime.namespace` |
+| `logs_kms_key_arn`      | the log-path key from landing-zone                                                |
+| `log_retention_days`    | controller log retention                                                          |
+
+The eval-reports bucket name is read from
+`/eks-agent-platform/<cluster>/model-artifacts/eval_reports_bucket_name`, which
+landing-zone's `agent-iam` publishes.
 
 ## Outputs
 
-- `eval_runner_role_arn` — the eval-runner role, bound to its ServiceAccount by an EKS Pod Identity association (no annotation)
-- `eval_runner_namespace`, `eval_runner_service_account` — published to SSM; they name the Pod Identity association tuple
+- `eval_runner_namespace` — published to SSM as `runner_namespace`
 - `controller_log_group_name`

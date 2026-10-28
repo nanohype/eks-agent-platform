@@ -343,6 +343,7 @@ func main() {
 			})
 			platformReconciler.AWSCfg = platformAWSConfigFrom(opConfig, environment)
 		}
+		platformReconciler.Eval = evalIdentityConfigFrom(opConfig)
 		if err := platformReconciler.SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("register the Platform reconciler: %w", err)
 		}
@@ -472,7 +473,6 @@ func main() {
 		}
 		if opConfig != nil {
 			evalReconciler.RunnerNamespace = opConfig.EvalRunnerNamespace
-			evalReconciler.RunnerServiceAccount = opConfig.EvalRunnerServiceAccount
 			evalReconciler.ReportsBucket = opConfig.EvalReportsBucket
 		}
 		if err := evalReconciler.SetupWithManager(mgr); err != nil {
@@ -586,6 +586,17 @@ func iamConfigFrom(cfg *operatorconfig.Config, tags orgTags) controller.IAMConfi
 		BusinessUnit:                 tags.BusinessUnit,
 		DataClassification:           tags.DataClassification,
 		Compliance:                   tags.Compliance,
+	}
+}
+
+// evalIdentityConfigFrom carries the eval-runtime outputs to the Platform
+// reconciler. They are the same two values the EvalSuite reconciler is handed,
+// so each Platform's eval ServiceAccount lands in the namespace its runs are
+// submitted to, and its role is scoped into the bucket they upload to.
+func evalIdentityConfigFrom(cfg *operatorconfig.Config) controller.EvalIdentityConfig {
+	return controller.EvalIdentityConfig{
+		Namespace:     cfg.EvalRunnerNamespace,
+		ReportsBucket: cfg.EvalReportsBucket,
 	}
 }
 

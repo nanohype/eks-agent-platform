@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -65,14 +66,19 @@ const (
 	evalRunTTLAfterFailure       int64 = 86400
 )
 
-// defaultEvalRunnerNamespace is the fallback when the reconciler is built
-// without an EvalRunnerNamespace override (envtest / dev paths). Production
-// resolves this from SSM via operatorconfig.EvalRunnerNamespace and the
-// value flows through EvalReconciler.RunnerNamespace.
-const (
-	defaultEvalRunnerNamespace      = "eval-runner"
-	defaultEvalRunnerServiceAccount = "eval-runner"
-)
+// defaultEvalRunnerNamespace is the eval runtime namespace when none is
+// configured (envtest / dev paths). Production resolves it from SSM via
+// operatorconfig.EvalRunnerNamespace, and the value reaches both
+// EvalReconciler.RunnerNamespace and PlatformReconciler.Eval.Namespace.
+const defaultEvalRunnerNamespace = "eval-runner"
+
+// evalRuntimeNamespace resolves a configured eval runtime namespace, empty
+// meaning the default. The EvalSuite reconciler submits runs there and the
+// Platform reconciler creates each Platform's eval ServiceAccount there, so
+// both resolve it through here.
+func evalRuntimeNamespace(configured string) string {
+	return orDefault(configured, defaultEvalRunnerNamespace)
+}
 
 // errNoReportsBucket is returned when the operator has no eval-reports bucket
 // to hand the workflow. Submitting anyway produces a run whose every upload
@@ -85,23 +91,19 @@ var errNoReportsBucket = errors.New(
 		"eval-runtime terraform component publishes",
 )
 
-// evalRunnerNamespace returns the per-reconciler namespace where Workflows
-// land — RunnerNamespace if set, otherwise the default.
+// evalRunnerNamespace returns the namespace where Workflows land —
+// RunnerNamespace if set, otherwise the default.
 func (r *EvalReconciler) evalRunnerNamespace() string {
-	if r.RunnerNamespace != "" {
-		return r.RunnerNamespace
-	}
-	return defaultEvalRunnerNamespace
+	return evalRuntimeNamespace(r.RunnerNamespace)
 }
 
-// evalRunnerServiceAccount returns the ServiceAccount the emitted Workflow
-// runs under — RunnerServiceAccount if set, otherwise the default.
-func (r *EvalReconciler) evalRunnerServiceAccount() string {
-	if r.RunnerServiceAccount != "" {
-		return r.RunnerServiceAccount
-	}
-	return defaultEvalRunnerServiceAccount
-}
+// errEvalIdentityMissing is a Platform whose eval ServiceAccount is not in the
+// eval runtime namespace. The Platform reconciler creates it with the
+// Platform's eval role; until it exists there is no identity to run under.
+var errEvalIdentityMissing = errors.New(
+	"the Platform's eval ServiceAccount does not exist in the eval runtime namespace; " +
+		"the Platform reconciler creates it once the eval-reports bucket is configured",
+)
 
 // argoWorkflowsGV is the GroupVersion the Argo Workflows controller
 // owns. Lazy-detected at reconcile time — clusters without Argo
@@ -174,9 +176,9 @@ func evalWorkflowName(suite *governancev1alpha1.EvalSuite) string {
 
 // ensureArgoWorkflow emits either a CronWorkflow (if Schedule is set) or
 // a one-shot Workflow. The pod-spec is intentionally thin — the actual
-// container image + script lives in the platform-shared
-// `eval-runner` WorkflowTemplate that terraform/components/eval-runtime
-// installs; this reconciler just references it via templateRef.
+// container image + script lives in the shared `eval-runner` WorkflowTemplate
+// the operator chart installs; this reconciler references it via templateRef
+// and runs it under the Platform's own eval ServiceAccount.
 func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governancev1alpha1.EvalSuite, platform *platformv1alpha1.Platform, fleet *agentsv1alpha1.AgentFleet) error {
 	// Refuse before submitting rather than after. A run with no bucket still
 	// executes every case against a live model and only fails at the upload,
@@ -203,6 +205,21 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 	if !ok {
 		return fmt.Errorf("%w: fleet %q runs on route %q; gateway publishes %s",
 			errRouteNotPublished, fleet.Name, routeName, strings.Join(routeNames(routes), ", "))
+	}
+
+	// The run holds the Platform's own eval identity (ensureEvalIdentity), never
+	// a shared one. Argo cannot create a pod under a ServiceAccount that does
+	// not exist, so a run submitted before the identity is in place fails
+	// without running a step, and its exit handler — a pod under the same
+	// account — cannot report the failure. The suite would sit in Provisioning
+	// with no reason given.
+	runnerSA := EvalServiceAccountName(platform)
+	saKey := types.NamespacedName{Namespace: r.evalRunnerNamespace(), Name: runnerSA}
+	if err := r.Get(ctx, saKey, &corev1.ServiceAccount{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: %s", errEvalIdentityMissing, saKey)
+		}
+		return fmt.Errorf("get eval ServiceAccount %s: %w", saKey, err)
 	}
 
 	kind := "Workflow"
@@ -273,7 +290,7 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		wfSpec := map[string]any{
 			"workflowTemplateRef":   map[string]any{"name": "eval-runner"},
 			"arguments":             map[string]any{"parameters": params},
-			"serviceAccountName":    r.evalRunnerServiceAccount(),
+			"serviceAccountName":    runnerSA,
 			"activeDeadlineSeconds": evalRunActiveDeadlineSeconds,
 			"podGC":                 map[string]any{"strategy": "OnWorkflowSuccess"},
 		}
@@ -403,6 +420,9 @@ func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1a
 		}
 		if errors.Is(err, errNoReportsBucket) {
 			return phasePending, errNoReportsBucket.Error(), nil
+		}
+		if errors.Is(err, errEvalIdentityMissing) {
+			return phasePending, err.Error(), nil
 		}
 		if errors.Is(err, errGatewayNotFound) || errors.Is(err, errGatewayNotPublished) {
 			return phasePending, err.Error(), nil

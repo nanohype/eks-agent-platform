@@ -98,13 +98,14 @@ and their `/eks-agent-platform/<cluster>/model-artifacts/*` SSM keys; this tree 
 the operator role, tenant baseline, and the eval-reports/model-artifacts buckets
 from that landing-zone SSM contract.
 
-**Prereq:** the `eks-pod-identity-agent` EKS addon must be installed — the
-eval-runner role binds via EKS Pod Identity, which is inert without it. Check: `aws eks describe-addon
+**Prereq:** the `eks-pod-identity-agent` EKS addon must be installed — every
+tenant role and every Platform's eval role binds via EKS Pod Identity, which is
+inert without it. Check: `aws eks describe-addon
 --cluster-name <cluster> --addon-name eks-pod-identity-agent`.
 
 From `eks-agent-platform/`, export `AWS_ACCOUNT_ID` (it names the state bucket)
 and the `TF_VAR_*` infrastructure identifiers the orchestrator supplies —
-`TF_VAR_data_kms_key_arn`, `TF_VAR_logs_kms_key_arn` (lz-secrets); the
+`TF_VAR_logs_kms_key_arn` (lz-secrets); the
 agent-egress VPC / subnet / route-table / security-group IDs (lz-network /
 lz-cluster); `TF_VAR_node_role_name` (lz-cluster, changes on cluster recreate) —
 then apply in dependency order:
@@ -115,8 +116,10 @@ task tofu:apply CLUSTER=<cluster> COMPONENT=all   # terragrunt run --all resolve
 
 Verify the Pod Identity associations bound:
 `aws eks list-pod-identity-associations --cluster-name <cluster>` should list the
-`aws-neuron/neuron-device-plugin`, `gpu-operator/gpu-operator`, and
-`eval-runner/eval-runner` tuples. From one of those pods,
+`aws-neuron/neuron-device-plugin` and `gpu-operator/gpu-operator` tuples. Eval
+runs have no association from this tree: the operator binds one per Platform,
+`eval-runner/eval-<platform>` to `<cluster>-<platform>-eval`, once the Platform
+reconciles (B2/B3), and the same list shows those. From one of those pods,
 `AWS_CONTAINER_CREDENTIALS_FULL_URI` is injected (Pod Identity), not
 `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` (IRSA), and `aws sts
 get-caller-identity` resolves to the bound role. A `(namespace, serviceAccount)`
@@ -129,8 +132,9 @@ The operator syncs itself. The `addons-agent-operator` ApplicationSet in
 eks-gitops git-sources `charts/operator` and targets every cluster carrying
 `eks-agent-platform/enabled=true`. It injects the per-cluster bits the chart
 can't hardcode — the operator IAM role ARN and the eval-reports bucket — from
-the annotations `cluster-bootstrap` publishes on the ArgoCD cluster Secret (the
-eval-runner role is bound by Pod Identity, see B1b). The cluster name comes from
+the annotations `cluster-bootstrap` publishes on the ArgoCD cluster Secret. Eval
+runs take no role ARN from the chart: the operator mints each Platform's eval
+role and binds it by Pod Identity. The cluster name comes from
 SSM
 (`/eks-agent-platform/<cluster>/cluster/name`), read by the operator's config
 loader. So once B1 step 3
@@ -161,7 +165,6 @@ helm upgrade --install eks-agent-platform eks-agent-platform/charts/operator \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=<agent-iam operator role ARN> \
   --set config.environment=<env> --set config.region=<r> \
   --set config.clusterName=<cluster> \
-  --set evalRuntime.serviceAccount.roleArn=<eval-runner role ARN> \
   --set evalRuntime.evalReportsBucket=<eval-reports bucket> \
   --set networkPolicy.engine=cilium --wait
 ```
@@ -251,4 +254,5 @@ green.
   envoy-ai-gateway) — they fail to render. (Fixed in the ApplicationSets.)
 - **Operator IAM idempotency GetRole:** authorizes against the bare-name (root)
   ARN before the role exists, so the operator role allows GetRole on the
-  `<cluster>-*-tenant` name pattern as well as the scoped path. (In `agent-iam`.)
+  `<cluster>-*-tenant` and `<cluster>-*-eval` name patterns as well as the
+  scoped path. (In `agent-iam`.)

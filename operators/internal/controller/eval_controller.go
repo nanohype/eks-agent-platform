@@ -39,17 +39,6 @@ type EvalReconciler struct {
 	// Empty falls back to the package default.
 	RunnerNamespace string
 
-	// RunnerServiceAccount is the ServiceAccount the emitted Workflow runs
-	// under. Resolved from SSM
-	// /eks-agent-platform/<cluster>/eval-runtime/runner_service_account.
-	// Empty falls back to the package default.
-	//
-	// The chart makes this name a value, so a cluster that overrides it gets
-	// a ServiceAccount and a WorkflowTemplate under the new name. Emitting a
-	// hardcoded name here would submit Workflows bound to a ServiceAccount
-	// that does not exist on such a cluster.
-	RunnerServiceAccount string
-
 	// ReportsBucket is the S3 bucket the workflow uploads reports to,
 	// resolved from SSM
 	// /eks-agent-platform/<cluster>/eval-runtime/eval_reports_bucket.
@@ -68,6 +57,8 @@ type EvalReconciler struct {
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites/finalizers,verbs=update
 // +kubebuilder:rbac:groups=argoproj.io,resources=workflows;workflowtemplates;cronworkflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=analysisruns;analysistemplates,verbs=get;list;watch
+// A run is submitted only once the Platform's eval ServiceAccount exists.
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
 
 // Reconcile drives an EvalSuite CR into a CronWorkflow (scheduled) or Workflow (manual).
 func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

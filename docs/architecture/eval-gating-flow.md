@@ -15,9 +15,16 @@ sequenceDiagram
   K8s->>ER: reconcile event
   ER->>K8s: Get Platform, Get AgentFleet
   ER->>ER: gate: both Ready?
-  ER->>Argo: CreateOrUpdate CronWorkflow<br/>workflowTemplateRef=eval-runner<br/>arguments: {platform, fleet, suite-name, cases-inline, pass-threshold}
-  ER->>K8s: EvalSuite.status.phase=Provisioning<br/>condition EvalReconciled=True
+  ER->>K8s: Get ServiceAccount eval-runner/eval-{platform}
+  alt absent
+    ER->>K8s: EvalSuite.status.phase=Pending<br/>(the Platform's eval identity is not in place)
+  else present
+    ER->>Argo: CreateOrUpdate CronWorkflow<br/>workflowTemplateRef=eval-runner<br/>serviceAccountName=eval-{platform}<br/>arguments: {platform, fleet, suite-name, cases-inline, pass-threshold}
+    ER->>K8s: EvalSuite.status.phase=Provisioning<br/>condition EvalReconciled=True
+  end
 ```
+
+Every run holds its Platform's own eval identity: the `eval-<platform>` ServiceAccount in the eval runtime namespace, bound by an EKS Pod Identity association to the `<cluster>-<platform>-eval` role. The `PlatformReconciler` mints all three when the Platform reconciles and removes them in its finalizer; the `EvalReconciler` only checks that the account exists, because a Workflow naming an absent ServiceAccount creates no pod — not even the exit handler that would report the failure. The role reaches `<bucket>/<platform>/manifests/*` for reading and `<bucket>/<platform>/runs/*` for writing, and nothing in any other Platform's prefixes (see [ARCHITECTURE.md](../../ARCHITECTURE.md#each-platforms-evals-run-under-that-platforms-identity)).
 
 ## Execution
 

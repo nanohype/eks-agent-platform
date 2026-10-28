@@ -11,7 +11,7 @@ It is not a deploy catalog. Nothing in this repo applies itself to a cluster.
 
 ## What eks-gitops deploys
 
-- **The operator** — `applicationsets/addons-agent-operator.yaml` git-sources `charts/operator`. It injects the per-cluster IRSA role ARNs and EKS OIDC wiring (provider ARN + issuer host) from the cluster-Secret annotations that `cluster-bootstrap` sets, so no account-specific values are ever committed to the chart. The same ApplicationSet injects the eval-runner role ARN and report bucket (see eval-runtime below).
+- **The operator** — `applicationsets/addons-agent-operator.yaml` git-sources `charts/operator`. It injects the per-cluster IRSA role ARNs and EKS OIDC wiring (provider ARN + issuer host) from the cluster-Secret annotations that `cluster-bootstrap` sets, so no account-specific values are ever committed to the chart. The same ApplicationSet injects the eval report bucket (see eval-runtime below).
 - **Envoy AI Gateway** — `applicationsets/addons-ai-platform.yaml`.
 - **Argo Workflows / Rollouts / Events** — `applicationsets/addons-argo-platform.yaml`. These are prerequisites for the operator's eval-runtime and SLO.
 - **Dashboards** — the seven persona dashboards ship as `GrafanaDashboard` CRs under `dashboards/base/platform/agent-*.yaml`.
@@ -22,7 +22,7 @@ eks-gitops also provides the substrate the operator assumes: ArgoCD, cert-manage
 
 The operator owns its own runtime. What rides along in `charts/operator/`, and what deliberately does not:
 
-- **eval-runtime** (`evalRuntime.*`, on by default) — the Argo `WorkflowTemplate` (eval-runner) the operator submits `EvalSuite` runs to, the gating `AnalysisTemplate`, and the `eval-runner` namespace + ServiceAccount + RBAC the workflow pods run under. Source: `charts/operator/{files,templates}/eval-runtime/`. Needs the Argo Workflows CRD (from `addons-argo-platform`). The eval-runner IRSA role ARN and the S3 report bucket carry the AWS account id, so eks-gitops injects them per-cluster via `addons-agent-operator.yaml`; they're empty in the base chart. The Rollouts `AnalysisTemplate` (`evalRuntime.rollouts.enabled`) is off by default since it needs the Argo Rollouts CRD.
+- **eval-runtime** (`evalRuntime.*`, on by default) — the Argo `WorkflowTemplate` (eval-runner) the operator submits `EvalSuite` runs to, the gating `AnalysisTemplate`, the `eval-runner` namespace, and the RBAC every run in it holds. Source: `charts/operator/{files,templates}/eval-runtime/`. Needs the Argo Workflows CRD (from `addons-argo-platform`). The chart carries no ServiceAccount or role for runs: each runs under its Platform's `eval-<platform>` ServiceAccount, which the operator mints with that Platform's eval role. The S3 report bucket carries the AWS account id, so eks-gitops injects it per-cluster via `addons-agent-operator.yaml`; it's empty in the base chart. The Rollouts `AnalysisTemplate` (`evalRuntime.rollouts.enabled`) is off by default since it needs the Argo Rollouts CRD.
 - **operator SLO** — not shipped by this chart. Burn-rate evaluation is the SLO reconciler's own control loop, which writes its verdict to `SLOPolicy.status`; kube-state-metrics projects that status (config lives in the eks-gitops kube-state-metrics addon, the single source), and the paging alerts are Grafana-managed against AMP in `eks-gitops/dashboards/base/alerting/`. A chart-shipped `PrometheusRule` or `AlertmanagerConfig` would be applied and evaluated by nothing: the catalog installs `prometheus-operator-crds` and no operator, server or Alertmanager.
 
 ## How a cluster opts in
