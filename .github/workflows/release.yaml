@@ -271,6 +271,59 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      # Nothing is pushed or signed until both release platforms pass the
+      # checks the ci.yaml eval-runner-image job runs on a pull request: the
+      # `score` golden smoke, the userland assertions, and no fixed CRITICAL. A
+      # loaded image is single-platform, so each platform is built and loaded on
+      # its own first. The multi-arch build below runs on the same builder, so
+      # it publishes the cached layers checked here rather than a fresh build.
+      - name: build linux/amd64 for the release checks
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: packages/eval-runner/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: eval-runner:release-check-amd64
+      - name: build linux/arm64 for the release checks
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: packages/eval-runner/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: eval-runner:release-check-arm64
+      - name: score smoke, userland present, package managers absent
+        run: |
+          packages/eval-runner/scripts/smoke-image.sh eval-runner:release-check-amd64 linux/amd64
+          packages/eval-runner/scripts/smoke-image.sh eval-runner:release-check-arm64 linux/arm64
+      # cache: false for the reason the setup-go step in operator-image states:
+      # a vulnerability database restored from a cache any workflow can write
+      # could clear an image this job then signs.
+      - name: no fixed CRITICAL (linux/amd64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: eval-runner:release-check-amd64
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          cache: false
+          # renovate: datasource=github-releases depName=aquasecurity/trivy
+          version: v0.72.0
+      - name: no fixed CRITICAL (linux/arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: eval-runner:release-check-arm64
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          cache: false
+          # renovate: datasource=github-releases depName=aquasecurity/trivy
+          version: v0.72.0
       - name: build + push (multi-arch)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:

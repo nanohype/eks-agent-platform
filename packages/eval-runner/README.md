@@ -101,5 +101,18 @@ node dist/cli.js score --results results.json --pass-threshold 0.85 \
 ```
 
 The image build (`Dockerfile`) bundles the CLI and layers the OS tools the
-workflow shells to — `aws`, `jq`, `kubectl` — on a slim Node base. It is built,
-cosign-signed, and SBOM-attested by `release.yaml` on an `eval-runner-v*` tag.
+workflow shells to — `aws`, `jq`, `kubectl` — on a slim Node base, with no
+package manager left in it. It is built, cosign-signed, and SBOM-attested by
+`release.yaml` on an `eval-runner-v*` tag. Before that job pushes anything, and
+on every pull request that changes what the image is built from (the
+`eval-runner-image` job in `ci.yaml`), each platform is built and checked by
+`packages/eval-runner/scripts/smoke-image.sh` — `score` reproduces
+`testdata/score.golden.json`, the tools run, no package manager is on `PATH` —
+and scanned with trivy, failing on any fixed CRITICAL. Run the smoke against a
+local build:
+
+```sh
+docker buildx build --platform linux/arm64 --load -t eval-runner:dev \
+  -f packages/eval-runner/Dockerfile .
+packages/eval-runner/scripts/smoke-image.sh eval-runner:dev linux/arm64
+```

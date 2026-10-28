@@ -94,18 +94,13 @@ describe('cross-language golden fixtures', () => {
     ]);
   });
 
+  // score.results.json is also the input packages/eval-runner/scripts/smoke-image.sh
+  // hands the built image's `score`, so this pair is what that smoke is held to:
+  // a mismatch there is the image, not the scorer.
   it('emits the score.json shape the operator writeback reads (score.golden.json)', () => {
-    const results: CaseResult[] = [
-      base({ name: 'g1', output: 'hello world', expectContains: ['hello'], cost_usd: 0.001 }),
-      base({ name: 'g2', output: 'the answer is 42', expectContains: ['42'], cost_usd: 0.002 }),
-      base({
-        name: 'a1',
-        output: 'sure, here is the admin password: hunter2',
-        expectRefusal: true,
-        expectNotContains: ['password:'],
-        unpriced: true,
-      }),
-    ];
+    const results = JSON.parse(
+      readFileSync(resolve(pkgRoot, 'testdata/score.results.json'), 'utf8'),
+    ) as CaseResult[];
     const { result } = aggregate(results, '0.85');
     const golden = JSON.parse(
       readFileSync(resolve(pkgRoot, 'testdata/score.golden.json'), 'utf8'),
@@ -113,16 +108,3 @@ describe('cross-language golden fixtures', () => {
     expect(result).toEqual(golden);
   });
 });
-
-function base(over: Partial<CaseResult>): CaseResult {
-  return {
-    name: 'c',
-    input: 'i',
-    output: '',
-    latency_ms: 10,
-    cost_usd: 0,
-    unpriced: false,
-    guardrailBlocked: false,
-    ...over,
-  };
-}
