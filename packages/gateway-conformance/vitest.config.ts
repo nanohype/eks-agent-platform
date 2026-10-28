@@ -1,4 +1,4 @@
-import { packageConfig } from '../../vitest.base';
+import { packageConfig } from '../../vitest.base.ts';
 
 export default packageConfig({
   // Honest ratchets just below the measured actuals (see the sibling packages'
