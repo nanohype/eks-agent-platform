@@ -20,10 +20,10 @@ overrides:
   esbuild: "^0.28.1" # GHSA-g7r4-m6w7-qqqr
   ws: "^8.21.0" # CVE-2026-48779 (memory-exhaustion DoS)
   form-data: "^4.0.6" # CVE-2026-12143 (CRLF header injection)
-  ip-address: "^10.3.1" # CVE-2026-69192 (leading-zero octets parsed as decimal, splitting SSRF filters from resolvers)
+  ip-address: "^10.7.4" # CVE-2026-69192 (leading-zero octets parsed as decimal, splitting SSRF filters from resolvers), GHSA-rxp7-6hxx-x8q5
   js-yaml: "^4.3.1" # CVE-2026-53550 (merge-key quadratic DoS), CVE-2026-59869 (crafted-document DoS), CVE-2026-59870 (!!omap quadratic DoS)
   read-yaml-file: "^3.0.0"
-  fast-uri: "^4.0.0" # GHSA-7p8r-x3mc-p8w7 (backslash authority introducer parsed as host)
+  fast-uri: "^4.2.3" # GHSA-7p8r-x3mc-p8w7 (backslash authority introducer parsed as host), GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h
   brace-expansion: "^5.0.9" # CVE-2026-69152 (quadratic blowup on a crafted brace pattern)
   # CVE-2026-67213 (a custom generator loops forever when size is zero), reached
   # through postcss. The caret is load-bearing and must not be widened to `>=`:
