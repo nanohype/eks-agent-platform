@@ -1,4 +1,4 @@
-import { packageConfig } from '../../vitest.base';
+import { packageConfig } from '../../vitest.base.ts';
 
 export default packageConfig({
   // Ratchets just below this suite's coverage, all four at or above the org

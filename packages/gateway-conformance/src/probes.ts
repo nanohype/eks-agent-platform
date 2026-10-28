@@ -53,6 +53,14 @@ const WEATHER_TOOL = {
 
 const TOOL_PROMPT = 'What is the temperature in San Diego? Use the tool.';
 
+/**
+ * The tool runner's request ceiling. The probe's loop is two requests: the
+ * first returns the tool call, the second carries the tool's result and
+ * returns the answer. The runner counts requests, so a model that keeps
+ * calling the tool stops at the second rather than looping without end.
+ */
+const TOOL_RUNNER_MAX_ITERATIONS = 2;
+
 export const PROBES: Probe[] = [
   {
     name: 'route-resolves',
@@ -168,6 +176,7 @@ export const PROBES: Probe[] = [
       const runner = client.beta.messages.toolRunner({
         model: route,
         max_tokens: 512,
+        max_iterations: TOOL_RUNNER_MAX_ITERATIONS,
         messages: [{ role: 'user', content: TOOL_PROMPT }],
         tools: [
           {
@@ -182,6 +191,15 @@ export const PROBES: Probe[] = [
       // runUntilDone, not done(): done() settles only the message in flight,
       // so on a turn that asked for a tool it never resolves.
       const final = await runner.runUntilDone();
+      // At its ceiling the runner resolves with the last reply rather than
+      // throwing, so a final reply that still asks for a tool is the loop
+      // stopped by the bound, not finished by the model.
+      if (final?.stop_reason === 'tool_use') {
+        return {
+          outcome: 'fail',
+          detail: `the model was still calling the tool after ${TOOL_RUNNER_MAX_ITERATIONS} requests, so the runner stopped at its bound (tool executed ${invoked}x)`,
+        };
+      }
       const text = textOf(final?.content);
       return {
         outcome: invoked > 0 && text.includes('72') ? 'pass' : 'fail',
