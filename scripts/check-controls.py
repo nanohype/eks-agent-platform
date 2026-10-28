@@ -276,6 +276,18 @@ CONTROLS = [
     ),
     Control(
         gate="check-version-pins.py",
+        path=".github/workflows/release.yaml",
+        # Derived for the reason the control above states. Three jobs carry the
+        # same installer input, so the anchor is the one preceded by the comment
+        # that explains the pin, which keeps it matching exactly once.
+        anchor=r'(?m)reviewed bump\.\n[^\n]*cosign-installer@[^\n]*\n[ \t]*with:\n([ \t]*)cosign-release: "[^"]+"$',
+        rewrite=lambda m: f'{m.group(0)}\n{m.group(1)}unwatched-release: "v1.0.0"',
+        catches="an installer-action input naming a tool release with no Renovate customManager "
+        "watching it",
+        expect_output="unwatched-release",
+    ),
+    Control(
+        gate="check-version-pins.py",
         path="renovate.json",
         before="GITLEAKS_VERSION:",
         after="GITLEAKS_VERSION_NEVER_MATCHES:",

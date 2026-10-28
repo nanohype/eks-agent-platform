@@ -140,7 +140,7 @@ Six threat categories, evaluated per architecture component.
 
 | Threat                                           | STRIDE        | Mitigation                                                                                                                                                   |
 | ------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Compromised operator image pushed to GHCR        | **T**ampering | All operator images signed with cosign (keyless OIDC) + SBOM attestation. Kyverno verify-images policy in `eks-gitops` rejects unsigned images cluster-wide. |
+| Compromised operator image pushed to GHCR        | **T**ampering | Every image signed by digest with cosign (keyless OIDC, Sigstore bundle) + SPDX SBOM attestation, from `release.yaml` on a tag. The Kyverno `verify-images` ImageValidatingPolicy in `eks-gitops` admits a `ghcr.io/nanohype/*` image only with both, from a `release.ya?ml` run on a tag. |
 | Compromised npm package in a workspace package's deps | **T**    | Renovate vulnerability alerts always-on, never auto-merge. OSV alerts enabled. Trivy fs scan in CI fails on HIGH/CRITICAL.                                   |
 | Compromised Helm chart pulled by ArgoCD          | **T**         | OCI charts published with signed metadata. AppProject `sourceRepos` allowlist is closed-set; only the named OCI registries are reachable.                    |
 | Compromised Envoy AI Gateway upstream            | **T**         | Pinned chartVersion in ApplicationSet matrix; Renovate proposes bumps but human reviews majors. Cluster-wide image-verification policy applies.              |
@@ -178,8 +178,8 @@ The platform ships:
 Planned hardening:
 
 - [ ] CEL `x-kubernetes-validations` cross-field rules on `BudgetPolicy` + `ModelGateway` (CRD schema is the floor; `Platform` + `EvalSuite` already enforce theirs)
-- [ ] cosign keyless signing on operator images via Sigstore/Fulcio (workflow exists; needs first tagged release)
-- [ ] Kyverno `verify-images` policy in `eks-gitops` referencing our cosign signer
+- [ ] A component tag published through `release.yaml`, so GHCR holds each image as a Sigstore bundle signature and SPDX attestation on its digest
+- [ ] Kyverno `verify-images` ImageValidatingPolicy in `eks-gitops` enforcing the release-workflow signer and the SPDX attestation on staging and production
 - [ ] GuardDuty Anomaly Detection rules tuned for "unfamiliar IAM principal as grantee" events
 
 ## Consequences

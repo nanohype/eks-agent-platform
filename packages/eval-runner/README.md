@@ -102,4 +102,5 @@ node dist/cli.js score --results results.json --pass-threshold 0.85 \
 
 The image build (`Dockerfile`) bundles the CLI and layers the OS tools the
 workflow shells to — `aws`, `jq`, `kubectl` — on a slim Node base. It is built,
-cosign-signed, and SBOM-attested by `release.yaml` on an `eval-runner-v*` tag.
+signed by digest with cosign, and SPDX SBOM-attested by `release.yaml` on an
+`eval-runner-v*` tag.

@@ -88,6 +88,14 @@
       "extractVersionTemplate": "^v?(?<version>.*)$"
     },
     {
+      "description": "cosign, pinned as the cosign-installer `cosign-release` input. The release decides the signature format the release workflow writes, and the cluster verify-images policy reads that format, so it moves through a reviewed bump rather than with the installer's default.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["cosign-release:\\s*[\"']?(?<currentValue>v[^\"'\\s]+)[\"']?"],
+      "depNameTemplate": "sigstore/cosign",
+      "datasourceTemplate": "github-releases"
+    },
+    {
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
       "matchStrings": [
