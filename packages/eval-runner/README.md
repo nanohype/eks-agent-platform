@@ -101,5 +101,30 @@ node dist/cli.js score --results results.json --pass-threshold 0.85 \
 ```
 
 The image build (`Dockerfile`) bundles the CLI and layers the OS tools the
-workflow shells to — `aws`, `jq`, `kubectl` — on a slim Node base. It is built,
-cosign-signed, and SBOM-attested by `release.yaml` on an `eval-runner-v*` tag.
+workflow shells to — `aws`, `jq`, `kubectl` — on a slim Node base, with no
+package manager left in it. The two downloaded tools are pinned by the
+`KUBECTL_VERSION` and `AWSCLI_VERSION` build args in the `Dockerfile`, each
+verified against a per-architecture SHA-256; those args are the record of what
+ships. Renovate proposes their bumps once a release clears its release-age
+floor, under two rules:
+
+- kubectl stays on the minor whose ±1 version-skew window spans the EKS
+  versions the platform's clusters run. A `renovate.json` packageRule holds
+  `KUBECTL_VERSION` to that minor, so moving to another minor follows a change
+  of the cluster version target rather than a kubectl release.
+- The AWS CLI takes the newest 2.x release.
+
+The image is built, cosign-signed, and SBOM-attested by
+`release.yaml` on an `eval-runner-v*` tag. Before that job pushes anything, and
+on every pull request that changes what the image is built from (the
+`eval-runner-image` job in `ci.yaml`), each platform is built and checked by
+`packages/eval-runner/scripts/smoke-image.sh` — `score` reproduces
+`testdata/score.golden.json`, the tools run, no package manager is on `PATH` —
+and scanned with trivy, failing on any fixed CRITICAL. Run the smoke against a
+local build:
+
+```sh
+docker buildx build --platform linux/arm64 --load -t eval-runner:dev \
+  -f packages/eval-runner/Dockerfile .
+packages/eval-runner/scripts/smoke-image.sh eval-runner:dev linux/arm64
+```

@@ -72,6 +72,11 @@ PIN_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         re.compile(r"^ARG (?P<name>[A-Z][A-Z0-9_]*_VERSION)=(?P<value>\S+)", re.M),
         "a Dockerfile build-arg version",
     ),
+    (
+        "packages/eval-runner/Dockerfile",
+        re.compile(r"^ARG (?P<name>[A-Z][A-Z0-9_]*_VERSION)=(?P<value>\S+)", re.M),
+        "a Dockerfile build-arg version",
+    ),
 ]
 
 # Inputs that are versions of a LANGUAGE RUNTIME resolved from a manifest the

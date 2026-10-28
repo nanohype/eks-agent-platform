@@ -276,6 +276,18 @@ CONTROLS = [
     ),
     Control(
         gate="check-version-pins.py",
+        path="packages/eval-runner/Dockerfile",
+        # Derived for the same reason as the workflow control above: the line
+        # it sits on holds a kubectl release Renovate moves.
+        anchor=r"(?m)^ARG KUBECTL_VERSION=\S+$",
+        rewrite=lambda m: f"{m.group(0)}\nARG UNWATCHED_TOOL_VERSION=1.0.0",
+        catches="a tool the eval-runner image downloads, pinned as a build arg no Renovate "
+        "customManager watches. This proves the gate reads that Dockerfile at all, which a "
+        "control over the workflows cannot",
+        expect_output='UNWATCHED_TOOL_VERSION',
+    ),
+    Control(
+        gate="check-version-pins.py",
         path="renovate.json",
         before="GITLEAKS_VERSION:",
         after="GITLEAKS_VERSION_NEVER_MATCHES:",
