@@ -58,15 +58,17 @@ ARG TARGETARCH
 # Which release each pin names. kubectl stays on the minor whose ±1
 # version-skew window spans the EKS versions the platform's clusters run, at
 # that minor's newest patch past the release-age floor Renovate holds updates
-# to. A renovate.json packageRule holds KUBECTL_VERSION to that minor, so
-# moving to another minor follows a change of the cluster version target. The
-# AWS CLI is the newest 2.x release past the same floor.
+# to — or a newer patch of it, when the one past the floor carries a fixed
+# CRITICAL finding the image gate rejects. A renovate.json packageRule holds
+# KUBECTL_VERSION to that minor, so moving to another minor follows a change of
+# the cluster version target. The AWS CLI is the newest 2.x release past the
+# same floor.
 ARG AWSCLI_VERSION=2.38.5
 ARG AWSCLI_SHA256_amd64=5def7d1b7e55d892f9a381bb2cb2081a685712464be0d36d5d706af0ac48d0d3
 ARG AWSCLI_SHA256_arm64=07711a936e9d271045ab937d2c2c5390c25f419e4ba9e25adb9e996031e3f6be
-ARG KUBECTL_VERSION=v1.36.5
-ARG KUBECTL_SHA256_amd64=33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e
-ARG KUBECTL_SHA256_arm64=88fc1aca8fd0c1b44fe379f67c39bd6858bdfc50241dc55775f84d0f5b31da3a
+ARG KUBECTL_VERSION=v1.36.6
+ARG KUBECTL_SHA256_amd64=29818b6729dc9262b692307470d0558d027725e738be5dd47c760261868a2634
+ARG KUBECTL_SHA256_arm64=35507ef408c3d38849e5d3203e18f8e861db822aa664101a9ced0869edd06046
 
 RUN set -eux; \
     case "${TARGETARCH}" in \
