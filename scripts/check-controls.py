@@ -666,6 +666,20 @@ CONTROLS = [
         "the YAML is malformed",
         expect_output='securityContext',
     ),
+    # The splice this gate exists for: the score step writing its results
+    # parameter, which carries model replies, through a single-quoted echo in
+    # its script source.
+    Control(
+        gate="check-argo-script-splices.py",
+        path="charts/operator/files/eval-runtime/workflow-template.yaml",
+        before='          run_id="$(date -u +%Y%m%dT%H%M%SZ)-{{workflow.uid}}"\n',
+        after="          echo '{{inputs.parameters.results-json}}' > /tmp/results.json\n"
+        '          run_id="$(date -u +%Y%m%dT%H%M%SZ)-{{workflow.uid}}"\n',
+        catches="a step input spliced into script source — a model reply holding a single quote "
+        "then runs as shell in a pod holding the eval-runner role and kubectl, and helm lint, "
+        "kubeconform and the PodSecurity gate all pass the template",
+        expect_output="{{inputs.parameters.results-json}} in template score script.source",
+    ),
     Control(
         gate="check-runtime-contract.py",
         path="charts/operator/files/eval-runtime/workflow-template.yaml",

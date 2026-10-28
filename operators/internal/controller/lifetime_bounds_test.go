@@ -9,9 +9,7 @@ package controller
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -371,7 +369,7 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 	// is required above to declare no initContainers, sidecars or podSpecPatch,
 	// because a container beside the script runs on every outcome and nothing
 	// here executes one.
-	assertHandlerCalls(t, handler, body, "Succeeded", 0)
+	assertHandlerCalls(t, handler, "Succeeded", 0)
 
 	// What follows still reads text, and reads it with comments dropped. These
 	// are claims about what the FAILING path writes — which arm it takes and
@@ -383,7 +381,7 @@ func TestATerminatedRunIsReportedOnTheSuite(t *testing.T) {
 
 	// The same harness on the failing path, so a run of it that observes nothing
 	// is telling us the stub works rather than that the handler is quiet.
-	assertHandlerCalls(t, handler, body, "Failed", 1)
+	assertHandlerCalls(t, handler, "Failed", 1)
 
 	for _, req := range []struct{ token, why string }{
 		{`phase:"Failed"`, "the handler runs on every outcome, so without this it reports nothing about a terminated run"},
@@ -514,67 +512,29 @@ func TestTheScoreGaugeGoesWithTheScore(t *testing.T) {
 // by absolute path, or a request made by anything other than kubectl, is not
 // watched here.
 //
-// The script is Argo source, so its parameter references are substituted first;
-// then it runs under sh with a directory ahead of PATH holding a stub for every
-// such command, each of which records that it was called and exits 0. What the
-// handler is observed to do replaces every previous attempt to work it out by
-// reading, because a reading can be defeated by how something is written and an
-// execution cannot.
-func assertHandlerCalls(t *testing.T, handler, source, status string, want int) {
+// runEvalStep delivers the step the way Argo does — the workflow status reaches
+// the script through the environment the template declares — and runs it under
+// sh with a stub ahead of PATH for every command that reaches the cluster, each
+// of which records its call and exits 0. What the handler is observed to do
+// settles what a reading of it cannot, because a reading can be defeated by how
+// something is written and an execution cannot.
+func assertHandlerCalls(t *testing.T, handler, status string, want int) {
 	t.Helper()
-	dir := t.TempDir()
-	log := filepath.Join(dir, "calls")
+	step, ok := evalScriptSteps(t)[handler]
+	if !ok {
+		t.Fatalf("onExit names %q and no script step of that name exists", handler)
+	}
+	values := stepValues(step, "probe")
+	values["inputs.parameters.workflow-status"] = status
+	run := runEvalStep(t, step, values)
 
-	script := strings.ReplaceAll(source, "{{inputs.parameters.workflow-status}}", status)
-	script = regexp.MustCompile(`\{\{[^}]*\}\}`).ReplaceAllString(script, "probe")
-
-	bin := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatalf("make the stub directory: %v", err)
-	}
-	for _, name := range []string{"kubectl"} {
-		stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + log + "\nexit 0\n"
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(stub), 0o755); err != nil {
-			t.Fatalf("write the %s stub: %v", name, err)
-		}
-	}
-	// jq is not a cluster call, but the handler pipes through it and `set -eu`
-	// would abort on a missing one.
-	jq := "#!/bin/sh\nprintf '{}'\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bin, "jq"), []byte(jq), 0o755); err != nil {
-		t.Fatalf("write the jq stub: %v", err)
-	}
-
-	path := filepath.Join(dir, "handler.sh")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write the handler script: %v", err)
-	}
-
-	cmd := exec.Command("/bin/sh", path)
-	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("the %s handler failed to run with status %s: %v\n%s", handler, status, err, out)
-	}
-
-	var calls int
-	if body, rerr := os.ReadFile(log); rerr == nil {
-		calls = len(strings.Split(strings.TrimSpace(string(body)), "\n"))
-	}
+	calls := run.commands("kubectl")
 	switch {
-	case status == "Succeeded" && calls != want:
+	case status == "Succeeded" && len(calls) != want:
 		t.Errorf("the %s handler made %d kubectl call(s) on a SUCCEEDED run; a run that wrote its own "+
-			"result at writeback must receive none. Calls:\n%s", handler, calls, readFileOrEmpty(log))
-	case status != "Succeeded" && calls < want:
+			"result at writeback must receive none. Calls:\n%q", handler, len(calls), calls)
+	case status != "Succeeded" && len(calls) < want:
 		t.Errorf("the %s handler made no kubectl call on a %s run, so this harness cannot tell a quiet "+
 			"handler from a stub that never fires", handler, status)
 	}
-}
-
-func readFileOrEmpty(path string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return string(b)
 }

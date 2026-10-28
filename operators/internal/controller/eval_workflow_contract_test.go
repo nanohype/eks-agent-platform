@@ -292,17 +292,32 @@ func TestWorkflowTemplateConsumesEveryParameterTheOperatorSends(t *testing.T) {
 	}
 }
 
-// TestWritebackPatchesTheSuiteNamespace reads the step's own script. The
-// parameter can be threaded correctly all the way to the writeback template
-// and still be unused by the kubectl invocation inside it.
+// TestWritebackPatchesTheSuiteNamespace runs the step. The parameter can be
+// threaded correctly all the way to the writeback template and still be unused
+// by the kubectl invocation inside it — or used through an environment variable
+// the template never sets.
 func TestWritebackPatchesTheSuiteNamespace(t *testing.T) {
-	template := readEvalWorkflowTemplate(t)
-
-	if !strings.Contains(template, "--namespace '{{inputs.parameters.suite-namespace}}'") {
-		t.Error("the writeback step does not patch in the suite's namespace")
+	step, ok := evalScriptSteps(t)["writeback"]
+	if !ok {
+		t.Fatal("the WorkflowTemplate has no writeback script step")
 	}
-	if strings.Contains(template, "--namespace '{{inputs.parameters.tenant}}'") {
-		t.Error("the writeback step patches in a namespace named after the tenant; a tenant name is not a namespace")
+	values := stepValues(step, "unused")
+	values["inputs.parameters.score-json"] = `{"meanScore":"0.92","passed":true,"reportUrl":"s3://b/r"}`
+	values["inputs.parameters.suite-name"] = "nightly"
+	values["inputs.parameters.suite-namespace"] = testSuiteNamespace
+	run := runEvalStep(t, step, values)
+
+	patches := run.commands("kubectl")
+	if len(patches) != 1 {
+		t.Fatalf("the writeback step made %d kubectl call(s), want the one status patch: %q", len(patches), patches)
+	}
+	// The suite's own namespace, not the tenant name: a tenant name is not a
+	// namespace, and a patch there addresses a namespace that need not exist.
+	if ns, _ := flagValue(patches[0], "--namespace"); ns != testSuiteNamespace {
+		t.Errorf("the writeback step patches in namespace %q, want the suite's %q", ns, testSuiteNamespace)
+	}
+	if name, _ := flagValue(patches[0], "evalsuite"); name != "nightly" {
+		t.Errorf("the writeback step patches evalsuite %q, want the suite named by suite-name", name)
 	}
 }
 

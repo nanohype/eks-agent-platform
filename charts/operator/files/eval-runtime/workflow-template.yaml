@@ -28,6 +28,34 @@
 # onExit: run-outcome — runs after the workflow whatever its outcome, and
 #      reports a run that never reached step 4. See the handler for the ways a
 #      run can stop without reaching the handler either.
+#
+# How a value reaches a script:
+#
+#   Argo resolves {{...}} by rewriting the template text before the pod exists,
+#   so an expression inside a script's `source` becomes part of the program. The
+#   values flowing through this pipeline include tenant-authored case inputs,
+#   the EvalSuite's manifest name and model replies to adversarial cases; one
+#   carrying a quote, a $( or a newline would run as shell in a pod holding the
+#   eval-runner role and kubectl. So a value reaches a script as data, never as
+#   source:
+#
+#   - a JSON document (the cases, the results, the score) is a raw input
+#     artifact: Argo writes the value to the artifact's path before the script
+#     starts, and the script reads the file. A raw artifact needs no artifact
+#     repository; its content travels inside the template.
+#   - a scalar (a name, a bucket, a URL, the threshold) is an environment
+#     variable, which the script expands inside double quotes.
+#
+#   Documents do not travel as environment variables because Linux caps a
+#   single environment string at 128 KiB at exec, and Argo Workflows does not
+#   offload a container's env. It does move a template that outgrows that size
+#   into a ConfigMap, so a raw artifact keeps Argo's parameter size limit.
+#
+#   The only expressions left in a script's source are {{workflow.uid}} and
+#   {{workflow.creationTimestamp.RFC3339}}. The API server and Argo generate
+#   both in a fixed format, and nothing a submitter, a tenant or a model
+#   supplies reaches either. scripts/check-argo-script-splices.py fails on any
+#   other expression in a script's source or in a shell's program argument.
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
@@ -168,6 +196,15 @@ spec:
           - name: cases-manifest
           - name: platform
           - name: bucket
+        artifacts:
+          # Empty when the suite loads its cases from a manifest. archive.none
+          # delivers the bytes as they are: Argo otherwise probes a raw artifact
+          # for a tarball and unpacks one.
+          - name: inline-cases
+            path: /tmp/inline-cases.json
+            archive: { none: {} }
+            raw:
+              data: "{{inputs.parameters.cases-inline}}"
       script:
         # The eval-runner image, not amazon/aws-cli: this script pipes through
         # `jq` to compact the case list, and the aws-cli image ships no jq —
@@ -191,18 +228,23 @@ spec:
           runAsUser: 1000
           seccompProfile:
             type: RuntimeDefault
+        env:
+          - name: CASES_MANIFEST
+            value: "{{inputs.parameters.cases-manifest}}"
+          - name: PLATFORM
+            value: "{{inputs.parameters.platform}}"
+          - name: REPORTS_BUCKET
+            value: "{{inputs.parameters.bucket}}"
         source: |
           set -eu
-          inline='{{inputs.parameters.cases-inline}}'
-          manifest='{{inputs.parameters.cases-manifest}}'
-          if [ -n "$inline" ] && [ "$inline" != "[]" ]; then
-            printf '%s' "$inline" > /tmp/cases.json
-          elif [ -n "$manifest" ]; then
-            # manifest is an s3:// URI or a bare key under
+          if [ -s /tmp/inline-cases.json ] && [ "$(cat /tmp/inline-cases.json)" != "[]" ]; then
+            cp /tmp/inline-cases.json /tmp/cases.json
+          elif [ -n "$CASES_MANIFEST" ]; then
+            # CASES_MANIFEST is an s3:// URI or a bare key under
             # <platform>/manifests/<name>.json
-            case "$manifest" in
-              s3://*) aws s3 cp "$manifest" /tmp/cases.json ;;
-              *)      aws s3 cp "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/manifests/$manifest" /tmp/cases.json ;;
+            case "$CASES_MANIFEST" in
+              s3://*) aws s3 cp "$CASES_MANIFEST" /tmp/cases.json ;;
+              *)      aws s3 cp "s3://$REPORTS_BUCKET/$PLATFORM/manifests/$CASES_MANIFEST" /tmp/cases.json ;;
             esac
           else
             echo "no cases supplied (inline empty + manifest empty)" >&2
@@ -231,6 +273,12 @@ spec:
           - name: base-url
           - name: route
           - name: route-api
+        artifacts:
+          - name: cases
+            path: /tmp/cases.json
+            archive: { none: {} }
+            raw:
+              data: "{{inputs.parameters.cases-json}}"
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
@@ -262,9 +310,14 @@ spec:
         env:
           - name: OTEL_RESOURCE_ATTRIBUTES
             value: "agents.tenant={{workflow.parameters.tenant}},agents.platform={{workflow.parameters.platform}},agents.fleet={{workflow.parameters.fleet}}"
+          - name: MODEL_ROUTE_BASE_URL
+            value: "{{inputs.parameters.base-url}}"
+          - name: MODEL_ROUTE
+            value: "{{inputs.parameters.route}}"
+          - name: MODEL_ROUTE_API
+            value: "{{inputs.parameters.route-api}}"
         source: |
           set -eu
-          echo '{{inputs.parameters.cases-json}}' > /tmp/cases.json
           # eval-runner is the @eks-agent/eval-runner Node CLI (packages/
           # eval-runner). The 'evaluate' command reads /tmp/cases.json and POSTs
           # each case to the route's published base URL — {base-url}/v1/messages
@@ -278,9 +331,9 @@ spec:
           # score step can grade without re-reading the source suite.
           evaluate \
             --cases /tmp/cases.json \
-            --base-url '{{inputs.parameters.base-url}}' \
-            --route '{{inputs.parameters.route}}' \
-            --route-api '{{inputs.parameters.route-api}}' \
+            --base-url "$MODEL_ROUTE_BASE_URL" \
+            --route "$MODEL_ROUTE" \
+            --route-api "$MODEL_ROUTE_API" \
             --output /tmp/results.json
         resources:
           requests: { cpu: 500m, memory: 512Mi }
@@ -303,6 +356,13 @@ spec:
           - name: platform
           - name: suite
           - name: bucket
+        artifacts:
+          # The results carry the model's replies, adversarial cases included.
+          - name: results
+            path: /tmp/results.json
+            archive: { none: {} }
+            raw:
+              data: "{{inputs.parameters.results-json}}"
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
@@ -320,9 +380,17 @@ spec:
           runAsUser: 1000
           seccompProfile:
             type: RuntimeDefault
+        env:
+          - name: PASS_THRESHOLD
+            value: "{{inputs.parameters.pass-threshold}}"
+          - name: PLATFORM
+            value: "{{inputs.parameters.platform}}"
+          - name: SUITE
+            value: "{{inputs.parameters.suite}}"
+          - name: REPORTS_BUCKET
+            value: "{{inputs.parameters.bucket}}"
         source: |
           set -eu
-          echo '{{inputs.parameters.results-json}}' > /tmp/results.json
           # The uniquifier is the workflow's own UID, not $RANDOM. /bin/sh in
           # this image is dash, which has no $RANDOM, and `set -u` makes that a
           # fatal error on the line itself:
@@ -334,15 +402,16 @@ spec:
           run_id="$(date -u +%Y%m%dT%H%M%SZ)-{{workflow.uid}}"
           score \
             --results /tmp/results.json \
-            --pass-threshold '{{inputs.parameters.pass-threshold}}' \
+            --pass-threshold "$PASS_THRESHOLD" \
             --report /tmp/report.html \
             --junit /tmp/junit.xml \
             --score-out /tmp/score.json
-          aws s3 cp /tmp/report.html "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/runs/{{inputs.parameters.suite}}/$run_id/report.html"
-          aws s3 cp /tmp/junit.xml   "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/runs/{{inputs.parameters.suite}}/$run_id/junit.xml"
+          run_prefix="s3://$REPORTS_BUCKET/$PLATFORM/runs/$SUITE/$run_id"
+          aws s3 cp /tmp/report.html "$run_prefix/report.html"
+          aws s3 cp /tmp/junit.xml   "$run_prefix/junit.xml"
           # Inject the report URL into score.json so writeback can copy
           # it into EvalSuite.status.lastReportUrl.
-          jq --arg url "s3://{{inputs.parameters.bucket}}/{{inputs.parameters.platform}}/runs/{{inputs.parameters.suite}}/$run_id/report.html" \
+          jq --arg url "$run_prefix/report.html" \
              '. + {reportUrl: $url}' /tmp/score.json > /tmp/score.with-url.json
           mv /tmp/score.with-url.json /tmp/score.json
         resources:
@@ -396,12 +465,18 @@ spec:
           runAsUser: 1000
           seccompProfile:
             type: RuntimeDefault
+        env:
+          - name: WORKFLOW_STATUS
+            value: "{{inputs.parameters.workflow-status}}"
+          - name: SUITE_NAME
+            value: "{{inputs.parameters.suite-name}}"
+          - name: SUITE_NAMESPACE
+            value: "{{inputs.parameters.suite-namespace}}"
         source: |
           set -eu
-          status='{{inputs.parameters.workflow-status}}'
           # A run that succeeded wrote its own result at step 4; a second patch
           # behind it would replace that result with a blank one.
-          if [ "$status" = "Succeeded" ]; then
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ]; then
             exit 0
           fi
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -417,8 +492,8 @@ spec:
           # status.lastRunAt is stamped by whoever wrote last, and both stamps
           # are UTC in the same layout, so a lexicographic compare orders them.
           # A lastRunAt after this workflow started is writeback's, from this run.
-          wrote="$(kubectl get evalsuite '{{inputs.parameters.suite-name}}' \
-            --namespace '{{inputs.parameters.suite-namespace}}' \
+          wrote="$(kubectl get evalsuite "$SUITE_NAME" \
+            --namespace "$SUITE_NAMESPACE" \
             -o jsonpath='{.status.lastRunAt}' 2>/dev/null || true)"
           newest="$(printf '%s\n%s\n' "$started" "$wrote" | sort | tail -1)"
 
@@ -433,8 +508,8 @@ spec:
             patch="$(jq -nc --arg t "$now" '{status:{phase:"Failed",lastRunAt:$t,lastScore:"",lastReportUrl:""}}')"
           fi
 
-          kubectl patch evalsuite '{{inputs.parameters.suite-name}}' \
-            --namespace '{{inputs.parameters.suite-namespace}}' \
+          kubectl patch evalsuite "$SUITE_NAME" \
+            --namespace "$SUITE_NAMESPACE" \
             --subresource status \
             --type merge \
             --patch "$patch"
@@ -452,6 +527,12 @@ spec:
           - name: score-json
           - name: suite-name
           - name: suite-namespace
+        artifacts:
+          - name: score
+            path: /tmp/score.json
+            archive: { none: {} }
+            raw:
+              data: "{{inputs.parameters.score-json}}"
       script:
         image: ghcr.io/nanohype/eks-agent-platform/eval-runner:0.1.0
         command: ["/bin/sh", "-c"]
@@ -469,21 +550,25 @@ spec:
           runAsUser: 1000
           seccompProfile:
             type: RuntimeDefault
+        env:
+          - name: SUITE_NAME
+            value: "{{inputs.parameters.suite-name}}"
+          - name: SUITE_NAMESPACE
+            value: "{{inputs.parameters.suite-namespace}}"
         source: |
           set -eu
-          # score-json shape (one line):
+          # /tmp/score.json shape (one line):
           #   {"meanScore":"0.92","passed":true,"reportUrl":"s3://…"}
-          score='{{inputs.parameters.score-json}}'
-          mean="$(echo "$score" | jq -r '.meanScore')"
-          phase="$(echo "$score" | jq -r 'if .passed then "Passed" else "Failed" end')"
-          url="$(echo "$score" | jq -r '.reportUrl')"
+          mean="$(jq -r '.meanScore' /tmp/score.json)"
+          phase="$(jq -r 'if .passed then "Passed" else "Failed" end' /tmp/score.json)"
+          url="$(jq -r '.reportUrl' /tmp/score.json)"
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           # suite-name is the bare EvalSuite resource name; passed in by
           # the operator directly so we don't have to reconstruct it
           # from workflow.name (platform-prefixed; shell-strip breaks
           # on hyphenated platform names like 'acme-corp').
-          kubectl patch evalsuite '{{inputs.parameters.suite-name}}' \
-            --namespace '{{inputs.parameters.suite-namespace}}' \
+          kubectl patch evalsuite "$SUITE_NAME" \
+            --namespace "$SUITE_NAMESPACE" \
             --subresource status \
             --type merge \
             --patch "$(jq -nc --arg ls "$mean" --arg lu "$url" --arg t "$now" --arg p "$phase" '{status:{lastScore:$ls,lastReportUrl:$lu,lastRunAt:$t,phase:$p}}')"

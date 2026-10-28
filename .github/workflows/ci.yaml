@@ -664,6 +664,26 @@ jobs:
       - run: pip install pyyaml
       - run: ./scripts/check-eval-workflow.py
 
+  # ── Argo script splice gate ──────────────────────────────────────────────
+  # Argo substitutes {{...}} into a template's text before the pod exists, so an
+  # expression inside a script's source or a shell's -c program becomes part of
+  # the program. The eval steps handle tenant-authored cases and model replies,
+  # and a quote in either would run as shell beside the eval-runner role and
+  # kubectl. This fails on any expression in code outside an allowlist of
+  # Argo-generated values, in every tracked workflow manifest. The self-test
+  # runs first: it proves the rule rejects the splices it names and accepts
+  # delivery through env values and raw artifacts.
+  argo-script-splices:
+    name: no template expression is spliced into code a step runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install pyyaml
+      - run: ./scripts/check-argo-script-splices.py --self-test
+      - run: ./scripts/check-argo-script-splices.py --list
+
   # ── eval-runner image ────────────────────────────────────────────────────
   # The image is what the eval WorkflowTemplate runs, and outside this job only
   # release.yaml builds it — on a tag, after the merge. A change that breaks the
@@ -1080,6 +1100,7 @@ jobs:
         chart-args,
         chart-version-bump,
         eval-workflow,
+        argo-script-splices,
         eval-runner-image,
         runtime-contract,
         vcluster-chart,
