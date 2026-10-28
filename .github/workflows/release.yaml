@@ -133,21 +133,59 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: build + push (multi-arch)
+      # One build, and every later step names its output by digest. The image
+      # is pushed untagged, each platform of that exact digest is scanned, and
+      # only then does the digest get its tags, its signature and its SBOM
+      # attestation. A registry digest is the hash of the bytes it names, so
+      # the bytes published are the bytes scanned.
+      - name: build + push by digest (multi-arch, untagged)
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: operators/
           platforms: linux/amd64,linux/arm64
-          push: true
           provenance: mode=max
           sbom: true
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
-          tags: |
-            ghcr.io/${{ github.repository }}/operator:${{ steps.ver.outputs.version }}
-            ghcr.io/${{ github.repository }}/operator:latest
-      # Sign, scan and attest the digest the build pushed, never a tag. A tag is
+          tags: ghcr.io/${{ github.repository }}/operator
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+      # Each scan names the index the build pushed and one platform, and trivy
+      # reads that platform's manifest out of the index the digest names. The
+      # scan fails if the image it read is any other platform.
+      - name: scan linux/amd64
+        uses: $/.github/actions/image-scan
+        with:
+          image: ghcr.io/${{ github.repository }}/operator@${{ steps.build.outputs.digest }}
+          platform: linux/amd64
+      - name: scan linux/arm64
+        uses: $/.github/actions/image-scan
+        with:
+          image: ghcr.io/${{ github.repository }}/operator@${{ steps.build.outputs.digest }}
+          platform: linux/arm64
+      # The tags point at the scanned digest, and each is read back before
+      # anything is signed: a tag that resolves anywhere else fails the job.
+      - name: tag the scanned digest
+        env:
+          REPO: ghcr.io/${{ github.repository }}/operator
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          case "$DIGEST" in
+            sha256:?*) ;;
+            *) echo "::error::the build reported no image digest ('$DIGEST'); nothing to tag"; exit 1 ;;
+          esac
+          docker buildx imagetools create --tag "$REPO:$VERSION" --tag "$REPO:latest" "$REPO@$DIGEST"
+          for ref in "$REPO:$VERSION" "$REPO:latest"; do
+            got=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" | jq -r .digest)
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$ref resolves to $got, not the scanned digest $DIGEST"
+              exit 1
+            fi
+            echo "$ref -> $got"
+          done
+      # Sign and attest the digest the build pushed, never a tag. A tag is
       # mutable, so a signature taken through one covers whatever the tag pointed
       # at in that instant; the digest is what this build produced, and it is what
       # admission pins the pod to before verifying the bundles attached to it.
@@ -225,18 +263,61 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: build + push (multi-arch)
+      # One build, and every later step names its output by digest. The image
+      # is pushed untagged, each platform of that exact digest is scanned, and
+      # only then does the digest get its tags, its signature and its SBOM
+      # attestation. A registry digest is the hash of the bytes it names, so
+      # the bytes published are the bytes scanned.
+      - name: build + push by digest (multi-arch, untagged)
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: sandbox-worker/
           platforms: linux/amd64,linux/arm64
-          push: true
           provenance: mode=max
           sbom: true
-          tags: |
-            ghcr.io/${{ github.repository }}/sandbox-worker:${{ steps.ver.outputs.version }}
-            ghcr.io/${{ github.repository }}/sandbox-worker:latest
+          tags: ghcr.io/${{ github.repository }}/sandbox-worker
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+      # Each scan names the index the build pushed and one platform, and trivy
+      # reads that platform's manifest out of the index the digest names. The
+      # scan fails if the image it read is any other platform.
+      #
+      # sandbox-worker/.trivyignore.yaml names the fixed CRITICALs this image
+      # acknowledges, the same file its ci.yaml job scans with.
+      - name: scan linux/amd64
+        uses: $/.github/actions/image-scan
+        with:
+          image: ghcr.io/${{ github.repository }}/sandbox-worker@${{ steps.build.outputs.digest }}
+          platform: linux/amd64
+          acknowledged: sandbox-worker/.trivyignore.yaml
+      - name: scan linux/arm64
+        uses: $/.github/actions/image-scan
+        with:
+          image: ghcr.io/${{ github.repository }}/sandbox-worker@${{ steps.build.outputs.digest }}
+          platform: linux/arm64
+          acknowledged: sandbox-worker/.trivyignore.yaml
+      # The tags point at the scanned digest, and each is read back before
+      # anything is signed: a tag that resolves anywhere else fails the job.
+      - name: tag the scanned digest
+        env:
+          REPO: ghcr.io/${{ github.repository }}/sandbox-worker
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          case "$DIGEST" in
+            sha256:?*) ;;
+            *) echo "::error::the build reported no image digest ('$DIGEST'); nothing to tag"; exit 1 ;;
+          esac
+          docker buildx imagetools create --tag "$REPO:$VERSION" --tag "$REPO:latest" "$REPO@$DIGEST"
+          for ref in "$REPO:$VERSION" "$REPO:latest"; do
+            got=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" | jq -r .digest)
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$ref resolves to $got, not the scanned digest $DIGEST"
+              exit 1
+            fi
+            echo "$ref -> $got"
+          done
       - name: sign (keyless, OIDC)
         env:
           IMAGE_REF: ghcr.io/${{ github.repository }}/sandbox-worker@${{ steps.build.outputs.digest }}
