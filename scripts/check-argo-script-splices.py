@@ -16,11 +16,26 @@ template, because none of them looks at what a substitution lands in.
 WHAT COUNTS AS CODE
 
   * a script template's `source`, whatever its interpreter;
-  * the program argument of a container that runs inline code: the argument
-    after `-c` for a shell or python, after `-e`/`--eval`/`-p`/`--print` for
-    node, wherever it falls across `command` and `args`, behind `env` or
-    `busybox` included. Arguments after the program are positional data (`$1`,
-    `sys.argv`) and are not code.
+  * the program argument of a container that runs inline code, wherever it
+    falls across `command` and `args`:
+      - a shell (sh, bash, dash, ash, zsh, ksh, mksh): the first word after its
+        options when one of them is `-c`, alone or in a cluster. The walk skips
+        the argument of `-o`/`+o` and `-O`/`+O`, alone or in a cluster, and of
+        `--rcfile` and `--init-file`;
+      - python: the word after `-c`, or the rest of the word when the program is
+        attached (`-cCODE`, `-BcCODE`). The walk skips the argument of `-W`, `-X`
+        and `--check-hash-based-pycs`; `-m` names a module, and the walk stops there;
+      - node: the word after `-e`, `--eval`, `-p`, `--print` or a cluster holding
+        e or p (`-pe`), and the value of `--eval=` or `--print=`.
+    The interpreter may stand behind `busybox` or `env`. The env walk skips
+    NAME=VALUE assignments and env's options, with the argument of `-u`, `-C`,
+    `-a` and their long forms, attached or separate. The string handed to
+    `env -S` or `--split-string` is code in its own right, because env splits it
+    into the command line it runs, and the program that command line names is
+    found the same way.
+
+  Any option outside those named is read as taking no argument. Arguments after
+  the program are positional data (`$1`, `sys.argv`) and are not code.
 
   Comments inside a source count as code. Argo substitutes inside them too, and
   a value carrying a newline ends the comment.
@@ -54,15 +69,23 @@ WHERE TEMPLATES ARE FOUND
 
   Every tracked *.yaml and *.yml holding an argoproj.io Workflow,
   WorkflowTemplate, ClusterWorkflowTemplate or CronWorkflow, found by content
-  rather than by path. A file that names one of those kinds but does not parse as
-  YAML is exit 3, not a skip: a Helm template wrapping a WorkflowTemplate in Go
-  templating is where a splice would hide from a walk that passed over what it
-  could not read. A Workflow a program assembles at run time is outside this
-  check.
+  rather than by path. A file the walk cannot judge is exit 3, not a skip:
+
+    * a file that names one of those kinds but does not parse as YAML. A Helm
+      template wrapping a WorkflowTemplate in Go templating is where a splice
+      would hide from a walk that passed over what it could not read;
+    * a tracked *.yaml or *.yml that cannot be read, or whose bytes are not
+      UTF-8, whatever they hold. A search of the raw bytes for argoproj.io
+      cannot rule such a file out: the same manifest in UTF-16 holds no such
+      byte run.
+
+  A path git lists that is gone from the working tree holds no bytes, and is
+  passed over. A Workflow a program assembles at run time is outside this check.
 
 Exit status: 0 no splice, 1 a splice, 2 usage error, 3 nothing could be checked
-(git or PyYAML missing, no workflow manifest found, a manifest that does not
-parse, or manifests holding no code at all).
+(git or PyYAML missing, a git call that did not finish or start, no workflow
+manifest found, a file the walk cannot judge, or manifests holding no code at
+all).
 
     scripts/check-argo-script-splices.py [--list] [--self-test]
 """
@@ -70,13 +93,16 @@ parse, or manifests holding no code at all).
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import os
 import pathlib
 import re
-import subprocess
+import shlex
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from _tooling import EXIT_CANNOT_EVALUATE, require_binary  # noqa: E402
+from _tooling import EXIT_CANNOT_EVALUATE, require_binary, run_tool  # noqa: E402
 
 # Imported here but asserted after argument parsing, so --help and a usage error
 # still behave on a machine without it.
@@ -107,7 +133,17 @@ KIND_LINE = re.compile(
 EXPRESSION = re.compile(r"\{\{(.*?)\}\}", re.S)
 
 SHELLS = {"sh", "bash", "dash", "ash", "zsh", "ksh", "mksh"}
-NODE_INLINE = ("-e", "--eval", "-p", "--print")
+
+# Options that take the next argument, or the rest of their own word where the
+# program allows it attached. Every option outside these sets is read as taking
+# none, so the first word after it that is not an option ends the walk.
+SHELL_SHORT_WITH_ARGUMENT = frozenset("oO")  # set -o/+o, bash's shopt -O/+O
+SHELL_LONG_WITH_ARGUMENT = frozenset({"--rcfile", "--init-file"})
+PYTHON_SHORT_WITH_ARGUMENT = frozenset("WX")
+PYTHON_LONG_WITH_ARGUMENT = frozenset({"--check-hash-based-pycs"})
+NODE_INLINE_LONG = ("--eval", "--print")
+ENV_SHORT_WITH_ARGUMENT = frozenset("uCSa")
+ENV_LONG_WITH_ARGUMENT = frozenset({"--unset", "--chdir", "--split-string", "--argv0"})
 
 
 def interpreter(word: str) -> str | None:
@@ -121,66 +157,135 @@ def interpreter(word: str) -> str | None:
     return None
 
 
-def program_index(argv: list[str]) -> int | None:
-    """Index of the argument a container runs as inline code, or None."""
-    i = 0
+def _env_options(argv: list[str], i: int) -> tuple[int, tuple[int, str] | None]:
+    """Walk env's options and NAME=VALUE assignments from argv[i].
+
+    Returns (index, split). Without -S, split is None and index is the command
+    env runs. At -S, split is (index of the argument holding the string, the
+    string) and index is the argument after it: env splits the string into
+    words in the option's place and reads on from there.
+    """
     while i < len(argv):
-        base = argv[i].rsplit("/", 1)[-1]
-        if base == "env":
+        a = argv[i]
+        if a == "--":
+            return i + 1, None
+        if a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name in ENV_LONG_WITH_ARGUMENT and not eq:
+                if name == "--split-string" and i + 1 < len(argv):
+                    return i + 2, (i + 1, argv[i + 1])
+                i += 2
+                continue
+            if name == "--split-string":
+                return i + 1, (i, value)
             i += 1
-            while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i]):
-                i += 1
             continue
-        if base == "busybox":
+        if len(a) > 1 and a[0] == "-":
+            i += 1
+            for k, ch in enumerate(a[1:], 1):
+                if ch not in ENV_SHORT_WITH_ARGUMENT:
+                    continue
+                attached = a[k + 1:]
+                if ch == "S":
+                    if attached:
+                        return i, (i - 1, attached)
+                    return (i + 1, (i, argv[i])) if i < len(argv) else (i, None)
+                if not attached:
+                    i += 1
+                break
+            continue
+        if a == "-" or "=" in a:
             i += 1
             continue
-        break
-    if i >= len(argv):
-        return None
-    kind = interpreter(argv[i])
-    if kind is None:
-        return None
-    start = i + 1
+        return i, None
+    return i, None
 
-    if kind == "node":
-        for j in range(start, len(argv)):
-            if argv[j] in NODE_INLINE:
-                return j + 1 if j + 1 < len(argv) else None
-            if argv[j].startswith(("--eval=", "--print=")):
-                return j
-        return None
 
+def _shell_program(argv: list[str], j: int) -> int | None:
     inline = False
-    j = start
     while j < len(argv):
         a = argv[j]
         if a == "--":
             j += 1
             break
-        if kind == "shell" and a in ("-o", "+o"):
-            j += 2
-            continue
-        if kind == "python" and a in ("-W", "-X"):
-            j += 2
-            continue
-        if kind == "python" and a == "-m":
-            return None
         if a.startswith("--"):
-            j += 1
+            j += 2 if a in SHELL_LONG_WITH_ARGUMENT else 1
             continue
         if len(a) > 1 and a[0] in "-+":
             if "c" in a[1:]:
                 inline = True
-                if kind == "python":
-                    # python stops reading options at -c; what follows is the program.
-                    j += 1
-                    break
-            j += 1
+            j += 1 + sum(ch in SHELL_SHORT_WITH_ARGUMENT for ch in a[1:])
             continue
         break
-    if inline and j < len(argv):
-        return j
+    return j if inline and j < len(argv) else None
+
+
+def _python_program(argv: list[str], j: int) -> int | None:
+    while j < len(argv):
+        a = argv[j]
+        if a.startswith("--") and a != "--":
+            j += 2 if a in PYTHON_LONG_WITH_ARGUMENT else 1
+            continue
+        if len(a) < 2 or a[0] != "-" or a == "--":
+            # A script path, `-` for stdin, or the end of options: no inline program.
+            return None
+        for k, ch in enumerate(a[1:], 1):
+            attached = a[k + 1:]
+            if ch == "c":
+                # python stops reading options at -c; what follows is the program.
+                if attached:
+                    return j
+                return j + 1 if j + 1 < len(argv) else None
+            if ch == "m":
+                return None
+            if ch in PYTHON_SHORT_WITH_ARGUMENT:
+                j += 0 if attached else 1
+                break
+        j += 1
     return None
+
+
+def _node_program(argv: list[str], j: int) -> int | None:
+    for k in range(j, len(argv)):
+        a = argv[k]
+        if a in NODE_INLINE_LONG or (len(a) > 1 and a[0] == "-" and a[1] != "-" and set(a[1:]) & {"e", "p"}):
+            return k + 1 if k + 1 < len(argv) else None
+        if a.startswith(tuple(f"{o}=" for o in NODE_INLINE_LONG)):
+            return k
+    return None
+
+
+def code_arguments(argv: list[str]) -> list[int]:
+    """Indices of the arguments in argv that a container runs as code."""
+    i = 0
+    while i < len(argv):
+        base = argv[i].rsplit("/", 1)[-1]
+        if base == "busybox":
+            i += 1
+            continue
+        if base != "env":
+            break
+        i, split = _env_options(argv, i + 1)
+        if split is not None:
+            # The string is code in its own right: env splits it into the command
+            # line it runs. The program that command line names may still be a
+            # word after it, so env's walk is read again over the split words.
+            at, text = split
+            out = [at]
+            try:
+                words = shlex.split(text)
+            except ValueError:
+                return out
+            for k in code_arguments(["env", *words, *argv[i:]]):
+                if k > len(words):
+                    out.append(i + k - 1 - len(words))
+            return out
+    if i >= len(argv):
+        return []
+    program = {"shell": _shell_program, "python": _python_program, "node": _node_program}.get(
+        interpreter(argv[i]) or "", lambda _argv, _j: None
+    )(argv, i + 1)
+    return [] if program is None else [program]
 
 
 def _containers(tmpl: dict) -> list[tuple[str, dict]]:
@@ -208,9 +313,7 @@ def code_fields(tmpl: dict) -> list[tuple[str, str]]:
         out.append(("script.source", script["source"]))
     for label, c in _containers(tmpl):
         argv = [str(a) for a in (c.get("command") or [])] + [str(a) for a in (c.get("args") or [])]
-        idx = program_index(argv)
-        if idx is not None:
-            out.append((f"{label} program argument", argv[idx]))
+        out.extend((f"{label} program argument", argv[idx]) for idx in code_arguments(argv))
     return out
 
 
@@ -267,15 +370,15 @@ def file_line(file_text: str, field_text: str, line: int) -> int | None:
     return hits[0] if len(hits) == 1 else None
 
 
+@dataclasses.dataclass(frozen=True)
 class Splice:
     """One expression found in code: where, and the field text it sits in."""
 
-    def __init__(self, template: str, field: str, line: int, expr: str, field_text: str):
-        self.template = template
-        self.field = field
-        self.line = line
-        self.expr = expr
-        self.field_text = field_text
+    template: str
+    field: str
+    line: int
+    expr: str
+    field_text: str
 
     def describe(self, file_text: str | None = None) -> str:
         at = file_line(file_text, self.field_text, self.line) if file_text is not None else None
@@ -299,17 +402,36 @@ def check_manifest(doc: dict) -> tuple[list[Splice], int, list[str]]:
 
 def tracked_yaml() -> list[pathlib.Path]:
     cmd = ["git", "ls-files", "-z", "--", "*.yaml", "*.yml"]
-    try:
-        r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError) as e:
-        print(f"check-argo-script-splices: `{' '.join(cmd)}` could not run ({e}); nothing was checked.",
-              file=sys.stderr)
-        sys.exit(EXIT_CANNOT_EVALUATE)
+    r = run_tool(cmd, timeout=120, cwd=ROOT)
     if r.returncode != 0:
         print(f"check-argo-script-splices: `{' '.join(cmd)}` exited {r.returncode}: "
               f"{r.stderr.strip()[:300]}; nothing was checked.", file=sys.stderr)
         sys.exit(EXIT_CANNOT_EVALUATE)
     return [ROOT / p for p in r.stdout.split("\0") if p]
+
+
+def survey(paths: list[pathlib.Path]) -> tuple[list[tuple[pathlib.Path, dict, str]], list[tuple[pathlib.Path, str]]]:
+    """(manifests, undecided): each workflow manifest among paths with its file's
+    text, and each path this gate owes a verdict on and cannot give one, with why."""
+    manifests: list[tuple[pathlib.Path, dict, str]] = []
+    undecided: list[tuple[pathlib.Path, str]] = []
+    for path in paths:
+        if not os.path.lexists(path):
+            # Listed by git, gone from the working tree: no bytes to hold a splice.
+            continue
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except OSError as e:
+            undecided.append((path, f"cannot be read ({e.strerror or e})"))
+            continue
+        except UnicodeDecodeError:
+            undecided.append((path, "is not UTF-8 text"))
+            continue
+        verdict, docs = classify(text)
+        if verdict == "unparseable":
+            undecided.append((path, "names a workflow kind but does not parse as YAML"))
+        manifests.extend((path, d, text) for d in docs)
+    return manifests, undecided
 
 
 # ── self-test ────────────────────────────────────────────────────────────────
@@ -360,8 +482,31 @@ def self_test() -> int:
         ("a program behind env and an option cluster",
          _wft(_container(["/usr/bin/env", "LC_ALL=C", "bash", "-euc"], [f"echo {x}"])), x, 1),
         ("a program behind -o pipefail", _wft(_container(["bash", "-o", "pipefail", "-c", f"echo {x}"])), x, 1),
+        ("a program behind -o inside a cluster",
+         _wft(_container(["bash", "-eo", "pipefail", "-c", f"echo {x}"])), x, 1),
+        ("a program behind -O and its argument", _wft(_container(["bash", "-O", "extglob", "-c", f"echo {x}"])), x, 1),
+        ("a program behind --rcfile and its argument",
+         _wft(_container(["bash", "--rcfile", "/etc/rc", "-c", f"echo {x}"])), x, 1),
+        ("a program behind --init-file and its argument",
+         _wft(_container(["bash", "--init-file", "/etc/rc", "-c", f"echo {x}"])), x, 1),
+        ("a program behind env -u and its argument",
+         _wft(_container(["env", "-u", "FOO", "sh", "-c", f"echo {x}"])), x, 1),
+        ("a program behind env -u attached in a cluster",
+         _wft(_container(["env", "-iuFOO", "sh", "-c", f"echo {x}"])), x, 1),
+        ("a program behind env --unset and its argument",
+         _wft(_container(["env", "--unset", "FOO", "sh", "-c", f"echo {x}"])), x, 1),
+        ("a program behind env --unset=", _wft(_container(["env", "--unset=FOO", "sh", "-c", f"echo {x}"])), x, 1),
+        ("a program behind env -C and its argument",
+         _wft(_container(["env", "-C", "/work", "sh", "-c", f"echo {x}"])), x, 1),
+        ("an expression in the command line env -S splits",
+         _wft(_container(["env", "-S", f"kubectl get evalsuite {x}"])), x, 1),
+        ("a program after the command line env -S splits",
+         _wft(_container(["/usr/bin/env", "-S", "sh -c"], [f"echo {x}"])), x, 1),
         ("a python -c program", _wft(_container(["python3", "-c", f"print('{x}')"])), x, 1),
+        ("a python program attached to -c in a cluster", _wft(_container(["python3", f"-Bcprint('{x}')"])), x, 1),
         ("a node --eval program", _wft(_container(["node", "--eval", f"console.log('{x}')"])), x, 1),
+        ("a node -pe program", _wft(_container(["node", "-pe", f"'{x}'"])), x, 1),
+        ("a node -ep program", _wft(_container(["node", "-ep", f"'{x}'"])), x, 1),
         ("a sidecar's program",
          _wft({"name": "s", "container": {"image": "x", "command": ["true"]},
                "sidecars": [{"name": "side", "image": "x", "command": ["sh", "-c", f"echo {x}"]}]}), x, 1),
@@ -393,6 +538,8 @@ def self_test() -> int:
         ("the allowed timestamp", _wft(_script("started='{{workflow.creationTimestamp.RFC3339}}'")), True),
         ("a positional argument after the program",
          _wft(_container(["sh", "-c", 'printf "%s" "$1"', "sh", x])), True),
+        ("a positional argument after the program env -S names",
+         _wft(_container(["env", "-S", "sh -c 'printf \"%s\" \"$1\"' sh", x])), True),
         ("an argument to a binary that runs no inline code",
          _wft(_container(["kubectl"], ["get", "evalsuite", x])), False),
         ("python running a module", _wft(_container(["python3", "-m", "http.server", x])), False),
@@ -417,6 +564,28 @@ def self_test() -> int:
         failures.append("an AnalysisTemplate was read as a workflow manifest")
     if classify(yaml.safe_dump(_wft(_script("true"))))[0] != "manifests":
         failures.append("a parseable WorkflowTemplate was not found")
+
+    # The walk over files, on files of its own: each one it cannot judge is
+    # undecided, and only the readable manifest is checked.
+    spliced = yaml.safe_dump(_wft(_script(f"echo '{x}'")))
+    files = {
+        "clean.yaml": yaml.safe_dump(_wft(_script("true"))).encode(),
+        "latin-1.yaml": spliced.replace("name: t\n", "name: caf\xe9\n").encode("latin-1"),
+        "utf-16.yaml": spliced.encode("utf-16"),
+        "helm.yaml": unreadable.encode(),
+        "notes.yml": b"title: not a workflow\n",
+    }
+    undecidable = {"latin-1.yaml", "utf-16.yaml", "helm.yaml", "directory.yaml"}
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        for name, data in files.items():
+            (tmp / name).write_bytes(data)
+        (tmp / "directory.yaml").mkdir()
+        manifests, undecided = survey([tmp / n for n in [*files, "directory.yaml", "deleted.yaml"]])
+    if {p.name for p, _ in undecided} != undecidable:
+        failures.append(f"files undecided: {sorted(p.name for p, _ in undecided)}, want {sorted(undecidable)}")
+    if [p.name for p, _, _ in manifests] != ["clean.yaml"]:
+        failures.append(f"manifests found: {[p.name for p, _, _ in manifests]}, want only clean.yaml")
     for name, why in ALLOWED.items():
         if not why.strip():
             failures.append(f"ALLOWED[{name!r}] carries no reason")
@@ -427,7 +596,7 @@ def self_test() -> int:
         return 1
     print(
         f"✓ check-argo-script-splices self-test: {len(reject)} splices rejected, {len(accept)} "
-        "data deliveries accepted, an unparseable workflow manifest refused"
+        f"data deliveries accepted, {len(undecidable)} files the walk cannot judge refused"
     )
     return 0
 
@@ -439,7 +608,8 @@ def main() -> int:
     ap.add_argument("--list", action="store_true",
                     help="print every manifest checked, its code-field count and the allowed expressions it uses")
     ap.add_argument("--self-test", action="store_true",
-                    help="prove the rule rejects known splices and accepts data delivery, without reading the tree")
+                    help="prove the rule rejects known splices, accepts data delivery and refuses files it "
+                    "cannot judge, without reading the tree")
     args = ap.parse_args()
 
     if yaml is None:
@@ -451,24 +621,13 @@ def main() -> int:
 
     require_binary("git", "list the tracked files Argo workflow manifests can live in")
 
-    manifests: list[tuple[pathlib.Path, dict, str]] = []
-    unparseable: list[pathlib.Path] = []
-    for path in tracked_yaml():
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        verdict, docs = classify(text)
-        if verdict == "unparseable":
-            unparseable.append(path)
-        manifests.extend((path, d, text) for d in docs)
-
-    if unparseable:
-        for p in unparseable:
-            print(f"  UNDECIDED  {p.relative_to(ROOT)} names a workflow kind but does not parse as YAML",
-                  file=sys.stderr)
-        print("check-argo-script-splices: a workflow manifest that cannot be read is not one without a "
-              "splice. Nothing about those files was checked.", file=sys.stderr)
+    manifests, undecided = survey(tracked_yaml())
+    if undecided:
+        for p, why in undecided:
+            print(f"  UNDECIDED  {p.relative_to(ROOT)} {why}", file=sys.stderr)
+        print("check-argo-script-splices: a file this gate cannot read could be a workflow manifest, and "
+              "one it cannot read is not one without a splice. Nothing about those files was checked.",
+              file=sys.stderr)
         return EXIT_CANNOT_EVALUATE
     if not manifests:
         print("check-argo-script-splices: found no tracked argoproj.io workflow manifest, so nothing was "

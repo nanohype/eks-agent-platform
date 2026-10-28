@@ -44,11 +44,10 @@ import contextlib
 import io
 import json
 import pathlib
-import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from _tooling import EXIT_CANNOT_EVALUATE, require_binary  # noqa: E402
+from _tooling import EXIT_CANNOT_EVALUATE, require_binary, run_tool  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -114,27 +113,10 @@ def package_dirs(listing: str) -> list[str] | None:
     return dirs if IMAGE_PACKAGE_DIR in dirs else None
 
 
-def run_tool(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    """Run git or pnpm for the scope. A call that does not finish in time, or
-    cannot be started, exits 3: it decided nothing, and the traceback it would
-    otherwise raise exits 1, which CI reads as the verdict to build."""
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        why = f"did not finish within {timeout}s"
-    except OSError as e:
-        why = f"could not be started ({e})"
-    print(
-        f"check-eval-runner-image-scope: `{' '.join(cmd)}` {why}, so no scope can be decided.",
-        file=sys.stderr,
-    )
-    sys.exit(EXIT_CANNOT_EVALUATE)
-
-
 def workspace_package_dirs() -> list[str]:
     """eval-runner and every workspace package it depends on. Exits 3 if the
     graph does not resolve."""
-    r = run_tool(["pnpm", "--filter", SELECTOR, "ls", "--depth", "-1", "--json"], timeout=120)
+    r = run_tool(["pnpm", "--filter", SELECTOR, "ls", "--depth", "-1", "--json"], timeout=120, cwd=ROOT)
     dirs = package_dirs(r.stdout) if r.returncode == 0 else None
     if dirs is None:
         print(
@@ -149,7 +131,7 @@ def workspace_package_dirs() -> list[str]:
 
 
 def git_lines(*args: str) -> list[str]:
-    r = run_tool(["git", *args], timeout=120)
+    r = run_tool(["git", *args], timeout=120, cwd=ROOT)
     if r.returncode != 0:
         print(
             f"check-eval-runner-image-scope: `git {' '.join(args)}` exited {r.returncode}: "
