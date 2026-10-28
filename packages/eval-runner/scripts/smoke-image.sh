@@ -8,9 +8,10 @@
 #   2. node, aws, kubectl and jq each run: the WorkflowTemplate's steps exec them.
 #   3. npm, npx, corepack, yarn and yarnpkg are not on PATH.
 #
-# Needs docker and jq on the host. The eval-runner-image jobs in
-# .github/workflows/ci.yaml and .github/workflows/release.yaml run it on every
-# platform they build, the release before anything is pushed or signed.
+# Needs docker and jq on the host. .github/actions/eval-runner-image-check runs
+# it on every platform the ci.yaml and release.yaml eval-runner-image jobs
+# build; the release runs it against the pushed digest before that digest is
+# tagged or signed.
 #
 #   packages/eval-runner/scripts/smoke-image.sh <image> <platform>
 set -eu

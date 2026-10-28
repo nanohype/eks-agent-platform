@@ -186,11 +186,18 @@ jobs:
           version: v4.3.1
       # This job runs EVERY gate for real, so it needs every binary any gate
       # asserts a precondition on — not only the ones its own name suggests.
-      # check-vcluster-chart resolves the operator constants with go.
+      # check-vcluster-chart resolves the operator constants with go, and
+      # check-eval-runner-image-scope reads the workspace graph with pnpm, which
+      # needs node and no install.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
       - run: pip install pyyaml
       - run: ./scripts/check-controls.py --list
 
@@ -662,18 +669,18 @@ jobs:
   # release.yaml builds it — on a tag, after the merge. A change that breaks the
   # bundle, an entry shim, a pinned download or the package-manager strip would
   # otherwise merge green and surface as a release that cannot publish. This
-  # builds each release platform from the pull request, runs
-  # packages/eval-runner/scripts/smoke-image.sh against it (the `score` golden
-  # smoke, node / aws / kubectl / jq present, no package manager), and holds it
-  # to the bar eks-gitops' image gate sets for every image its charts render: no
-  # fixed CRITICAL.
+  # builds each release platform from the pull request and runs
+  # .github/actions/eval-runner-image-check against it, the check the release
+  # runs on every platform before it tags or signs: the `score` golden smoke,
+  # node / aws / kubectl / jq present, no package manager, and the bar
+  # eks-gitops' image gate sets for every image its charts render, no fixed
+  # CRITICAL.
   #
-  # Scoped to the pull requests that can change the image: the workspace
-  # packages it bundles (read from the pnpm workspace graph, so a new workspace
-  # dependency is in scope without editing this job), the root build inputs, and
-  # this workflow. Outside that scope the job runs and builds nothing rather than
-  # being skipped, because the merge gate counts a skipped job as a failure. A
-  # push to main always builds.
+  # Scoped to the pull requests that can change the image, which
+  # scripts/check-eval-runner-image-scope.py decides from the workspace graph.
+  # Outside that scope the job runs and builds nothing rather than being
+  # skipped, because the merge gate counts a skipped job as a failure. A push to
+  # main always builds.
   eval-runner-image:
     name: eval-runner image (${{ matrix.platform }})
     runs-on: ubuntu-latest
@@ -693,51 +700,28 @@ jobs:
         with:
           node-version-file: package.json
           package-manager-cache: false
+      - run: ./scripts/check-eval-runner-image-scope.py --self-test
+      # The script's exit status is the verdict: 0 nothing to build, 1 build,
+      # anything else means the scope could not be decided, and the job fails.
       - name: scope
         id: scope
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          set -euo pipefail
           if [ "$EVENT" != "pull_request" ]; then
             echo "scope: a $EVENT builds unconditionally"
             echo "build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           # A pull_request checkout is the merge commit, and its first parent is
           # the base it merges into, so this is exactly what the PR changes.
-          changed=$(git diff --name-only HEAD^1 HEAD)
-
-          # eval-runner and every workspace package it depends on, as paths
-          # relative to the repo root. pnpm reads this from the workspace
-          # manifests, without an install.
-          root="$(pwd -P)/"
-          pkgs=$(pnpm --filter "@eks-agent/eval-runner..." ls --depth -1 --json \
-            | jq -r --arg root "$root" '.[].path | ltrimstr($root) + "/"')
-          # A graph that did not resolve would scope every PR out of the build.
-          if ! printf '%s\n' "$pkgs" | grep -qx 'packages/eval-runner/'; then
-            echo "::error::the workspace graph did not resolve packages/eval-runner/; cannot decide scope"
-            printf '%s\n' "$pkgs"
-            exit 1
-          fi
-          roots="package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .github/workflows/ci.yaml"
-
-          build=false
-          while IFS= read -r f; do
-            [ -n "$f" ] || continue
-            for p in $pkgs; do
-              case "$f" in "$p"*) build=true; echo "in scope: $f" ;; esac
-            done
-            for r in $roots; do
-              if [ "$f" = "$r" ]; then build=true; echo "in scope: $f"; fi
-            done
-          done <<< "$changed"
-
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          if [ "$build" = false ]; then
-            echo "scope: this pull request changes nothing the image is built from; nothing to build"
-          fi
+          rc=0
+          ./scripts/check-eval-runner-image-scope.py --base HEAD^1 --head HEAD --list || rc=$?
+          case "$rc" in
+            0) echo "build=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "build=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
       - if: steps.scope.outputs.build == 'true'
         uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
       - if: steps.scope.outputs.build == 'true'
@@ -752,25 +736,12 @@ jobs:
           platforms: ${{ matrix.platform }}
           load: true
           tags: eval-runner:ci
-      - name: score smoke, userland present, package managers absent
+      - name: smoke + scan
         if: steps.scope.outputs.build == 'true'
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: packages/eval-runner/scripts/smoke-image.sh eval-runner:ci "$PLATFORM"
-      - name: no fixed CRITICAL
-        if: steps.scope.outputs.build == 'true'
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        uses: $/.github/actions/eval-runner-image-check
         with:
-          scan-type: image
-          image-ref: eval-runner:ci
-          scanners: vuln
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-          # The scanner's release is part of the verdict, so it is pinned here
-          # rather than left to whatever the action defaults to.
-          # renovate: datasource=github-releases depName=aquasecurity/trivy
-          version: v0.72.0
+          image: eval-runner:ci
+          platform: ${{ matrix.platform }}
 
   # ── runtime contract gate ────────────────────────────────────────────────
   # The chart and the binary are one contract in two files: the eval

@@ -7,14 +7,15 @@
 #
 # Both stages pin the multi-arch manifest-list digest, not just the tag — buildx
 # still picks the right per-platform manifest, but the bytes are fixed. Refresh
-# with `docker buildx imagetools inspect node:24-bookworm-slim` and move both
-# stages together.
+# with `docker buildx imagetools inspect node:24-trixie-slim`, take a digest
+# past the release-age floor Renovate holds updates to, and move both stages
+# together.
 
 # ── build stage: bundle the CLI to a single file ────────────────────────────
 # Runs on the build host's platform. Its only output is one JavaScript file,
 # the same for every target, so emulating this stage per target platform would
 # only make an arm64 build under QEMU slower.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS builder
+FROM --platform=$BUILDPLATFORM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS builder
 WORKDIR /src
 
 # corepack pins pnpm from the root package.json's packageManager field.
@@ -28,14 +29,15 @@ COPY . .
 
 RUN pnpm install --frozen-lockfile
 
-# Build eval-runner's dependency graph (core → pricing) so the pricing data
-# file lands in its dist, then bundle the CLI from source into one ESM file.
-# The @eks-agent/core imports are types-only and erase at build.
-RUN pnpm --filter "...@eks-agent/eval-runner" build \
+# `@eks-agent/eval-runner...` selects eval-runner and every workspace package it
+# depends on (core, pricing), and pnpm runs each one's own build script in
+# dependency order, pricing's copy of its data file into dist among them. The
+# bundle inlines core and pricing from those dist entry points.
+RUN pnpm --filter "@eks-agent/eval-runner..." build \
     && pnpm --filter @eks-agent/eval-runner bundle
 
 # ── runtime stage: slim node + the OS tools the workflow shells to ──────────
-FROM node:24-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS runtime
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS runtime
 
 # Populated per platform by buildx, and declared without a default: a default
 # shadows the per-platform value and cross-builds the wrong architecture.

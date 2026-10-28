@@ -117,8 +117,9 @@
       "extractVersionTemplate": "^v?(?<version>.*)$"
     },
     {
+      "description": "A tool release passed as an action's `version` input, named by the `# renovate:` comment above it. Read in the workflows and in the composite actions under .github/actions/ they call.",
       "customType": "regex",
-      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "managerFilePatterns": ["/^\\.github/(workflows/[^/]+|actions/[^/]+/action)\\.ya?ml$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\s+version: (?<currentValue>v?\\S+)"
       ]

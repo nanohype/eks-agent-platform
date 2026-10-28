@@ -12,6 +12,7 @@ export {
 } from './cli.js';
 export type { GatewayBackendOptions, RouteAPI } from './model.js';
 export { asAgentError, classifyStatus, GatewayBackend } from './model.js';
+export { CaseResultSchema, CaseResultsSchema, parseResults } from './results.js';
 export type { RunOptions } from './run.js';
 export { runCases } from './run.js';
 export type { Scored } from './score.js';

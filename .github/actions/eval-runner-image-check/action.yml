@@ -1,0 +1,45 @@
+name: eval-runner image check
+description: >-
+  Checks one platform of a built eval-runner image against what the eval
+  WorkflowTemplate relies on: the score golden smoke, the userland its steps
+  exec, no package manager on PATH, and no fixed CRITICAL vulnerability. The
+  ci.yaml and release.yaml eval-runner-image jobs run it once per platform, so
+  a pull request and a release hold the image to one bar.
+
+inputs:
+  image:
+    description: >-
+      The image to check. A local tag for an image built with load, or a
+      registry reference pinned to one platform's manifest digest.
+    required: true
+  platform:
+    description: The platform to run the image as, such as linux/arm64.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: score smoke, userland present, package managers absent
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        PLATFORM: ${{ inputs.platform }}
+      run: |
+        "$GITHUB_WORKSPACE/packages/eval-runner/scripts/smoke-image.sh" "$IMAGE" "$PLATFORM"
+    # cache: false. The trivy database cache is writable by any workflow on the
+    # repository, including one running from a pull request, so a database
+    # restored from it could clear an image the release then signs.
+    - name: no fixed CRITICAL
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        scan-type: image
+        image-ref: ${{ inputs.image }}
+        scanners: vuln
+        severity: CRITICAL
+        ignore-unfixed: true
+        exit-code: "1"
+        cache: false
+        # The scanner's release is part of the verdict, so it is pinned here
+        # rather than left to whatever the action defaults to.
+        # renovate: datasource=github-releases depName=aquasecurity/trivy
+        version: v0.72.0

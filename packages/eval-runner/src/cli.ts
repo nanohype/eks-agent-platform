@@ -6,9 +6,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 
 import { parseCases } from './cases.js';
 import { GatewayBackend, type RouteAPI } from './model.js';
+import { parseResults } from './results.js';
 import { runCases } from './run.js';
 import { aggregate, renderHtml, renderJUnit } from './score.js';
-import type { CaseResult, ModelBackend } from './types.js';
+import type { ModelBackend } from './types.js';
 
 /**
  * The flags each subcommand REQUIRES — every one is read with `required()`
@@ -114,12 +115,12 @@ export interface ScoreOptions {
 }
 
 /**
- * `score` — grade results.json against the pass threshold, render the HTML +
- * JUnit reports, and write score.json (`{meanScore, passed, …}`, the shape the
- * workflow's writeback step patches into EvalSuite.status).
+ * `score` — validate results.json, grade it against the pass threshold, render
+ * the HTML + JUnit reports, and write score.json (`{meanScore, passed, …}`, the
+ * shape the workflow's writeback step patches into EvalSuite.status).
  */
 export async function runScore(opts: ScoreOptions): Promise<void> {
-  const results = JSON.parse(await readFile(opts.resultsPath, 'utf8')) as CaseResult[];
+  const results = parseResults(await readFile(opts.resultsPath, 'utf8'));
   const scored = aggregate(results, opts.passThreshold);
   const generatedAt = (opts.now ?? (() => new Date().toISOString()))();
   await writeFile(opts.reportPath, renderHtml(results, scored, generatedAt));
