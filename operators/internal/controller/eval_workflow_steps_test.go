@@ -79,27 +79,65 @@ type evalStep struct {
 	} `json:"script"`
 }
 
-// evalScriptSteps returns every script step of the WorkflowTemplate by name.
-func evalScriptSteps(t *testing.T) map[string]evalStep {
+// evalTask is one DAG task: the template it runs and the arguments it passes
+// that template.
+type evalTask struct {
+	Name      string `json:"name"`
+	Template  string `json:"template"`
+	Arguments struct {
+		Parameters []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"parameters"`
+	} `json:"arguments"`
+}
+
+// evalWorkflow is the WorkflowTemplate as the harness reads it: every script
+// step by name, and what hands each step its inputs, the DAG's tasks and the
+// exit handler.
+type evalWorkflow struct {
+	steps  map[string]evalStep
+	tasks  []evalTask
+	onExit string
+}
+
+// parseEvalWorkflow parses the WorkflowTemplate once for everything the
+// harness reads from it.
+func parseEvalWorkflow(t *testing.T) evalWorkflow {
 	t.Helper()
 	var doc struct {
 		Spec struct {
-			Templates []evalStep `json:"templates"`
+			OnExit    string `json:"onExit"`
+			Templates []struct {
+				evalStep
+				DAG *struct {
+					Tasks []evalTask `json:"tasks"`
+				} `json:"dag"`
+			} `json:"templates"`
 		} `json:"spec"`
 	}
 	if err := yaml.Unmarshal([]byte(readEvalWorkflowTemplate(t)), &doc); err != nil {
 		t.Fatalf("parse the WorkflowTemplate: %v", err)
 	}
-	steps := map[string]evalStep{}
-	for _, s := range doc.Spec.Templates {
-		if s.Script != nil {
-			steps[s.Name] = s
+	w := evalWorkflow{steps: map[string]evalStep{}, onExit: doc.Spec.OnExit}
+	for _, tmpl := range doc.Spec.Templates {
+		if tmpl.Script != nil {
+			w.steps[tmpl.Name] = tmpl.evalStep
+		}
+		if tmpl.DAG != nil {
+			w.tasks = append(w.tasks, tmpl.DAG.Tasks...)
 		}
 	}
-	if len(steps) == 0 {
+	if len(w.steps) == 0 {
 		t.Fatal("parsed no script step out of the WorkflowTemplate; every check below would pass vacuously")
 	}
-	return steps
+	return w
+}
+
+// evalScriptSteps returns every script step of the WorkflowTemplate by name.
+func evalScriptSteps(t *testing.T) map[string]evalStep {
+	t.Helper()
+	return parseEvalWorkflow(t).steps
 }
 
 // argoExpression matches an Argo template tag: from a `{{` to the first `}}`
@@ -129,7 +167,8 @@ func substitute(s string, values map[string]string) (string, []string) {
 }
 
 // stubbedCommands are the commands the eval steps reach S3, the cluster and the
-// model through, plus jq, which every step pipes through.
+// model through, plus jq, which resolve-cases, score, writeback and the exit
+// handler pipe through.
 var stubbedCommands = []string{"aws", "kubectl", "evaluate", "score", "jq"}
 
 // testWorkflowUID is the uid every run here gives the Workflow.
@@ -324,44 +363,17 @@ func stepValues(step evalStep, attack string) map[string]string {
 	return values
 }
 
-// evalPipeline is what hands each step its inputs: the DAG's tasks with the
-// arguments each passes its template, and the exit handler.
-type evalPipeline struct {
-	Spec struct {
-		OnExit    string `json:"onExit"`
-		Templates []struct {
-			DAG *struct {
-				Tasks []struct {
-					Name      string `json:"name"`
-					Template  string `json:"template"`
-					Arguments struct {
-						Parameters []struct {
-							Name  string `json:"name"`
-							Value string `json:"value"`
-						} `json:"parameters"`
-					} `json:"arguments"`
-				} `json:"tasks"`
-			} `json:"dag"`
-		} `json:"templates"`
-	} `json:"spec"`
-}
-
 // wiredValues resolves, for each step the pipeline runs, the value of every
 // expression the step references, the way Argo reaches it from a run's
 // globals: a task's arguments, resolved against globals, bind the step's input
 // parameters, and an input no argument binds takes its default, resolved the
 // same way. The exit handler's inputs are all defaults. globals holds the
 // workflow-scoped values and the task outputs a DAG argument reads.
-func wiredValues(t *testing.T, globals map[string]string) map[string]map[string]string {
+func (w evalWorkflow) wiredValues(t *testing.T, globals map[string]string) map[string]map[string]string {
 	t.Helper()
-	steps := evalScriptSteps(t)
-	var doc evalPipeline
-	if err := yaml.Unmarshal([]byte(readEvalWorkflowTemplate(t)), &doc); err != nil {
-		t.Fatalf("parse the WorkflowTemplate: %v", err)
-	}
 	out := map[string]map[string]string{}
 	bind := func(caller, template string, args map[string]string) {
-		step, ok := steps[template]
+		step, ok := w.steps[template]
 		if !ok {
 			t.Fatalf("%s runs template %q, which is no script step", caller, template)
 		}
@@ -390,22 +402,17 @@ func wiredValues(t *testing.T, globals map[string]string) map[string]map[string]
 		}
 		out[template] = values
 	}
-	for _, tmpl := range doc.Spec.Templates {
-		if tmpl.DAG == nil {
-			continue
+	for _, task := range w.tasks {
+		args := make(map[string]string, len(task.Arguments.Parameters))
+		for _, a := range task.Arguments.Parameters {
+			args[a.Name] = a.Value
 		}
-		for _, task := range tmpl.DAG.Tasks {
-			args := make(map[string]string, len(task.Arguments.Parameters))
-			for _, a := range task.Arguments.Parameters {
-				args[a.Name] = a.Value
-			}
-			bind("task "+task.Name, task.Template, args)
-		}
+		bind("task "+task.Name, task.Template, args)
 	}
-	if doc.Spec.OnExit == "" {
+	if w.onExit == "" {
 		t.Fatal("the WorkflowTemplate names no onExit handler")
 	}
-	bind("onExit", doc.Spec.OnExit, nil)
+	bind("onExit", w.onExit, nil)
 	return out
 }
 
@@ -527,9 +534,10 @@ func TestNoStepRunsAParameterValueAsCode(t *testing.T) {
 // place, and nothing runs as code, so only a check on where each value lands
 // sees it. The status-writing steps are TestWritebackPatchesTheSuiteNamespace's.
 func TestEachStepReceivesItsOwnValues(t *testing.T) {
-	steps := evalScriptSteps(t)
+	w := parseEvalWorkflow(t)
+	steps := w.steps
 	g := wiringGlobals()
-	wired := wiredValues(t, g)
+	wired := w.wiredValues(t, g)
 	bucket, platform := g["workflow.parameters.eval-reports-bucket"], g["workflow.parameters.platform"]
 
 	t.Run("resolve-cases/manifest", func(t *testing.T) {
@@ -543,7 +551,7 @@ func TestEachStepReceivesItsOwnValues(t *testing.T) {
 	t.Run("resolve-cases/inline", func(t *testing.T) {
 		inline := wiringGlobals()
 		inline["workflow.parameters.cases-inline"] = `[{"name":"inline-only"}]`
-		run := runEvalStep(t, steps["resolve-cases"], wiredValues(t, inline)["resolve-cases"])
+		run := runEvalStep(t, steps["resolve-cases"], w.wiredValues(t, inline)["resolve-cases"])
 		if calls := run.commands("aws"); len(calls) != 0 {
 			t.Errorf("the resolve-cases step was handed inline cases and still fetched a manifest: %q", calls)
 		}
@@ -610,6 +618,8 @@ func TestArgoTagGrammarMatchesTheGate(t *testing.T) {
 		{"an expr-language tag", `{{=inputs.parameters.x}}`},
 		{"an expr-language call", `{{=sprig.trim(inputs.parameters.x)}}`},
 		{"a brace inside an expression", `{{={"a": inputs.parameters.x}}}`},
+		{"a closing brace inside a call", `{{=toJson({"a": inputs.parameters.x})}}`},
+		{"a closing brace before the tag's end", `{{={"a": inputs.parameters.x} }}`},
 		{"a tag opened inside a tag", `{{ {{inputs.parameters.x}} }}`},
 		{"adjacent tags", `{{a}}{{b}}`},
 		{"an empty tag", `{{}}`},
