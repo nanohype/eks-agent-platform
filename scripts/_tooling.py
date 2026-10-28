@@ -65,7 +65,7 @@ PROBES = {
 
 
 def require_binary(name: str, why: str, probe: list[str] | None = None) -> None:
-    """Assert a binary exists AND runs, or exit 2 naming it.
+    """Assert a binary exists AND runs, or exit EXIT_PRECONDITION (3) naming it.
 
     The probe comes from PROBES. A binary with no entry there is a programming
     error in the caller, not a finding about the machine.
