@@ -289,6 +289,29 @@ CONTROLS = [
     ),
     Control(
         gate="check-version-pins.py",
+        path="packages/eval-runner/Dockerfile",
+        # Derived for the same reason as the workflow control above: the line
+        # it sits on holds a kubectl release Renovate moves.
+        anchor=r"(?m)^ARG KUBECTL_VERSION=\S+$",
+        rewrite=lambda m: f"{m.group(0)}\nARG UNWATCHED_TOOL_VERSION=1.0.0",
+        catches="a tool the eval-runner image downloads, pinned as a build arg no Renovate "
+        "customManager watches. This proves the gate reads that Dockerfile at all, which a "
+        "control over the workflows cannot",
+        expect_output='UNWATCHED_TOOL_VERSION',
+    ),
+    Control(
+        gate="check-version-pins.py",
+        path="renovate.json",
+        before='"managerFilePatterns": ["/^\\\\.github/(workflows/[^/]+|actions/[^/]+/action)\\\\.ya?ml$/"]',
+        after='"managerFilePatterns": ["/^\\\\.github/workflows/[^/]+\\\\.ya?ml$/"]',
+        catches="a manager whose file patterns stop reaching a file its regex still matches: the "
+        "trivy release the eval-runner image check pins inside its composite action. Renovate "
+        "applies a manager only to the files its managerFilePatterns select, so the pin goes "
+        "unwatched while its text still matches. This also proves the gate reads .github/actions/",
+        expect_output="eval-runner-image-check/action.yml: aquasecurity/trivy",
+    ),
+    Control(
+        gate="check-version-pins.py",
         path="renovate.json",
         before="GITLEAKS_VERSION:",
         after="GITLEAKS_VERSION_NEVER_MATCHES:",
@@ -311,6 +334,35 @@ CONTROLS = [
         "form of this control renamed depNameTemplate and left matchStrings intact: the edit landed, "
         "the bytes changed, and the meaning did not, so the gate's pass was correct and the CONTROL "
         "was the thing at fault",
+    ),
+    # The scope gate's verdict is its exit status, as with `git diff --quiet`:
+    # 1 means a changed path is an image input and the image has to be built. It
+    # reads the working tree against HEAD by default, so the mutation IS the
+    # change it classifies. The failure it exists to prevent is the quiet one —
+    # a dependency change scoped out, so CI builds nothing and passes — so the
+    # reject control edits a package the image reaches only through the
+    # workspace graph, never by name.
+    Control(
+        gate="check-eval-runner-image-scope.py",
+        path="packages/pricing/src/index.ts",
+        before="import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };",
+        after="import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };\n"
+        "// zzsynthetic-scope-control",
+        catches="a change under a workspace package eval-runner depends on, which the image "
+        "bundles and the eval-runner-image job therefore has to build",
+        expect_output="in scope: packages/pricing/src/index.ts",
+    ),
+    Control(
+        gate="check-eval-runner-image-scope.py",
+        path="docs/architecture/eval-gating-flow.md",
+        before="# Architecture — Eval gating flow\n",
+        after="# Architecture — Eval gating flow\n\nzzsynthetic-scope-control\n",
+        args=["--list"],
+        catches="a documentation-only change, which must NOT be scoped into the image build. The "
+        "expected line names the planted path, so a gate that never saw the change cannot pass "
+        "this control by reporting nothing to build",
+        expect_output="out of scope: docs/architecture/eval-gating-flow.md",
+        expect_reject=False,
     ),
     Control(
         gate="check-named-paths.py",
@@ -626,6 +678,20 @@ CONTROLS = [
         "PodSecurity `restricted` admission — every step pod is then REJECTED, and nothing about "
         "the YAML is malformed",
         expect_output='securityContext',
+    ),
+    # The splice this gate exists for: the score step writing its results
+    # parameter, which carries model replies, through a single-quoted echo in
+    # its script source.
+    Control(
+        gate="check-argo-script-splices.py",
+        path="charts/operator/files/eval-runtime/workflow-template.yaml",
+        before='          run_id="$(date -u +%Y%m%dT%H%M%SZ)-{{workflow.uid}}"\n',
+        after="          echo '{{inputs.parameters.results-json}}' > /tmp/results.json\n"
+        '          run_id="$(date -u +%Y%m%dT%H%M%SZ)-{{workflow.uid}}"\n',
+        catches="a step input spliced into script source — a model reply holding a single quote "
+        "then runs as shell in a pod holding the eval-runner role and kubectl, and helm lint, "
+        "kubeconform and the PodSecurity gate all pass the template",
+        expect_output="{{inputs.parameters.results-json}} in template score script.source",
     ),
     Control(
         gate="check-runtime-contract.py",

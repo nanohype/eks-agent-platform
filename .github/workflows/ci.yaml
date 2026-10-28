@@ -13,6 +13,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Every job below that runs a gate parsing YAML installs PyYAML at this one
+  # version. The parser is part of a gate's verdict, so an unpinned install lets
+  # a PyYAML release turn an unrelated pull request red or green.
+  PYYAML_VERSION: "6.0.3"
+
 jobs:
   placeholders:
     name: zero-placeholder gate
@@ -124,7 +130,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-workflow-permissions.py --list
 
   merge-gate-reachable:
@@ -134,7 +140,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-merge-gate.py --list
 
   empty-tree:
@@ -144,7 +150,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-empty-tree.py --list
 
   named-paths:
@@ -186,12 +192,19 @@ jobs:
           version: v4.3.1
       # This job runs EVERY gate for real, so it needs every binary any gate
       # asserts a precondition on — not only the ones its own name suggests.
-      # check-vcluster-chart resolves the operator constants with go.
+      # check-vcluster-chart resolves the operator constants with go, and
+      # check-eval-runner-image-scope reads the workspace graph with pnpm, which
+      # needs node and no install.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
           cache-dependency-path: operators/go.sum
-      - run: pip install pyyaml
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-controls.py --list
 
   # A gate over the gates. A check that cannot fail is worse than no check,
@@ -206,7 +219,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-gates.py --self-test
       - run: ./scripts/check-gates.py --list
 
@@ -232,7 +245,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-workflow-triggers.py --list
 
   # Three environments run the same component on the same substrate shape, so a
@@ -471,7 +484,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-chart-rbac.py
 
   # ── Chart↔CRD parity gate ────────────────────────────────────────────────
@@ -501,7 +514,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-chart-crd-parity.py
 
   # ── CRD instantiation ────────────────────────────────────────────────────
@@ -530,7 +543,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-crd-instantiation.py
 
   # ── Custom resource admissibility ────────────────────────────────────────
@@ -552,7 +565,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-cr-admissibility.py
 
   # ── PROJECT parity ───────────────────────────────────────────────────────
@@ -654,8 +667,107 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-eval-workflow.py
+
+  # ── Argo script splice gate ──────────────────────────────────────────────
+  # Argo substitutes {{...}} into a template's text before the pod exists, so an
+  # expression inside a script's source or a shell's -c program becomes part of
+  # the program. The eval steps handle tenant-authored cases and model replies,
+  # and a quote in either would run as shell beside the eval-runner role and
+  # kubectl. This fails on any expression in code outside an allowlist of
+  # Argo-generated values, in every tracked workflow manifest. The self-test
+  # runs first: it proves the rule rejects the splices it names and accepts
+  # delivery through env values and raw artifacts.
+  argo-script-splices:
+    name: no template expression is spliced into code a step runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
+      - run: ./scripts/check-argo-script-splices.py --self-test
+      - run: ./scripts/check-argo-script-splices.py --list
+
+  # ── eval-runner image ────────────────────────────────────────────────────
+  # The image is what the eval WorkflowTemplate runs, and outside this job only
+  # release.yaml builds it — on a tag, after the merge. A change that breaks the
+  # bundle, an entry shim, a pinned download or the package-manager strip would
+  # otherwise merge green and surface as a release that cannot publish. This
+  # builds each release platform from the pull request and runs
+  # .github/actions/eval-runner-image-check against it, the check the release
+  # runs on every platform before it tags or signs: the `score` golden smoke,
+  # node / aws / kubectl / jq present, no package manager, and the bar
+  # eks-gitops' image gate sets for every image its charts render, no fixed
+  # CRITICAL.
+  #
+  # Scoped to the pull requests that can change the image, which
+  # scripts/check-eval-runner-image-scope.py decides from the workspace graph.
+  # Outside that scope the job runs and builds nothing rather than being
+  # skipped, because the merge gate counts a skipped job as a failure. A push to
+  # main always builds.
+  eval-runner-image:
+    name: eval-runner image (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # The scope compares the merge commit with its first parent.
+          fetch-depth: 2
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      # Node only for pnpm to read the workspace graph; nothing is installed, so
+      # there is nothing to cache, and an image build is no place to restore one.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+      - run: ./scripts/check-eval-runner-image-scope.py --self-test
+      # The script's exit status is the verdict: 0 nothing to build, 1 build,
+      # anything else means the scope could not be decided, and the job fails.
+      - name: scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "scope: a $EVENT builds unconditionally"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull_request checkout is the merge commit, and its first parent is
+          # the base it merges into, so this is exactly what the PR changes.
+          rc=0
+          ./scripts/check-eval-runner-image-scope.py --base HEAD^1 --head HEAD --list || rc=$?
+          case "$rc" in
+            0) echo "build=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "build=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+      - if: steps.scope.outputs.build == 'true'
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - if: steps.scope.outputs.build == 'true'
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: build
+        if: steps.scope.outputs.build == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          # Repo root context: the image bundles the pnpm workspace.
+          context: .
+          file: packages/eval-runner/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: eval-runner:ci
+      - name: smoke + scan
+        if: steps.scope.outputs.build == 'true'
+        uses: $/.github/actions/eval-runner-image-check
+        with:
+          image: eval-runner:ci
+          platform: ${{ matrix.platform }}
 
   # ── runtime contract gate ────────────────────────────────────────────────
   # The chart and the binary are one contract in two files: the eval
@@ -685,7 +797,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-runtime-contract.py --list
 
   # ── vcluster chart acceptance gate ───────────────────────────────────────
@@ -719,7 +831,7 @@ jobs:
           # green on a helm release rather than on a change here.
           # renovate: datasource=github-releases depName=helm/helm
           version: v4.3.1
-      - run: pip install pyyaml
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - run: ./scripts/check-vcluster-chart.py
 
   # helm lint, template rendering and CRD parity all read the chart against
@@ -842,9 +954,14 @@ jobs:
             | tar -xz -C /tmp
           sudo install -m 0755 "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
           promtool --version
+      # REQUIRE_PYTHON3 turns TestArgoTagGrammarMatchesTheGate's skip when
+      # python3 is absent into a failure: that test runs the splice gate's tag
+      # grammar beside the step harness's. The runner image ships python3, and
+      # the comparison needs no package beyond it.
       - name: go test with envtest + coverage floors
         env:
           REQUIRE_PROMTOOL: "1"
+          REQUIRE_PYTHON3: "1"
         run: cd operators && make coverage-check
       # verify: false because the JSONSchema check it performs by default is a
       # network fetch of https://golangci-lint.run/jsonschema/... on every run,
@@ -994,6 +1111,8 @@ jobs:
         chart-args,
         chart-version-bump,
         eval-workflow,
+        argo-script-splices,
+        eval-runner-image,
         runtime-contract,
         vcluster-chart,
         image-refs,

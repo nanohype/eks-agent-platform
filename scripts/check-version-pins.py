@@ -19,9 +19,12 @@ instead: this walks the files that CAN carry an unmanaged pin, extracts every
 pin, and requires each one to be matched by a customManager regex in
 renovate.json. A new pin with no manager fails the build.
 
-The manager regexes are applied as written, so this also catches a manager whose
-regex has drifted from the file it claims to match — a customManager that
-matches nothing is the same silent nothing as no manager at all.
+The manager regexes are applied as written, and only to the files the manager's
+managerFilePatterns select, so this also catches a manager whose regex has
+drifted from the file it claims to match, and one whose file patterns do not
+reach the file at all — a pin moved into a file Renovate does not read for
+that manager is unwatched however well the regex matches its text. A
+customManager that matches nothing is the same silent nothing as no manager.
 
     scripts/check-version-pins.py [--list] [--self-test]
 """
@@ -43,24 +46,32 @@ RENOVATE = ROOT / "renovate.json"
 # which pins Renovate cannot see. go.mod, package.json, `uses:` SHAs and
 # Dockerfile FROM digests are all natively managed and are excluded for that
 # reason rather than because they carry no version.
-PIN_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
+#
+# Each entry names the files it reads and every one has to match a file: a
+# shape searched for nowhere finds nothing, and that silence reads as a pass.
+# A directory is read recursively for YAML, which is how a composite action's
+# action.yml under .github/actions/ is covered beside the workflows that call it.
+ACTION_YAML = (".github/workflows", ".github/actions")
+DOCKERFILES = ("sandbox-worker/Dockerfile", "packages/eval-runner/Dockerfile")
+
+PIN_PATTERNS: list[tuple[tuple[str, ...], re.Pattern[str], str]] = [
     (
-        ".github/workflows",
+        ACTION_YAML,
         re.compile(r"^\s*(?P<name>[A-Z][A-Z0-9_]*_VERSION):\s*\"?(?P<value>[^\"\s]+)\"?\s*$", re.M),
         "a tool version the step installs itself",
     ),
     (
-        ".github/workflows",
+        ACTION_YAML,
         re.compile(r"^\s*(?P<name>[a-z_]+_version):\s*\"?(?P<value>[^\"\s]+)\"?\s*$", re.M),
         "a setup-action input naming a tool release",
     ),
     (
-        ".github/workflows",
+        ACTION_YAML,
         re.compile(r"^\s*(?P<name>[a-z]+-release):\s*[\"']?(?P<value>[^\"'\s]+)[\"']?\s*$", re.M),
         "an installer-action input naming the tool release it installs",
     ),
     (
-        ".github/workflows",
+        ACTION_YAML,
         re.compile(
             r"#\s*renovate:[^\n]*depName=(?P<name>\S+)[^\n]*\n\s*version:\s*\"?(?P<value>[^\"\s]+)\"?",
             re.M,
@@ -68,12 +79,12 @@ PIN_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         "a setup-action version input, named by its Renovate marker",
     ),
     (
-        "operators/Makefile",
+        ("operators/Makefile",),
         re.compile(r"^(?P<name>[A-Z][A-Z0-9_]*_VERSION)\s*\?=\s*(?P<value>\S+)", re.M),
         "a Makefile tool version",
     ),
     (
-        "sandbox-worker/Dockerfile",
+        DOCKERFILES,
         re.compile(r"^ARG (?P<name>[A-Z][A-Z0-9_]*_VERSION)=(?P<value>\S+)", re.M),
         "a Dockerfile build-arg version",
     ),
@@ -88,20 +99,23 @@ NOT_A_PIN = {"node-version", "python-version", "go-version", "node_version", "go
 def files_for(spec: str) -> list[pathlib.Path]:
     p = ROOT / spec
     if p.is_dir():
-        return sorted(list(p.glob("*.yaml")) + list(p.glob("*.yml")))
+        return sorted(list(p.rglob("*.yaml")) + list(p.rglob("*.yml")))
     return [p] if p.is_file() else []
 
 
 def discovered_pins() -> list[tuple[pathlib.Path, str, str, str]]:
     """(file, pin name, value, why it counts) for every unmanaged-capable pin."""
     out = []
-    for spec, pattern, why in PIN_PATTERNS:
-        found = files_for(spec)
-        if not found:
-            sys.exit(
-                f"check-version-pins: {spec} matched no file. Finding no pins and looking "
-                "nowhere produce the same silence, so this is an error rather than a pass."
-            )
+    for specs, pattern, why in PIN_PATTERNS:
+        found = []
+        for spec in specs:
+            matched = files_for(spec)
+            if not matched:
+                sys.exit(
+                    f"check-version-pins: {spec} matched no file. Finding no pins and looking "
+                    "nowhere produce the same silence, so this is an error rather than a pass."
+                )
+            found.extend(matched)
         for f in found:
             text = f.read_text(encoding="utf-8")
             for m in pattern.finditer(text):
@@ -111,7 +125,42 @@ def discovered_pins() -> list[tuple[pathlib.Path, str, str, str]]:
     return out
 
 
-def manager_regexes() -> list[tuple[str, re.Pattern[str]]]:
+# Renovate's managerFilePatterns entry for a regex: `/pattern/` with optional
+# flags. Its other form, a glob, has matching rules this file does not
+# reimplement, so a glob is refused rather than approximated.
+FILE_PATTERN = re.compile(r"^/(?P<body>.+)/(?P<flags>[a-z]*)$")
+
+
+def file_patterns(name: str, mgr: dict) -> list[re.Pattern[str]]:
+    """The paths a manager reads, as compiled regexes over repo-relative paths."""
+    raw = mgr.get("managerFilePatterns") or []
+    if not raw:
+        sys.exit(
+            f"check-version-pins: customManager {name} declares no managerFilePatterns, so Renovate "
+            "applies it to no file and every pin it names is unwatched."
+        )
+    out = []
+    for fp in raw:
+        m = FILE_PATTERN.match(fp)
+        if not m:
+            sys.exit(
+                f"check-version-pins: customManager {name} has managerFilePatterns entry {fp!r}, "
+                "which is not a /regex/. Write it as one, so this check reads the files Renovate does."
+            )
+        flags = re.I if "i" in m.group("flags") else 0
+        try:
+            out.append(re.compile(m.group("body"), flags))
+        except re.error as e:
+            sys.exit(f"check-version-pins: customManager {name} has an uncompilable managerFilePatterns entry: {e}")
+    return out
+
+
+def manages(patterns: list[re.Pattern[str]], path: pathlib.Path) -> bool:
+    rel = path.relative_to(ROOT).as_posix()
+    return any(fp.search(rel) for fp in patterns)
+
+
+def manager_regexes() -> list[tuple[str, re.Pattern[str], list[re.Pattern[str]]]]:
     if not RENOVATE.is_file():
         sys.exit("check-version-pins: renovate.json is missing; nothing manages any pin")
     cfg = json.loads(RENOVATE.read_text(encoding="utf-8"))
@@ -124,6 +173,7 @@ def manager_regexes() -> list[tuple[str, re.Pattern[str]]]:
     out = []
     for mgr in managers:
         name = mgr.get("depNameTemplate", "<unnamed>")
+        files = file_patterns(name, mgr)
         for ms in mgr.get("matchStrings", []):
             # Renovate's matchStrings use the JavaScript named-group syntax
             # `(?<name>...)`; Python's re spells it `(?P<name>...)`. Translating
@@ -132,7 +182,7 @@ def manager_regexes() -> list[tuple[str, re.Pattern[str]]]:
             # matters, and this check reads what Renovate will read.
             translated = re.sub(r"\(\?<(?![=!])", "(?P<", ms)
             try:
-                out.append((name, re.compile(translated, re.M)))
+                out.append((name, re.compile(translated, re.M), files))
             except re.error as e:
                 sys.exit(f"check-version-pins: customManager {name} has an uncompilable matchString: {e}")
     return out
@@ -144,16 +194,31 @@ def self_test() -> int:
     Without this the check could match everything — a regex list that always hit
     would report full coverage, which is the failure this file exists to catch.
     """
+    managers = manager_regexes()
     fake_pin = "TOTALLY_UNMANAGED_VERSION: 9.9.9"
-    if any(rx.search(fake_pin) for _n, rx in manager_regexes()):
+    if any(rx.search(fake_pin) for _n, rx, _f in managers):
         print("self-test: a pin no manager declares was reported as managed", file=sys.stderr)
         return 1
     # And a pin that IS managed must be seen, or the check passes vacuously.
     real = 'GITLEAKS_VERSION: "8.30.1"'
-    if not any(rx.search(real) for _n, rx in manager_regexes()):
+    owners = [files for _n, rx, files in managers if rx.search(real)]
+    if not owners:
         print("self-test: a managed pin was not matched by any manager regex", file=sys.stderr)
         return 1
-    print("✓ check-version-pins self-test: the matcher distinguishes a managed pin from an unmanaged one")
+    # The same text in a file outside the manager's managerFilePatterns is a pin
+    # Renovate never reads, so the file half has to be able to say no as well.
+    workflow = ROOT / ".github" / "workflows" / "security.yaml"
+    elsewhere = ROOT / "operators" / "Makefile"
+    if not any(manages(files, workflow) for files in owners):
+        print("self-test: the managing regex's file patterns do not reach a workflow", file=sys.stderr)
+        return 1
+    if any(manages(files, elsewhere) for files in owners):
+        print("self-test: a workflow-only manager was reported as reading operators/Makefile", file=sys.stderr)
+        return 1
+    print(
+        "✓ check-version-pins self-test: the matcher distinguishes a managed pin from an unmanaged "
+        "one, and a manager's file patterns from the files outside them"
+    )
     return 0
 
 
@@ -187,7 +252,9 @@ def main() -> int:
         line = f"{name}: {value}"
         text = f.read_text(encoding="utf-8")
         owner = None
-        for mgr_idx, (mgr_name, rx) in enumerate(managers):
+        for mgr_idx, (mgr_name, rx, files) in enumerate(managers):
+            if not manages(files, f):
+                continue
             for m in rx.finditer(text):
                 gd = m.groupdict()
                 if gd.get("currentValue") != value:
@@ -205,7 +272,7 @@ def main() -> int:
             unmanaged.append((str(f.relative_to(ROOT)), name, value, why))
 
     # A manager matching nothing is the same silent nothing as no manager.
-    idle = [n for i, (n, _rx) in enumerate(managers) if i not in matched_managers]
+    idle = [n for i, (n, _rx, _f) in enumerate(managers) if i not in matched_managers]
 
     if args.list:
         for f, line, owner in covered:
@@ -219,8 +286,8 @@ def main() -> int:
             print(f"  - {f}: {name}={value} ({why})", file=sys.stderr)
         print(
             "\nRenovate reads go.mod, package.json, Dockerfile FROM digests and workflow `uses:` refs\n"
-            "on its own; it cannot see these. Add a customManager to renovate.json, or move the pin\n"
-            "somewhere natively managed.",
+            "on its own; it cannot see these. Add a customManager to renovate.json whose\n"
+            "managerFilePatterns reach the file, or move the pin somewhere natively managed.",
             file=sys.stderr,
         )
     if idle:

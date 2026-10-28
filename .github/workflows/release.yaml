@@ -304,7 +304,13 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: build + push (multi-arch)
+      # One build, and every later step names its output by digest. The image
+      # is pushed untagged, each platform of that exact digest is checked, and
+      # only then does the digest get its tags, its signature and its SBOM
+      # attestation. A registry digest is the hash of the bytes it names, so
+      # the bytes published are the bytes checked; nothing rests on a second
+      # build reproducing the first.
+      - name: build + push by digest (multi-arch, untagged)
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -313,12 +319,70 @@ jobs:
           context: .
           file: packages/eval-runner/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
           provenance: mode=max
           sbom: true
-          tags: |
-            ghcr.io/${{ github.repository }}/eval-runner:${{ steps.ver.outputs.version }}
-            ghcr.io/${{ github.repository }}/eval-runner:latest
+          tags: ghcr.io/${{ github.repository }}/eval-runner
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+      # The index the build pushed, resolved to the manifest digest of each
+      # platform it was built for. The index is hashed before it is read, so
+      # the children come from the index the digest names. Exactly one manifest
+      # per platform, or the step fails: the checks below run against these
+      # references, and a second candidate would leave which one was checked
+      # to chance.
+      - name: resolve each platform of the pushed digest
+        id: platforms
+        env:
+          REPO: ghcr.io/${{ github.repository }}/eval-runner
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          case "$DIGEST" in
+            sha256:*) ;;
+            *) echo "::error::the build reported no image digest ('$DIGEST'); nothing to check"; exit 1 ;;
+          esac
+          index="$RUNNER_TEMP/eval-runner-index.json"
+          docker buildx imagetools inspect --raw "$REPO@$DIGEST" > "$index"
+          read -r sum _ < <(sha256sum "$index")
+          if [ "sha256:$sum" != "$DIGEST" ]; then
+            echo "::error::the index fetched for $DIGEST hashes to sha256:$sum"
+            exit 1
+          fi
+          for arch in amd64 arm64; do
+            child=$(jq -r --arg arch "$arch" '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest]
+              | if length == 1 then .[0] else error("\(length) linux/\($arch) manifests") end
+            ' "$index")
+            echo "linux/$arch: $REPO@$child"
+            echo "$arch=$REPO@$child" >> "$GITHUB_OUTPUT"
+          done
+      - name: check linux/amd64
+        uses: $/.github/actions/eval-runner-image-check
+        with:
+          image: ${{ steps.platforms.outputs.amd64 }}
+          platform: linux/amd64
+      - name: check linux/arm64
+        uses: $/.github/actions/eval-runner-image-check
+        with:
+          image: ${{ steps.platforms.outputs.arm64 }}
+          platform: linux/arm64
+      # The tags point at the checked digest, and each is read back before
+      # anything is signed: a tag that resolves anywhere else fails the job.
+      - name: tag the checked digest
+        env:
+          REPO: ghcr.io/${{ github.repository }}/eval-runner
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$REPO:$VERSION" --tag "$REPO:latest" "$REPO@$DIGEST"
+          for ref in "$REPO:$VERSION" "$REPO:latest"; do
+            got=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" | jq -r .digest)
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$ref resolves to $got, not the checked digest $DIGEST"
+              exit 1
+            fi
+            echo "$ref -> $got"
+          done
       - name: sign (keyless, OIDC)
         env:
           IMAGE_REF: ghcr.io/${{ github.repository }}/eval-runner@${{ steps.build.outputs.digest }}

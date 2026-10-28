@@ -1,4 +1,4 @@
-import { packageConfig } from '../../vitest.base';
+import { packageConfig } from '../../vitest.base.ts';
 
 export default packageConfig({
   // The suite injects a fake CustomObjectsClient for the CRD call paths and a
