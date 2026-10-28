@@ -28,8 +28,8 @@ RUN apt-get update \
 # digests together when moving to a new `ant` release.
 ARG ANT_VERSION=1.44.0
 ARG TARGETARCH=amd64
-ARG ANT_SHA256_amd64=221abeda39d65e202f8c07a85c94744023d2bddef7b0906301715b73d78a1cfc
-ARG ANT_SHA256_arm64=5cd4bda9ea9c9621a7403d27e256d37b18bfd95a85ba97435b717e2fd03462c7
+ARG ANT_SHA256_amd64=27ad6f23aacea79a252d69702dc1e4f9c68d7cd35b89f799e0a7836e487728e6
+ARG ANT_SHA256_arm64=094bde4aaa6999b0dec68934a6b1f21c77d0a71258754e4ae93765fd6b45683b
 RUN set -eux; \
     case "${TARGETARCH}" in \
       amd64) ant_sha256="${ANT_SHA256_amd64}" ;; \
