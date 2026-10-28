@@ -161,14 +161,15 @@ func runEvalStep(t *testing.T, step evalStep, values map[string]string) stepRun 
 	}
 
 	type file struct{ path, data string }
-	var artifacts []file
+	artifacts := make([]file, 0, len(step.Inputs.Artifacts))
 	for _, a := range step.Inputs.Artifacts {
 		if a.Raw == nil {
 			t.Fatalf("step %s declares input artifact %q with no raw source; this harness delivers raw artifacts only", step.Name, a.Name)
 		}
 		artifacts = append(artifacts, file{relocate(a.Path), resolve(a.Raw.Data)})
 	}
-	env := []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	env := make([]string, 0, 1+len(step.Script.Env))
+	env = append(env, "PATH="+bin+":/usr/bin:/bin")
 	for _, e := range step.Script.Env {
 		env = append(env, e.Name+"="+resolve(relocate(e.Value)))
 	}
@@ -242,7 +243,8 @@ func stepValues(step evalStep, payload string) map[string]string {
 	for _, p := range step.Inputs.Parameters {
 		values["inputs.parameters."+p.Name] = payload
 	}
-	texts := []string{step.Script.Source}
+	texts := make([]string, 0, 1+len(step.Script.Env))
+	texts = append(texts, step.Script.Source)
 	for _, e := range step.Script.Env {
 		texts = append(texts, e.Value)
 	}

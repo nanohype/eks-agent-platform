@@ -252,7 +252,7 @@ def classify(text: str) -> tuple[str, list[dict]]:
         return ("unparseable", []) if KIND_LINE.search(text) else ("other", [])
     found = [
         d for d in docs
-        if str(d.get("apiVersion", "")).startswith("argoproj.io/") and d.get("kind") in WORKFLOW_KINDS
+        if str(d.get("apiVersion", "")).partition("/")[0] == "argoproj.io" and d.get("kind") in WORKFLOW_KINDS
     ]
     return ("manifests", found) if found else ("other", [])
 
