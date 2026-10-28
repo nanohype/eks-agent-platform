@@ -102,17 +102,19 @@ node dist/cli.js score --results results.json --pass-threshold 0.85 \
 
 The image build (`Dockerfile`) bundles the CLI and layers the OS tools the
 workflow shells to — `aws`, `jq`, `kubectl` — on a slim Node base, with no
-package manager left in it. The two downloaded tools are pinned as build args,
-each verified against a per-architecture SHA-256:
+package manager left in it. The two downloaded tools are pinned by the
+`KUBECTL_VERSION` and `AWSCLI_VERSION` build args in the `Dockerfile`, each
+verified against a per-architecture SHA-256; those args are the record of what
+ships. Renovate proposes their bumps once a release clears its release-age
+floor, under two rules:
 
-- **kubectl v1.36.5.** 1.36 is the minor whose ±1 version-skew window (1.35 to
-  1.37) spans the EKS versions the platform's clusters run, and v1.36.5 is that
-  minor's newest patch past the release-age floor Renovate holds updates to.
-- **AWS CLI 2.38.5**, the newest 2.x release past the same floor.
+- kubectl stays on the minor whose ±1 version-skew window spans the EKS
+  versions the platform's clusters run. A `renovate.json` packageRule holds
+  `KUBECTL_VERSION` to that minor, so moving to another minor follows a change
+  of the cluster version target rather than a kubectl release.
+- The AWS CLI takes the newest 2.x release.
 
-Renovate proposes later releases (`KUBECTL_VERSION` and `AWSCLI_VERSION` in the
-`Dockerfile`), and a kubectl minor bump is a skew decision for review rather
-than a refresh. The image is built, cosign-signed, and SBOM-attested by
+The image is built, cosign-signed, and SBOM-attested by
 `release.yaml` on an `eval-runner-v*` tag. Before that job pushes anything, and
 on every pull request that changes what the image is built from (the
 `eval-runner-image` job in `ci.yaml`), each platform is built and checked by

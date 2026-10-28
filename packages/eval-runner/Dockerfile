@@ -53,10 +53,12 @@ ARG TARGETARCH
 #            PGP key from the AWS CLI install guide (fingerprint
 #            FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C).
 #
-# Which release each pin names: kubectl stays on the minor whose ±1
+# Which release each pin names. kubectl stays on the minor whose ±1
 # version-skew window spans the EKS versions the platform's clusters run, at
 # that minor's newest patch past the release-age floor Renovate holds updates
-# to; the AWS CLI is the newest 2.x release past the same floor.
+# to. A renovate.json packageRule holds KUBECTL_VERSION to that minor, so
+# moving to another minor follows a change of the cluster version target. The
+# AWS CLI is the newest 2.x release past the same floor.
 ARG AWSCLI_VERSION=2.38.5
 ARG AWSCLI_SHA256_amd64=5def7d1b7e55d892f9a381bb2cb2081a685712464be0d36d5d706af0ac48d0d3
 ARG AWSCLI_SHA256_arm64=07711a936e9d271045ab937d2c2c5390c25f419e4ba9e25adb9e996031e3f6be

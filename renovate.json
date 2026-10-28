@@ -9,10 +9,17 @@
       "groupName": "pricing-deps"
     },
     {
-      "description": "The eval-runner image's kubectl and AWS CLI travel in their own PR rather than the all-non-major group. Each bump lands with the image's per-architecture checksums still naming the previous release, so the eval-runner image job fails on sha256sum until they are refreshed, and that failure has to hold back only this PR. A kubectl minor also moves the version-skew window against the clusters the image patches EvalSuites on, which is a choice to review rather than a refresh to accept.",
+      "description": "The eval-runner image's kubectl and AWS CLI travel in their own PR rather than the all-non-major group. Each bump lands with the image's per-architecture checksums still naming the previous release, so the eval-runner image job fails on sha256sum until they are refreshed, and that failure has to hold back only this PR.",
       "matchManagers": ["custom.regex"],
       "matchFileNames": ["packages/eval-runner/Dockerfile"],
       "groupName": "eval-runner-tools"
+    },
+    {
+      "description": "kubectl in the eval-runner image stays on the minor of the org's EKS cluster version target (landing-zone's cluster_version default), whose \u00b11 version-skew window also covers clusters one minor either side of it. Renovate proposes that minor's patches and nothing outside it. Moving the minor follows a change of the cluster version target, and is made in the same change that moves this range.",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["packages/eval-runner/Dockerfile"],
+      "matchDepNames": ["kubernetes/kubernetes"],
+      "allowedVersions": "/^v1\\.36\\./"
     }
   ],
   "customManagers": [
