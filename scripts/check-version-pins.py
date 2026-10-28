@@ -67,6 +67,11 @@ PIN_PATTERNS: list[tuple[tuple[str, ...], re.Pattern[str], str]] = [
     ),
     (
         ACTION_YAML,
+        re.compile(r"^\s*(?P<name>[a-z]+-release):\s*[\"']?(?P<value>[^\"'\s]+)[\"']?\s*$", re.M),
+        "an installer-action input naming the tool release it installs",
+    ),
+    (
+        ACTION_YAML,
         re.compile(
             r"#\s*renovate:[^\n]*depName=(?P<name>\S+)[^\n]*\n\s*version:\s*\"?(?P<value>[^\"\s]+)\"?",
             re.M,

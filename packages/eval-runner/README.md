@@ -116,9 +116,9 @@ floor, under two rules:
 
 `release.yaml` publishes the image on an `eval-runner-v*` tag. It builds both
 platforms once and pushes the result untagged, by digest; checks each platform
-of that digest; and only then tags, cosign-signs and SBOM-attests the same
-digest, after reading each tag back to confirm it resolves there. The check is
-`.github/actions/eval-runner-image-check`: `packages/eval-runner/scripts/smoke-image.sh`
+of that digest; and only then tags, cosign-signs and SPDX SBOM-attests the
+same digest, after reading each tag back to confirm it resolves there. The
+check is `.github/actions/eval-runner-image-check`: `packages/eval-runner/scripts/smoke-image.sh`
 (`score` reproduces `testdata/score.golden.json`, the tools run, no package
 manager is on `PATH`) and a trivy scan failing on any fixed CRITICAL. The
 `eval-runner-image` job in `ci.yaml` runs the same check on each platform for

@@ -138,12 +138,12 @@ Six threat categories, evaluated per architecture component.
 
 ### Supply-chain attacks
 
-| Threat                                           | STRIDE        | Mitigation                                                                                                                                                   |
-| ------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Compromised operator image pushed to GHCR        | **T**ampering | All operator images signed with cosign (keyless OIDC) + SBOM attestation. Kyverno verify-images policy in `eks-gitops` rejects unsigned images cluster-wide. |
-| Compromised npm package in a workspace package's deps | **T**    | Renovate vulnerability alerts always-on, never auto-merge. OSV alerts enabled. Trivy fs scan in CI fails on HIGH/CRITICAL.                                   |
-| Compromised Helm chart pulled by ArgoCD          | **T**         | OCI charts published with signed metadata. AppProject `sourceRepos` allowlist is closed-set; only the named OCI registries are reachable.                    |
-| Compromised Envoy AI Gateway upstream            | **T**         | Pinned chartVersion in ApplicationSet matrix; Renovate proposes bumps but human reviews majors. Cluster-wide image-verification policy applies.              |
+| Threat                                                | STRIDE        | Mitigation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compromised operator image pushed to GHCR             | **T**ampering | `operator`, `sandbox-worker` and `eval-runner` are signed by digest with cosign keyless OIDC and carry an SPDX SBOM attestation, both as Sigstore bundles, from `release.yaml` on a component tag. The eks-gitops `verify-images` ImageValidatingPolicy requires both, from a `release.ya?ml` run on a tag, for every `ghcr.io/nanohype/*` image: Deny on staging and production, Audit on development. It lands in eks-gitops together with the Kyverno 3.9.2 chart it runs on (Planned hardening below). |
+| Compromised npm package in a workspace package's deps | **T**         | Renovate vulnerability alerts always-on, never auto-merge. OSV alerts enabled. Trivy fs scan in CI fails on HIGH/CRITICAL.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Compromised Helm chart pulled by ArgoCD               | **T**         | OCI charts published with signed metadata. AppProject `sourceRepos` allowlist is closed-set; only the named OCI registries are reachable.                                                                                                                                                                                                                                                                                                                                                                  |
+| Compromised Envoy AI Gateway upstream                 | **T**         | Pinned chartVersion in ApplicationSet matrix; Renovate proposes bumps but human reviews majors. `verify-images` matches only `ghcr.io/nanohype/*`, so it does not verify upstream gateway images.                                                                                                                                                                                                                                                                                                          |
 
 ### Audit + non-repudiation
 
@@ -178,8 +178,8 @@ The platform ships:
 Planned hardening:
 
 - [ ] CEL `x-kubernetes-validations` cross-field rules on `BudgetPolicy` + `ModelGateway` (CRD schema is the floor; `Platform` + `EvalSuite` already enforce theirs)
-- [ ] cosign keyless signing on operator images via Sigstore/Fulcio (workflow exists; needs first tagged release)
-- [ ] Kyverno `verify-images` policy in `eks-gitops` referencing our cosign signer
+- [ ] A component tag published through `release.yaml`, so GHCR holds each image as a Sigstore bundle signature and SPDX attestation on its digest
+- [ ] eks-gitops `verify-images` ImageValidatingPolicy on the Kyverno 3.9.2 chart, landing together with the bundle-format signing in `release.yaml`: release-workflow signer and SPDX attestation required, Deny on staging and production, Audit on development
 - [ ] GuardDuty Anomaly Detection rules tuned for "unfamiliar IAM principal as grantee" events
 
 ## Consequences
