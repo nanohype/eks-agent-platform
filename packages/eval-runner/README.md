@@ -102,7 +102,17 @@ node dist/cli.js score --results results.json --pass-threshold 0.85 \
 
 The image build (`Dockerfile`) bundles the CLI and layers the OS tools the
 workflow shells to — `aws`, `jq`, `kubectl` — on a slim Node base, with no
-package manager left in it. It is built, cosign-signed, and SBOM-attested by
+package manager left in it. The two downloaded tools are pinned as build args,
+each verified against a per-architecture SHA-256:
+
+- **kubectl v1.36.5.** 1.36 is the minor whose ±1 version-skew window (1.35 to
+  1.37) spans the EKS versions the platform's clusters run, and v1.36.5 is that
+  minor's newest patch past the release-age floor Renovate holds updates to.
+- **AWS CLI 2.38.5**, the newest 2.x release past the same floor.
+
+Renovate proposes later releases (`KUBECTL_VERSION` and `AWSCLI_VERSION` in the
+`Dockerfile`), and a kubectl minor bump is a skew decision for review rather
+than a refresh. The image is built, cosign-signed, and SBOM-attested by
 `release.yaml` on an `eval-runner-v*` tag. Before that job pushes anything, and
 on every pull request that changes what the image is built from (the
 `eval-runner-image` job in `ci.yaml`), each platform is built and checked by

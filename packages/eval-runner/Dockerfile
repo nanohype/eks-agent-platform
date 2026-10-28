@@ -52,12 +52,17 @@ ARG TARGETARCH
 #            hashed only after its .sig verifies against the AWS CLI team's
 #            PGP key from the AWS CLI install guide (fingerprint
 #            FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C).
-ARG AWSCLI_VERSION=2.39.0
-ARG AWSCLI_SHA256_amd64=6c89ce7ed7bc0a2520e2bc3eeedfea4e2eb2e7da2836860c9471871408404036
-ARG AWSCLI_SHA256_arm64=05da9395b4d148c42e959192650bf4a7cbb59ea275fa334d0936c593c27b946f
-ARG KUBECTL_VERSION=v1.37.2
-ARG KUBECTL_SHA256_amd64=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
-ARG KUBECTL_SHA256_arm64=fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
+#
+# Which release each pin names: kubectl stays on the minor whose ±1
+# version-skew window spans the EKS versions the platform's clusters run, at
+# that minor's newest patch past the release-age floor Renovate holds updates
+# to; the AWS CLI is the newest 2.x release past the same floor.
+ARG AWSCLI_VERSION=2.38.5
+ARG AWSCLI_SHA256_amd64=5def7d1b7e55d892f9a381bb2cb2081a685712464be0d36d5d706af0ac48d0d3
+ARG AWSCLI_SHA256_arm64=07711a936e9d271045ab937d2c2c5390c25f419e4ba9e25adb9e996031e3f6be
+ARG KUBECTL_VERSION=v1.36.5
+ARG KUBECTL_SHA256_amd64=33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e
+ARG KUBECTL_SHA256_arm64=88fc1aca8fd0c1b44fe379f67c39bd6858bdfc50241dc55775f84d0f5b31da3a
 
 RUN set -eux; \
     case "${TARGETARCH}" in \
