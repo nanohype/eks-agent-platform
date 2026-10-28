@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+import { describe, expect, it, vi } from 'vitest';
 
 import { main, plan, USAGE } from './cli.js';
 import { anthropicBaseURL, describeError, formatReport, runConformance } from './run.js';
@@ -188,6 +191,59 @@ describe('runConformance', () => {
       ],
     });
     expect(report.failed).toBe(0);
+  });
+
+  it('sends its placeholder as the only credential, whatever the environment holds', async () => {
+    // The gateway needs no credential from this client. One resolved from the
+    // environment would reach the gateway as a real key it has no use for.
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-from-the-environment');
+    vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'token-from-the-environment');
+    const received: { url: string | undefined; headers: IncomingHttpHeaders }[] = [];
+    const server = createServer((req, res) => {
+      received.push({ url: req.url, headers: req.headers });
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            type: 'message',
+            role: 'assistant',
+            model: 'resolved',
+            content: [],
+            stop_reason: 'end_turn',
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const report = await runConformance({
+        endpoint: `http://127.0.0.1:${port}`,
+        route: 'primary',
+        probes: [
+          {
+            name: 'wire',
+            question: 'what reaches the gateway',
+            run: async (client, route) => {
+              await client.messages.create({
+                model: route,
+                max_tokens: 1,
+                messages: [{ role: 'user', content: 'ping' }],
+              });
+              return { outcome: 'pass', detail: 'sent' };
+            },
+          },
+        ],
+      });
+      expect(report.results[0]?.detail).toBe('sent');
+      expect(received.map((r) => r.url)).toEqual(['/anthropic/v1/messages']);
+      expect(received[0]?.headers.authorization).toMatch(/^Bearer /);
+      expect(JSON.stringify(received)).not.toMatch(/from-the-environment/);
+    } finally {
+      vi.unstubAllEnvs();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 

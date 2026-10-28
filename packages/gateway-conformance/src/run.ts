@@ -48,10 +48,20 @@ export function anthropicBaseURL(endpoint: string): string {
  */
 export async function runConformance(options: RunOptions): Promise<RunReport> {
   const baseURL = anthropicBaseURL(options.endpoint);
+  // The client sends its SDK's default `anthropic-version`. Bedrock reads the
+  // version from the request body, and the gateway writes the
+  // AIServiceBackend's schema version (bedrock-2023-05-31) there on every
+  // request it forwards, whatever the client sent. A version set here would
+  // change nothing upstream, and would stop the suite sending what a tenant on
+  // the same SDK sends.
   const client = new Anthropic({
     baseURL,
     // The gateway holds the AWS credential and signs upstream; this app holds
-    // none. The SDK requires the field and the gateway ignores it.
+    // none. The placeholder is the client's one credential, which keeps it
+    // from resolving ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, an on-disk
+    // profile or workload identity and sending that to the gateway. It goes
+    // out as `Authorization: Bearer`, which the gateway's SigV4 signature
+    // replaces before the request reaches Bedrock.
     apiKey: 'unused-the-gateway-holds-the-credential',
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxRetries: 0,
