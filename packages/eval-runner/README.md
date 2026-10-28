@@ -114,13 +114,16 @@ floor, under two rules:
   of the cluster version target rather than a kubectl release.
 - The AWS CLI takes the newest 2.x release.
 
-The image is built, cosign-signed, and SBOM-attested by
-`release.yaml` on an `eval-runner-v*` tag. Before that job pushes anything, and
-on every pull request that changes what the image is built from (the
-`eval-runner-image` job in `ci.yaml`), each platform is built and checked by
-`packages/eval-runner/scripts/smoke-image.sh` — `score` reproduces
-`testdata/score.golden.json`, the tools run, no package manager is on `PATH` —
-and scanned with trivy, failing on any fixed CRITICAL. Run the smoke against a
+`release.yaml` publishes the image on an `eval-runner-v*` tag. It builds both
+platforms once and pushes the result untagged, by digest; checks each platform
+of that digest; and only then tags, cosign-signs and SBOM-attests the same
+digest, after reading each tag back to confirm it resolves there. The check is
+`.github/actions/eval-runner-image-check`: `packages/eval-runner/scripts/smoke-image.sh`
+(`score` reproduces `testdata/score.golden.json`, the tools run, no package
+manager is on `PATH`) and a trivy scan failing on any fixed CRITICAL. The
+`eval-runner-image` job in `ci.yaml` runs the same check on each platform for
+every pull request that changes what the image is built from, a scope
+`scripts/check-eval-runner-image-scope.py` decides. Run the smoke against a
 local build:
 
 ```sh

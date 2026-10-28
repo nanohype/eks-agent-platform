@@ -60,6 +60,7 @@ PROBES = {
     "git": ["git", "--version"],
     "helm": ["helm", "version", "--short"],
     "go": ["go", "version"],
+    "pnpm": ["pnpm", "--version"],
 }
 
 

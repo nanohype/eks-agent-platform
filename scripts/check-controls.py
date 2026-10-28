@@ -289,6 +289,17 @@ CONTROLS = [
     Control(
         gate="check-version-pins.py",
         path="renovate.json",
+        before='"managerFilePatterns": ["/^\\\\.github/(workflows/[^/]+|actions/[^/]+/action)\\\\.ya?ml$/"]',
+        after='"managerFilePatterns": ["/^\\\\.github/workflows/[^/]+\\\\.ya?ml$/"]',
+        catches="a manager whose file patterns stop reaching a file its regex still matches: the "
+        "trivy release the eval-runner image check pins inside its composite action. Renovate "
+        "applies a manager only to the files its managerFilePatterns select, so the pin goes "
+        "unwatched while its text still matches. This also proves the gate reads .github/actions/",
+        expect_output="eval-runner-image-check/action.yml: aquasecurity/trivy",
+    ),
+    Control(
+        gate="check-version-pins.py",
+        path="renovate.json",
         before="GITLEAKS_VERSION:",
         after="GITLEAKS_VERSION_NEVER_MATCHES:",
         catches="a manager whose regex stops matching its pin. This proves the gate READS "
@@ -310,6 +321,35 @@ CONTROLS = [
         "form of this control renamed depNameTemplate and left matchStrings intact: the edit landed, "
         "the bytes changed, and the meaning did not, so the gate's pass was correct and the CONTROL "
         "was the thing at fault",
+    ),
+    # The scope gate's verdict is its exit status, as with `git diff --quiet`:
+    # 1 means a changed path is an image input and the image has to be built. It
+    # reads the working tree against HEAD by default, so the mutation IS the
+    # change it classifies. The failure it exists to prevent is the quiet one —
+    # a dependency change scoped out, so CI builds nothing and passes — so the
+    # reject control edits a package the image reaches only through the
+    # workspace graph, never by name.
+    Control(
+        gate="check-eval-runner-image-scope.py",
+        path="packages/pricing/src/index.ts",
+        before="import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };",
+        after="import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };\n"
+        "// zzsynthetic-scope-control",
+        catches="a change under a workspace package eval-runner depends on, which the image "
+        "bundles and the eval-runner-image job therefore has to build",
+        expect_output="in scope: packages/pricing/src/index.ts",
+    ),
+    Control(
+        gate="check-eval-runner-image-scope.py",
+        path="docs/architecture/eval-gating-flow.md",
+        before="# Architecture — Eval gating flow\n",
+        after="# Architecture — Eval gating flow\n\nzzsynthetic-scope-control\n",
+        args=["--list"],
+        catches="a documentation-only change, which must NOT be scoped into the image build. The "
+        "expected line names the planted path, so a gate that never saw the change cannot pass "
+        "this control by reporting nothing to build",
+        expect_output="out of scope: docs/architecture/eval-gating-flow.md",
+        expect_reject=False,
     ),
     Control(
         gate="check-named-paths.py",

@@ -157,7 +157,9 @@ jobs:
   # A workflow runs with this repository's credentials on every push, so the
   # workflows ARE a dependency surface and their defects are supply-chain
   # defects. zizmor is the scanner for that surface, sitting beside trivy and
-  # govulncheck rather than in a reviewer's head.
+  # govulncheck rather than in a reviewer's head. The composite actions under
+  # .github/actions/ run inside those jobs with the same credentials, so they
+  # are scanned with them.
   #
   # --offline is load-bearing: without it the audit resolves actions over the
   # network, and the verdict becomes a function of what GitHub answers at that
@@ -203,7 +205,7 @@ jobs:
           # Every tier first. `|| true` because a non-empty scan exits non-zero
           # by design here; the verdict comes from the gating run below.
           zizmor --offline --persona=auditor --config .github/zizmor.yml \
-            --min-severity=informational .github/workflows/ > all-tiers.txt 2>&1 || true
+            --min-severity=informational .github/workflows/ .github/actions/ > all-tiers.txt 2>&1 || true
           echo "::group::every severity, including tiers this gate does not fail on"
           grep -E '^[0-9]+ findings|^No findings' all-tiers.txt || tail -3 all-tiers.txt
           echo "::endgroup::"
@@ -211,7 +213,7 @@ jobs:
           # The verdict. Exit status is read directly off zizmor, not off a
           # pipeline, so it is zizmor's status and not some downstream tool's.
           zizmor --offline --persona=auditor --config .github/zizmor.yml \
-            --min-severity=low .github/workflows/
+            --min-severity=low .github/workflows/ .github/actions/
           echo "zizmor: nothing at medium or above. Informational and low are NOT gated here; their counts are in the group above."
 
   tflint:

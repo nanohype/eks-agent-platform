@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
 
 import { parseCases } from './cases.js';
 import { KNOWN_FLAGS, REQUIRED_FLAGS } from './cli.js';
+import { parseResults } from './results.js';
 import { aggregate } from './score.js';
-import type { CaseResult } from './types.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
 const pkgRoot = resolve(import.meta.dirname, '..');
@@ -96,11 +96,13 @@ describe('cross-language golden fixtures', () => {
 
   // score.results.json is also the input packages/eval-runner/scripts/smoke-image.sh
   // hands the built image's `score`, so this pair is what that smoke is held to:
-  // a mismatch there is the image, not the scorer.
+  // a mismatch there is the image, not the scorer. The fixture goes through the
+  // schema `score` reads results.json with, so a fixture `score` would reject
+  // fails here as a schema error rather than as a golden diff.
   it('emits the score.json shape the operator writeback reads (score.golden.json)', () => {
-    const results = JSON.parse(
+    const results = parseResults(
       readFileSync(resolve(pkgRoot, 'testdata/score.results.json'), 'utf8'),
-    ) as CaseResult[];
+    );
     const { result } = aggregate(results, '0.85');
     const golden = JSON.parse(
       readFileSync(resolve(pkgRoot, 'testdata/score.golden.json'), 'utf8'),
