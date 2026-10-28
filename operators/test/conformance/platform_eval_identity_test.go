@@ -19,8 +19,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -34,10 +36,11 @@ import (
 // and evalBucket the eval-reports bucket. The policy name restates the
 // operator's so a rename upstream breaks these tests loudly.
 const (
-	evalRuntimeNs     = "eval-conformance"
-	evalBucket        = "conformance-111111111111-us-west-2-eval-reports"
-	evalPolicyName    = "eval-reports-access"
-	evalRoleARNPrefix = "arn:aws:iam::123456789012:role/eks-agent-platform/tenants/"
+	condEvalIdentityReady = "EvalIdentityReady"
+	evalRuntimeNs         = "eval-conformance"
+	evalBucket            = "conformance-111111111111-us-west-2-eval-reports"
+	evalPolicyName        = "eval-reports-access"
+	evalRoleARNPrefix     = "arn:aws:iam::123456789012:role/eks-agent-platform/tenants/"
 )
 
 // memEKS is an in-memory awsclients.EKS holding Pod Identity associations by
@@ -217,6 +220,20 @@ func wantEvalStatements(platform, bucket string) []evalStatement {
 	}
 }
 
+// assertEvalIdentityCondition checks the Platform's EvalIdentityReady
+// condition as the API server holds it.
+func assertEvalIdentityCondition(ctx context.Context, t *testing.T, p *platformv1alpha1.Platform, status metav1.ConditionStatus, reason, inMessage string) {
+	t.Helper()
+	got := getPlatform(ctx, t, p.Namespace, p.Name)
+	c := apimeta.FindStatusCondition(got.Status.Conditions, condEvalIdentityReady)
+	if c == nil {
+		t.Fatalf("%s: no %s condition; conditions %+v", p.Name, condEvalIdentityReady, got.Status.Conditions)
+	}
+	if c.Status != status || c.Reason != reason || !strings.Contains(c.Message, inMessage) {
+		t.Errorf("%s: %s = %s (%s) %q, want %s (%s) mentioning %q", p.Name, condEvalIdentityReady, c.Status, c.Reason, c.Message, status, reason, inMessage)
+	}
+}
+
 func assertEvalPolicy(t *testing.T, iamFake *memIAM, p *platformv1alpha1.Platform, bucket string) {
 	t.Helper()
 	doc, ok := iamFake.inlinePolicy(evalRoleFor(p), evalPolicyName)
@@ -256,6 +273,7 @@ func TestPlatformReconciler_MintsAPerPlatformEvalIdentity(t *testing.T) {
 		if !ok || role != evalRoleARNPrefix+evalRoleFor(p) {
 			t.Errorf("%s: %s/%s is bound to %q (bound=%v), want its own eval role", p.Name, evalRuntimeNs, saName, role, ok)
 		}
+		assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleFor(p))
 	}
 
 	// Neither Platform's grant names the other's prefix.
@@ -391,6 +409,7 @@ func TestPlatformReconciler_EvalIdentityWaitsForTheRuntimeNamespace(t *testing.T
 	if _, ok := eksFake.roleFor(absentNs, saName); ok {
 		t.Error("an association was created for a ServiceAccount that cannot exist")
 	}
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionFalse, "RuntimeNamespaceAbsent", absentNs)
 
 	mustCreate(ctx, t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: absentNs}})
 	reconcileIAM(ctx, t, r, p)
@@ -400,5 +419,127 @@ func TestPlatformReconciler_EvalIdentityWaitsForTheRuntimeNamespace(t *testing.T
 	assertEvalPolicy(t, iamFake, p, evalBucket)
 	if role, ok := eksFake.roleFor(absentNs, saName); !ok || role != evalRoleARNPrefix+evalRoleFor(p) {
 		t.Errorf("%s/%s is bound to %q (bound=%v), want its eval role", absentNs, saName, role, ok)
+	}
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", saName)
+}
+
+// evalCreateDenied fails CreateRole for every eval role, the way IAM refuses an
+// operator role that holds no create grant for it.
+func evalCreateDenied(name string) error {
+	if strings.HasSuffix(name, "-eval") {
+		return &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: iam:CreateRole on resource: role " + name}
+	}
+	return nil
+}
+
+// TestPlatformReconciler_EvalIdentityFailureLeavesThePlatformReady: a Platform's
+// readiness does not wait on its evals. An eval identity that cannot be minted
+// is reported on EvalIdentityReady, while the reconcile still succeeds, writes
+// the Platform's status, and requeues on its usual interval. The next pass that
+// can mint the identity does.
+func TestPlatformReconciler_EvalIdentityFailureLeavesThePlatformReady(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake.createErr = evalCreateDenied
+	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+	p := evalPlatform(ctx, t, "p")
+	reconcileIAM(ctx, t, r, p)
+
+	got := getPlatform(ctx, t, p.Namespace, p.Name)
+	if got.Status.Phase != phaseReady {
+		t.Fatalf("phase %q with an eval identity that cannot be minted, want Ready", got.Status.Phase)
+	}
+	if apimeta.FindStatusCondition(got.Status.Conditions, condModelAccessScoped) == nil {
+		t.Error("the Platform's own conditions were not written")
+	}
+	if !iamFake.hasRole(tenantRoleFor(p)) {
+		t.Errorf("tenant role %s not minted", tenantRoleFor(p))
+	}
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionFalse, "ReconcileFailed", "AccessDenied")
+	if _, ok := eksFake.roleFor(evalRuntimeNs, controller.EvalServiceAccountName(p)); ok {
+		t.Error("an association was created for a role that was never minted")
+	}
+
+	iamFake.createErr = nil
+	reconcileIAM(ctx, t, r, p)
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleFor(p))
+	assertEvalPolicy(t, iamFake, p, evalBucket)
+}
+
+// TestPlatformReconciler_EvalIdentityFailureKeepsSuspensionReported: the
+// kill-switch's state reaches the Platform's status whatever its eval identity
+// does. A pass that returned early on an eval failure would leave a suspended
+// Platform reading as whatever it read before.
+func TestPlatformReconciler_EvalIdentityFailureKeepsSuspensionReported(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake.createErr = evalCreateDenied
+	p := evalPlatform(ctx, t, "p")
+	iamFake.seedRole(tenantRoleFor(p),
+		iamtypes.Tag{Key: aws.String("platform.nanohype.dev/suspended"), Value: aws.String("true")},
+		iamtypes.Tag{Key: aws.String("platform.nanohype.dev/suspended-reason"), Value: aws.String("budget-exceeded")},
+	)
+	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
+
+	got := getPlatform(ctx, t, p.Namespace, p.Name)
+	if got.Status.Phase != phaseSuspended {
+		t.Fatalf("phase %q, want Suspended", got.Status.Phase)
+	}
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, "Suspended"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Errorf("Suspended condition %+v, want True", c)
+	}
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionFalse, "ReconcileFailed", "AccessDenied")
+}
+
+// TestPlatformReconciler_EvalIdentityNeedsNoRootPathGrant runs the operator
+// role as a tenant-path grant leaves it for the eval role: every call naming an
+// eval role that does not exist is refused, as IAM authorizes it against the
+// root-path name. The identity is still minted and torn down, and a Platform
+// deleted before its eval role ever existed still releases its finalizer.
+func TestPlatformReconciler_EvalIdentityNeedsNoRootPathGrant(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake.deniedAbsentSuffix = "-eval"
+	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+
+	minted := evalPlatform(ctx, t, "minted")
+	reconcileIAM(ctx, t, r, minted)
+	assertEvalIdentityCondition(ctx, t, minted, metav1.ConditionTrue, "Bound", evalRoleFor(minted))
+	assertEvalPolicy(t, iamFake, minted, evalBucket)
+
+	// Deferred on a namespace that never arrives, so no eval role is minted.
+	deferred := evalPlatform(ctx, t, "deferred")
+	late := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+	late.Eval.Namespace = "eval-never-" + strings.TrimPrefix(deferred.Name, "ev-")
+	reconcileIAM(ctx, t, late, deferred)
+	if iamFake.hasRole(evalRoleFor(deferred)) {
+		t.Fatalf("precondition: role %s was minted", evalRoleFor(deferred))
+	}
+
+	for _, c := range []struct {
+		p *platformv1alpha1.Platform
+		r *controller.PlatformReconciler
+	}{{minted, r}, {deferred, late}} {
+		if err := k8sClient.Delete(ctx, c.p); err != nil {
+			t.Fatalf("delete %s: %v", c.p.Name, err)
+		}
+		if _, err := c.r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: c.p.Name, Namespace: c.p.Namespace}}); err != nil {
+			t.Fatalf("%s: finalizer reconcile: %v", c.p.Name, err)
+		}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: c.p.Name, Namespace: c.p.Namespace}, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
+			t.Errorf("%s: the finalizer was not released (err=%v)", c.p.Name, err)
+		}
+	}
+	if iamFake.hasRole(evalRoleFor(minted)) {
+		t.Errorf("role %s survived its Platform", evalRoleFor(minted))
 	}
 }

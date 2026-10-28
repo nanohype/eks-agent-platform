@@ -61,16 +61,21 @@ func PlatformNamespace(p *platformv1alpha1.Platform) string {
 // namespace, the eval ServiceAccount, the tenant, session, eval and
 // scheduler-invoke role names — goes through here, so they truncate alike.
 //
-// A prefix and suffix that leave no room for the hash yield a name over maxLen;
-// the API that receives it rejects it by name, which is the actionable failure.
+// A prefix and suffix that leave no room for the hash yield a name over maxLen.
+// The role-name prefix is the only one that varies, and ValidateClusterName
+// refuses at startup a cluster name that would leave a role name there.
 func boundedName(prefix, name, suffix string, maxLen int) string {
 	full := prefix + name + suffix
 	if len(full) <= maxLen {
 		return full
 	}
-	budget := max(maxLen-len(prefix)-len(suffix)-1-8, 0)
+	budget := max(maxLen-len(prefix)-len(suffix)-boundedNameHashLen, 0)
 	return fmt.Sprintf("%s%s-%08x%s", prefix, name[:budget], fnv1a64(name)&0xffffffff, suffix)
 }
+
+// boundedNameHashLen is what boundedName puts in place of the part of a name it
+// cuts: a hyphen and 8 hex digits.
+const boundedNameHashLen = len("-") + 8
 
 // fnv1a64 implements FNV-1a 64-bit without importing hash/fnv — keeps the
 // reconcile package free of additional stdlib imports for clarity.

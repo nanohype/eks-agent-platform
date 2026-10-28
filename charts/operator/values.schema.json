@@ -172,7 +172,8 @@
           "type": "string"
         },
         "clusterName": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 37
         },
         "region": {
           "type": "string"

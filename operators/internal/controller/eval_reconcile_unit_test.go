@@ -13,6 +13,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -36,13 +37,25 @@ func evalScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// evalIdentityAccount is the per-Platform ServiceAccount the Platform
-// reconciler creates in the eval runtime namespace, and the precondition the
-// EvalSuite reconciler checks before submitting a run under it.
-func evalIdentityAccount(r *EvalReconciler, p *platformv1alpha1.Platform) *corev1.ServiceAccount {
+// boundEvalIdentity is a Platform's eval identity as the Platform reconciler
+// leaves it once bound, which is what the EvalSuite reconciler checks before
+// submitting a run: it marks p's EvalIdentityReady condition True and returns
+// the ServiceAccount in the eval runtime namespace for the fake client to hold.
+// Call it before the client is built, so a Platform the client holds carries
+// the condition too.
+func boundEvalIdentity(r *EvalReconciler, p *platformv1alpha1.Platform) *corev1.ServiceAccount {
+	markEvalIdentityBound(p)
 	return &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
 		Name: EvalServiceAccountName(p), Namespace: r.evalRunnerNamespace(),
 	}}
+}
+
+// markEvalIdentityBound sets the condition a Platform pass that bound the eval
+// identity end to end writes.
+func markEvalIdentityBound(p *platformv1alpha1.Platform) {
+	apimeta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{
+		Type: conditionEvalIdentityReady, Status: metav1.ConditionTrue, Reason: "Bound",
+	})
 }
 
 func evalSuite() *governancev1alpha1.EvalSuite {

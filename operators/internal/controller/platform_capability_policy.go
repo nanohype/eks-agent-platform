@@ -126,7 +126,7 @@ func anySidPresent(sids []string, granted map[string]struct{}) bool {
 // PassRole grant composes role/<name> with no path segment). Capped at 64 chars
 // with the same FNV-1a hash-truncation as tenantRoleName.
 func schedulerInvokeRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	return boundedName(clusterName+"-", p.Name, "-scheduler-invoke", iamRoleNameMax)
+	return boundedName(clusterName+"-", p.Name, schedulerInvokeRoleSuffix, iamRoleNameMax)
 }
 
 // schedulerInvokeRoleARN composes the invoke role's ARN from the same scope the

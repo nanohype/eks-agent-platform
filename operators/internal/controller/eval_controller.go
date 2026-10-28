@@ -57,7 +57,7 @@ type EvalReconciler struct {
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites/finalizers,verbs=update
 // +kubebuilder:rbac:groups=argoproj.io,resources=workflows;workflowtemplates;cronworkflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=analysisruns;analysistemplates,verbs=get;list;watch
-// A run is submitted only once the Platform's eval ServiceAccount exists.
+// A run is submitted only while the Platform's eval ServiceAccount exists.
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
 
 // Reconcile drives an EvalSuite CR into a CronWorkflow (scheduled) or Workflow (manual).

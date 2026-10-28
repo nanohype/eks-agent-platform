@@ -32,7 +32,7 @@ const defaultSessionRoleMaxDuration int32 = 3600
 // Same 64-char cap + FNV-1a hash-truncation scheme as tenantRoleName, so the
 // two role names never collide and both stay within IAM's role-name limit.
 func sessionRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	return boundedName(clusterName+"-", p.Name, "-session", iamRoleNameMax)
+	return boundedName(clusterName+"-", p.Name, sessionRoleSuffix, iamRoleNameMax)
 }
 
 // sessionRoleTrustPolicy builds the trust policy for the attribution session

@@ -119,7 +119,8 @@ Verify the Pod Identity associations bound:
 `aws-neuron/neuron-device-plugin` and `gpu-operator/gpu-operator` tuples. Eval
 runs have no association from this tree: the operator binds one per Platform,
 `eval-runner/eval-<platform>` to `<cluster>-<platform>-eval`, once the Platform
-reconciles (B2/B3), and the same list shows those. From one of those pods,
+reconciles (B2/B3) — its `EvalIdentityReady` condition turns True — and the same
+list shows those. From one of those pods,
 `AWS_CONTAINER_CREDENTIALS_FULL_URI` is injected (Pod Identity), not
 `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` (IRSA), and `aws sts
 get-caller-identity` resolves to the bound role. A `(namespace, serviceAccount)`
@@ -252,7 +253,12 @@ green.
 - **Upstream chart value schemas:** don't inject `clusterName`/`vpcId` (or other
   unknown `--set` values) into upstream charts with strict schemas (cert-manager,
   envoy-ai-gateway) — they fail to render. (Fixed in the ApplicationSets.)
-- **Operator IAM idempotency GetRole:** authorizes against the bare-name (root)
-  ARN before the role exists, so the operator role allows GetRole on the
-  `<cluster>-*-tenant` and `<cluster>-*-eval` name patterns as well as the
-  scoped path. (In `agent-iam`.)
+- **Operator IAM idempotency GetRole:** IAM authorizes a call naming a role
+  that does not exist against the bare-name (root) ARN, not the tenant path the
+  operator's grants are scoped to. The tenant role's pre-create `GetRole`
+  therefore needs the `<cluster>-*-tenant` name pattern beside the scoped path
+  (`agent-iam`'s `TenantRoleRead` statement). The eval role needs no such
+  grant: the operator reads AccessDenied on its existence check as "no role
+  under the tenant path holds this name" and lets `CreateRole`, which names the
+  path, settle it. A Platform whose eval identity cannot be minted still
+  reaches Ready and reports why on its `EvalIdentityReady` condition.

@@ -87,11 +87,39 @@ type iamReconcileResult struct {
 // of the same name without their tenant roles colliding. Capped at 64 chars (IAM
 // role-name limit); long platform names get hash-truncated like PlatformNamespace.
 func tenantRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	return boundedName(clusterName+"-", p.Name, "-tenant", iamRoleNameMax)
+	return boundedName(clusterName+"-", p.Name, tenantRoleSuffix, iamRoleNameMax)
 }
 
 // iamRoleNameMax is IAM's role-name length limit.
 const iamRoleNameMax = 64
+
+// The suffixes of the roles the operator mints for a Platform, each named
+// <cluster-name>-<platform.name><suffix> through boundedName.
+const (
+	tenantRoleSuffix          = "-tenant"
+	sessionRoleSuffix         = "-session"
+	evalRoleSuffix            = "-eval"
+	schedulerInvokeRoleSuffix = "-scheduler-invoke"
+)
+
+// MaxClusterNameLen is the longest cluster name with which every role name the
+// operator derives fits IAM's limit. boundedName can cut a Platform name down to
+// nothing but always keeps the hyphen and hash that stand in for it, so the
+// bound is the limit less the cluster's own hyphen, that hash, and the longest
+// role suffix.
+const MaxClusterNameLen = iamRoleNameMax - len("-") - boundedNameHashLen - len(schedulerInvokeRoleSuffix)
+
+// ValidateClusterName rejects a cluster name too long for the role names derived
+// from it to fit IAM's role-name limit. Every Platform's CreateRole would fail
+// on such a name at reconcile time, so the operator refuses it at startup.
+func ValidateClusterName(name string) error {
+	if len(name) > MaxClusterNameLen {
+		return fmt.Errorf("cluster name %q is %d characters; the role names the operator derives from it "+
+			"(<cluster-name>-<platform>%s the longest) fit IAM's %d-character limit only for cluster names of at most %d",
+			name, len(name), schedulerInvokeRoleSuffix, iamRoleNameMax, MaxClusterNameLen)
+	}
+	return nil
+}
 
 // tenantPath is the IAM path every operator-minted tenant-scoped role is
 // created under, normalized to the trailing slash IAM requires. The operator's

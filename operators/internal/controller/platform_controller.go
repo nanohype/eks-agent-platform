@@ -309,11 +309,18 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// The identity the Platform's eval runs hold. Not gated on suspension: the
-	// eval role carries no model access for the kill-switch to withdraw.
-	if err := r.ensureEvalIdentity(ctx, platform); err != nil {
-		logger.Error(err, "ensureEvalIdentity failed")
-		return ctrl.Result{}, err
+	// eval role carries no model access for the kill-switch to withdraw. Its
+	// outcome goes on the EvalIdentityReady condition rather than into the
+	// reconcile's result, so a failure here neither holds the Platform's own
+	// phase nor drops this pass's status write; the periodic requeue every
+	// IAM-wired pass ends with retries it.
+	evalOutcome, evalErr := r.ensureEvalIdentity(ctx, platform)
+	if evalErr != nil {
+		logger.Error(evalErr, "ensureEvalIdentity failed; reported on EvalIdentityReady")
+		r.recordWarning(platform, "EvalIdentityNotBound", "ReconcileEvalIdentity",
+			"eval identity not bound, so no eval run is submitted: %s", evalErr.Error())
 	}
+	r.setEvalIdentityCondition(platform, evalOutcome, evalErr)
 
 	// Update status. status.phase = Suspended when the kill-switch tag is
 	// set; otherwise Ready.

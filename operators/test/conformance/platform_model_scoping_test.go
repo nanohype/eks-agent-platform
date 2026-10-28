@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -56,6 +57,13 @@ type memIAM struct {
 	attached map[string]map[string]struct{}
 	inline   map[string]map[string]string
 	puts     int
+
+	// deniedAbsentSuffix makes every call naming an absent role whose name ends
+	// in it answer AccessDenied instead of NoSuchEntity: IAM's answer to an
+	// identity whose grants cover the tenant path but not that root-path name.
+	deniedAbsentSuffix string
+	// createErr, when set, fails CreateRole for the names it returns an error for.
+	createErr func(name string) error
 }
 
 func newMemIAM() *memIAM {
@@ -71,9 +79,19 @@ func (m *memIAM) seedRole(name string, tags ...iamtypes.Tag) {
 	defer m.mu.Unlock()
 	m.roles[name] = &iamtypes.Role{
 		RoleName: aws.String(name),
+		Path:     aws.String("/eks-agent-platform/tenants/"),
 		Arn:      aws.String("arn:aws:iam::123456789012:role/eks-agent-platform/tenants/" + name),
 		Tags:     tags,
 	}
+}
+
+// absent answers a call naming a role that does not exist, the way IAM
+// authorizes it. Callers hold m.mu.
+func (m *memIAM) absent(name string) error {
+	if m.deniedAbsentSuffix != "" && strings.HasSuffix(name, m.deniedAbsentSuffix) {
+		return &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized on resource: role " + name}
+	}
+	return notFound()
 }
 
 func (m *memIAM) inlineDoc(role string) (string, bool) {
@@ -88,6 +106,11 @@ func notFound() error {
 }
 
 func (m *memIAM) CreateRole(_ context.Context, p *iam.CreateRoleInput, _ ...func(*iam.Options)) (*iam.CreateRoleOutput, error) {
+	if m.createErr != nil {
+		if err := m.createErr(aws.ToString(p.RoleName)); err != nil {
+			return nil, err
+		}
+	}
 	m.seedRole(aws.ToString(p.RoleName), p.Tags...)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -99,7 +122,7 @@ func (m *memIAM) GetRole(_ context.Context, p *iam.GetRoleInput, _ ...func(*iam.
 	defer m.mu.Unlock()
 	role, ok := m.roles[aws.ToString(p.RoleName)]
 	if !ok {
-		return nil, notFound()
+		return nil, m.absent(aws.ToString(p.RoleName))
 	}
 	return &iam.GetRoleOutput{Role: role}, nil
 }
@@ -107,6 +130,9 @@ func (m *memIAM) GetRole(_ context.Context, p *iam.GetRoleInput, _ ...func(*iam.
 func (m *memIAM) DeleteRole(_ context.Context, p *iam.DeleteRoleInput, _ ...func(*iam.Options)) (*iam.DeleteRoleOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.roles[aws.ToString(p.RoleName)]; !ok && m.deniedAbsentSuffix != "" {
+		return nil, m.absent(aws.ToString(p.RoleName))
+	}
 	delete(m.roles, aws.ToString(p.RoleName))
 	return &iam.DeleteRoleOutput{}, nil
 }
@@ -140,6 +166,9 @@ func (m *memIAM) DetachRolePolicy(_ context.Context, p *iam.DetachRolePolicyInpu
 func (m *memIAM) ListAttachedRolePolicies(_ context.Context, p *iam.ListAttachedRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.roles[aws.ToString(p.RoleName)]; !ok && m.deniedAbsentSuffix != "" {
+		return nil, m.absent(aws.ToString(p.RoleName))
+	}
 	out := &iam.ListAttachedRolePoliciesOutput{}
 	for arn := range m.attached[aws.ToString(p.RoleName)] {
 		out.AttachedPolicies = append(out.AttachedPolicies, iamtypes.AttachedPolicy{PolicyArn: aws.String(arn), PolicyName: aws.String(arn)})
@@ -185,7 +214,7 @@ func (m *memIAM) ListRolePolicies(_ context.Context, p *iam.ListRolePoliciesInpu
 	defer m.mu.Unlock()
 	role := aws.ToString(p.RoleName)
 	if _, ok := m.roles[role]; !ok {
-		return nil, notFound()
+		return nil, m.absent(role)
 	}
 	out := &iam.ListRolePoliciesOutput{}
 	for name := range m.inline[role] {

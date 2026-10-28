@@ -18,6 +18,7 @@ import (
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
@@ -73,6 +74,10 @@ type fakeIAM struct {
 	deleteInlineReturnsErr map[string]error
 	// putInlineReturnsErr injects a PutRolePolicy error keyed by policy name.
 	putInlineReturnsErr map[string]error
+	// absentReadsDenied answers GetRole on a name no role holds with
+	// AccessDenied instead of NoSuchEntity — what IAM returns to an identity
+	// whose read grant covers the tenant path but not the root-path name.
+	absentReadsDenied bool
 	// inlinePageSize, when > 0, paginates ListRolePolicies at that size so a
 	// test can drive the marker-following branch of deleteInlinePolicies. A
 	// loop that ignores the marker deletes only the first page, which on the
@@ -124,6 +129,7 @@ func (f *fakeIAM) CreateRole(_ context.Context, params *iam.CreateRoleInput, _ .
 	name := aws.ToString(params.RoleName)
 	arn := "arn:aws:iam::123456789012:role/" + name
 	f.seedRole(name, arn, params.Tags...)
+	f.roles[name].Path = params.Path
 	return &iam.CreateRoleOutput{Role: f.roles[name]}, nil
 }
 
@@ -133,6 +139,9 @@ func (f *fakeIAM) GetRole(_ context.Context, params *iam.GetRoleInput, _ ...func
 	}
 	name := aws.ToString(params.RoleName)
 	role, ok := f.roles[name]
+	if !ok && f.absentReadsDenied {
+		return nil, &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: iam:GetRole on resource: role " + name}
+	}
 	if !ok {
 		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role: " + name)}
 	}

@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -97,13 +98,21 @@ func (r *EvalReconciler) evalRunnerNamespace() string {
 	return evalRuntimeNamespace(r.RunnerNamespace)
 }
 
-// errEvalIdentityMissing is a Platform whose eval ServiceAccount is not in the
-// eval runtime namespace. The Platform reconciler creates it with the
-// Platform's eval role; until it exists there is no identity to run under.
-var errEvalIdentityMissing = errors.New(
-	"the Platform's eval ServiceAccount does not exist in the eval runtime namespace; " +
-		"the Platform reconciler creates it once the eval-reports bucket is configured",
-)
+// errEvalIdentityMissing is a Platform whose eval identity is not in place to
+// run under: its EvalIdentityReady condition is not True, or the eval
+// ServiceAccount the condition vouched for is gone.
+var errEvalIdentityMissing = errors.New("the Platform's eval identity is not bound")
+
+// evalIdentityNotBound says why a Platform's EvalIdentityReady condition does
+// not admit a run, quoting the Platform reconciler's own reason when it wrote
+// one.
+func evalIdentityNotBound(c *metav1.Condition) string {
+	if c == nil {
+		return "the Platform reports no " + conditionEvalIdentityReady + " condition; " +
+			"the Platform reconciler writes it once the eval-reports bucket is configured"
+	}
+	return fmt.Sprintf("%s=%s (%s): %s", c.Type, c.Status, c.Reason, c.Message)
+}
 
 // argoWorkflowsGV is the GroupVersion the Argo Workflows controller
 // owns. Lazy-detected at reconcile time — clusters without Argo
@@ -208,16 +217,26 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 	}
 
 	// The run holds the Platform's own eval identity (ensureEvalIdentity), never
-	// a shared one. Argo cannot create a pod under a ServiceAccount that does
-	// not exist, so a run submitted before the identity is in place fails
-	// without running a step, and its exit handler — a pod under the same
-	// account — cannot report the failure. The suite would sit in Provisioning
-	// with no reason given.
+	// a shared one, and only once the Platform reports it bound. The account
+	// alone is not that: a Platform pass that fails after creating it leaves an
+	// account with no role behind it, and a run under it does not hold the eval
+	// role, so its S3 calls fail — after it has run every inline case against a
+	// live model. EvalIdentityReady is True only after a pass in which the
+	// account, the role and the association binding them all exist.
 	runnerSA := EvalServiceAccountName(platform)
+	if c := apimeta.FindStatusCondition(platform.Status.Conditions, conditionEvalIdentityReady); c == nil || c.Status != metav1.ConditionTrue {
+		return fmt.Errorf("%w: %s", errEvalIdentityMissing, evalIdentityNotBound(c))
+	}
+	// The account is read as well, for the window between a Platform pass and
+	// an out-of-band delete of it. Argo cannot create a pod under a
+	// ServiceAccount that does not exist, so a run submitted then fails without
+	// running a step, and its exit handler — a pod under the same account —
+	// cannot report the failure. The suite would sit in Provisioning with no
+	// reason given.
 	saKey := types.NamespacedName{Namespace: r.evalRunnerNamespace(), Name: runnerSA}
 	if err := r.Get(ctx, saKey, &corev1.ServiceAccount{}); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("%w: %s", errEvalIdentityMissing, saKey)
+			return fmt.Errorf("%w: eval ServiceAccount %s does not exist", errEvalIdentityMissing, saKey)
 		}
 		return fmt.Errorf("get eval ServiceAccount %s: %w", saKey, err)
 	}

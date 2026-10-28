@@ -47,10 +47,11 @@ Platform's reports; the bucket is shared, so that role is the only boundary
 inside it. The role carries no Bedrock grant: eval-runner reaches the model
 through the Platform's `ModelGateway` over HTTP.
 
-The operator's pre-create `GetRole` — and the finalizer's calls against a role
-that was never created — authorize against the root-path name ARN, so the
-operator identity needs read on `role/<cluster>-*-eval` beside the tenant-path
-grants it already holds.
+The operator needs no grant on the role's root-path name beside its
+tenant-path grants: it reads AccessDenied on the role's existence check as an
+absent role and lets `CreateRole`, which names the tenant path, settle whether
+the name is free. The Platform reports the identity on its `EvalIdentityReady`
+condition, and no run is submitted until that is `True`.
 
 The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 `spec.schedule` is set) into `runner_namespace` referencing the

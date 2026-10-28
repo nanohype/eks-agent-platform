@@ -10,14 +10,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -294,8 +299,12 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
 	p := newPlatform("analytics", "acme")
 
-	if err := r.ensureEvalIdentity(ctx, p); err != nil {
+	outcome, err := r.ensureEvalIdentity(ctx, p)
+	if err != nil {
 		t.Fatalf("ensureEvalIdentity: %v", err)
+	}
+	if outcome != evalIdentityBound {
+		t.Errorf("outcome = %v, want evalIdentityBound", outcome)
 	}
 
 	var sa corev1.ServiceAccount
@@ -368,7 +377,7 @@ func TestEnsureEvalIdentity_ConvergedPassWritesNothing(t *testing.T) {
 	r, f, fe, _ := evalIdentityReconciler(t, nil)
 	p := newPlatform("analytics", "acme")
 	for i := 0; i < 3; i++ {
-		if err := r.ensureEvalIdentity(ctx, p); err != nil {
+		if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 			t.Fatalf("pass %d: %v", i+1, err)
 		}
 	}
@@ -386,12 +395,12 @@ func TestEnsureEvalIdentity_ConvergesThePolicy(t *testing.T) {
 	r, f, _, _ := evalIdentityReconciler(t, nil)
 	p := newPlatform("analytics", "acme")
 	role := evalRoleName(evalTestCluster, p)
-	if err := r.ensureEvalIdentity(ctx, p); err != nil {
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
 
 	f.inline[role][evalReportsPolicyName] = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["*"]}]}`
-	if err := r.ensureEvalIdentity(ctx, p); err != nil {
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
 	want, _ := evalReportsPolicyDoc("analytics", evalTestBucket, arnScopeFromRole(evalTestRoleARN, "us-west-2"))
@@ -400,7 +409,7 @@ func TestEnsureEvalIdentity_ConvergesThePolicy(t *testing.T) {
 	}
 
 	r.Eval.ReportsBucket = "relocated-eval-reports"
-	if err := r.ensureEvalIdentity(ctx, p); err != nil {
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
 	doc := f.inline[role][evalReportsPolicyName]
@@ -412,24 +421,39 @@ func TestEnsureEvalIdentity_ConvergesThePolicy(t *testing.T) {
 	}
 }
 
-// TestEnsureEvalIdentity_ReconcilesTheAccountWithoutIAM: the ServiceAccount is
-// the EvalSuite reconciler's precondition, so it exists wherever runs can be
-// submitted, AWS wired or not.
-func TestEnsureEvalIdentity_ReconcilesTheAccountWithoutIAM(t *testing.T) {
+// TestEvalIdentityNeedsBothAWSClients: the identity is a role bound to an
+// account by Pod Identity, so a reconciler missing either client mints no part
+// of it — an account alone is one no run can hold credentials through — and
+// has none to tear down.
+func TestEvalIdentityNeedsBothAWSClients(t *testing.T) {
 	ctx := context.Background()
-	r, _, _, cl := evalIdentityReconciler(t, nil)
-	r.IAM, r.EKS = nil, nil
-	if err := r.ensureEvalIdentity(ctx, newPlatform("analytics", "acme")); err != nil {
-		t.Fatalf("ensureEvalIdentity: %v", err)
-	}
-	if err := cl.Get(ctx, types.NamespacedName{Namespace: evalTestNamespace, Name: "eval-analytics"}, &corev1.ServiceAccount{}); err != nil {
-		t.Errorf("no ServiceAccount without an IAM client: %v", err)
+	for _, missing := range []string{"IAM", "EKS"} {
+		t.Run(missing, func(t *testing.T) {
+			r, _, _, cl := evalIdentityReconciler(t, nil)
+			if missing == "IAM" {
+				r.IAM = nil
+			} else {
+				r.EKS = nil
+			}
+			p := newPlatform("analytics", "acme")
+			outcome, err := r.ensureEvalIdentity(ctx, p)
+			if err != nil || outcome != evalIdentityUnmanaged {
+				t.Fatalf("ensureEvalIdentity = (%v, %v), want (evalIdentityUnmanaged, nil)", outcome, err)
+			}
+			err = cl.Get(ctx, types.NamespacedName{Namespace: evalTestNamespace, Name: "eval-analytics"}, &corev1.ServiceAccount{})
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("eval ServiceAccount created with no %s client (err=%v)", missing, err)
+			}
+			if err := r.deleteEvalIdentity(ctx, p); err != nil {
+				t.Errorf("deleteEvalIdentity: %v", err)
+			}
+		})
 	}
 }
 
 // TestEvalIdentityIsInertWithoutAnEvalRuntime: no reports bucket, no calls of
-// any kind — a cluster that never ran evals holds no grant for the -eval role
-// name, so a stray call would fail the reconcile or wedge the finalizer.
+// any kind. A cluster that runs no evals has no eval identity, and the
+// operator makes no IAM or EKS call on behalf of one.
 func TestEvalIdentityIsInertWithoutAnEvalRuntime(t *testing.T) {
 	ctx := context.Background()
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
@@ -439,8 +463,8 @@ func TestEvalIdentityIsInertWithoutAnEvalRuntime(t *testing.T) {
 	fe.listReturnsErr = errors.New("ListPodIdentityAssociations must not be called")
 	p := newPlatform("analytics", "acme")
 
-	if err := r.ensureEvalIdentity(ctx, p); err != nil {
-		t.Errorf("ensureEvalIdentity: %v", err)
+	if outcome, err := r.ensureEvalIdentity(ctx, p); err != nil || outcome != evalIdentityUnmanaged {
+		t.Errorf("ensureEvalIdentity = (%v, %v), want (evalIdentityUnmanaged, nil)", outcome, err)
 	}
 	if err := r.deleteEvalIdentity(ctx, p); err != nil {
 		t.Errorf("deleteEvalIdentity: %v", err)
@@ -456,17 +480,16 @@ func TestEvalIdentityIsInertWithoutAnEvalRuntime(t *testing.T) {
 
 // TestEnsureEvalIdentity_DefersWithoutTheRuntimeNamespace: the API server
 // answers a ServiceAccount create in an absent namespace with NotFound. That is
-// a cluster without the chart's eval runtime, not a failed reconcile — the
-// Platform goes on to Ready, and no role is minted for an account that does
-// not exist yet.
+// a cluster without the chart's eval runtime, not a failed pass — the outcome
+// is deferred, and no role is minted for an account that does not exist yet.
 func TestEnsureEvalIdentity_DefersWithoutTheRuntimeNamespace(t *testing.T) {
 	r, f, fe, _ := evalIdentityReconciler(t, &interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 		return apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, evalTestNamespace)
 	}})
 	f.getReturnsErr = errors.New("GetRole must not be called")
 	fe.createReturnsErr = errors.New("CreatePodIdentityAssociation must not be called")
-	if err := r.ensureEvalIdentity(context.Background(), newPlatform("analytics", "acme")); err != nil {
-		t.Errorf("ensureEvalIdentity = %v, want the identity deferred", err)
+	if outcome, err := r.ensureEvalIdentity(context.Background(), newPlatform("analytics", "acme")); err != nil || outcome != evalIdentityDeferred {
+		t.Errorf("ensureEvalIdentity = (%v, %v), want (evalIdentityDeferred, nil)", outcome, err)
 	}
 	if len(f.roles) != 0 || len(fe.createCalls) != 0 {
 		t.Errorf("minted AWS identity for an account that does not exist: roles=%v associations=%v", f.roles, fe.createCalls)
@@ -492,6 +515,11 @@ func TestEnsureEvalIdentity_Errors(t *testing.T) {
 		{name: "GetRole", inject: func(f *fakeIAM, _ *fakeEKS) { f.getReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval"},
 		{name: "CreateRole", inject: func(f *fakeIAM, _ *fakeEKS) { f.createReturnsErr = boom }, want: "iam CreateRole production-cluster-analytics-eval"},
 		{
+			name:   "CreateRole after a refused read",
+			inject: func(f *fakeIAM, _ *fakeEKS) { f.absentReadsDenied, f.createReturnsErr = true, boom },
+			want:   "iam CreateRole production-cluster-analytics-eval",
+		},
+		{
 			name:   "PutRolePolicy",
 			inject: func(f *fakeIAM, _ *fakeEKS) { f.putInlineReturnsErr = map[string]error{evalReportsPolicyName: boom} },
 			want:   "iam PutRolePolicy production-cluster-analytics-eval/eval-reports-access",
@@ -504,9 +532,12 @@ func TestEnsureEvalIdentity_Errors(t *testing.T) {
 			if c.inject != nil {
 				c.inject(f, fe)
 			}
-			err := r.ensureEvalIdentity(ctx, newPlatform("analytics", "acme"))
+			outcome, err := r.ensureEvalIdentity(ctx, newPlatform("analytics", "acme"))
 			if err == nil || !errors.Is(err, boom) || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("got %v, want an error wrapping boom that names %q", err, c.want)
+			}
+			if outcome == evalIdentityBound {
+				t.Error("a failed pass reported the identity bound")
 			}
 		})
 	}
@@ -516,7 +547,7 @@ func TestDeleteEvalIdentity_RemovesEverythingItMinted(t *testing.T) {
 	ctx := context.Background()
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
 	p := newPlatform("analytics", "acme")
-	if err := r.ensureEvalIdentity(ctx, p); err != nil {
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
 
@@ -557,13 +588,14 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 			}},
 			want: "delete eval ServiceAccount evals/eval-analytics",
 		},
+		{name: "role lookup", inject: func(f *fakeIAM, _ *fakeEKS) { f.getReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval"},
 		{name: "role", inject: func(f *fakeIAM, _ *fakeEKS) { f.deleteReturnsErr = boom }, want: "iam DeleteRole"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r, f, fe, _ := evalIdentityReconciler(t, c.funcs)
 			p := newPlatform("analytics", "acme")
-			if err := r.ensureEvalIdentity(ctx, p); err != nil {
+			if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 				t.Fatal(err)
 			}
 			if c.inject != nil {
@@ -592,5 +624,169 @@ func TestEvalRoleIsNotTheTenantRole(t *testing.T) {
 	tenant := tenantRoleTags(p, IAMConfig{ClusterName: evalTestCluster})
 	if tagValue(tags, platformIDTagKey) != tagValue(tenant, platformIDTagKey) {
 		t.Error("the eval role must attribute to the same Platform as the tenant role")
+	}
+}
+
+// TestEnsureEvalIdentity_NeedsNoGrantOnTheRootPathName drives the operator
+// role as a tenant-path read grant leaves it: IAM refuses the existence check
+// for an eval role that is not there yet, rather than answering NoSuchEntity.
+// The identity is still minted, a later pass reads the role through the tenant
+// path and creates nothing, and the finalizer releases whether or not the role
+// is still there to read.
+func TestEnsureEvalIdentity_NeedsNoGrantOnTheRootPathName(t *testing.T) {
+	ctx := context.Background()
+	r, f, fe, _ := evalIdentityReconciler(t, nil)
+	f.absentReadsDenied = true
+	p := newPlatform("analytics", "acme")
+
+	for pass := 1; pass <= 2; pass++ {
+		outcome, err := r.ensureEvalIdentity(ctx, p)
+		if err != nil || outcome != evalIdentityBound {
+			t.Fatalf("pass %d: ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", pass, outcome, err)
+		}
+	}
+	if len(f.createCalls) != 1 || len(fe.createCalls) != 1 {
+		t.Errorf("CreateRole %d, CreatePodIdentityAssociation %d over two passes; want 1 each", len(f.createCalls), len(fe.createCalls))
+	}
+
+	for pass := 1; pass <= 2; pass++ {
+		if err := r.deleteEvalIdentity(ctx, p); err != nil {
+			t.Fatalf("delete pass %d: %v", pass, err)
+		}
+	}
+	if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+		t.Error("eval role still present")
+	}
+}
+
+// TestDeleteEvalIdentity_ReleasesWhenNoRoleWasMinted: a Platform deleted
+// before a pass minted its eval role — or while the eval runtime namespace was
+// absent — has nothing in IAM to remove, whether IAM says so with NoSuchEntity
+// or by refusing the read, and no call is made against the absent role.
+func TestDeleteEvalIdentity_ReleasesWhenNoRoleWasMinted(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(fmt.Sprintf("absentReadsDenied=%v", denied), func(t *testing.T) {
+			r, f, _, _ := evalIdentityReconciler(t, nil)
+			f.absentReadsDenied = denied
+			f.listReturnsErr = errors.New("ListAttachedRolePolicies called for a role that is not there")
+			f.deleteReturnsErr = errors.New("DeleteRole called for a role that is not there")
+			if err := r.deleteEvalIdentity(context.Background(), newPlatform("analytics", "acme")); err != nil {
+				t.Errorf("deleteEvalIdentity: %v", err)
+			}
+		})
+	}
+}
+
+// TestEvalRoleOutsideTheTenantPathIsNeverAdopted: the operator mints the eval
+// role only under the tenant path, so a role of its name anywhere else is not
+// one it minted. It is neither written to, bound to the Platform's runs, nor
+// deleted with the Platform.
+func TestEvalRoleOutsideTheTenantPathIsNeverAdopted(t *testing.T) {
+	ctx := context.Background()
+	r, f, fe, _ := evalIdentityReconciler(t, nil)
+	const name = "production-cluster-analytics-eval"
+	f.seedRole(name, "arn:aws:iam::123456789012:role/"+name)
+	f.roles[name].Path = aws.String("/")
+	p := newPlatform("analytics", "acme")
+
+	outcome, err := r.ensureEvalIdentity(ctx, p)
+	if err == nil || !strings.Contains(err.Error(), `under path "/"`) {
+		t.Fatalf("ensureEvalIdentity = (%v, %v), want a refusal naming the foreign path", outcome, err)
+	}
+	if len(f.putInlineCalls) != 0 || len(fe.createCalls) != 0 {
+		t.Errorf("wrote to or bound a role the operator did not mint: PutRolePolicy %d, CreatePodIdentityAssociation %d",
+			len(f.putInlineCalls), len(fe.createCalls))
+	}
+
+	if err := r.deleteEvalIdentity(ctx, p); err != nil {
+		t.Fatalf("deleteEvalIdentity: %v", err)
+	}
+	if _, ok := f.roles[name]; !ok {
+		t.Error("deleted a role the operator did not mint")
+	}
+}
+
+// TestEnsureEvalRole_RefusesANameHeldOutOfSight: the read is refused and the
+// create finds the name taken, so a role of this name exists that the operator
+// cannot read under the tenant path. It is not adopted, and the error carries
+// both answers.
+func TestEnsureEvalRole_RefusesANameHeldOutOfSight(t *testing.T) {
+	r, f, fe, _ := evalIdentityReconciler(t, nil)
+	f.absentReadsDenied = true
+	f.createReturnsErr = &iamtypes.EntityAlreadyExistsException{Message: aws.String("Role with name production-cluster-analytics-eval already exists.")}
+
+	_, err := r.ensureEvalIdentity(context.Background(), newPlatform("analytics", "acme"))
+	var taken *iamtypes.EntityAlreadyExistsException
+	if !errors.As(err, &taken) {
+		t.Fatalf("got %v, want EntityAlreadyExists", err)
+	}
+	for _, want := range []string{"cannot read under the tenant path /eks-agent-platform/tenants/", "AccessDenied"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not carry %q", err, want)
+		}
+	}
+	if len(fe.createCalls) != 0 {
+		t.Error("bound the account to a role the operator could not read")
+	}
+}
+
+func TestEvalRoleAbsent(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no error", nil, false},
+		{"NoSuchEntity", &iamtypes.NoSuchEntityException{}, true},
+		{"AccessDenied", &smithy.GenericAPIError{Code: "AccessDenied"}, true},
+		{"wrapped AccessDenied", fmt.Errorf("op: %w", &smithy.GenericAPIError{Code: "AccessDenied"}), true},
+		{"throttled", &smithy.GenericAPIError{Code: "Throttling"}, false},
+		{"not an API error", errors.New("dial tcp: i/o timeout"), false},
+	}
+	for _, c := range cases {
+		if got := evalRoleAbsent(c.err); got != c.want {
+			t.Errorf("%s: evalRoleAbsent = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestEvalIdentityCondition walks the condition through every state a pass can
+// leave. Only a pass that bound the identity end to end reads True, because
+// the EvalSuite reconciler submits runs on exactly that.
+func TestEvalIdentityCondition(t *testing.T) {
+	r, _, _, _ := evalIdentityReconciler(t, nil)
+	p := newPlatform("analytics", "acme")
+	p.Generation = 4
+	get := func() *metav1.Condition {
+		return apimeta.FindStatusCondition(p.Status.Conditions, conditionEvalIdentityReady)
+	}
+
+	r.setEvalIdentityCondition(p, evalIdentityBound, nil)
+	c := get()
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "Bound" || c.ObservedGeneration != 4 {
+		t.Fatalf("bound pass: %+v", c)
+	}
+	for _, want := range []string{"evals/eval-analytics", "production-cluster-analytics-eval"} {
+		if !strings.Contains(c.Message, want) {
+			t.Errorf("bound message %q does not name %q", c.Message, want)
+		}
+	}
+
+	r.setEvalIdentityCondition(p, evalIdentityUnmanaged, errors.New("iam CreateRole production-cluster-analytics-eval: boom"))
+	c = get()
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "ReconcileFailed" ||
+		!strings.Contains(c.Message, "iam CreateRole production-cluster-analytics-eval: boom") {
+		t.Errorf("failed pass: %+v", c)
+	}
+
+	r.setEvalIdentityCondition(p, evalIdentityDeferred, nil)
+	c = get()
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "RuntimeNamespaceAbsent" || !strings.Contains(c.Message, "namespace evals") {
+		t.Errorf("deferred pass: %+v", c)
+	}
+
+	r.setEvalIdentityCondition(p, evalIdentityUnmanaged, nil)
+	if c := get(); c != nil {
+		t.Errorf("a reconciler that mints no eval identity left %+v on the Platform", c)
 	}
 }

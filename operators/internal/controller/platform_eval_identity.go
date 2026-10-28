@@ -9,13 +9,16 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -36,9 +39,20 @@ import (
 // namespace; and a ServiceAccount in the tenant namespace would be usable by
 // any pod the tenant's AppProject deploys there, handing the tenant the eval
 // identity and the writeback into its own EvalSuite's score.
+//
+// The Platform reports its eval identity on the EvalIdentityReady condition, and
+// the outcome travels there rather than in the reconcile's result: a Platform's
+// own readiness does not wait on its evals. The EvalSuite reconciler submits a
+// run only while that condition is True, which is written only after a pass in
+// which the ServiceAccount, the role and the association binding them all exist.
 
 // evalReportsPolicyName is the eval role's one inline policy.
 const evalReportsPolicyName = "eval-reports-access"
+
+// conditionEvalIdentityReady is the Platform condition reporting whether its
+// eval identity is bound end to end. The EvalSuite reconciler gates every run
+// on it.
+const conditionEvalIdentityReady = "EvalIdentityReady"
 
 // EvalIdentityConfig locates the eval runtime the per-Platform eval identity is
 // minted into. main.go wires it from the eval-runtime component's SSM outputs —
@@ -60,6 +74,17 @@ func (c EvalIdentityConfig) enabled() bool { return c.ReportsBucket != "" }
 
 func (c EvalIdentityConfig) namespace() string { return evalRuntimeNamespace(c.Namespace) }
 
+// evalIdentityWired reports whether this reconciler mints eval identities: an
+// eval runtime is configured, and the IAM and EKS clients the role and its
+// association are made with are wired. On a running operator the three arrive
+// together, because the eval-reports bucket is read from SSM through the same
+// AWS clients. Without either client there is no role a run could be bound to,
+// so nothing is created, nothing is torn down, and the Platform reports no
+// EvalIdentityReady condition.
+func (r *PlatformReconciler) evalIdentityWired() bool {
+	return r.Eval.enabled() && r.IAM != nil && r.EKS != nil
+}
+
 // EvalServiceAccountName is the ServiceAccount a Platform's eval Workflows run
 // under, in the eval runtime namespace: eval-<platform>, hash-truncated to the
 // 63-char label limit the same way PlatformNamespace is. Exported so the
@@ -72,13 +97,9 @@ func EvalServiceAccountName(p *platformv1alpha1.Platform) string {
 //
 //	<cluster-name>-<platform.name>-eval
 //
-// Same 64-char cap and hash truncation as tenantRoleName. The operator's
-// pre-create GetRole (and the finalizer's calls against a role that was never
-// created) authorize against the root-path name ARN rather than the tenant-path
-// ARN, so the operator identity needs a grant on role/<cluster>-*-eval; the
-// suffix is what that grant matches.
+// Same 64-char cap and hash truncation as tenantRoleName.
 func evalRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	return boundedName(clusterName+"-", p.Name, "-eval", iamRoleNameMax)
+	return boundedName(clusterName+"-", p.Name, evalRoleSuffix, iamRoleNameMax)
 }
 
 // evalRoleTags mirrors tenantRoleTags with Component eval-iam, so cost
@@ -149,25 +170,39 @@ func (r *PlatformReconciler) evalIdentityLabels(p *platformv1alpha1.Platform) ma
 	return l
 }
 
+// evalIdentityOutcome is what an ensureEvalIdentity pass that returned no error
+// established.
+type evalIdentityOutcome int
+
+const (
+	// evalIdentityUnmanaged: this reconciler mints no eval identity (see
+	// evalIdentityWired).
+	evalIdentityUnmanaged evalIdentityOutcome = iota
+	// evalIdentityDeferred: the eval runtime namespace does not exist.
+	evalIdentityDeferred
+	// evalIdentityBound: the ServiceAccount, the role and the association
+	// binding them all exist.
+	evalIdentityBound
+)
+
 // ensureEvalIdentity reconciles a Platform's eval identity: the
 // ServiceAccount, the role with its eval-reports-access policy, and the Pod
-// Identity association binding the two. No-op on a cluster with no eval runtime.
-//
-// The ServiceAccount is reconciled with or without an IAM client, so the
-// EvalSuite reconciler's precondition — the account its Workflow names exists —
-// holds wherever runs are submitted. The role carries no model access, so the
-// kill-switch has nothing on it to pull, and it reconciles whether or not the
-// Platform is suspended.
+// Identity association binding the two. The role carries no model access, so
+// the kill-switch has nothing on it to pull, and it reconciles whether or not
+// the Platform is suspended.
 //
 // An absent eval runtime namespace defers the whole identity instead of
-// failing the reconcile. The namespace arrives with the operator chart's
-// evalRuntime bundle, and a Platform's own readiness does not wait on its
-// evals: until the namespace exists no run can be submitted, the EvalSuite
-// reconciler holds suites Pending on the missing account, and a later
-// reconcile mints the identity.
-func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) error {
-	if !r.Eval.enabled() {
-		return nil
+// failing: the namespace arrives with the operator chart's evalRuntime bundle,
+// no role is minted for an account that cannot exist yet, and a later pass
+// mints it.
+//
+// A pass that fails after creating the ServiceAccount leaves it bound to
+// nothing until a later pass completes, which is why runs are gated on the
+// EvalIdentityReady condition this pass's outcome sets, not on the account
+// alone.
+func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) (evalIdentityOutcome, error) {
+	if !r.evalIdentityWired() {
+		return evalIdentityUnmanaged, nil
 	}
 	ns := r.Eval.namespace()
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: EvalServiceAccountName(p), Namespace: ns}}
@@ -177,34 +212,95 @@ func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platform
 	}); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.FromContext(ctx).Info("eval runtime namespace absent; eval identity deferred", "namespace", ns, "serviceAccount", sa.Name)
-			return nil
+			return evalIdentityDeferred, nil
 		}
-		return fmt.Errorf("ensure eval ServiceAccount %s/%s: %w", ns, sa.Name, err)
-	}
-	if r.IAM == nil {
-		return nil
+		return evalIdentityUnmanaged, fmt.Errorf("ensure eval ServiceAccount %s/%s: %w", ns, sa.Name, err)
 	}
 	roleARN, err := r.ensureEvalRole(ctx, p, r.IAMCfg)
 	if err != nil {
-		return err
+		return evalIdentityUnmanaged, err
 	}
-	return r.ensurePodIdentityAssociation(ctx, r.IAMCfg, ns, sa.Name, roleARN)
+	if err := r.ensurePodIdentityAssociation(ctx, r.IAMCfg, ns, sa.Name, roleARN); err != nil {
+		return evalIdentityUnmanaged, err
+	}
+	return evalIdentityBound, nil
 }
 
-// ensureEvalRole creates the eval role when it is absent — under the tenant IAM
-// path, with the tenant permissions boundary and the Pod Identity trust, like
-// every other role the operator mints — and converges its inline policy on
-// every pass, so a changed bucket or a policy edited out of band is rewritten.
-// Returns the role ARN.
+// setEvalIdentityCondition records one ensureEvalIdentity pass on the
+// Platform's EvalIdentityReady condition. True only for a pass that bound the
+// identity end to end; False, with the reason, for a deferred or failed one.
+// A reconciler that mints no eval identity removes the condition, since the
+// Platform then has no eval identity to report on.
+func (r *PlatformReconciler) setEvalIdentityCondition(p *platformv1alpha1.Platform, outcome evalIdentityOutcome, err error) {
+	if err == nil && outcome == evalIdentityUnmanaged {
+		apimeta.RemoveStatusCondition(&p.Status.Conditions, conditionEvalIdentityReady)
+		return
+	}
+	ns := r.Eval.namespace()
+	cond := metav1.Condition{
+		Type:               conditionEvalIdentityReady,
+		Status:             metav1.ConditionFalse,
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: p.Generation,
+	}
+	switch {
+	case err != nil:
+		cond.Reason = "ReconcileFailed"
+		cond.Message = err.Error() + "; no eval run is submitted until the identity is bound"
+	case outcome == evalIdentityDeferred:
+		cond.Reason = "RuntimeNamespaceAbsent"
+		cond.Message = fmt.Sprintf("eval runtime namespace %s does not exist; no eval run is submitted until it does and the identity is minted in it", ns)
+	default:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "Bound"
+		cond.Message = fmt.Sprintf("ServiceAccount %s/%s is bound by EKS Pod Identity to role %s",
+			ns, EvalServiceAccountName(p), evalRoleName(r.IAMCfg.ClusterName, p))
+	}
+	upsertCondition(&p.Status.Conditions, cond)
+}
+
+// evalRoleAbsent reports whether a read of the eval role found no role under
+// the tenant path holding its name.
+//
+// IAM authorizes a call against an existing role by that role's ARN, path
+// included, and a call naming no existing role by the root-path ARN
+// role/<name>. The operator's grants reach the roles it mints through the
+// tenant path, so a read of its own eval role is authorized, while a read of a
+// name no role holds may be refused instead of answered NoSuchEntity. Either
+// answer means the same thing here, and the eval role needs no grant on its
+// root-path name. ensureEvalRole lets CreateRole, which names the path, settle
+// whether the name is free.
+func evalRoleAbsent(err error) bool {
+	if isIAMNotFound(err) {
+		return true
+	}
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied"
+}
+
+// ensureEvalRole creates the eval role when no role under the tenant path
+// holds its name — with the tenant permissions boundary and the Pod Identity
+// trust, like every other role the operator mints — and converges its inline
+// policy on every pass, so a changed bucket or a policy edited out of band is
+// rewritten. Returns the role ARN.
+//
+// A role of this name the operator did not mint is never adopted. One that
+// GetRole returns under another path is refused outright. One that GetRole is
+// refused for, because it sits outside what the operator can read, surfaces as
+// EntityAlreadyExists when CreateRole tries the name, and is refused there.
 func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) (string, error) {
 	name := evalRoleName(cfg.ClusterName, p)
+	path := cfg.tenantPath()
 
 	var roleARN string
 	getOut, getErr := r.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	switch {
-	case getErr == nil && getOut != nil && getOut.Role != nil:
+	case getErr == nil:
+		if got := aws.ToString(getOut.Role.Path); got != path {
+			return "", fmt.Errorf("eval role %s exists under path %q, not the tenant path %s; the operator does not adopt a role it did not mint", name, got, path)
+		}
 		roleARN = aws.ToString(getOut.Role.Arn)
-	case !isIAMNotFound(getErr):
+	case !evalRoleAbsent(getErr):
 		return "", fmt.Errorf("iam GetRole %s: %w", name, getErr)
 	default:
 		trust, err := assumeRolePolicyForPodIdentity()
@@ -213,7 +309,7 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 		}
 		createInput := &iam.CreateRoleInput{
 			RoleName:                 aws.String(name),
-			Path:                     aws.String(cfg.tenantPath()),
+			Path:                     aws.String(path),
 			AssumeRolePolicyDocument: aws.String(trust),
 			Description:              aws.String(fmt.Sprintf("Eval role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
 			Tags:                     evalRoleTags(p, cfg),
@@ -222,7 +318,11 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 			createInput.PermissionsBoundary = aws.String(cfg.TenantPermissionsBoundaryARN)
 		}
 		createOut, err := r.IAM.CreateRole(ctx, createInput)
-		if err != nil {
+		var taken *iamtypes.EntityAlreadyExistsException
+		switch {
+		case errors.As(err, &taken):
+			return "", fmt.Errorf("iam CreateRole %s: the name is held by a role the operator cannot read under the tenant path %s (GetRole: %v): %w", name, path, getErr, err)
+		case err != nil:
 			return "", fmt.Errorf("iam CreateRole %s: %w", name, err)
 		}
 		roleARN = aws.ToString(createOut.Role.Arn)
@@ -242,12 +342,11 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 // association, the ServiceAccount, then the role with its inline policy. Every
 // step tolerates a resource that is already gone, so re-runs are safe.
 //
-// Gated like the ensure path. A cluster with no eval runtime never minted an
-// eval identity, and an IAM call there against a role name the operator holds
-// no grant for would fail AccessDenied and hold the finalizer for nothing.
-// Datastores are not touched, as on every other finalizer step.
+// Gated like the ensure path: a reconciler that mints no eval identity has
+// none to tear down. Datastores are not touched, as on every other finalizer
+// step.
 func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) error {
-	if !r.Eval.enabled() {
+	if !r.evalIdentityWired() {
 		return nil
 	}
 	ns := r.Eval.namespace()
@@ -259,5 +358,26 @@ func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platform
 	if err := r.Delete(ctx, sa); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete eval ServiceAccount %s/%s: %w", ns, name, err)
 	}
-	return r.detachAndDeleteRole(ctx, evalRoleName(r.IAMCfg.ClusterName, p))
+	return r.deleteEvalRole(ctx, evalRoleName(r.IAMCfg.ClusterName, p))
+}
+
+// deleteEvalRole removes the eval role with its inline policy when a role under
+// the tenant path holds its name. A Platform whose eval role was never created
+// — deleted before a pass reached it, or while the eval runtime namespace was
+// absent — reads as absent (evalRoleAbsent) and releases its finalizer without
+// any grant on the role's root-path name. A role of the name under another
+// path is not one the operator minted and is left alone.
+func (r *PlatformReconciler) deleteEvalRole(ctx context.Context, name string) error {
+	out, err := r.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
+	switch {
+	case evalRoleAbsent(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("iam GetRole %s: %w", name, err)
+	case aws.ToString(out.Role.Path) != r.IAMCfg.tenantPath():
+		log.FromContext(ctx).Info("eval role name is held by a role outside the tenant path; leaving it",
+			"role", name, "path", aws.ToString(out.Role.Path))
+		return nil
+	}
+	return r.detachAndDeleteRole(ctx, name)
 }

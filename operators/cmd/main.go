@@ -251,6 +251,17 @@ func main() {
 			"why", "it qualifies tenant role names and the PlatformId cost-attribution tag, and an empty value degrades silently rather than failing")
 		os.Exit(1)
 	}
+	// Too long fails as surely, later and per Platform: every role name is
+	// <cluster>-<platform><suffix>, and past controller.MaxClusterNameLen the
+	// longest no longer fits IAM's limit, so each CreateRole is refused at
+	// reconcile time. Gated like the empty check, since only the AWS path mints
+	// roles.
+	if !disableAWS {
+		if err := controller.ValidateClusterName(clusterName); err != nil {
+			setupLog.Error(err, "--cluster-name (or AGENTS_CLUSTER_NAME) is too long; refusing to start")
+			os.Exit(1)
+		}
+	}
 
 	// AWS clients. Building them is local: it resolves the SDK's configuration
 	// chain and constructs service clients, and it reaches nothing. A failure

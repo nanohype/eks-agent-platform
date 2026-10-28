@@ -32,7 +32,7 @@ func submitEvalRun(t *testing.T, p *platformv1alpha1.Platform, mg *agentsv1alpha
 	suite.Spec.Cases = []governancev1alpha1.EvalCase{{Name: "greet", Input: "hi"}}
 
 	r := &EvalReconciler{Scheme: s, ReportsBucket: testReportsBucket}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, fleet, mg, evalIdentityAccount(r, p)).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(p, fleet, mg, boundEvalIdentity(r, p)).Build()
 	r.Client = cl
 
 	if err := r.ensureArgoWorkflow(ctx, suite, p, fleet); err != nil {
