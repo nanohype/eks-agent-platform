@@ -1,6 +1,12 @@
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk';
 
 import { PROBES, type Probe, type ProbeResult } from './probes.js';
+
+/**
+ * The client's one credential. The gateway holds the AWS credential and signs
+ * upstream, so it has no use for any key this client could send.
+ */
+export const PLACEHOLDER_API_KEY = 'unused-the-gateway-holds-the-credential';
 
 export interface RunOptions {
   /** The gateway endpoint, as published on `ModelGateway.status.endpoint`. */
@@ -50,19 +56,24 @@ export async function runConformance(options: RunOptions): Promise<RunReport> {
   const baseURL = anthropicBaseURL(options.endpoint);
   // The client sends its SDK's default `anthropic-version`. Bedrock reads the
   // version from the request body, and the gateway writes the
-  // AIServiceBackend's schema version (bedrock-2023-05-31) there on every
-  // request it forwards, whatever the client sent. A version set here would
-  // change nothing upstream, and would stop the suite sending what a tenant on
-  // the same SDK sends.
-  const client = new Anthropic({
+  // AIServiceBackend's schema version there on every request it forwards,
+  // whatever the client sent. The operator sets that schema version from its
+  // `bedrockAnthropicVersion` constant
+  // (operators/internal/controller/modelgateway_reconcile.go). A version set
+  // here would change nothing upstream, and would stop the suite sending what
+  // a tenant on the same SDK sends.
+  const client = clientWithoutEnvironmentHeaders({
     baseURL,
-    // The gateway holds the AWS credential and signs upstream; this app holds
-    // none. The placeholder is the client's one credential, which keeps it
-    // from resolving ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, an on-disk
-    // profile or workload identity and sending that to the gateway. It goes
-    // out as `Authorization: Bearer`, which the gateway's SigV4 signature
-    // replaces before the request reaches Bedrock.
-    apiKey: 'unused-the-gateway-holds-the-credential',
+    // Whatever the environment or an on-disk profile holds, the only
+    // credential this client sends is the placeholder, as
+    // `Authorization: Bearer`, with no `X-Api-Key`. Passing it here stops the
+    // SDK resolving ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, a profile or
+    // workload identity; clientWithoutEnvironmentHeaders keeps
+    // ANTHROPIC_CUSTOM_HEADERS from replacing it. Envoy AI Gateway's AWS
+    // backend auth, which the operator's AWSCredentials BackendSecurityPolicy
+    // selects, signs each upstream request with SigV4 and sets that request's
+    // Authorization header in place of the placeholder.
+    apiKey: PLACEHOLDER_API_KEY,
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxRetries: 0,
   });
@@ -88,6 +99,30 @@ export async function runConformance(options: RunOptions): Promise<RunReport> {
     results,
     failed: results.filter((r) => r.outcome !== 'pass').length,
   };
+}
+
+/**
+ * Construct the client with ANTHROPIC_CUSTOM_HEADERS out of its sight.
+ *
+ * The SDK reads that variable once, in its constructor, and applies the
+ * headers it lists after the credential, so an `Authorization` or `X-Api-Key`
+ * line there replaces the placeholder. Pinning those two in `defaultHeaders`
+ * does not hold: the SDK spreads `defaultHeaders` over the parsed variable by
+ * exact key, then applies the result case-insensitively in key order, so a
+ * second, differently-cased line in the variable lands after the pinned one
+ * and wins. Filtering the variable down to its non-credential headers does not
+ * hold either, because a credential can travel under any header name. So the
+ * variable is hidden for the synchronous constructor call and none of it is
+ * sent.
+ */
+function clientWithoutEnvironmentHeaders(options: ClientOptions): Anthropic {
+  const customHeaders = process.env.ANTHROPIC_CUSTOM_HEADERS;
+  delete process.env.ANTHROPIC_CUSTOM_HEADERS;
+  try {
+    return new Anthropic(options);
+  } finally {
+    if (customHeaders !== undefined) process.env.ANTHROPIC_CUSTOM_HEADERS = customHeaders;
+  }
 }
 
 /**

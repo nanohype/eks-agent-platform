@@ -4,7 +4,46 @@ import type { AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 
 import { main, plan, USAGE } from './cli.js';
-import { anthropicBaseURL, describeError, formatReport, runConformance } from './run.js';
+import { PROBES } from './probes.js';
+import {
+  anthropicBaseURL,
+  describeError,
+  formatReport,
+  PLACEHOLDER_API_KEY,
+  runConformance,
+} from './run.js';
+
+interface Received {
+  url: string | undefined;
+  headers: IncomingHttpHeaders;
+}
+
+/**
+ * Run `use` against a local stand-in for the gateway, which answers its n-th
+ * request (from 0) with `reply(n)`, and return what the stand-in received.
+ */
+async function withFakeGateway<T>(
+  reply: (n: number) => unknown,
+  use: (endpoint: string) => Promise<T>,
+): Promise<{ result: T; received: Received[] }> {
+  const received: Received[] = [];
+  const server = createServer((req, res) => {
+    const n = received.length;
+    received.push({ url: req.url, headers: req.headers });
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(reply(n)));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const { port } = server.address() as AddressInfo;
+    return { result: await use(`http://127.0.0.1:${port}`), received };
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
 
 describe('plan', () => {
   it('skips rather than fails when no gateway is configured', () => {
@@ -194,56 +233,111 @@ describe('runConformance', () => {
   });
 
   it('sends its placeholder as the only credential, whatever the environment holds', async () => {
-    // The gateway needs no credential from this client. One resolved from the
+    // The gateway needs no credential from this client. One taken from the
     // environment would reach the gateway as a real key it has no use for.
+    // ANTHROPIC_CUSTOM_HEADERS carries each credential header in two casings,
+    // the shape that gets past an `Authorization` pinned in `defaultHeaders`.
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-from-the-environment');
     vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'token-from-the-environment');
-    const received: { url: string | undefined; headers: IncomingHttpHeaders }[] = [];
-    const server = createServer((req, res) => {
-      received.push({ url: req.url, headers: req.headers });
-      req.resume();
-      req.on('end', () => {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            type: 'message',
-            role: 'assistant',
-            model: 'resolved',
-            content: [],
-            stop_reason: 'end_turn',
-          }),
-        );
-      });
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    vi.stubEnv(
+      'ANTHROPIC_CUSTOM_HEADERS',
+      [
+        'Authorization: Bearer token-from-the-environment-headers',
+        'authorization: Bearer token-from-the-environment-headers',
+        'X-Api-Key: key-from-the-environment-headers',
+        'x-api-key: key-from-the-environment-headers',
+      ].join('\n'),
+    );
     try {
-      const { port } = server.address() as AddressInfo;
-      const report = await runConformance({
-        endpoint: `http://127.0.0.1:${port}`,
-        route: 'primary',
-        probes: [
-          {
-            name: 'wire',
-            question: 'what reaches the gateway',
-            run: async (client, route) => {
-              await client.messages.create({
-                model: route,
-                max_tokens: 1,
-                messages: [{ role: 'user', content: 'ping' }],
-              });
-              return { outcome: 'pass', detail: 'sent' };
-            },
-          },
-        ],
-      });
+      const { result: report, received } = await withFakeGateway(
+        () => ({
+          type: 'message',
+          role: 'assistant',
+          model: 'resolved',
+          content: [],
+          stop_reason: 'end_turn',
+        }),
+        (endpoint) =>
+          runConformance({
+            endpoint,
+            route: 'primary',
+            probes: [
+              {
+                name: 'wire',
+                question: 'what reaches the gateway',
+                run: async (client, route) => {
+                  await client.messages.create({
+                    model: route,
+                    max_tokens: 1,
+                    messages: [{ role: 'user', content: 'ping' }],
+                  });
+                  return { outcome: 'pass', detail: 'sent' };
+                },
+              },
+            ],
+          }),
+      );
       expect(report.results[0]?.detail).toBe('sent');
       expect(received.map((r) => r.url)).toEqual(['/anthropic/v1/messages']);
-      expect(received[0]?.headers.authorization).toMatch(/^Bearer /);
+      expect(received[0]?.headers.authorization).toBe(`Bearer ${PLACEHOLDER_API_KEY}`);
+      expect(received[0]?.headers['x-api-key']).toBeUndefined();
       expect(JSON.stringify(received)).not.toMatch(/from-the-environment/);
     } finally {
       vi.unstubAllEnvs();
-      await new Promise((resolve) => server.close(resolve));
     }
+  });
+
+  it('leaves ANTHROPIC_CUSTOM_HEADERS as it found it', async () => {
+    // The variable is hidden only while the client is built. Unset has to stay
+    // unset: assigning undefined to process.env stores the string "undefined".
+    const probes = [
+      {
+        name: 'x',
+        question: 'x holds',
+        run: async () => ({ outcome: 'pass' as const, detail: '' }),
+      },
+    ];
+    try {
+      vi.stubEnv('ANTHROPIC_CUSTOM_HEADERS', 'X-Trace: from-the-caller');
+      await runConformance({ endpoint, route: 'primary', probes });
+      expect(process.env.ANTHROPIC_CUSTOM_HEADERS).toBe('X-Trace: from-the-caller');
+
+      vi.stubEnv('ANTHROPIC_CUSTOM_HEADERS', undefined);
+      await runConformance({ endpoint, route: 'primary', probes });
+      expect('ANTHROPIC_CUSTOM_HEADERS' in process.env).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('stops a tool loop the model never ends, and reports it as a failure', async () => {
+    // A model that answers every tool result with another tool call, in a
+    // reply whose text already holds the answer. The runner's ceiling is what
+    // ends the loop, and the probe's bound check, not its text check, is what
+    // reports that as a failure rather than a pass.
+    const toolRunner = PROBES.filter((p) => p.name === 'tool-runner');
+    expect(toolRunner).toHaveLength(1);
+    const { result: report, received } = await withFakeGateway(
+      (n) => ({
+        id: `msg_${n}`,
+        type: 'message',
+        role: 'assistant',
+        model: 'resolved',
+        content: [
+          { type: 'text', text: 'It is 72 degrees. Checking once more.' },
+          { type: 'tool_use', id: `toolu_${n}`, name: 'get_weather', input: { city: 'San Diego' } },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+      (endpoint) => runConformance({ endpoint, route: 'primary', probes: toolRunner }),
+    );
+    // Two requests: the tool call, then the tool's result.
+    expect(received).toHaveLength(2);
+    expect(report.failed).toBe(1);
+    expect(report.results[0]?.outcome).toBe('fail');
+    expect(report.results[0]?.detail).toMatch(/still calling the tool after 2 requests/);
   });
 });
 
