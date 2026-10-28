@@ -109,7 +109,8 @@ var errEvalIdentityMissing = errors.New("the Platform's eval identity is not bou
 func evalIdentityNotBound(c *metav1.Condition) string {
 	if c == nil {
 		return "the Platform reports no " + conditionEvalIdentityReady + " condition; " +
-			"the Platform reconciler writes it once the eval-reports bucket is configured"
+			"the Platform reconciler writes it on a pass that has the eval-reports bucket configured " +
+			"and both its IAM and EKS clients wired"
 	}
 	return fmt.Sprintf("%s=%s (%s): %s", c.Type, c.Status, c.Reason, c.Message)
 }

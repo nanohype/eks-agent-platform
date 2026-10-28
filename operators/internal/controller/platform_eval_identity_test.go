@@ -29,6 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 const (
@@ -47,7 +49,10 @@ func evalIdentityReconciler(t *testing.T, funcs *interceptor.Funcs) (*PlatformRe
 	if err := corev1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	b := fake.NewClientBuilder().WithScheme(s)
+	if err := platformv1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	b := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&platformv1alpha1.Platform{})
 	if funcs != nil {
 		b = b.WithInterceptorFuncs(*funcs)
 	}
@@ -69,6 +74,32 @@ func evalIdentityReconciler(t *testing.T, funcs *interceptor.Funcs) (*PlatformRe
 		Eval: EvalIdentityConfig{Namespace: evalTestNamespace, ReportsBucket: evalTestBucket},
 	}
 	return r, f, fe, cl
+}
+
+// storedPlatform creates the analytics Platform in the reconciler's client,
+// which a finalizer pass writes status.evalRoleArn back through.
+func storedPlatform(t *testing.T, cl client.Client) *platformv1alpha1.Platform {
+	t.Helper()
+	p := newPlatform("analytics", "acme")
+	if err := cl.Create(context.Background(), p); err != nil {
+		t.Fatalf("create Platform: %v", err)
+	}
+	return p
+}
+
+// storedEvalRoleArn is status.evalRoleArn as the API server holds it.
+func storedEvalRoleArn(t *testing.T, cl client.Client, p *platformv1alpha1.Platform) string {
+	t.Helper()
+	var got platformv1alpha1.Platform
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(p), &got); err != nil {
+		t.Fatalf("get Platform: %v", err)
+	}
+	return got.Status.EvalRoleArn
+}
+
+// accessDenied is IAM refusing a call naming the role.
+func accessDenied(role string) error {
+	return &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: iam:GetRole on resource: role " + role}
 }
 
 // iamGlob reports whether an IAM resource pattern matches an ARN. IAM's `*`
@@ -357,6 +388,10 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 		t.Errorf("eval-reports-access =\n %s\nwant\n %s", got[evalReportsPolicyName], want)
 	}
 
+	if p.Status.EvalRoleArn != evalTestRoleARN {
+		t.Errorf("status.evalRoleArn = %q, want the minted role %s", p.Status.EvalRoleArn, evalTestRoleARN)
+	}
+
 	if len(fe.createCalls) != 1 {
 		t.Fatalf("CreatePodIdentityAssociation calls = %d, want 1", len(fe.createCalls))
 	}
@@ -546,7 +581,7 @@ func TestEnsureEvalIdentity_Errors(t *testing.T) {
 func TestDeleteEvalIdentity_RemovesEverythingItMinted(t *testing.T) {
 	ctx := context.Background()
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
-	p := newPlatform("analytics", "acme")
+	p := storedPlatform(t, cl)
 	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -574,27 +609,39 @@ func TestDeleteEvalIdentity_RemovesEverythingItMinted(t *testing.T) {
 func TestDeleteEvalIdentity_Errors(t *testing.T) {
 	ctx := context.Background()
 	boom := errors.New("boom")
+	// record is status.evalRoleArn after the failed pass: kept until the role
+	// has been read and the cleared record written, empty from then on.
 	cases := []struct {
 		name   string
 		funcs  *interceptor.Funcs
 		inject func(*fakeIAM, *fakeEKS)
 		want   string
+		record string
 	}{
-		{name: "association", inject: func(_ *fakeIAM, fe *fakeEKS) { fe.listReturnsErr = boom }, want: "eks ListPodIdentityAssociations"},
+		{name: "association", inject: func(_ *fakeIAM, fe *fakeEKS) { fe.listReturnsErr = boom }, want: "eks ListPodIdentityAssociations", record: evalTestRoleARN},
 		{
 			name: "service account",
 			funcs: &interceptor.Funcs{Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
 				return boom
 			}},
-			want: "delete eval ServiceAccount evals/eval-analytics",
+			want:   "delete eval ServiceAccount evals/eval-analytics",
+			record: evalTestRoleARN,
 		},
-		{name: "role lookup", inject: func(f *fakeIAM, _ *fakeEKS) { f.getReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval"},
-		{name: "role", inject: func(f *fakeIAM, _ *fakeEKS) { f.deleteReturnsErr = boom }, want: "iam DeleteRole"},
+		{name: "role lookup", inject: func(f *fakeIAM, _ *fakeEKS) { f.getReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval", record: evalTestRoleARN},
+		{
+			name: "record",
+			funcs: &interceptor.Funcs{SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+				return boom
+			}},
+			want:   "clear status.evalRoleArn on Platform eks-agent-platform/analytics",
+			record: evalTestRoleARN,
+		},
+		{name: "role", inject: func(f *fakeIAM, _ *fakeEKS) { f.deleteReturnsErr = boom }, want: "iam DeleteRole", record: ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, f, fe, _ := evalIdentityReconciler(t, c.funcs)
-			p := newPlatform("analytics", "acme")
+			r, f, fe, cl := evalIdentityReconciler(t, c.funcs)
+			p := storedPlatform(t, cl)
 			if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 				t.Fatal(err)
 			}
@@ -604,6 +651,9 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 			err := r.deleteEvalIdentity(ctx, p)
 			if err == nil || !errors.Is(err, boom) || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("got %v, want an error wrapping boom that names %q", err, c.want)
+			}
+			if p.Status.EvalRoleArn != c.record {
+				t.Errorf("status.evalRoleArn = %q after the failed pass, want %q", p.Status.EvalRoleArn, c.record)
 			}
 		})
 	}
@@ -635,9 +685,9 @@ func TestEvalRoleIsNotTheTenantRole(t *testing.T) {
 // is still there to read.
 func TestEnsureEvalIdentity_NeedsNoGrantOnTheRootPathName(t *testing.T) {
 	ctx := context.Background()
-	r, f, fe, _ := evalIdentityReconciler(t, nil)
+	r, f, fe, cl := evalIdentityReconciler(t, nil)
 	f.absentReadsDenied = true
-	p := newPlatform("analytics", "acme")
+	p := storedPlatform(t, cl)
 
 	for pass := 1; pass <= 2; pass++ {
 		outcome, err := r.ensureEvalIdentity(ctx, p)
@@ -730,22 +780,22 @@ func TestEnsureEvalRole_RefusesANameHeldOutOfSight(t *testing.T) {
 	}
 }
 
-func TestEvalRoleAbsent(t *testing.T) {
+func TestIsIAMAccessDenied(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
 		want bool
 	}{
 		{"no error", nil, false},
-		{"NoSuchEntity", &iamtypes.NoSuchEntityException{}, true},
+		{"NoSuchEntity", &iamtypes.NoSuchEntityException{}, false},
 		{"AccessDenied", &smithy.GenericAPIError{Code: "AccessDenied"}, true},
 		{"wrapped AccessDenied", fmt.Errorf("op: %w", &smithy.GenericAPIError{Code: "AccessDenied"}), true},
 		{"throttled", &smithy.GenericAPIError{Code: "Throttling"}, false},
 		{"not an API error", errors.New("dial tcp: i/o timeout"), false},
 	}
 	for _, c := range cases {
-		if got := evalRoleAbsent(c.err); got != c.want {
-			t.Errorf("%s: evalRoleAbsent = %v, want %v", c.name, got, c.want)
+		if got := isIAMAccessDenied(c.err); got != c.want {
+			t.Errorf("%s: isIAMAccessDenied = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
@@ -761,12 +811,13 @@ func TestEvalIdentityCondition(t *testing.T) {
 		return apimeta.FindStatusCondition(p.Status.Conditions, conditionEvalIdentityReady)
 	}
 
+	p.Status.EvalRoleArn = evalTestRoleARN
 	r.setEvalIdentityCondition(p, evalIdentityBound, nil)
 	c := get()
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "Bound" || c.ObservedGeneration != 4 {
 		t.Fatalf("bound pass: %+v", c)
 	}
-	for _, want := range []string{"evals/eval-analytics", "production-cluster-analytics-eval"} {
+	for _, want := range []string{"evals/eval-analytics", evalTestRoleARN} {
 		if !strings.Contains(c.Message, want) {
 			t.Errorf("bound message %q does not name %q", c.Message, want)
 		}
@@ -788,5 +839,155 @@ func TestEvalIdentityCondition(t *testing.T) {
 	r.setEvalIdentityCondition(p, evalIdentityUnmanaged, nil)
 	if c := get(); c != nil {
 		t.Errorf("a reconciler that mints no eval identity left %+v on the Platform", c)
+	}
+}
+
+// TestEnsureEvalIdentity_RecordsTheRoleItHolds: status.evalRoleArn is what
+// tells the finalizer a role was minted, so a pass records the role as soon as
+// it holds one — even a pass that then fails — and records nothing for a role
+// it neither found under the tenant path nor created.
+func TestEnsureEvalIdentity_RecordsTheRoleItHolds(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("boom")
+	cases := []struct {
+		name   string
+		inject func(*fakeIAM, *fakeEKS)
+		want   string
+	}{
+		{"bound", func(*fakeIAM, *fakeEKS) {}, evalTestRoleARN},
+		{"policy write fails", func(f *fakeIAM, _ *fakeEKS) { f.putInlineReturnsErr = map[string]error{evalReportsPolicyName: boom} }, evalTestRoleARN},
+		{"association fails", func(_ *fakeIAM, fe *fakeEKS) { fe.createReturnsErr = boom }, evalTestRoleARN},
+		{"create fails", func(f *fakeIAM, _ *fakeEKS) { f.createReturnsErr = boom }, ""},
+		{"name held under another path", func(f *fakeIAM, _ *fakeEKS) {
+			f.seedRole("production-cluster-analytics-eval", "arn:aws:iam::123456789012:role/production-cluster-analytics-eval")
+			f.roles["production-cluster-analytics-eval"].Path = aws.String("/")
+		}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, f, fe, _ := evalIdentityReconciler(t, nil)
+			c.inject(f, fe)
+			p := newPlatform("analytics", "acme")
+			_, _ = r.ensureEvalIdentity(ctx, p)
+			if p.Status.EvalRoleArn != c.want {
+				t.Errorf("status.evalRoleArn = %q, want %q", p.Status.EvalRoleArn, c.want)
+			}
+		})
+	}
+}
+
+// TestDeleteEvalRole_HoldsOnARefusedReadOfARecordedRole: once a role is
+// recorded, a refused read is the operator's own role out of its reach, not an
+// absent one. Releasing the finalizer would leave the role and its grant into
+// the eval-reports bucket behind, so the finalizer holds — the role, its policy
+// and the record all stay — until the role can be read and deleted.
+func TestDeleteEvalRole_HoldsOnARefusedReadOfARecordedRole(t *testing.T) {
+	ctx := context.Background()
+	r, f, _, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Status().Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	const role = "production-cluster-analytics-eval"
+
+	f.getReturnsErr = accessDenied(role)
+	err := r.deleteEvalIdentity(ctx, p)
+	if err == nil || !isIAMAccessDenied(err) || !strings.Contains(err.Error(), "status.evalRoleArn records "+evalTestRoleARN) {
+		t.Fatalf("deleteEvalIdentity = %v, want the refusal, naming the recorded role", err)
+	}
+	if _, ok := f.roles[role]; !ok || len(f.inline[role]) != 1 {
+		t.Errorf("the role or its policy was removed on a refused read: role present %v, inline %v", ok, f.inline[role])
+	}
+	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
+		t.Errorf("stored status.evalRoleArn = %q, want the record kept while the role is out of reach", got)
+	}
+
+	f.getReturnsErr = nil
+	if err := r.deleteEvalIdentity(ctx, p); err != nil {
+		t.Fatalf("deleteEvalIdentity once the role is readable: %v", err)
+	}
+	if _, ok := f.roles[role]; ok {
+		t.Error("eval role survived a finalizer that could read it")
+	}
+}
+
+// TestDeleteEvalRole_ClearsTheRecordBeforeDeletingTheRole: the record goes
+// once a read has found the role, ahead of the deletion, so a deletion that
+// fails leaves the role to the next pass's read rather than to the record.
+func TestDeleteEvalRole_ClearsTheRecordBeforeDeletingTheRole(t *testing.T) {
+	ctx := context.Background()
+	r, f, _, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Status().Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	f.deleteReturnsErr = errors.New("boom")
+	if err := r.deleteEvalIdentity(ctx, p); err == nil {
+		t.Fatal("deleteEvalIdentity reported success over a failed DeleteRole")
+	}
+	if got := storedEvalRoleArn(t, cl, p); got != "" {
+		t.Errorf("stored status.evalRoleArn = %q after the role was read; want it cleared before the delete", got)
+	}
+
+	f.deleteReturnsErr = nil
+	if err := r.deleteEvalIdentity(ctx, p); err != nil {
+		t.Fatalf("retried deleteEvalIdentity: %v", err)
+	}
+	if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+		t.Error("eval role survived the retried finalizer")
+	}
+}
+
+// TestDeleteEvalRole_ARetriedFinalizerReleases: with no grant on the root-path
+// name, a deleted role's read is refused like any absent name's. A finalizer
+// retried after a later step failed reads the Platform afresh, and must find no
+// record left to hold it on its own completed deletion.
+func TestDeleteEvalRole_ARetriedFinalizerReleases(t *testing.T) {
+	ctx := context.Background()
+	r, f, _, cl := evalIdentityReconciler(t, nil)
+	f.absentReadsDenied = true
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Status().Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.deleteEvalIdentity(ctx, p); err != nil {
+		t.Fatalf("deleteEvalIdentity: %v", err)
+	}
+
+	var again platformv1alpha1.Platform
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(p), &again); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.deleteEvalIdentity(ctx, &again); err != nil {
+		t.Errorf("retried deleteEvalIdentity held on the role it had deleted: %v", err)
+	}
+}
+
+// TestEnsureEvalIdentity_RebindsAnAssociationToAnotherRole: an association for
+// the eval account that names any role but the eval role would hand runs
+// credentials the operator did not scope while EvalIdentityReady names the eval
+// role. The pass replaces it before reporting the identity bound.
+func TestEnsureEvalIdentity_RebindsAnAssociationToAnotherRole(t *testing.T) {
+	ctx := context.Background()
+	r, _, fe, _ := evalIdentityReconciler(t, nil)
+	fe.seedAssociation(evalTestNamespace, "eval-analytics", "arn:aws:iam::123456789012:role/someone-else", "")
+	p := newPlatform("analytics", "acme")
+
+	outcome, err := r.ensureEvalIdentity(ctx, p)
+	if err != nil || outcome != evalIdentityBound {
+		t.Fatalf("ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
+	}
+	if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != evalTestRoleARN {
+		t.Errorf("evals/eval-analytics is bound to %q, want the eval role %s", got, evalTestRoleARN)
 	}
 }

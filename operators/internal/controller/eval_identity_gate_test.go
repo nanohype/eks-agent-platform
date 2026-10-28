@@ -43,7 +43,8 @@ func TestEvalRunWaitsForABoundIdentity(t *testing.T) {
 		cond *metav1.Condition
 		want string
 	}{
-		{"no condition", nil, "the Platform reports no EvalIdentityReady condition"},
+		{"no condition", nil, "the Platform reports no EvalIdentityReady condition; " +
+			"the Platform reconciler writes it on a pass that has the eval-reports bucket configured and both its IAM and EKS clients wired"},
 		{
 			"failed pass",
 			&metav1.Condition{Type: conditionEvalIdentityReady, Status: metav1.ConditionFalse, Reason: "ReconcileFailed", Message: "iam CreateRole x-analytics-eval: AccessDenied"},

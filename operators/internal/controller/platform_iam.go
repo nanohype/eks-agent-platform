@@ -15,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/smithy-go"
@@ -417,12 +418,15 @@ func (r *PlatformReconciler) ensureTenantPodIdentity(
 	}, nil
 }
 
-// ensurePodIdentityAssociation binds the tenant ServiceAccount to its IAM role
-// through EKS Pod Identity, so pods using the SA receive the role's credentials
-// with no role-arn annotation. Idempotent: it lists associations for the
-// (namespace, serviceAccount) on the cluster first and creates one only when
-// none exists. A nil EKS client (envtest / dev without AWS) is a silent no-op,
-// mirroring the IAM-nil short-circuit.
+// ensurePodIdentityAssociation binds a ServiceAccount to an IAM role through
+// EKS Pod Identity, so pods using the SA receive the role's credentials with no
+// role-arn annotation. It converges on that binding and no other: an
+// association for the (namespace, serviceAccount) that names another role, or
+// chains to a target role, hands those pods credentials the operator did not
+// scope, so it is deleted and the binding created in its place. The list
+// summary carries no role, so each association listed is described. A pass
+// over a converged binding writes nothing. A nil EKS client (envtest / dev
+// without AWS) is a silent no-op, mirroring the IAM-nil short-circuit.
 func (r *PlatformReconciler) ensurePodIdentityAssociation(ctx context.Context, cfg IAMConfig, namespace, serviceAccount, roleARN string) error {
 	if r.EKS == nil {
 		return nil
@@ -438,7 +442,29 @@ func (r *PlatformReconciler) ensurePodIdentityAssociation(ctx context.Context, c
 	if err != nil {
 		return fmt.Errorf("eks ListPodIdentityAssociations: %w", err)
 	}
-	if len(listOut.Associations) > 0 {
+	bound := false
+	for _, a := range listOut.Associations {
+		id := aws.ToString(a.AssociationId)
+		desc, err := r.EKS.DescribePodIdentityAssociation(ctx, &eks.DescribePodIdentityAssociationInput{
+			ClusterName:   aws.String(cfg.ClusterName),
+			AssociationId: a.AssociationId,
+		})
+		if err != nil {
+			return fmt.Errorf("eks DescribePodIdentityAssociation %s: %w", id, err)
+		}
+		if !bound && bindsExactly(desc.Association, roleARN) {
+			bound = true
+			continue
+		}
+		if _, err := r.EKS.DeletePodIdentityAssociation(ctx, &eks.DeletePodIdentityAssociationInput{
+			ClusterName:   aws.String(cfg.ClusterName),
+			AssociationId: a.AssociationId,
+		}); err != nil {
+			return fmt.Errorf("eks DeletePodIdentityAssociation %s (bound to %s, not %s): %w",
+				id, associationRole(desc.Association), roleARN, err)
+		}
+	}
+	if bound {
 		return nil
 	}
 	if _, err := r.EKS.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
@@ -450,6 +476,26 @@ func (r *PlatformReconciler) ensurePodIdentityAssociation(ctx context.Context, c
 		return fmt.Errorf("eks CreatePodIdentityAssociation: %w", err)
 	}
 	return nil
+}
+
+// bindsExactly reports whether an association hands its pods roleARN's own
+// credentials: it names that role and chains to no target role, whose
+// credentials the pods would receive instead.
+func bindsExactly(a *ekstypes.PodIdentityAssociation, roleARN string) bool {
+	return a != nil && aws.ToString(a.RoleArn) == roleARN && aws.ToString(a.TargetRoleArn) == ""
+}
+
+// associationRole names the role an association hands its pods, for an error
+// that says what is being replaced.
+func associationRole(a *ekstypes.PodIdentityAssociation) string {
+	switch {
+	case a == nil:
+		return "an undescribed role"
+	case aws.ToString(a.TargetRoleArn) != "":
+		return aws.ToString(a.RoleArn) + " chaining to " + aws.ToString(a.TargetRoleArn)
+	default:
+		return aws.ToString(a.RoleArn)
+	}
 }
 
 // deletePodIdentityAssociation removes the Pod Identity association for the
@@ -591,6 +637,14 @@ func (r *PlatformReconciler) detachAndDeleteRole(ctx context.Context, name strin
 		return fmt.Errorf("iam DeleteRole: %w", err)
 	}
 	return nil
+}
+
+// isIAMAccessDenied reports IAM refusing a call. For a call naming a role,
+// that is also IAM's answer for a name no role holds when the caller's grants
+// do not reach the name's root-path ARN (see ensureEvalRole).
+func isIAMAccessDenied(err error) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied"
 }
 
 // isIAMNotFound returns true for IAM's NoSuchEntityException.

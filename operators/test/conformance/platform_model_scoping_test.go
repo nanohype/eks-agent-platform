@@ -64,6 +64,9 @@ type memIAM struct {
 	deniedAbsentSuffix string
 	// createErr, when set, fails CreateRole for the names it returns an error for.
 	createErr func(name string) error
+	// refusedReads makes GetRole refuse the roles it names, present or not: an
+	// identity whose grants no longer reach them.
+	refusedReads map[string]bool
 }
 
 func newMemIAM() *memIAM {
@@ -120,6 +123,9 @@ func (m *memIAM) CreateRole(_ context.Context, p *iam.CreateRoleInput, _ ...func
 func (m *memIAM) GetRole(_ context.Context, p *iam.GetRoleInput, _ ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.refusedReads[aws.ToString(p.RoleName)] {
+		return nil, &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized on resource: role " + aws.ToString(p.RoleName)}
+	}
 	role, ok := m.roles[aws.ToString(p.RoleName)]
 	if !ok {
 		return nil, m.absent(aws.ToString(p.RoleName))

@@ -448,8 +448,8 @@ func wiringGlobals() map[string]string {
 //
 // The values these steps handle include tenant-authored case inputs, the
 // EvalSuite's manifest name and the model's replies to adversarial cases, and
-// the step pods hold the eval-runner role and kubectl. A value that reaches a
-// script as source runs there: written into the score step as
+// the step pods hold their Platform's eval role and kubectl. A value that
+// reaches a script as source runs there: written into the score step as
 //
 //	echo '<results-json, substituted by Argo>' > /tmp/results.json
 //
@@ -572,8 +572,9 @@ func TestEachStepReceivesItsOwnValues(t *testing.T) {
 			"--pass-threshold": g["workflow.parameters.pass-threshold"],
 		})
 		assertDocumentHanded(t, "score", run, "score", "--results", g["tasks.run.outputs.parameters.results"])
-		// The eval-runner role is granted writes under <bucket>/*/runs/ only, and
-		// the platform segment is what keeps one platform's reports from another's.
+		// A run holds its Platform's eval role, granted writes under
+		// <bucket>/<platform>/runs/* and nowhere else, so an upload outside the
+		// run's own Platform segment is refused.
 		prefix := "s3://" + bucket + "/" + platform + "/runs/" + g["workflow.name"] + "/"
 		uploads := run.commands("aws")
 		files := []string{"report.html", "junit.xml"}

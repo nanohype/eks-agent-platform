@@ -262,3 +262,12 @@ green.
   under the tenant path holds this name" and lets `CreateRole`, which names the
   path, settle it. A Platform whose eval identity cannot be minted still
   reaches Ready and reports why on its `EvalIdentityReady` condition.
+- **Platform held terminating on its eval role:** on delete, the operator reads
+  AccessDenied on the eval role as an absent role only when the Platform's
+  `status.evalRoleArn` is empty. With a role recorded, the finalizer logs
+  `iam GetRole <cluster>-<platform>-eval: ... AccessDenied ...; status.evalRoleArn
+  records <arn>` and retries rather than leave the role and its eval-reports
+  grant behind. If the role still exists, restore the operator's read of the
+  tenant path and the finalizer deletes it. If it was deleted out of band, clear
+  the record and the finalizer releases:
+  `kubectl patch platform <name> -n <namespace> --subresource=status --type=merge -p '{"status":{"evalRoleArn":null}}'`.

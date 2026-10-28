@@ -48,10 +48,15 @@ inside it. The role carries no Bedrock grant: eval-runner reaches the model
 through the Platform's `ModelGateway` over HTTP.
 
 The operator needs no grant on the role's root-path name beside its
-tenant-path grants: it reads AccessDenied on the role's existence check as an
-absent role and lets `CreateRole`, which names the tenant path, settle whether
-the name is free. The Platform reports the identity on its `EvalIdentityReady`
-condition, and no run is submitted until that is `True`.
+tenant-path grants. Minting the role, it reads AccessDenied on the existence
+check as no role under the tenant path holding the name, and lets `CreateRole`,
+which names the tenant path, settle whether the name is free. Deleting it, it
+reads AccessDenied as an absent role only for a Platform with no role recorded
+on `status.evalRoleArn`; with one recorded, the finalizer holds until the role
+can be read and deleted. The association is converged as well as created: one
+that binds the ServiceAccount to any other role is replaced. The Platform
+reports the identity on its `EvalIdentityReady` condition, and no run is
+submitted until that is `True`.
 
 The `EvalReconciler` emits an Argo `Workflow` (or `CronWorkflow` when
 `spec.schedule` is set) into `runner_namespace` referencing the

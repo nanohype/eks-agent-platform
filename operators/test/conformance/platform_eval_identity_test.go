@@ -45,7 +45,8 @@ const (
 
 // memEKS is an in-memory awsclients.EKS holding Pod Identity associations by
 // (namespace, serviceAccount), the key ListPodIdentityAssociations filters on.
-// The list summary carries no role ARN, so the bound role is kept beside it.
+// The list summary carries no role ARN, so the bound role is kept beside it and
+// returned by DescribePodIdentityAssociation.
 type memEKS struct {
 	mu     sync.Mutex
 	assocs map[string]ekstypes.PodIdentityAssociationSummary
@@ -92,6 +93,30 @@ func (m *memEKS) DeletePodIdentityAssociation(_ context.Context, p *eks.DeletePo
 		}
 	}
 	return &eks.DeletePodIdentityAssociationOutput{}, nil
+}
+
+func (m *memEKS) DescribePodIdentityAssociation(_ context.Context, p *eks.DescribePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DescribePodIdentityAssociationOutput, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, a := range m.assocs {
+		if aws.ToString(a.AssociationId) == aws.ToString(p.AssociationId) {
+			return &eks.DescribePodIdentityAssociationOutput{Association: &ekstypes.PodIdentityAssociation{
+				AssociationId:  a.AssociationId,
+				Namespace:      a.Namespace,
+				ServiceAccount: a.ServiceAccount,
+				RoleArn:        aws.String(m.roles[k]),
+			}}, nil
+		}
+	}
+	return nil, &ekstypes.ResourceNotFoundException{Message: aws.String("no association " + aws.ToString(p.AssociationId))}
+}
+
+// rebind points the (namespace, serviceAccount) association at another role,
+// the way an edit made outside the operator would.
+func (m *memEKS) rebind(namespace, serviceAccount, roleARN string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roles[namespace+"/"+serviceAccount] = roleARN
 }
 
 // roleFor returns the role a (namespace, serviceAccount) is bound to.
@@ -274,6 +299,9 @@ func TestPlatformReconciler_MintsAPerPlatformEvalIdentity(t *testing.T) {
 			t.Errorf("%s: %s/%s is bound to %q (bound=%v), want its own eval role", p.Name, evalRuntimeNs, saName, role, ok)
 		}
 		assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleFor(p))
+		if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalRoleArn; got != evalRoleARNPrefix+evalRoleFor(p) {
+			t.Errorf("%s: status.evalRoleArn = %q, want %s", p.Name, got, evalRoleARNPrefix+evalRoleFor(p))
+		}
 	}
 
 	// Neither Platform's grant names the other's prefix.
@@ -542,4 +570,79 @@ func TestPlatformReconciler_EvalIdentityNeedsNoRootPathGrant(t *testing.T) {
 	if iamFake.hasRole(evalRoleFor(minted)) {
 		t.Errorf("role %s survived its Platform", evalRoleFor(minted))
 	}
+}
+
+// TestPlatformReconciler_EvalRoleOutOfReachHoldsTheFinalizer runs the operator
+// role with no grant on the eval role's root-path name, and then without its
+// read of the minted role either. A Platform whose recorded eval role the
+// operator can no longer read keeps its finalizer — the role and its grant into
+// the eval-reports bucket stay owned by a Platform that still exists — and
+// releases it once the role can be read and deleted.
+func TestPlatformReconciler_EvalRoleOutOfReachHoldsTheFinalizer(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake.deniedAbsentSuffix = "-eval"
+	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+	p := evalPlatform(ctx, t, "p")
+	reconcileIAM(ctx, t, r, p)
+	role := evalRoleFor(p)
+	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalRoleArn; got != evalRoleARNPrefix+role {
+		t.Fatalf("precondition: status.evalRoleArn = %q, want %s", got, evalRoleARNPrefix+role)
+	}
+
+	iamFake.mu.Lock()
+	iamFake.refusedReads = map[string]bool{role: true}
+	iamFake.mu.Unlock()
+	if err := k8sClient.Delete(ctx, p); err != nil {
+		t.Fatalf("delete platform: %v", err)
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	if _, err := r.Reconcile(ctx, req); err == nil || !strings.Contains(err.Error(), "status.evalRoleArn records") {
+		t.Fatalf("finalizer reconcile = %v, want it held on the recorded role", err)
+	}
+	if !iamFake.hasRole(role) {
+		t.Fatalf("role %s was lost while the operator could not read it", role)
+	}
+	if got := getPlatform(ctx, t, p.Namespace, p.Name); len(got.Finalizers) == 0 {
+		t.Fatal("the finalizer was released over a role the operator could not read")
+	}
+
+	iamFake.mu.Lock()
+	iamFake.refusedReads = nil
+	iamFake.mu.Unlock()
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("finalizer reconcile once the role is readable: %v", err)
+	}
+	if iamFake.hasRole(role) {
+		t.Errorf("role %s survived its Platform", role)
+	}
+	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the finalizer was not released (err=%v)", err)
+	}
+}
+
+// TestPlatformReconciler_EvalIdentityRebindsADriftedAssociation: an association
+// for the eval account pointed at another role out of band would hand runs
+// credentials the operator did not scope. The next reconcile binds the account
+// back to the Platform's eval role, and the condition names that role.
+func TestPlatformReconciler_EvalIdentityRebindsADriftedAssociation(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+	p := evalPlatform(ctx, t, "p")
+	reconcileIAM(ctx, t, r, p)
+	saName := controller.EvalServiceAccountName(p)
+
+	eksFake.rebind(evalRuntimeNs, saName, "arn:aws:iam::123456789012:role/someone-else")
+	reconcileIAM(ctx, t, r, p)
+	if role, _ := eksFake.roleFor(evalRuntimeNs, saName); role != evalRoleARNPrefix+evalRoleFor(p) {
+		t.Errorf("%s/%s is bound to %q, want %s", evalRuntimeNs, saName, role, evalRoleARNPrefix+evalRoleFor(p))
+	}
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleARNPrefix+evalRoleFor(p))
 }

@@ -538,21 +538,58 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 }
 
 // fakeEKS is a minimal in-memory awsclients.EKS covering the Pod Identity
-// association the operator binds the tenant ServiceAccount with.
+// associations the operator binds a Platform's ServiceAccounts with.
 type fakeEKS struct {
 	associations map[string]string // "namespace/serviceAccount" -> association id
-	createCalls  []eks.CreatePodIdentityAssociationInput
-	deleteCalls  []eks.DeletePodIdentityAssociationInput
-	nextID       int
+	// bound is what DescribePodIdentityAssociation returns, by association id.
+	// CreatePodIdentityAssociation records the role it was handed; a test seeds
+	// another role, or a target role, to stand for an association made out of
+	// band.
+	bound       map[string]*ekstypes.PodIdentityAssociation
+	createCalls []eks.CreatePodIdentityAssociationInput
+	deleteCalls []eks.DeletePodIdentityAssociationInput
+	nextID      int
 
 	// Error-injection hooks (default nil = no error).
-	listReturnsErr   error
-	createReturnsErr error
-	deleteReturnsErr error
+	listReturnsErr     error
+	createReturnsErr   error
+	deleteReturnsErr   error
+	describeReturnsErr error
 }
 
 func newFakeEKS() *fakeEKS {
-	return &fakeEKS{associations: map[string]string{}}
+	return &fakeEKS{associations: map[string]string{}, bound: map[string]*ekstypes.PodIdentityAssociation{}}
+}
+
+// seedAssociation stands for an association made out of band: the
+// (namespace, serviceAccount) bound to roleARN, chaining to targetRoleARN when
+// that is set.
+func (f *fakeEKS) seedAssociation(namespace, serviceAccount, roleARN, targetRoleARN string) string {
+	f.nextID++
+	id := fmt.Sprintf("a-%d", f.nextID)
+	f.associations[namespace+"/"+serviceAccount] = id
+	a := &ekstypes.PodIdentityAssociation{AssociationId: aws.String(id), RoleArn: aws.String(roleARN)}
+	if targetRoleARN != "" {
+		a.TargetRoleArn = aws.String(targetRoleARN)
+	}
+	f.bound[id] = a
+	return id
+}
+
+// roleFor returns the role the (namespace, serviceAccount) association names.
+func (f *fakeEKS) roleFor(namespace, serviceAccount string) string {
+	a := f.bound[f.associations[namespace+"/"+serviceAccount]]
+	if a == nil {
+		return ""
+	}
+	return aws.ToString(a.RoleArn)
+}
+
+func (f *fakeEKS) DescribePodIdentityAssociation(_ context.Context, params *eks.DescribePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DescribePodIdentityAssociationOutput, error) {
+	if f.describeReturnsErr != nil {
+		return nil, f.describeReturnsErr
+	}
+	return &eks.DescribePodIdentityAssociationOutput{Association: f.bound[aws.ToString(params.AssociationId)]}, nil
 }
 
 func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
@@ -579,6 +616,7 @@ func (f *fakeEKS) CreatePodIdentityAssociation(_ context.Context, params *eks.Cr
 	f.nextID++
 	id := fmt.Sprintf("a-%d", f.nextID)
 	f.associations[aws.ToString(params.Namespace)+"/"+aws.ToString(params.ServiceAccount)] = id
+	f.bound[id] = &ekstypes.PodIdentityAssociation{AssociationId: aws.String(id), RoleArn: params.RoleArn}
 	return &eks.CreatePodIdentityAssociationOutput{}, nil
 }
 
@@ -592,6 +630,7 @@ func (f *fakeEKS) DeletePodIdentityAssociation(_ context.Context, params *eks.De
 			delete(f.associations, k)
 		}
 	}
+	delete(f.bound, aws.ToString(params.AssociationId))
 	return &eks.DeletePodIdentityAssociationOutput{}, nil
 }
 

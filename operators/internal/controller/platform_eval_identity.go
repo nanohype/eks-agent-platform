@@ -15,11 +15,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -200,6 +200,12 @@ const (
 // nothing until a later pass completes, which is why runs are gated on the
 // EvalIdentityReady condition this pass's outcome sets, not on the account
 // alone.
+//
+// The role's ARN goes on status.evalRoleArn as soon as the pass holds it —
+// before the association is written, and whether or not its policy write
+// succeeded — and the reconcile's status write does not skip on this pass's
+// failure. A role a failed pass created is recorded all the same, and the
+// record is what the finalizer reads (deleteEvalRole).
 func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) (evalIdentityOutcome, error) {
 	if !r.evalIdentityWired() {
 		return evalIdentityUnmanaged, nil
@@ -217,6 +223,9 @@ func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platform
 		return evalIdentityUnmanaged, fmt.Errorf("ensure eval ServiceAccount %s/%s: %w", ns, sa.Name, err)
 	}
 	roleARN, err := r.ensureEvalRole(ctx, p, r.IAMCfg)
+	if roleARN != "" {
+		p.Status.EvalRoleArn = roleARN
+	}
 	if err != nil {
 		return evalIdentityUnmanaged, err
 	}
@@ -254,35 +263,27 @@ func (r *PlatformReconciler) setEvalIdentityCondition(p *platformv1alpha1.Platfo
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = "Bound"
 		cond.Message = fmt.Sprintf("ServiceAccount %s/%s is bound by EKS Pod Identity to role %s",
-			ns, EvalServiceAccountName(p), evalRoleName(r.IAMCfg.ClusterName, p))
+			ns, EvalServiceAccountName(p), p.Status.EvalRoleArn)
 	}
 	upsertCondition(&p.Status.Conditions, cond)
 }
 
-// evalRoleAbsent reports whether a read of the eval role found no role under
-// the tenant path holding its name.
-//
-// IAM authorizes a call against an existing role by that role's ARN, path
-// included, and a call naming no existing role by the root-path ARN
-// role/<name>. The operator's grants reach the roles it mints through the
-// tenant path, so a read of its own eval role is authorized, while a read of a
-// name no role holds may be refused instead of answered NoSuchEntity. Either
-// answer means the same thing here, and the eval role needs no grant on its
-// root-path name. ensureEvalRole lets CreateRole, which names the path, settle
-// whether the name is free.
-func evalRoleAbsent(err error) bool {
-	if isIAMNotFound(err) {
-		return true
-	}
-	var apiErr smithy.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied"
-}
-
 // ensureEvalRole creates the eval role when no role under the tenant path
-// holds its name — with the tenant permissions boundary and the Pod Identity
-// trust, like every other role the operator mints — and converges its inline
-// policy on every pass, so a changed bucket or a policy edited out of band is
-// rewritten. Returns the role ARN.
+// holds its name — under that path, with the tenant permissions boundary and
+// the Pod Identity trust the tenant role also carries — and converges its
+// inline policy on every pass, so a changed bucket or a policy edited out of
+// band is rewritten. It returns the role's ARN once it holds the role, found
+// under the tenant path or created, including from a pass whose policy write
+// failed, so the caller can record it.
+//
+// IAM authorizes a call naming an existing role against that role's ARN, path
+// included, and a call naming no existing role against the root-path ARN
+// role/<name>. The operator's grants reach the roles it mints through the
+// tenant path, so its read of its own eval role is authorized, while a read of
+// a name no role holds may be refused instead of answered NoSuchEntity. Here
+// either answer is read as no role under the tenant path holding the name, so
+// the eval role needs no grant on its root-path name: CreateRole, which names
+// the path, settles whether the name is free.
 //
 // A role of this name the operator did not mint is never adopted. One that
 // GetRole returns under another path is refused outright. One that GetRole is
@@ -300,7 +301,7 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 			return "", fmt.Errorf("eval role %s exists under path %q, not the tenant path %s; the operator does not adopt a role it did not mint", name, got, path)
 		}
 		roleARN = aws.ToString(getOut.Role.Arn)
-	case !evalRoleAbsent(getErr):
+	case !isIAMNotFound(getErr) && !isIAMAccessDenied(getErr):
 		return "", fmt.Errorf("iam GetRole %s: %w", name, getErr)
 	default:
 		trust, err := assumeRolePolicyForPodIdentity()
@@ -333,7 +334,7 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 		return "", err //coverage:ignore unreachable — see evalReportsPolicyDoc
 	}
 	if err := r.reconcileInlinePolicy(ctx, name, evalReportsPolicyName, desired); err != nil {
-		return "", err
+		return roleARN, err
 	}
 	return roleARN, nil
 }
@@ -358,20 +359,42 @@ func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platform
 	if err := r.Delete(ctx, sa); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete eval ServiceAccount %s/%s: %w", ns, name, err)
 	}
-	return r.deleteEvalRole(ctx, evalRoleName(r.IAMCfg.ClusterName, p))
+	return r.deleteEvalRole(ctx, p)
 }
 
-// deleteEvalRole removes the eval role with its inline policy when a role under
-// the tenant path holds its name. A Platform whose eval role was never created
-// — deleted before a pass reached it, or while the eval runtime namespace was
-// absent — reads as absent (evalRoleAbsent) and releases its finalizer without
-// any grant on the role's root-path name. A role of the name under another
-// path is not one the operator minted and is left alone.
-func (r *PlatformReconciler) deleteEvalRole(ctx context.Context, name string) error {
+// deleteEvalRole removes the eval role with its inline policy.
+//
+// A refused read of the role is ambiguous. IAM answers that way for a name no
+// role holds when the operator has no grant on the root-path name (see
+// ensureEvalRole), and for an existing role the operator's grants no longer
+// reach. status.evalRoleArn tells the two apart:
+//
+//   - No role recorded: no pass ever held one. The Platform was deleted before
+//     a pass minted its role, or while the eval runtime namespace was absent,
+//     and a refused read releases the finalizer.
+//   - A role recorded: only NoSuchEntity means the role is gone. A refused read
+//     is the operator's own role out of its reach, and releasing the finalizer
+//     would leave the role and its grant into the eval-reports bucket behind,
+//     so the finalizer holds and retries.
+//
+// The record is cleared after a read has found the role under the tenant path
+// and before the role is deleted. A deleted role's read is refused like any
+// absent name's, so a record outliving the deletion would hold a finalizer
+// retried after a later step fails on a role that no longer exists.
+//
+// A role of the name under another path is not one the operator minted and is
+// left alone.
+func (r *PlatformReconciler) deleteEvalRole(ctx context.Context, p *platformv1alpha1.Platform) error {
+	name := evalRoleName(r.IAMCfg.ClusterName, p)
 	out, err := r.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	switch {
-	case evalRoleAbsent(err):
+	case isIAMNotFound(err):
 		return nil
+	case isIAMAccessDenied(err) && p.Status.EvalRoleArn == "":
+		return nil
+	case isIAMAccessDenied(err):
+		return fmt.Errorf("iam GetRole %s: %w; status.evalRoleArn records %s, so the finalizer holds until the role can be read and deleted",
+			name, err, p.Status.EvalRoleArn)
 	case err != nil:
 		return fmt.Errorf("iam GetRole %s: %w", name, err)
 	case aws.ToString(out.Role.Path) != r.IAMCfg.tenantPath():
@@ -379,5 +402,24 @@ func (r *PlatformReconciler) deleteEvalRole(ctx context.Context, name string) er
 			"role", name, "path", aws.ToString(out.Role.Path))
 		return nil
 	}
+	if err := r.clearEvalRoleRecord(ctx, p); err != nil {
+		return err
+	}
 	return r.detachAndDeleteRole(ctx, name)
+}
+
+// clearEvalRoleRecord empties status.evalRoleArn and writes it through, so the
+// cleared record is persisted before the caller deletes the role.
+func (r *PlatformReconciler) clearEvalRoleRecord(ctx context.Context, p *platformv1alpha1.Platform) error {
+	recorded := p.Status.EvalRoleArn
+	if recorded == "" {
+		return nil
+	}
+	before := p.DeepCopy()
+	p.Status.EvalRoleArn = ""
+	if err := r.Status().Patch(ctx, p, client.MergeFrom(before)); err != nil {
+		p.Status.EvalRoleArn = recorded
+		return fmt.Errorf("clear status.evalRoleArn on Platform %s/%s before deleting its eval role: %w", p.Namespace, p.Name, err)
+	}
+	return nil
 }

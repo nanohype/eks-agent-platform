@@ -14,7 +14,9 @@ type: application
 # and the run RBAC binds the eval runtime namespace's ServiceAccount group,
 # narrowed to what a run calls. The operator creates each Platform's
 # eval-<platform> ServiceAccount and the <cluster>-<platform>-eval role behind
-# it, and submits every run under that account. So 0.7.0 is a lockstep version
+# it, and submits every run under that account. The Platform CRD gains
+# status.evalRoleArn, where that operator records each Platform's eval role for
+# its finalizer to read. So 0.7.0 is a lockstep version
 # in the sense 0.5.0 records: an operator without per-Platform eval identities
 # submits runs under an account this chart does not create, and each run fails
 # before its first step. appVersion must name an operator release that mints
