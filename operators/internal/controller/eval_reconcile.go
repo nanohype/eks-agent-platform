@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
@@ -224,7 +225,13 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 	// role, so its S3 calls fail — after it has run every inline case against a
 	// live model. EvalIdentityReady is True only after a pass in which the
 	// account, the role and the association binding them all exist.
+	//
+	// A Platform being deleted admits no run either, whatever its condition
+	// still says: its finalizer is removing the identity the run would hold.
 	runnerSA := EvalServiceAccountName(platform)
+	if !platform.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("%w: Platform %s is being deleted, and its finalizer removes the eval identity", errEvalIdentityMissing, platform.Name)
+	}
 	if c := apimeta.FindStatusCondition(platform.Status.Conditions, conditionEvalIdentityReady); c == nil || c.Status != metav1.ConditionTrue {
 		return fmt.Errorf("%w: %s", errEvalIdentityMissing, evalIdentityNotBound(c))
 	}
@@ -317,6 +324,10 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		}
 
 		if kind == "CronWorkflow" {
+			// The spec is written whole, with no suspend key, so a schedule
+			// suspended while the suite was Pending (suspendSchedule) resumes
+			// here, on the pass that finds every precondition met.
+			//
 			// ttlStrategy belongs to the CHILD workflows a schedule spawns, and
 			// only there. On the one-shot form it would delete the object this
 			// reconciler owns and recreates by a deterministic name, so the next
@@ -385,6 +396,40 @@ func buildInlineCasesParam(cases []governancev1alpha1.EvalCase) (string, error) 
 		return "", fmt.Errorf("marshal inline eval cases: %w", err)
 	}
 	return string(b), nil
+}
+
+// suspendSchedule suspends the suite's CronWorkflow, if it has one. A suite is
+// Pending when this reconciler would not submit a run for it now, and a
+// schedule left running would submit that same run on its own, under the same
+// missing precondition: an eval identity unbound, deleted or never minted, a
+// Platform or fleet absent or not Ready, no reports bucket, no published
+// route. Every Pending pass requeues, and the pass that finds the
+// preconditions met rewrites the schedule's spec, which resumes it.
+func (r *EvalReconciler) suspendSchedule(ctx context.Context, suite *governancev1alpha1.EvalSuite) error {
+	cw := &unstructured.Unstructured{}
+	cw.SetGroupVersionKind(argoWorkflowsGV.WithKind("CronWorkflow"))
+	key := types.NamespacedName{Namespace: r.evalRunnerNamespace(), Name: evalWorkflowName(suite)}
+	if err := r.Get(ctx, key, cw); err != nil {
+		if apierrors.IsNotFound(err) || isNoKindMatch(err) {
+			return nil
+		}
+		return fmt.Errorf("get argo CronWorkflow %s: %w", key, err)
+	}
+	return suspendCronWorkflow(ctx, r.Client, cw)
+}
+
+// suspendCronWorkflow sets spec.suspend on a CronWorkflow, so Argo schedules no
+// further run from it. One already suspended is not written again, and one
+// deleted since it was read needs no suspending.
+func suspendCronWorkflow(ctx context.Context, c client.Client, cw *unstructured.Unstructured) error {
+	if suspended, _, _ := unstructured.NestedBool(cw.Object, "spec", "suspend"); suspended {
+		return nil
+	}
+	patch := client.RawPatch(types.MergePatchType, []byte(`{"spec":{"suspend":true}}`))
+	if err := c.Patch(ctx, cw, patch); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("suspend argo CronWorkflow %s/%s: %w", cw.GetNamespace(), cw.GetName(), err)
+	}
+	return nil
 }
 
 // cleanupArgoWorkflow is the finalizer counterpart: deletes both the

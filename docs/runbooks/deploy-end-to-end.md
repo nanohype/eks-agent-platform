@@ -271,3 +271,10 @@ green.
   tenant path and the finalizer deletes it. If it was deleted out of band, clear
   the record and the finalizer releases:
   `kubectl patch platform <name> -n <namespace> --subresource=status --type=merge -p '{"status":{"evalRoleArn":null}}'`.
+- **Platform held terminating under `--disable-aws`:** an operator without its
+  IAM and EKS clients cannot remove an eval identity a Platform records, so
+  its finalizer logs `status.evalRoleArn records eval role <arn>, and this
+  reconciler has no IAM and EKS clients to remove it ...` and retries. Run the
+  operator with its AWS clients and the finalizer removes the identity and
+  releases. An eval runtime that is no longer configured does not hold it: the
+  finalizer removes whatever `status.evalRoleArn` records.

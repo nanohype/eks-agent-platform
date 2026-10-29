@@ -353,11 +353,13 @@ type PlatformStatus struct {
 
 	// EvalRoleArn is the per-Platform role the Platform's eval runs hold, bound
 	// by EKS Pod Identity to the eval ServiceAccount the EvalIdentityReady
-	// condition names. Recorded by the first reconcile that finds or creates the
-	// role, and kept until the finalizer has read the role and is about to
-	// delete it. While it is set, a refused read of the role holds the finalizer
-	// instead of releasing it. Empty when the cluster runs no eval runtime or no
-	// reconcile has minted the role.
+	// condition names. A reconcile writes it as soon as it holds the role,
+	// created or found under the tenant path, and binds the role only once that
+	// write has succeeded. It is kept until the finalizer has read the role and
+	// is about to delete it. While it is set, a refused read of the role holds
+	// the finalizer instead of releasing it, and the finalizer removes the eval
+	// identity whether or not the eval runtime is still configured. Empty until
+	// a reconcile holds the role.
 	// +optional
 	EvalRoleArn string `json:"evalRoleArn,omitempty"`
 

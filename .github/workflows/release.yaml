@@ -491,10 +491,18 @@ jobs:
     permissions:
       contents: read
       packages: write   # push this component's image to ghcr.io under this repository
+    env:
+      # check-runtime-contract.py parses the chart and the CRDs with PyYAML, so
+      # its version is part of the verdict, pinned as ci.yaml pins it.
+      PYYAML_VERSION: "6.0.3"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # check-runtime-contract.py resolves appVersion to source through
+          # its operator-v release tag, and a shallow checkout has no tags.
+          fetch-depth: 0
+      - run: pip install "pyyaml==${PYYAML_VERSION}"
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           # Helm renders the charts these gates compare against, so its version is
@@ -530,8 +538,20 @@ jobs:
           # (keys reordered, comments dropped) and stamps mtimes, so source and
           # registry only compare equal once both have been through
           # `helm package`.
+          #
+          # An operator chart about to be published must also name, in
+          # appVersion, an operator release that honours it: one that supplies
+          # every parameter its eval WorkflowTemplate takes from the reconciler,
+          # and whose CRDs decode the same fields as the ones the chart
+          # installs. The merge gate cannot require that, because the release
+          # carrying a CRD change is tagged after the change merges. So
+          # check-runtime-contract.py --release decides it here, and a chart
+          # that fails it is held: not pushed, and the job fails once every
+          # other chart has been published, so no other chart's release waits
+          # on an operator tag.
           published=0
           skipped=0
+          held=0
 
           for d in charts/*/; do
             name=$(basename "$d")
@@ -590,6 +610,11 @@ jobs:
                 exit 1
                 ;;
               absent)
+                if [ "$name" = operator ] && ! ./scripts/check-runtime-contract.py --release; then
+                  echo "::error::operator ${version} is held — appVersion names an operator release that cannot honour it (above)."
+                  held=$((held + 1))
+                  continue
+                fi
                 helm push "$tgz" "$REGISTRY"
                 published=$((published + 1))
                 ;;
@@ -601,7 +626,13 @@ jobs:
             esac
           done
 
-          echo "published=${published} skipped=${skipped}"
+          echo "published=${published} skipped=${skipped} held=${held}"
+
+          if [ "$held" -gt 0 ]; then
+            echo "::error::${held} chart(s) held unpublished. Tag operator-v<next> from a commit that"
+            echo "carries the chart's CRDs and WorkflowTemplate, point appVersion at it, and tag again."
+            exit 1
+          fi
 
           # A charts-v tag that publishes nothing is a tag pushed without a
           # version bump. Passing green would report a release that did not

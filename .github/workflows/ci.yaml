@@ -909,6 +909,13 @@ jobs:
   # that literal string and score every case zero, reading as a failed model
   # rather than a mispaired release.
   #
+  # The CRD half of the contract — the chart's CRDs decoding the same fields as
+  # the binary's — is reported here as a publication hold rather than failed:
+  # the chart's CRDs are generated from this tree's Go types, so a CRD change
+  # always merges ahead of the release that carries it. release.yaml's
+  # charts-oci job runs the same gate with --release and holds the operator
+  # chart until appVersion names that release.
+  #
   # fetch-depth: 0 because the check resolves appVersion to source through the
   # release tag, and a shallow checkout has no tags to resolve it with.
   runtime-contract:
@@ -920,6 +927,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - run: pip install "pyyaml==${PYYAML_VERSION}"
+      - run: ./scripts/check-runtime-contract.py --self-test
       - run: ./scripts/check-runtime-contract.py --list
 
   # ── vcluster chart acceptance gate ───────────────────────────────────────

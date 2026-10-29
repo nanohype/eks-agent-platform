@@ -16,11 +16,15 @@ type: application
 # eval-<platform> ServiceAccount and the <cluster>-<platform>-eval role behind
 # it, and submits every run under that account. The Platform CRD gains
 # status.evalRoleArn, where that operator records each Platform's eval role for
-# its finalizer to read. So 0.7.0 is a lockstep version
-# in the sense 0.5.0 records: an operator without per-Platform eval identities
-# submits runs under an account this chart does not create, and each run fails
-# before its first step. appVersion must name an operator release that mints
-# them before 0.7.0 is published.
+# its finalizer to read. So 0.7.0 is a lockstep version in the sense 0.5.0
+# records: an operator without per-Platform eval identities submits runs under
+# an account this chart does not create, and each run fails before its first
+# step. The chart is published only once appVersion names an operator release
+# that mints them. The charts-oci release job runs
+# scripts/check-runtime-contract.py --release before it pushes this chart, and
+# holds the chart while the CRDs it installs differ from the ones the release
+# appVersion names generates; status.evalRoleArn is the field that tells a
+# release minting them apart.
 #
 # 0.6.8 is documentation only. The CRD's `isolation` description cites an ADR by
 # path, and the ADR sequence closed up, so the packaged CRD carries different
@@ -66,7 +70,8 @@ type: application
 # binary has no such field on its Go struct, so an errorSelector would be
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
-# honour — nor, as 0.6.3 records, a workflow parameter.
+# honour — nor, as 0.6.3 records, a workflow parameter. The charts-oci release
+# job enforces both with scripts/check-runtime-contract.py --release.
 version: 0.7.0
 appVersion: "0.6.1"
 # `-0` admits pre-release-tagged versions so the constraint matches managed

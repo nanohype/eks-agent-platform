@@ -134,6 +134,9 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// The finalizer suspends the Platform's eval schedules before it deletes the
+// eval ServiceAccount they run under (suspendEvalSchedules).
+// +kubebuilder:rbac:groups=argoproj.io,resources=cronworkflows,verbs=list;patch
 
 // Reconcile drives a Platform CR toward its desired state.
 func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

@@ -646,3 +646,119 @@ func TestPlatformReconciler_EvalIdentityRebindsADriftedAssociation(t *testing.T)
 	}
 	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleARNPrefix+evalRoleFor(p))
 }
+
+// evalSessionCreateDenied fails CreateRole for every attribution session role,
+// so a pass that has already held the eval role returns before the closing
+// status write.
+func evalSessionCreateDenied(name string) error {
+	if strings.HasSuffix(name, "-session") {
+		return &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: iam:CreateRole on resource: role " + name}
+	}
+	return nil
+}
+
+// TestPlatformReconciler_EvalRoleRecordSurvivesAnEarlyReturn: a pass can fail
+// after it has minted the eval role and before it writes the Platform's status.
+// The role is recorded the moment the pass holds it, so a Platform deleted
+// while that role cannot be read keeps its finalizer rather than releasing it
+// over a role nothing else would remove.
+func TestPlatformReconciler_EvalRoleRecordSurvivesAnEarlyReturn(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake.createErr = evalSessionCreateDenied
+	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+	p := evalPlatform(ctx, t, "p")
+	latest := getPlatform(ctx, t, p.Namespace, p.Name)
+	latest.Spec.Attribution = &platformv1alpha1.AttributionSpec{Operators: []string{"ops@example.com"}}
+	if err := k8sClient.Update(ctx, latest); err != nil {
+		t.Fatalf("enable attribution: %v", err)
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	var err error
+	for i := 0; i < 5 && err == nil; i++ {
+		_, err = r.Reconcile(ctx, req)
+	}
+	if err == nil || !strings.Contains(err.Error(), "-session") {
+		t.Fatalf("Reconcile = %v, want the session role's CreateRole failure", err)
+	}
+	role := evalRoleFor(p)
+	if !iamFake.hasRole(role) {
+		t.Fatalf("precondition: the failing pass never minted %s", role)
+	}
+	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalRoleArn; got != evalRoleARNPrefix+role {
+		t.Fatalf("status.evalRoleArn = %q after a pass that returned early, want %s", got, evalRoleARNPrefix+role)
+	}
+
+	iamFake.mu.Lock()
+	iamFake.refusedReads = map[string]bool{role: true}
+	iamFake.mu.Unlock()
+	if err := k8sClient.Delete(ctx, p); err != nil {
+		t.Fatalf("delete platform: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, req); err == nil || !strings.Contains(err.Error(), "status.evalRoleArn records") {
+		t.Fatalf("finalizer reconcile = %v, want it held on the recorded role", err)
+	}
+	if !iamFake.hasRole(role) {
+		t.Fatalf("role %s was lost while the operator could not read it", role)
+	}
+	if got := getPlatform(ctx, t, p.Namespace, p.Name); len(got.Finalizers) == 0 {
+		t.Fatal("the finalizer was released over a role the operator could not read")
+	}
+
+	iamFake.mu.Lock()
+	iamFake.refusedReads = nil
+	iamFake.mu.Unlock()
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("finalizer reconcile once the role is readable: %v", err)
+	}
+	if iamFake.hasRole(role) {
+		t.Errorf("role %s survived its Platform", role)
+	}
+	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the finalizer was not released (err=%v)", err)
+	}
+}
+
+// TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured: an
+// operator restarted without the eval-reports bucket mints no eval identity,
+// and still removes the one a Platform recorded when that Platform is deleted:
+// the role, its Pod Identity association and its ServiceAccount.
+func TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	p := evalPlatform(ctx, t, "p")
+	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
+	saName := controller.EvalServiceAccountName(p)
+	if _, ok := eksFake.roleFor(evalRuntimeNs, saName); !ok {
+		t.Fatal("precondition: the eval identity was never bound")
+	}
+
+	unconfigured := newEvalIdentityReconciler(iamFake, eksFake, "")
+	if err := k8sClient.Delete(ctx, p); err != nil {
+		t.Fatalf("delete platform: %v", err)
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	if _, err := unconfigured.Reconcile(ctx, req); err != nil {
+		t.Fatalf("finalizer reconcile: %v", err)
+	}
+	if iamFake.hasRole(evalRoleFor(p)) {
+		t.Errorf("role %s survived its Platform", evalRoleFor(p))
+	}
+	if _, ok := eksFake.roleFor(evalRuntimeNs, saName); ok {
+		t.Error("the Pod Identity association survived the Platform")
+	}
+	err := k8sClient.Get(ctx, types.NamespacedName{Namespace: evalRuntimeNs, Name: saName}, &corev1.ServiceAccount{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("eval ServiceAccount survived the Platform (err=%v)", err)
+	}
+	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the finalizer was not released (err=%v)", err)
+	}
+}

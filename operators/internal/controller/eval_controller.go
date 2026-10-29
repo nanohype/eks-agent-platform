@@ -16,9 +16,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // EvalReconciler reconciles EvalSuite CRs into Argo Workflows
@@ -59,6 +62,8 @@ type EvalReconciler struct {
 // +kubebuilder:rbac:groups=argoproj.io,resources=analysisruns;analysistemplates,verbs=get;list;watch
 // A run is submitted only while the Platform's eval ServiceAccount exists.
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+// A Platform event re-runs the suites that reference it (platformToSuites).
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms,verbs=get;list;watch
 
 // Reconcile drives an EvalSuite CR into a CronWorkflow (scheduled) or Workflow (manual).
 func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -97,6 +102,12 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		logger.Error(err, "reconcile failed")
 		return ctrl.Result{}, err
 	}
+	if phase == phasePending {
+		if err := r.suspendSchedule(ctx, &suite); err != nil {
+			logger.Error(err, "suspending the schedule of a Pending suite failed")
+			return ctrl.Result{}, err
+		}
+	}
 	if err := r.applyEvalStatus(ctx, &suite, phase, reason); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)
 	}
@@ -114,7 +125,36 @@ func (r *EvalReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&governancev1alpha1.EvalSuite{}).
+		Watches(&platformv1alpha1.Platform{}, handler.EnqueueRequestsFromMapFunc(r.platformToSuites)).
 		Named("eval").
 		WithOptions(ctrlruntime.Options{MaxConcurrentReconciles: c}).
 		Complete(r)
+}
+
+// platformToSuites maps a Platform event onto every suite that references it.
+//
+// A suite past Pending is not requeued, so without this watch the Platform's
+// eval identity would reach a suite only when the suite itself changed. A
+// Platform whose EvalIdentityReady condition goes False, whose deletion starts,
+// or which is gone would leave the suite's schedule submitting runs under an
+// identity no longer bound. Namespace-scoped, matching how a suite resolves
+// its Platform.
+func (r *EvalReconciler) platformToSuites(ctx context.Context, obj client.Object) []reconcile.Request {
+	p, ok := obj.(*platformv1alpha1.Platform)
+	if !ok {
+		return nil
+	}
+	var suites governancev1alpha1.EvalSuiteList
+	if err := r.List(ctx, &suites, client.InNamespace(p.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "list EvalSuites for a Platform event", "platform", client.ObjectKeyFromObject(p))
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range suites.Items {
+		if suites.Items[i].Spec.PlatformRef.Name != p.Name {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&suites.Items[i])})
+	}
+	return out
 }

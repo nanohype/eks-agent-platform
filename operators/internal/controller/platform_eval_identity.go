@@ -19,6 +19,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -44,7 +45,8 @@ import (
 // the outcome travels there rather than in the reconcile's result: a Platform's
 // own readiness does not wait on its evals. The EvalSuite reconciler submits a
 // run only while that condition is True, which is written only after a pass in
-// which the ServiceAccount, the role and the association binding them all exist.
+// which the ServiceAccount, the role and the association binding them all exist,
+// and holds a suite's schedule suspended while it is not.
 
 // evalReportsPolicyName is the eval role's one inline policy.
 const evalReportsPolicyName = "eval-reports-access"
@@ -79,8 +81,9 @@ func (c EvalIdentityConfig) namespace() string { return evalRuntimeNamespace(c.N
 // association are made with are wired. On a running operator the three arrive
 // together, because the eval-reports bucket is read from SSM through the same
 // AWS clients. Without either client there is no role a run could be bound to,
-// so nothing is created, nothing is torn down, and the Platform reports no
-// EvalIdentityReady condition.
+// so nothing is created and the Platform reports no EvalIdentityReady
+// condition. Teardown is not gated on it: deleteEvalIdentity removes whatever
+// status.evalRoleArn records, whatever this reconciler is configured with.
 func (r *PlatformReconciler) evalIdentityWired() bool {
 	return r.Eval.enabled() && r.IAM != nil && r.EKS != nil
 }
@@ -201,11 +204,14 @@ const (
 // EvalIdentityReady condition this pass's outcome sets, not on the account
 // alone.
 //
-// The role's ARN goes on status.evalRoleArn as soon as the pass holds it —
-// before the association is written, and whether or not its policy write
-// succeeded — and the reconcile's status write does not skip on this pass's
-// failure. A role a failed pass created is recorded all the same, and the
-// record is what the finalizer reads (deleteEvalRole).
+// The role's ARN is written through to status.evalRoleArn as soon as the pass
+// holds the role (recordEvalRole), whether or not its policy write succeeded,
+// and before the association binds anything to it. The record is what the
+// finalizer reads (deleteEvalRole), and the reconcile can return before its
+// closing status write, or have that write refused, after this step has run,
+// so the record does not wait for that write. A pass whose record write fails
+// binds nothing and reports the failure, and the next pass finds the role under
+// the tenant path and records it.
 func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) (evalIdentityOutcome, error) {
 	if !r.evalIdentityWired() {
 		return evalIdentityUnmanaged, nil
@@ -222,17 +228,45 @@ func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platform
 		}
 		return evalIdentityUnmanaged, fmt.Errorf("ensure eval ServiceAccount %s/%s: %w", ns, sa.Name, err)
 	}
-	roleARN, err := r.ensureEvalRole(ctx, p, r.IAMCfg)
+	roleARN, roleErr := r.ensureEvalRole(ctx, p, r.IAMCfg)
 	if roleARN != "" {
-		p.Status.EvalRoleArn = roleARN
+		if err := r.recordEvalRole(ctx, p, roleARN); err != nil {
+			return evalIdentityUnmanaged, err
+		}
 	}
-	if err != nil {
-		return evalIdentityUnmanaged, err
+	if roleErr != nil {
+		return evalIdentityUnmanaged, roleErr
 	}
 	if err := r.ensurePodIdentityAssociation(ctx, r.IAMCfg, ns, sa.Name, roleARN); err != nil {
 		return evalIdentityUnmanaged, err
 	}
 	return evalIdentityBound, nil
+}
+
+// recordEvalRole sets status.evalRoleArn to roleARN and patches it through to
+// the API server. A record that already names roleARN is not written again, so
+// a converged pass makes no write.
+//
+// The value is set on p before the patch, so a refused patch still leaves it for
+// the reconcile's closing status write. The patch itself is a merge patch of a
+// copy: it carries no resourceVersion, so it cannot conflict, and the rest of
+// the pass keeps working on the spec it read rather than on whatever the API
+// server returns. Only the copy's resourceVersion is carried back to p, so that
+// closing write lands on top of this patch instead of conflicting with it. That
+// is sound because this reconciler is the only writer of Platform status, and
+// it reconciles one Platform on one worker at a time.
+func (r *PlatformReconciler) recordEvalRole(ctx context.Context, p *platformv1alpha1.Platform, roleARN string) error {
+	if p.Status.EvalRoleArn == roleARN {
+		return nil
+	}
+	before := p.DeepCopy()
+	p.Status.EvalRoleArn = roleARN
+	recorded := p.DeepCopy()
+	if err := r.Status().Patch(ctx, recorded, client.MergeFrom(before)); err != nil {
+		return fmt.Errorf("record eval role %s in status.evalRoleArn of Platform %s/%s: %w", roleARN, p.Namespace, p.Name, err)
+	}
+	p.ResourceVersion = recorded.ResourceVersion
+	return nil
 }
 
 // setEvalIdentityCondition records one ensureEvalIdentity pass on the
@@ -289,6 +323,9 @@ func (r *PlatformReconciler) setEvalIdentityCondition(p *platformv1alpha1.Platfo
 // GetRole returns under another path is refused outright. One that GetRole is
 // refused for, because it sits outside what the operator can read, surfaces as
 // EntityAlreadyExists when CreateRole tries the name, and is refused there.
+// EntityAlreadyExists after a NoSuchEntity is a role created between the two
+// calls; the pass fails, and the next one reads the role and holds it to the
+// same path rule.
 func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) (string, error) {
 	name := evalRoleName(cfg.ClusterName, p)
 	path := cfg.tenantPath()
@@ -321,8 +358,10 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 		createOut, err := r.IAM.CreateRole(ctx, createInput)
 		var taken *iamtypes.EntityAlreadyExistsException
 		switch {
-		case errors.As(err, &taken):
+		case errors.As(err, &taken) && isIAMAccessDenied(getErr):
 			return "", fmt.Errorf("iam CreateRole %s: the name is held by a role the operator cannot read under the tenant path %s (GetRole: %v): %w", name, path, getErr, err)
+		case errors.As(err, &taken):
+			return "", fmt.Errorf("iam CreateRole %s: a role of this name was created after GetRole answered NoSuchEntity; the next pass reads it and holds it to the tenant path %s: %w", name, path, err)
 		case err != nil:
 			return "", fmt.Errorf("iam CreateRole %s: %w", name, err)
 		}
@@ -339,19 +378,33 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 	return roleARN, nil
 }
 
-// deleteEvalIdentity is the finalizer counterpart of ensureEvalIdentity: the
-// association, the ServiceAccount, then the role with its inline policy. Every
-// step tolerates a resource that is already gone, so re-runs are safe.
+// deleteEvalIdentity is the finalizer counterpart of ensureEvalIdentity: it
+// suspends the Platform's eval schedules, then removes the association, the
+// ServiceAccount, and the role with its inline policy. Every step tolerates a
+// resource that is already gone, so re-runs are safe.
 //
-// Gated like the ensure path: a reconciler that mints no eval identity has
-// none to tear down. Datastores are not touched, as on every other finalizer
-// step.
+// It runs when this reconciler mints eval identities or when the Platform
+// records an eval role, so removing an identity does not depend on the
+// configuration it was minted under still being in place: a cluster whose eval
+// runtime is unconfigured after a role was minted still tears that role down.
+// A recorded role with no IAM or EKS client to remove it with holds the
+// finalizer. Releasing it would leave the role with its grant into the
+// eval-reports bucket, its association and its ServiceAccount behind, and a
+// later Platform of the same name would inherit all three. Datastores are not
+// touched, as on every other finalizer step.
 func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) error {
-	if !r.evalIdentityWired() {
+	recorded := p.Status.EvalRoleArn
+	if !r.evalIdentityWired() && recorded == "" {
 		return nil
+	}
+	if r.IAM == nil || r.EKS == nil {
+		return fmt.Errorf("status.evalRoleArn records eval role %s, and this reconciler has no IAM and EKS clients to remove it, its Pod Identity association and its ServiceAccount with; the finalizer holds until both are wired", recorded)
 	}
 	ns := r.Eval.namespace()
 	name := EvalServiceAccountName(p)
+	if err := r.suspendEvalSchedules(ctx, p, ns); err != nil {
+		return err
+	}
 	if err := r.deletePodIdentityAssociation(ctx, r.IAMCfg, ns, name); err != nil {
 		return err
 	}
@@ -362,6 +415,33 @@ func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platform
 	return r.deleteEvalRole(ctx, p)
 }
 
+// suspendEvalSchedules suspends every CronWorkflow the EvalSuite reconciler
+// made for this Platform in the eval runtime namespace, ahead of the
+// ServiceAccount's deletion, so no schedule fires a run under an account that
+// no longer exists. The EvalSuite reconciler keeps a schedule suspended while
+// its Platform is being deleted or absent, and resumes it on the pass that
+// finds a Platform of that name with its identity bound. A cluster without the
+// CronWorkflow kind has no schedules to suspend.
+func (r *PlatformReconciler) suspendEvalSchedules(ctx context.Context, p *platformv1alpha1.Platform, ns string) error {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(argoWorkflowsGV.WithKind("CronWorkflowList"))
+	if err := r.List(ctx, list, client.InNamespace(ns), client.MatchingLabels{
+		"app.kubernetes.io/managed-by": "eks-agent-platform",
+		LabelPlatform:                  p.Name,
+	}); err != nil {
+		if isNoKindMatch(err) {
+			return nil
+		}
+		return fmt.Errorf("list eval schedules for Platform %s in %s: %w", p.Name, ns, err)
+	}
+	for i := range list.Items {
+		if err := suspendCronWorkflow(ctx, r.Client, &list.Items[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // deleteEvalRole removes the eval role with its inline policy.
 //
 // A refused read of the role is ambiguous. IAM answers that way for a name no
@@ -369,9 +449,14 @@ func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platform
 // ensureEvalRole), and for an existing role the operator's grants no longer
 // reach. status.evalRoleArn tells the two apart:
 //
-//   - No role recorded: no pass ever held one. The Platform was deleted before
-//     a pass minted its role, or while the eval runtime namespace was absent,
-//     and a refused read releases the finalizer.
+//   - No role recorded: a refused read releases the finalizer. A pass records
+//     the role before it binds anything to it (recordEvalRole), so the record
+//     is empty for a Platform no pass held a role for — deleted before one was
+//     minted, or while the eval runtime namespace was absent — and for one
+//     whose record write failed after CreateRole. That role sits under the
+//     tenant path, which the operator's grants reach, so its read is answered
+//     and the role is deleted below; only a role those grants no longer reach
+//     is released unread.
 //   - A role recorded: only NoSuchEntity means the role is gone. A refused read
 //     is the operator's own role out of its reach, and releasing the finalizer
 //     would leave the role and its grant into the eval-reports bucket behind,

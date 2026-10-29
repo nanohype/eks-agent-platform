@@ -23,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -328,7 +329,7 @@ func TestEvalIdentityConfigDefaults(t *testing.T) {
 func TestEnsureEvalIdentity_Creates(t *testing.T) {
 	ctx := context.Background()
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
-	p := newPlatform("analytics", "acme")
+	p := storedPlatform(t, cl)
 
 	outcome, err := r.ensureEvalIdentity(ctx, p)
 	if err != nil {
@@ -391,6 +392,9 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 	if p.Status.EvalRoleArn != evalTestRoleARN {
 		t.Errorf("status.evalRoleArn = %q, want the minted role %s", p.Status.EvalRoleArn, evalTestRoleARN)
 	}
+	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
+		t.Errorf("stored status.evalRoleArn = %q, want the minted role written through by the pass itself", got)
+	}
 
 	if len(fe.createCalls) != 1 {
 		t.Fatalf("CreatePodIdentityAssociation calls = %d, want 1", len(fe.createCalls))
@@ -409,16 +413,22 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 // write.
 func TestEnsureEvalIdentity_ConvergedPassWritesNothing(t *testing.T) {
 	ctx := context.Background()
-	r, f, fe, _ := evalIdentityReconciler(t, nil)
-	p := newPlatform("analytics", "acme")
+	statusPatches := 0
+	r, f, fe, cl := evalIdentityReconciler(t, &interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			statusPatches++
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	p := storedPlatform(t, cl)
 	for i := 0; i < 3; i++ {
 		if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 			t.Fatalf("pass %d: %v", i+1, err)
 		}
 	}
-	if len(f.createCalls) != 1 || len(f.putInlineCalls) != 1 || len(fe.createCalls) != 1 {
-		t.Errorf("writes over three passes: CreateRole %d, PutRolePolicy %d, CreatePodIdentityAssociation %d; want 1 each",
-			len(f.createCalls), len(f.putInlineCalls), len(fe.createCalls))
+	if len(f.createCalls) != 1 || len(f.putInlineCalls) != 1 || len(fe.createCalls) != 1 || statusPatches != 1 {
+		t.Errorf("writes over three passes: CreateRole %d, PutRolePolicy %d, CreatePodIdentityAssociation %d, status patches %d; want 1 each",
+			len(f.createCalls), len(f.putInlineCalls), len(fe.createCalls), statusPatches)
 	}
 }
 
@@ -427,8 +437,8 @@ func TestEnsureEvalIdentity_ConvergedPassWritesNothing(t *testing.T) {
 // bucket rather than keeping a grant into the old one.
 func TestEnsureEvalIdentity_ConvergesThePolicy(t *testing.T) {
 	ctx := context.Background()
-	r, f, _, _ := evalIdentityReconciler(t, nil)
-	p := newPlatform("analytics", "acme")
+	r, f, _, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
 	role := evalRoleName(evalTestCluster, p)
 	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
@@ -542,8 +552,11 @@ func TestEnsureEvalIdentity_Errors(t *testing.T) {
 	}{
 		{
 			name: "service account write",
-			funcs: &interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
-				return boom
+			funcs: &interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*corev1.ServiceAccount); ok {
+					return boom
+				}
+				return c.Create(ctx, obj, opts...)
 			}},
 			want: "ensure eval ServiceAccount evals/eval-analytics",
 		},
@@ -563,11 +576,11 @@ func TestEnsureEvalIdentity_Errors(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, f, fe, _ := evalIdentityReconciler(t, c.funcs)
+			r, f, fe, cl := evalIdentityReconciler(t, c.funcs)
 			if c.inject != nil {
 				c.inject(f, fe)
 			}
-			outcome, err := r.ensureEvalIdentity(ctx, newPlatform("analytics", "acme"))
+			outcome, err := r.ensureEvalIdentity(ctx, storedPlatform(t, cl))
 			if err == nil || !errors.Is(err, boom) || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("got %v, want an error wrapping boom that names %q", err, c.want)
 			}
@@ -630,8 +643,11 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 		{name: "role lookup", inject: func(f *fakeIAM, _ *fakeEKS) { f.getReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval", record: evalTestRoleARN},
 		{
 			name: "record",
-			funcs: &interceptor.Funcs{SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
-				return boom
+			funcs: &interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if obj.(*platformv1alpha1.Platform).Status.EvalRoleArn == "" {
+					return boom
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 			}},
 			want:   "clear status.evalRoleArn on Platform eks-agent-platform/analytics",
 			record: evalTestRoleARN,
@@ -843,9 +859,10 @@ func TestEvalIdentityCondition(t *testing.T) {
 }
 
 // TestEnsureEvalIdentity_RecordsTheRoleItHolds: status.evalRoleArn is what
-// tells the finalizer a role was minted, so a pass records the role as soon as
-// it holds one — even a pass that then fails — and records nothing for a role
-// it neither found under the tenant path nor created.
+// tells the finalizer a role was minted, so a pass writes the role through to
+// the API server as soon as it holds one — even a pass that then fails — and
+// records nothing for a role it neither found under the tenant path nor
+// created.
 func TestEnsureEvalIdentity_RecordsTheRoleItHolds(t *testing.T) {
 	ctx := context.Background()
 	boom := errors.New("boom")
@@ -865,12 +882,15 @@ func TestEnsureEvalIdentity_RecordsTheRoleItHolds(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, f, fe, _ := evalIdentityReconciler(t, nil)
+			r, f, fe, cl := evalIdentityReconciler(t, nil)
 			c.inject(f, fe)
-			p := newPlatform("analytics", "acme")
+			p := storedPlatform(t, cl)
 			_, _ = r.ensureEvalIdentity(ctx, p)
 			if p.Status.EvalRoleArn != c.want {
 				t.Errorf("status.evalRoleArn = %q, want %q", p.Status.EvalRoleArn, c.want)
+			}
+			if got := storedEvalRoleArn(t, cl, p); got != c.want {
+				t.Errorf("stored status.evalRoleArn = %q, want %q written through by the pass itself", got, c.want)
 			}
 		})
 	}
@@ -979,9 +999,9 @@ func TestDeleteEvalRole_ARetriedFinalizerReleases(t *testing.T) {
 // role. The pass replaces it before reporting the identity bound.
 func TestEnsureEvalIdentity_RebindsAnAssociationToAnotherRole(t *testing.T) {
 	ctx := context.Background()
-	r, _, fe, _ := evalIdentityReconciler(t, nil)
+	r, _, fe, cl := evalIdentityReconciler(t, nil)
 	fe.seedAssociation(evalTestNamespace, "eval-analytics", "arn:aws:iam::123456789012:role/someone-else", "")
-	p := newPlatform("analytics", "acme")
+	p := storedPlatform(t, cl)
 
 	outcome, err := r.ensureEvalIdentity(ctx, p)
 	if err != nil || outcome != evalIdentityBound {
@@ -989,5 +1009,326 @@ func TestEnsureEvalIdentity_RebindsAnAssociationToAnotherRole(t *testing.T) {
 	}
 	if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != evalTestRoleARN {
 		t.Errorf("evals/eval-analytics is bound to %q, want the eval role %s", got, evalTestRoleARN)
+	}
+}
+
+// TestEnsureEvalIdentity_RecordWriteFailureBindsNothing: the role is bound to
+// the account only once its record is on the API server, so a pass whose
+// record write is refused binds nothing and says why. The value stays on the
+// Platform the pass holds, for the reconcile's closing status write, and the
+// next pass records the role it finds under the tenant path and binds it.
+func TestEnsureEvalIdentity_RecordWriteFailureBindsNothing(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("boom")
+	refuse := true
+	r, f, fe, cl := evalIdentityReconciler(t, &interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if refuse {
+				return boom
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	p := storedPlatform(t, cl)
+
+	outcome, err := r.ensureEvalIdentity(ctx, p)
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "record eval role "+evalTestRoleARN+" in status.evalRoleArn of Platform eks-agent-platform/analytics") {
+		t.Fatalf("ensureEvalIdentity = %v, want the refused record write, naming the role", err)
+	}
+	if outcome == evalIdentityBound {
+		t.Error("a pass whose record write failed reported the identity bound")
+	}
+	if len(fe.createCalls) != 0 {
+		t.Error("the role was bound to the account with no record of it on the API server")
+	}
+	if p.Status.EvalRoleArn != evalTestRoleARN {
+		t.Errorf("status.evalRoleArn on the pass's Platform = %q, want %s kept for the closing status write", p.Status.EvalRoleArn, evalTestRoleARN)
+	}
+
+	refuse = false
+	next := refetched(t, cl, p)
+	if outcome, err := r.ensureEvalIdentity(ctx, next); err != nil || outcome != evalIdentityBound {
+		t.Fatalf("next pass: ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
+	}
+	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
+		t.Errorf("stored status.evalRoleArn = %q after the next pass, want %s", got, evalTestRoleARN)
+	}
+	if len(f.createCalls) != 1 {
+		t.Errorf("CreateRole calls = %d; the next pass records the role it finds rather than minting another", len(f.createCalls))
+	}
+}
+
+// refetched is p as the API server holds it, the way the next reconcile reads
+// it.
+func refetched(t *testing.T, cl client.Client, p *platformv1alpha1.Platform) *platformv1alpha1.Platform {
+	t.Helper()
+	var got platformv1alpha1.Platform
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(p), &got); err != nil {
+		t.Fatalf("get Platform: %v", err)
+	}
+	return &got
+}
+
+// TestEnsureEvalIdentity_ClosingStatusWriteLandsOnTheRecord: the reconcile
+// writes the Platform's status once more at the end of the pass. The record's
+// patch moves the Platform's resourceVersion, and that closing write must land
+// rather than conflict, and must keep the record. The pass also keeps the spec
+// it read: the patch's response is not decoded into it.
+func TestEnsureEvalIdentity_ClosingStatusWriteLandsOnTheRecord(t *testing.T) {
+	ctx := context.Background()
+	r, _, _, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
+
+	edited := refetched(t, cl, p)
+	edited.Spec.Persona = "edited-mid-pass"
+	if err := cl.Update(ctx, edited); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatalf("ensureEvalIdentity: %v", err)
+	}
+	if p.Spec.Persona != "generic" {
+		t.Errorf("spec.persona on the pass's Platform = %q; the pass must keep reconciling the spec it read", p.Spec.Persona)
+	}
+	p.Status.Phase = phaseReady
+	if err := cl.Status().Update(ctx, p); err != nil {
+		t.Fatalf("the reconcile's closing status write after the record: %v", err)
+	}
+	got := refetched(t, cl, p)
+	if got.Status.EvalRoleArn != evalTestRoleARN || got.Status.Phase != phaseReady {
+		t.Errorf("stored status = (evalRoleArn %q, phase %q), want (%s, %s)", got.Status.EvalRoleArn, got.Status.Phase, evalTestRoleARN, phaseReady)
+	}
+	if got.Spec.Persona != "edited-mid-pass" {
+		t.Errorf("stored spec.persona = %q; a status write must not carry the pass's spec back", got.Spec.Persona)
+	}
+}
+
+// TestEnsureEvalRole_NamesACreateRace: EntityAlreadyExists after GetRole
+// answered NoSuchEntity is a role created between the two calls, not one the
+// operator cannot read, and the error says which.
+func TestEnsureEvalRole_NamesACreateRace(t *testing.T) {
+	r, f, fe, cl := evalIdentityReconciler(t, nil)
+	f.createReturnsErr = &iamtypes.EntityAlreadyExistsException{Message: aws.String("Role with name production-cluster-analytics-eval already exists.")}
+
+	_, err := r.ensureEvalIdentity(context.Background(), storedPlatform(t, cl))
+	var taken *iamtypes.EntityAlreadyExistsException
+	if !errors.As(err, &taken) {
+		t.Fatalf("got %v, want EntityAlreadyExists", err)
+	}
+	if !strings.Contains(err.Error(), "created after GetRole answered NoSuchEntity") || strings.Contains(err.Error(), "cannot read") {
+		t.Errorf("error %q does not name the create race, or claims a read was refused", err)
+	}
+	if len(fe.createCalls) != 0 {
+		t.Error("bound the account to a role the pass did not hold")
+	}
+}
+
+// TestDeleteEvalIdentity_TearsDownARecordedRoleOnceTheRuntimeIsUnconfigured:
+// the identity was minted under an eval runtime that is no longer configured.
+// The record still drives the teardown — the role with its grant into the
+// eval-reports bucket, its association and its ServiceAccount all go — so a
+// later Platform of the same name inherits none of them.
+func TestDeleteEvalIdentity_TearsDownARecordedRoleOnceTheRuntimeIsUnconfigured(t *testing.T) {
+	ctx := context.Background()
+	r, f, fe, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	r.Eval.ReportsBucket = ""
+	if r.evalIdentityWired() {
+		t.Fatal("precondition: the reconciler still mints eval identities")
+	}
+
+	if err := r.deleteEvalIdentity(ctx, refetched(t, cl, p)); err != nil {
+		t.Fatalf("deleteEvalIdentity: %v", err)
+	}
+	if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+		t.Error("the recorded eval role survived its Platform")
+	}
+	if len(fe.associations) != 0 {
+		t.Errorf("associations left behind: %v", fe.associations)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: evalTestNamespace, Name: "eval-analytics"}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Errorf("eval ServiceAccount still present (err=%v)", err)
+	}
+}
+
+// TestDeleteEvalIdentity_HoldsARecordedRoleWithNoClientToRemoveIt: a reconciler
+// missing the IAM or the EKS client cannot remove what the record names, so it
+// holds the finalizer and says so rather than releasing it over the role.
+func TestDeleteEvalIdentity_HoldsARecordedRoleWithNoClientToRemoveIt(t *testing.T) {
+	for _, missing := range []string{"IAM", "EKS"} {
+		t.Run(missing, func(t *testing.T) {
+			r, f, _, _ := evalIdentityReconciler(t, nil)
+			if missing == "IAM" {
+				r.IAM = nil
+			} else {
+				r.EKS = nil
+			}
+			p := newPlatform("analytics", "acme")
+			p.Status.EvalRoleArn = evalTestRoleARN
+			f.seedRole("production-cluster-analytics-eval", evalTestRoleARN)
+
+			err := r.deleteEvalIdentity(context.Background(), p)
+			if err == nil || !strings.Contains(err.Error(), "status.evalRoleArn records eval role "+evalTestRoleARN) ||
+				!strings.Contains(err.Error(), "the finalizer holds") {
+				t.Fatalf("deleteEvalIdentity = %v, want the finalizer held on the recorded role", err)
+			}
+			if _, ok := f.roles["production-cluster-analytics-eval"]; !ok {
+				t.Error("the recorded role was removed by a reconciler reporting it could not")
+			}
+		})
+	}
+}
+
+// evalSchedule is a CronWorkflow the EvalSuite reconciler would have made for
+// platform in namespace, suspended or not.
+func evalSchedule(name, namespace, platform string, suspended bool) *unstructured.Unstructured {
+	cw := &unstructured.Unstructured{}
+	cw.SetGroupVersionKind(argoWorkflowsGV.WithKind("CronWorkflow"))
+	cw.SetName(name)
+	cw.SetNamespace(namespace)
+	cw.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "eks-agent-platform", LabelPlatform: platform})
+	spec := map[string]any{"schedule": "0 3 * * *"}
+	if suspended {
+		spec["suspend"] = true
+	}
+	_ = unstructured.SetNestedField(cw.Object, spec, "spec")
+	return cw
+}
+
+// suspended reports a stored CronWorkflow's spec.suspend.
+func suspended(t *testing.T, cl client.Client, namespace, name string) bool {
+	t.Helper()
+	cw := &unstructured.Unstructured{}
+	cw.SetGroupVersionKind(argoWorkflowsGV.WithKind("CronWorkflow"))
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: name}, cw); err != nil {
+		t.Fatalf("get CronWorkflow %s/%s: %v", namespace, name, err)
+	}
+	v, _, _ := unstructured.NestedBool(cw.Object, "spec", "suspend")
+	return v
+}
+
+// TestDeleteEvalIdentity_SuspendsThePlatformsSchedulesFirst: a schedule left
+// running fires a run under an account the finalizer is about to delete, and
+// that run creates no pod — not even the exit handler that would report it. So
+// the Platform's CronWorkflows in the eval runtime namespace are suspended
+// before the ServiceAccount goes, and no other Platform's are touched.
+func TestDeleteEvalIdentity_SuspendsThePlatformsSchedulesFirst(t *testing.T) {
+	ctx := context.Background()
+	var suspendedAtDelete []bool
+	r, _, _, cl := evalIdentityReconciler(t, &interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*corev1.ServiceAccount); ok {
+				suspendedAtDelete = append(suspendedAtDelete, suspended(t, c, evalTestNamespace, "acme-nightly"))
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	for _, cw := range []*unstructured.Unstructured{
+		evalSchedule("acme-nightly", evalTestNamespace, "analytics", false),
+		evalSchedule("acme-hourly", evalTestNamespace, "analytics", true),
+		evalSchedule("acme-other", evalTestNamespace, "analytics-two", false),
+		evalSchedule("acme-elsewhere", "somewhere-else", "analytics", false),
+	} {
+		if err := cl.Create(ctx, cw); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := r.deleteEvalIdentity(ctx, refetched(t, cl, p)); err != nil {
+		t.Fatalf("deleteEvalIdentity: %v", err)
+	}
+	if len(suspendedAtDelete) != 1 || !suspendedAtDelete[0] {
+		t.Errorf("schedule suspended when the ServiceAccount was deleted: %v, want [true]", suspendedAtDelete)
+	}
+	for _, c := range []struct {
+		namespace, name string
+		want            bool
+	}{
+		{evalTestNamespace, "acme-nightly", true},
+		{evalTestNamespace, "acme-hourly", true},
+		{evalTestNamespace, "acme-other", false},
+		{"somewhere-else", "acme-elsewhere", false},
+	} {
+		if got := suspended(t, cl, c.namespace, c.name); got != c.want {
+			t.Errorf("%s/%s suspended = %v, want %v", c.namespace, c.name, got, c.want)
+		}
+	}
+}
+
+// TestDeleteEvalIdentity_ScheduleErrors: a cluster without the CronWorkflow kind
+// has no schedule to suspend and the teardown goes on; any other failure to
+// list or suspend one holds the finalizer before the account is deleted.
+func TestDeleteEvalIdentity_ScheduleErrors(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("boom")
+	isSchedule := func(obj client.ObjectList) bool {
+		u, ok := obj.(*unstructured.UnstructuredList)
+		return ok && u.GetKind() == "CronWorkflowList"
+	}
+	cases := []struct {
+		name  string
+		funcs *interceptor.Funcs
+		want  string
+	}{
+		{
+			name: "kind not installed",
+			funcs: &interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if isSchedule(list) {
+					return &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "argoproj.io", Kind: "CronWorkflow"}}
+				}
+				return c.List(ctx, list, opts...)
+			}},
+		},
+		{
+			name: "list",
+			funcs: &interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if isSchedule(list) {
+					return boom
+				}
+				return c.List(ctx, list, opts...)
+			}},
+			want: "list eval schedules for Platform analytics in evals",
+		},
+		{
+			name: "suspend",
+			funcs: &interceptor.Funcs{Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+				return boom
+			}},
+			want: "suspend argo CronWorkflow evals/acme-nightly",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, _, _, cl := evalIdentityReconciler(t, c.funcs)
+			p := storedPlatform(t, cl)
+			if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			if err := cl.Create(ctx, evalSchedule("acme-nightly", evalTestNamespace, "analytics", false)); err != nil {
+				t.Fatal(err)
+			}
+			err := r.deleteEvalIdentity(ctx, refetched(t, cl, p))
+			saErr := cl.Get(ctx, types.NamespacedName{Namespace: evalTestNamespace, Name: "eval-analytics"}, &corev1.ServiceAccount{})
+			if c.want == "" {
+				if err != nil || !apierrors.IsNotFound(saErr) {
+					t.Errorf("deleteEvalIdentity = %v (ServiceAccount err=%v), want the teardown completed", err, saErr)
+				}
+				return
+			}
+			if !errors.Is(err, boom) || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("deleteEvalIdentity = %v, want an error wrapping boom that names %q", err, c.want)
+			}
+			if saErr != nil {
+				t.Errorf("the ServiceAccount was touched before its schedules were suspended (err=%v)", saErr)
+			}
+		})
 	}
 }
