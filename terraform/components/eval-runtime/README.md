@@ -54,8 +54,11 @@ which names the tenant path, settle whether the name is free. Deleting it, it
 reads AccessDenied as an absent role only for a Platform with no role recorded
 on `status.evalRoleArn`; with one recorded, the finalizer holds until the role
 can be read and deleted. A recorded identity is removed whether or not the
-operator still reads an eval-reports bucket from this component. The association is converged as well as created: one
-that binds the ServiceAccount to any other role is replaced. The Platform
+operator still reads an eval-reports bucket from this component, and its
+account and association are removed from the namespace recorded on
+`status.evalNamespace`, whatever `runner_namespace` holds by then. The
+association is converged as well as created: one that binds the
+ServiceAccount to any other role is replaced. The Platform
 reports the identity on its `EvalIdentityReady` condition, and no run is
 submitted until that is `True`.
 

@@ -363,6 +363,18 @@ type PlatformStatus struct {
 	// +optional
 	EvalRoleArn string `json:"evalRoleArn,omitempty"`
 
+	// EvalNamespace is the eval runtime namespace holding the eval
+	// ServiceAccount and the Pod Identity association that bind
+	// status.evalRoleArn. It is written in the same status write as
+	// status.evalRoleArn and cleared with it. A reconcile that finds the eval
+	// runtime configured with another namespace removes the account and its
+	// association from this one before it records the other, and the finalizer
+	// removes them from this namespace, so a runtime namespace that moves or is
+	// unconfigured after the identity was minted leaves no association naming
+	// the role behind.
+	// +optional
+	EvalNamespace string `json:"evalNamespace,omitempty"`
+
 	// Namespace is the tenant namespace the controller provisioned.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`

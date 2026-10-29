@@ -598,8 +598,8 @@ func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alp
 
 // detachAndDeleteRole detaches every managed policy from a role, deletes its
 // inline policies (IAM refuses DeleteRole while the bedrock-model-scoping
-// policy remains), and deletes it. Shared by the tenant-role and session-role
-// finalizers. Tolerates NotFound at every step so re-runs (and roles that
+// policy remains), and deletes it. Every deletion of a role the operator mints
+// goes through it. Tolerates NotFound at every step so re-runs (and roles that
 // were never created) are safe no-ops.
 func (r *PlatformReconciler) detachAndDeleteRole(ctx context.Context, name string) error {
 	if r.IAM == nil {

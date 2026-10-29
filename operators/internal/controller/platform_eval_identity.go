@@ -68,7 +68,9 @@ type EvalIdentityConfig struct {
 	Namespace string
 	// ReportsBucket is the eval-reports bucket the role's grants are scoped
 	// into. Empty means the cluster runs no eval runtime: no eval identity is
-	// reconciled or torn down, and the EvalSuite reconciler submits no runs.
+	// minted, and the EvalSuite reconciler submits no runs. An identity a
+	// Platform already records on status.evalRoleArn is still torn down by its
+	// finalizer (deleteEvalIdentity).
 	ReportsBucket string
 }
 
@@ -83,7 +85,8 @@ func (c EvalIdentityConfig) namespace() string { return evalRuntimeNamespace(c.N
 // AWS clients. Without either client there is no role a run could be bound to,
 // so nothing is created and the Platform reports no EvalIdentityReady
 // condition. Teardown is not gated on it: deleteEvalIdentity removes whatever
-// status.evalRoleArn records, whatever this reconciler is configured with.
+// status.evalRoleArn and status.evalNamespace record, whatever this reconciler
+// is configured with.
 func (r *PlatformReconciler) evalIdentityWired() bool {
 	return r.Eval.enabled() && r.IAM != nil && r.EKS != nil
 }
@@ -204,14 +207,20 @@ const (
 // EvalIdentityReady condition this pass's outcome sets, not on the account
 // alone.
 //
-// The role's ARN is written through to status.evalRoleArn as soon as the pass
-// holds the role (recordEvalRole), whether or not its policy write succeeded,
-// and before the association binds anything to it. The record is what the
-// finalizer reads (deleteEvalRole), and the reconcile can return before its
+// The role's ARN and the namespace the pass binds it in are written through to
+// status.evalRoleArn and status.evalNamespace as soon as the pass holds the
+// role (recordEvalRole), whether or not its policy write succeeded, and before
+// the association binds anything to it. The record is what the finalizer reads
+// (deleteEvalIdentity, deleteEvalRole), and the reconcile can return before its
 // closing status write, or have that write refused, after this step has run,
 // so the record does not wait for that write. A pass whose record write fails
 // binds nothing and reports the failure, and the next pass finds the role under
 // the tenant path and records it.
+//
+// A record naming another namespace is an identity bound under an earlier eval
+// runtime namespace. Its account and association are removed from there before
+// the record names this one (retireMovedEvalAccount), so the namespace the
+// record names is the only one an association binding the role can sit in.
 func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) (evalIdentityOutcome, error) {
 	if !r.evalIdentityWired() {
 		return evalIdentityUnmanaged, nil
@@ -230,7 +239,10 @@ func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platform
 	}
 	roleARN, roleErr := r.ensureEvalRole(ctx, p, r.IAMCfg)
 	if roleARN != "" {
-		if err := r.recordEvalRole(ctx, p, roleARN); err != nil {
+		if err := r.retireMovedEvalAccount(ctx, p, ns); err != nil {
+			return evalIdentityUnmanaged, err
+		}
+		if err := r.recordEvalRole(ctx, p, roleARN, ns); err != nil {
 			return evalIdentityUnmanaged, err
 		}
 	}
@@ -243,29 +255,42 @@ func (r *PlatformReconciler) ensureEvalIdentity(ctx context.Context, p *platform
 	return evalIdentityBound, nil
 }
 
-// recordEvalRole sets status.evalRoleArn to roleARN and patches it through to
-// the API server. A record that already names roleARN is not written again, so
-// a converged pass makes no write.
-//
-// The value is set on p before the patch, so a refused patch still leaves it for
-// the reconcile's closing status write. The patch itself is a merge patch of a
-// copy: it carries no resourceVersion, so it cannot conflict, and the rest of
-// the pass keeps working on the spec it read rather than on whatever the API
-// server returns. Only the copy's resourceVersion is carried back to p, so that
-// closing write lands on top of this patch instead of conflicting with it. That
-// is sound because this reconciler is the only writer of Platform status, and
-// it reconciles one Platform on one worker at a time.
-func (r *PlatformReconciler) recordEvalRole(ctx context.Context, p *platformv1alpha1.Platform, roleARN string) error {
-	if p.Status.EvalRoleArn == roleARN {
+// recordEvalRole sets status.evalRoleArn to roleARN and status.evalNamespace to
+// ns and patches both through to the API server. A record that already names
+// both is not written again, so a converged pass makes no write. A refused
+// patch still leaves the values on p for the reconcile's closing status write.
+func (r *PlatformReconciler) recordEvalRole(ctx context.Context, p *platformv1alpha1.Platform, roleARN, ns string) error {
+	if p.Status.EvalRoleArn == roleARN && p.Status.EvalNamespace == ns {
 		return nil
 	}
-	before := p.DeepCopy()
-	p.Status.EvalRoleArn = roleARN
-	recorded := p.DeepCopy()
-	if err := r.Status().Patch(ctx, recorded, client.MergeFrom(before)); err != nil {
-		return fmt.Errorf("record eval role %s in status.evalRoleArn of Platform %s/%s: %w", roleARN, p.Namespace, p.Name, err)
+	if err := r.patchEvalRecord(ctx, p, roleARN, ns); err != nil {
+		return fmt.Errorf("record eval role %s and namespace %s in status.evalRoleArn and status.evalNamespace of Platform %s/%s: %w",
+			roleARN, ns, p.Namespace, p.Name, err)
 	}
-	p.ResourceVersion = recorded.ResourceVersion
+	return nil
+}
+
+// patchEvalRecord sets status.evalRoleArn and status.evalNamespace on p and
+// writes both through to the API server in one status patch, which is what
+// keeps the two fields set and cleared together.
+//
+// The values are set on p before the patch and stay there whatever its result;
+// a caller that must not keep them on a refused patch restores them. The patch
+// itself is a merge patch of a copy: it carries no resourceVersion, so it
+// cannot conflict, and the rest of the pass keeps working on the spec it read
+// rather than on whatever the API server returns. Only the copy's
+// resourceVersion is carried back to p, so a later write of p lands on top of
+// this patch instead of conflicting with it. That is sound because this
+// reconciler is the only writer of Platform status, and it reconciles one
+// Platform on one worker at a time.
+func (r *PlatformReconciler) patchEvalRecord(ctx context.Context, p *platformv1alpha1.Platform, roleARN, ns string) error {
+	before := p.DeepCopy()
+	p.Status.EvalRoleArn, p.Status.EvalNamespace = roleARN, ns
+	patched := p.DeepCopy()
+	if err := r.Status().Patch(ctx, patched, client.MergeFrom(before)); err != nil {
+		return err
+	}
+	p.ResourceVersion = patched.ResourceVersion
 	return nil
 }
 
@@ -378,20 +403,22 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 	return roleARN, nil
 }
 
-// deleteEvalIdentity is the finalizer counterpart of ensureEvalIdentity: it
-// suspends the Platform's eval schedules, then removes the association, the
-// ServiceAccount, and the role with its inline policy. Every step tolerates a
-// resource that is already gone, so re-runs are safe.
+// deleteEvalIdentity is the finalizer counterpart of ensureEvalIdentity: in
+// each namespace evalTeardownNamespaces names it suspends the Platform's eval
+// schedules and removes the association and the ServiceAccount, then it
+// removes the role with its inline policy. Every step tolerates a resource
+// that is already gone, so re-runs are safe.
 //
 // It runs when this reconciler mints eval identities or when the Platform
 // records an eval role, so removing an identity does not depend on the
 // configuration it was minted under still being in place: a cluster whose eval
-// runtime is unconfigured after a role was minted still tears that role down.
-// A recorded role with no IAM or EKS client to remove it with holds the
-// finalizer. Releasing it would leave the role with its grant into the
-// eval-reports bucket, its association and its ServiceAccount behind, and a
-// later Platform of the same name would inherit all three. Datastores are not
-// touched, as on every other finalizer step.
+// runtime is unconfigured, or configured with another namespace, after a role
+// was minted still tears down that role and the account and association
+// status.evalNamespace records. A recorded role with no IAM or EKS client to
+// remove it with holds the finalizer. Releasing it would leave the role with
+// its grant into the eval-reports bucket, its association and its
+// ServiceAccount behind, and a later Platform of the same name would inherit
+// all three. Datastores are not touched, as on every other finalizer step.
 func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platformv1alpha1.Platform) error {
 	recorded := p.Status.EvalRoleArn
 	if !r.evalIdentityWired() && recorded == "" {
@@ -400,7 +427,54 @@ func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platform
 	if r.IAM == nil || r.EKS == nil {
 		return fmt.Errorf("status.evalRoleArn records eval role %s, and this reconciler has no IAM and EKS clients to remove it, its Pod Identity association and its ServiceAccount with; the finalizer holds until both are wired", recorded)
 	}
-	ns := r.Eval.namespace()
+	for _, ns := range r.evalTeardownNamespaces(p) {
+		if err := r.removeEvalAccount(ctx, p, ns); err != nil {
+			return err
+		}
+	}
+	return r.deleteEvalRole(ctx, p)
+}
+
+// evalTeardownNamespaces names every namespace the finalizer removes the
+// Platform's eval account and association from. The namespace
+// status.evalNamespace records holds any association binding the recorded
+// role. While this reconciler mints eval identities, the configured namespace
+// is added: a pass creates the account there before it records anything, so an
+// account can sit there unrecorded. With no namespace recorded, the configured
+// namespace is the only one a pass can have created the account in.
+func (r *PlatformReconciler) evalTeardownNamespaces(p *platformv1alpha1.Platform) []string {
+	configured, recorded := r.Eval.namespace(), p.Status.EvalNamespace
+	switch {
+	case recorded == "" || recorded == configured:
+		return []string{configured}
+	case r.evalIdentityWired():
+		return []string{recorded, configured}
+	default:
+		return []string{recorded}
+	}
+}
+
+// retireMovedEvalAccount removes the Platform's eval account and its
+// association from the namespace status.evalNamespace records when that is not
+// ns, the namespace the pass binds the identity in. ensureEvalIdentity moves
+// the record to ns only once this has succeeded, so a failure here leaves the
+// record naming the namespace the association still sits in, and the next pass
+// or the finalizer removes it from there.
+func (r *PlatformReconciler) retireMovedEvalAccount(ctx context.Context, p *platformv1alpha1.Platform, ns string) error {
+	recorded := p.Status.EvalNamespace
+	if recorded == "" || recorded == ns {
+		return nil
+	}
+	log.FromContext(ctx).Info("eval runtime namespace moved; removing the eval identity's account from the recorded one",
+		"recorded", recorded, "namespace", ns)
+	return r.removeEvalAccount(ctx, p, recorded)
+}
+
+// removeEvalAccount suspends the Platform's eval schedules in ns, then deletes
+// the Pod Identity association binding its eval ServiceAccount there and the
+// ServiceAccount itself, in that order, so no schedule fires a run under an
+// account that is gone and no association outlives the account it names.
+func (r *PlatformReconciler) removeEvalAccount(ctx context.Context, p *platformv1alpha1.Platform, ns string) error {
 	name := EvalServiceAccountName(p)
 	if err := r.suspendEvalSchedules(ctx, p, ns); err != nil {
 		return err
@@ -412,13 +486,13 @@ func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platform
 	if err := r.Delete(ctx, sa); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete eval ServiceAccount %s/%s: %w", ns, name, err)
 	}
-	return r.deleteEvalRole(ctx, p)
+	return nil
 }
 
 // suspendEvalSchedules suspends every CronWorkflow the EvalSuite reconciler
-// made for this Platform in the eval runtime namespace, ahead of the
-// ServiceAccount's deletion, so no schedule fires a run under an account that
-// no longer exists. The EvalSuite reconciler keeps a schedule suspended while
+// made for this Platform in namespace ns, ahead of the ServiceAccount's
+// deletion there, so no schedule fires a run under an account that no longer
+// exists. The EvalSuite reconciler keeps a schedule suspended while
 // its Platform is being deleted or absent, and resumes it on the pass that
 // finds a Platform of that name with its identity bound. A cluster without the
 // CronWorkflow kind has no schedules to suspend.
@@ -493,18 +567,18 @@ func (r *PlatformReconciler) deleteEvalRole(ctx context.Context, p *platformv1al
 	return r.detachAndDeleteRole(ctx, name)
 }
 
-// clearEvalRoleRecord empties status.evalRoleArn and writes it through, so the
-// cleared record is persisted before the caller deletes the role.
+// clearEvalRoleRecord empties status.evalRoleArn and status.evalNamespace and
+// writes them through, so the cleared record is persisted before the caller
+// deletes the role. A refused write restores both on p, so p goes on matching
+// the record the API server still holds.
 func (r *PlatformReconciler) clearEvalRoleRecord(ctx context.Context, p *platformv1alpha1.Platform) error {
-	recorded := p.Status.EvalRoleArn
-	if recorded == "" {
+	role, ns := p.Status.EvalRoleArn, p.Status.EvalNamespace
+	if role == "" && ns == "" {
 		return nil
 	}
-	before := p.DeepCopy()
-	p.Status.EvalRoleArn = ""
-	if err := r.Status().Patch(ctx, p, client.MergeFrom(before)); err != nil {
-		p.Status.EvalRoleArn = recorded
-		return fmt.Errorf("clear status.evalRoleArn on Platform %s/%s before deleting its eval role: %w", p.Namespace, p.Name, err)
+	if err := r.patchEvalRecord(ctx, p, "", ""); err != nil {
+		p.Status.EvalRoleArn, p.Status.EvalNamespace = role, ns
+		return fmt.Errorf("clear status.evalRoleArn and status.evalNamespace on Platform %s/%s before deleting its eval role: %w", p.Namespace, p.Name, err)
 	}
 	return nil
 }

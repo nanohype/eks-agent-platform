@@ -15,16 +15,19 @@ type: application
 # narrowed to what a run calls. The operator creates each Platform's
 # eval-<platform> ServiceAccount and the <cluster>-<platform>-eval role behind
 # it, and submits every run under that account. The Platform CRD gains
-# status.evalRoleArn, where that operator records each Platform's eval role for
-# its finalizer to read. So 0.7.0 is a lockstep version in the sense 0.5.0
+# status.evalRoleArn and status.evalNamespace, where that operator records each
+# Platform's eval role and the namespace its account is bound in, for its
+# finalizer to read. So 0.7.0 is a lockstep version in the sense 0.5.0
 # records: an operator without per-Platform eval identities submits runs under
 # an account this chart does not create, and each run fails before its first
 # step. The chart is published only once appVersion names an operator release
 # that mints them. The charts-oci release job runs
 # scripts/check-runtime-contract.py --release before it pushes this chart, and
-# holds the chart while the CRDs it installs differ from the ones the release
-# appVersion names generates; status.evalRoleArn is the field that tells a
-# release minting them apart.
+# holds the chart while the CRDs it installs and the CRDs generated at the
+# operator-v<appVersion> tag differ in a field, a version or a kind they
+# declare. Descriptions, defaults and validation are not compared.
+# status.evalRoleArn and status.evalNamespace are the fields that tell a
+# release minting eval identities apart.
 #
 # 0.6.8 is documentation only. The CRD's `isolation` description cites an ADR by
 # path, and the ADR sequence closed up, so the packaged CRD carries different

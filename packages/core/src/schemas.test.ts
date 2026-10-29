@@ -37,6 +37,7 @@ describe('PlatformResource', () => {
         iamRoleArn: 'arn:aws:iam::000000000000:role/cluster-acme-tenant',
         sessionRoleArn: 'arn:aws:iam::000000000000:role/cluster-acme-session',
         evalRoleArn: 'arn:aws:iam::000000000000:role/eks-agent-platform/tenants/cluster-acme-eval',
+        evalNamespace: 'eval-runner',
         observedGeneration: 4,
         suspendedAt: '2026-07-18T00:00:00.000Z',
         suspendedReason: 'budget-exceeded',
@@ -55,6 +56,7 @@ describe('PlatformResource', () => {
     expect(p.status?.suspendedReason).toBe('budget-exceeded');
     expect(p.status?.sessionRoleArn).toContain('session');
     expect(p.status?.evalRoleArn).toContain('eval');
+    expect(p.status?.evalNamespace).toBe('eval-runner');
     expect(p.status?.conditions?.[0]?.type).toBe('Suspended');
   });
 

@@ -299,8 +299,12 @@ func TestPlatformReconciler_MintsAPerPlatformEvalIdentity(t *testing.T) {
 			t.Errorf("%s: %s/%s is bound to %q (bound=%v), want its own eval role", p.Name, evalRuntimeNs, saName, role, ok)
 		}
 		assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleFor(p))
-		if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalRoleArn; got != evalRoleARNPrefix+evalRoleFor(p) {
-			t.Errorf("%s: status.evalRoleArn = %q, want %s", p.Name, got, evalRoleARNPrefix+evalRoleFor(p))
+		stored := getPlatform(ctx, t, p.Namespace, p.Name).Status
+		if stored.EvalRoleArn != evalRoleARNPrefix+evalRoleFor(p) {
+			t.Errorf("%s: status.evalRoleArn = %q, want %s", p.Name, stored.EvalRoleArn, evalRoleARNPrefix+evalRoleFor(p))
+		}
+		if stored.EvalNamespace != evalRuntimeNs {
+			t.Errorf("%s: status.evalNamespace = %q, want %s, the namespace the account is bound in", p.Name, stored.EvalNamespace, evalRuntimeNs)
 		}
 	}
 
@@ -724,9 +728,11 @@ func TestPlatformReconciler_EvalRoleRecordSurvivesAnEarlyReturn(t *testing.T) {
 }
 
 // TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured: an
-// operator restarted without the eval-reports bucket mints no eval identity,
-// and still removes the one a Platform recorded when that Platform is deleted:
-// the role, its Pod Identity association and its ServiceAccount.
+// operator restarted without the eval-runtime component's outputs, so with
+// neither a reports bucket nor a runner namespace, mints no eval identity, and
+// still removes the one a Platform recorded when that Platform is deleted: the
+// role, and its Pod Identity association and its ServiceAccount from the
+// namespace status.evalNamespace records rather than from the default one.
 func TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
@@ -741,6 +747,7 @@ func TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured(t *t
 	}
 
 	unconfigured := newEvalIdentityReconciler(iamFake, eksFake, "")
+	unconfigured.Eval = controller.EvalIdentityConfig{}
 	if err := k8sClient.Delete(ctx, p); err != nil {
 		t.Fatalf("delete platform: %v", err)
 	}
@@ -757,6 +764,70 @@ func TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured(t *t
 	err := k8sClient.Get(ctx, types.NamespacedName{Namespace: evalRuntimeNs, Name: saName}, &corev1.ServiceAccount{})
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("eval ServiceAccount survived the Platform (err=%v)", err)
+	}
+	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the finalizer was not released (err=%v)", err)
+	}
+}
+
+// TestPlatformReconciler_EvalIdentityFollowsAMovedRuntimeNamespace: the eval
+// runtime namespace changes under a live Platform. The next pass binds the
+// identity in the new namespace, removes the account and its association from
+// the one status.evalNamespace recorded, and records the new one; deleting the
+// Platform then removes the identity from there.
+func TestPlatformReconciler_EvalIdentityFollowsAMovedRuntimeNamespace(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+	const movedNs = evalRuntimeNs + "-moved"
+	if err := k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: movedNs}}); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create moved eval runtime namespace: %v", err)
+	}
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	p := evalPlatform(ctx, t, "p")
+	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
+	saName := controller.EvalServiceAccountName(p)
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: movedNs}})
+	})
+
+	moved := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+	moved.Eval.Namespace = movedNs
+	reconcileIAM(ctx, t, moved, p)
+
+	want := evalRoleARNPrefix + evalRoleFor(p)
+	if role, ok := eksFake.roleFor(movedNs, saName); !ok || role != want {
+		t.Errorf("%s/%s is bound to %q (bound=%v), want %s", movedNs, saName, role, ok, want)
+	}
+	if role, ok := eksFake.roleFor(evalRuntimeNs, saName); ok {
+		t.Errorf("the association in %s still binds %s after the move", evalRuntimeNs, role)
+	}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: evalRuntimeNs, Name: saName}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Errorf("eval ServiceAccount left in %s after the move (err=%v)", evalRuntimeNs, err)
+	}
+	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalNamespace; got != movedNs {
+		t.Errorf("status.evalNamespace = %q after the move, want %s", got, movedNs)
+	}
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", movedNs+"/"+saName)
+
+	unconfigured := newEvalIdentityReconciler(iamFake, eksFake, "")
+	unconfigured.Eval = controller.EvalIdentityConfig{}
+	if err := k8sClient.Delete(ctx, p); err != nil {
+		t.Fatalf("delete platform: %v", err)
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	if _, err := unconfigured.Reconcile(ctx, req); err != nil {
+		t.Fatalf("finalizer reconcile: %v", err)
+	}
+	if role, ok := eksFake.roleFor(movedNs, saName); ok {
+		t.Errorf("the association in %s survived the Platform, still binding %s", movedNs, role)
+	}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: movedNs, Name: saName}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Errorf("eval ServiceAccount survived the Platform in %s (err=%v)", movedNs, err)
+	}
+	if iamFake.hasRole(evalRoleFor(p)) {
+		t.Errorf("role %s survived its Platform", evalRoleFor(p))
 	}
 	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the finalizer was not released (err=%v)", err)

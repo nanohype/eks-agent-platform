@@ -91,11 +91,13 @@ func storedPlatform(t *testing.T, cl client.Client) *platformv1alpha1.Platform {
 // storedEvalRoleArn is status.evalRoleArn as the API server holds it.
 func storedEvalRoleArn(t *testing.T, cl client.Client, p *platformv1alpha1.Platform) string {
 	t.Helper()
-	var got platformv1alpha1.Platform
-	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(p), &got); err != nil {
-		t.Fatalf("get Platform: %v", err)
-	}
-	return got.Status.EvalRoleArn
+	return refetched(t, cl, p).Status.EvalRoleArn
+}
+
+// storedEvalNamespace is status.evalNamespace as the API server holds it.
+func storedEvalNamespace(t *testing.T, cl client.Client, p *platformv1alpha1.Platform) string {
+	t.Helper()
+	return refetched(t, cl, p).Status.EvalNamespace
 }
 
 // accessDenied is IAM refusing a call naming the role.
@@ -395,6 +397,12 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
 		t.Errorf("stored status.evalRoleArn = %q, want the minted role written through by the pass itself", got)
 	}
+	if p.Status.EvalNamespace != evalTestNamespace {
+		t.Errorf("status.evalNamespace = %q, want the namespace the account is bound in, %s", p.Status.EvalNamespace, evalTestNamespace)
+	}
+	if got := storedEvalNamespace(t, cl, p); got != evalTestNamespace {
+		t.Errorf("stored status.evalNamespace = %q, want %s written through with the role", got, evalTestNamespace)
+	}
 
 	if len(fe.createCalls) != 1 {
 		t.Fatalf("CreatePodIdentityAssociation calls = %d, want 1", len(fe.createCalls))
@@ -649,7 +657,7 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 				}
 				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 			}},
-			want:   "clear status.evalRoleArn on Platform eks-agent-platform/analytics",
+			want:   "clear status.evalRoleArn and status.evalNamespace on Platform eks-agent-platform/analytics",
 			record: evalTestRoleARN,
 		},
 		{name: "role", inject: func(f *fakeIAM, _ *fakeEKS) { f.deleteReturnsErr = boom }, want: "iam DeleteRole", record: ""},
@@ -670,6 +678,13 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 			}
 			if p.Status.EvalRoleArn != c.record {
 				t.Errorf("status.evalRoleArn = %q after the failed pass, want %q", p.Status.EvalRoleArn, c.record)
+			}
+			wantNS := ""
+			if c.record != "" {
+				wantNS = evalTestNamespace
+			}
+			if p.Status.EvalNamespace != wantNS {
+				t.Errorf("status.evalNamespace = %q after the failed pass, want %q, kept and cleared with status.evalRoleArn", p.Status.EvalNamespace, wantNS)
 			}
 		})
 	}
@@ -892,6 +907,13 @@ func TestEnsureEvalIdentity_RecordsTheRoleItHolds(t *testing.T) {
 			if got := storedEvalRoleArn(t, cl, p); got != c.want {
 				t.Errorf("stored status.evalRoleArn = %q, want %q written through by the pass itself", got, c.want)
 			}
+			wantNS := ""
+			if c.want != "" {
+				wantNS = evalTestNamespace
+			}
+			if got := storedEvalNamespace(t, cl, p); got != wantNS || p.Status.EvalNamespace != wantNS {
+				t.Errorf("status.evalNamespace = %q (stored %q), want %q recorded with the role", p.Status.EvalNamespace, got, wantNS)
+			}
 		})
 	}
 }
@@ -954,6 +976,9 @@ func TestDeleteEvalRole_ClearsTheRecordBeforeDeletingTheRole(t *testing.T) {
 	}
 	if got := storedEvalRoleArn(t, cl, p); got != "" {
 		t.Errorf("stored status.evalRoleArn = %q after the role was read; want it cleared before the delete", got)
+	}
+	if got := storedEvalNamespace(t, cl, p); got != "" {
+		t.Errorf("stored status.evalNamespace = %q after the role was read; want it cleared with status.evalRoleArn", got)
 	}
 
 	f.deleteReturnsErr = nil
@@ -1032,7 +1057,7 @@ func TestEnsureEvalIdentity_RecordWriteFailureBindsNothing(t *testing.T) {
 	p := storedPlatform(t, cl)
 
 	outcome, err := r.ensureEvalIdentity(ctx, p)
-	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "record eval role "+evalTestRoleARN+" in status.evalRoleArn of Platform eks-agent-platform/analytics") {
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "record eval role "+evalTestRoleARN+" and namespace evals in status.evalRoleArn and status.evalNamespace of Platform eks-agent-platform/analytics") {
 		t.Fatalf("ensureEvalIdentity = %v, want the refused record write, naming the role", err)
 	}
 	if outcome == evalIdentityBound {
@@ -1330,5 +1355,199 @@ func TestDeleteEvalIdentity_ScheduleErrors(t *testing.T) {
 				t.Errorf("the ServiceAccount was touched before its schedules were suspended (err=%v)", saErr)
 			}
 		})
+	}
+}
+
+// evalAccountExists reports whether the Platform's eval ServiceAccount is in
+// namespace.
+func evalAccountExists(t *testing.T, cl client.Client, namespace string) bool {
+	t.Helper()
+	err := cl.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: "eval-analytics"}, &corev1.ServiceAccount{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("get ServiceAccount %s/eval-analytics: %v", namespace, err)
+	}
+	return err == nil
+}
+
+// TestDeleteEvalIdentity_TearsDownWhereTheRecordSays: the identity was bound
+// in one eval runtime namespace, and by the time the Platform is deleted the
+// operator is configured with another, or with none. The finalizer finds the
+// account, its association and its schedules where status.evalNamespace says
+// they are. Released without them, the association would name a role ARN a
+// later Platform of the same name mints again, and bind it to that Platform's
+// role.
+func TestDeleteEvalIdentity_TearsDownWhereTheRecordSays(t *testing.T) {
+	const moved = "evals-moved"
+	cases := []struct {
+		name string
+		cfg  EvalIdentityConfig
+		// unrecorded is an account a pass under cfg created in cfg's namespace
+		// before it recorded anything, which the finalizer also removes.
+		unrecorded string
+	}{
+		{name: "eval runtime unconfigured", cfg: EvalIdentityConfig{}},
+		{name: "namespace unconfigured", cfg: EvalIdentityConfig{ReportsBucket: evalTestBucket}, unrecorded: defaultEvalRunnerNamespace},
+		{name: "namespace moved", cfg: EvalIdentityConfig{Namespace: moved, ReportsBucket: evalTestBucket}, unrecorded: moved},
+		{name: "namespace moved, bucket unconfigured", cfg: EvalIdentityConfig{Namespace: moved}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			r, f, fe, cl := evalIdentityReconciler(t, nil)
+			p := storedPlatform(t, cl)
+			if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			if err := cl.Create(ctx, evalSchedule("acme-nightly", evalTestNamespace, "analytics", false)); err != nil {
+				t.Fatal(err)
+			}
+			if c.unrecorded != "" {
+				sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "eval-analytics", Namespace: c.unrecorded}}
+				if err := cl.Create(ctx, sa); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.Eval = c.cfg
+
+			if err := r.deleteEvalIdentity(ctx, refetched(t, cl, p)); err != nil {
+				t.Fatalf("deleteEvalIdentity: %v", err)
+			}
+			if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != "" {
+				t.Errorf("the association in the recorded namespace %s still binds %s", evalTestNamespace, got)
+			}
+			if len(fe.associations) != 0 {
+				t.Errorf("associations left behind: %v", fe.associations)
+			}
+			for _, ns := range []string{evalTestNamespace, c.unrecorded} {
+				if ns != "" && evalAccountExists(t, cl, ns) {
+					t.Errorf("eval ServiceAccount left in %s", ns)
+				}
+			}
+			if !suspended(t, cl, evalTestNamespace, "acme-nightly") {
+				t.Error("the schedule in the recorded namespace was left running")
+			}
+			if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+				t.Error("eval role still present")
+			}
+		})
+	}
+}
+
+// TestEvalTeardownNamespaces is the rule deleteEvalIdentity tears down by: the
+// recorded namespace whenever there is one, and the configured one while the
+// reconciler mints eval identities or when nothing is recorded.
+func TestEvalTeardownNamespaces(t *testing.T) {
+	wired := EvalIdentityConfig{Namespace: evalTestNamespace, ReportsBucket: evalTestBucket}
+	cases := []struct {
+		name     string
+		cfg      EvalIdentityConfig
+		recorded string
+		want     []string
+	}{
+		{"nothing recorded", wired, "", []string{evalTestNamespace}},
+		{"recorded where configured", wired, evalTestNamespace, []string{evalTestNamespace}},
+		{"recorded elsewhere, minting", wired, "evals-old", []string{"evals-old", evalTestNamespace}},
+		{"recorded elsewhere, not minting", EvalIdentityConfig{Namespace: evalTestNamespace}, "evals-old", []string{"evals-old"}},
+		{"nothing recorded, nothing configured", EvalIdentityConfig{}, "", []string{defaultEvalRunnerNamespace}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, _, _, _ := evalIdentityReconciler(t, nil)
+			r.Eval = c.cfg
+			p := newPlatform("analytics", "acme")
+			p.Status.EvalNamespace = c.recorded
+			if got := r.evalTeardownNamespaces(p); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("evalTeardownNamespaces = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestEnsureEvalIdentity_MovesTheIdentityWithTheRuntimeNamespace: the eval
+// runtime namespace changes under a live Platform. The pass binds the identity
+// in the configured namespace and removes the account, its association and its
+// running schedules from the recorded one, so no association in a namespace
+// the record no longer names is left binding the role.
+func TestEnsureEvalIdentity_MovesTheIdentityWithTheRuntimeNamespace(t *testing.T) {
+	ctx := context.Background()
+	const moved = "evals-moved"
+	r, f, fe, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Create(ctx, evalSchedule("acme-nightly", evalTestNamespace, "analytics", false)); err != nil {
+		t.Fatal(err)
+	}
+
+	r.Eval.Namespace = moved
+	next := refetched(t, cl, p)
+	outcome, err := r.ensureEvalIdentity(ctx, next)
+	if err != nil || outcome != evalIdentityBound {
+		t.Fatalf("ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
+	}
+	if got := fe.roleFor(moved, "eval-analytics"); got != evalTestRoleARN {
+		t.Errorf("%s/eval-analytics is bound to %q, want %s", moved, got, evalTestRoleARN)
+	}
+	if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != "" {
+		t.Errorf("the association in the namespace the identity moved out of still binds %s", got)
+	}
+	if evalAccountExists(t, cl, evalTestNamespace) {
+		t.Errorf("eval ServiceAccount left in %s", evalTestNamespace)
+	}
+	if !evalAccountExists(t, cl, moved) {
+		t.Errorf("no eval ServiceAccount in %s", moved)
+	}
+	if !suspended(t, cl, evalTestNamespace, "acme-nightly") {
+		t.Error("the schedule in the namespace the identity moved out of was left running")
+	}
+	if got := storedEvalNamespace(t, cl, p); got != moved || next.Status.EvalNamespace != moved {
+		t.Errorf("status.evalNamespace = %q (stored %q), want %s", next.Status.EvalNamespace, got, moved)
+	}
+	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
+		t.Errorf("stored status.evalRoleArn = %q, want %s", got, evalTestRoleARN)
+	}
+	if len(f.createCalls) != 1 {
+		t.Errorf("CreateRole calls = %d; the role is the same across the move", len(f.createCalls))
+	}
+}
+
+// TestEnsureEvalIdentity_KeepsTheRecordUntilTheMovedAccountIsGone: a pass
+// that cannot remove the association from the recorded namespace leaves the
+// record naming it and binds nothing in the configured one, so the next pass,
+// or the finalizer, still knows where that association sits.
+func TestEnsureEvalIdentity_KeepsTheRecordUntilTheMovedAccountIsGone(t *testing.T) {
+	ctx := context.Background()
+	const moved = "evals-moved"
+	boom := errors.New("boom")
+	r, _, fe, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+
+	r.Eval.Namespace = moved
+	fe.deleteReturnsErr = boom
+	next := refetched(t, cl, p)
+	outcome, err := r.ensureEvalIdentity(ctx, next)
+	if !errors.Is(err, boom) || outcome == evalIdentityBound {
+		t.Fatalf("ensureEvalIdentity = (%v, %v), want the failed removal and no bound identity", outcome, err)
+	}
+	if got := storedEvalNamespace(t, cl, p); got != evalTestNamespace || next.Status.EvalNamespace != evalTestNamespace {
+		t.Errorf("status.evalNamespace = %q (stored %q), want %s kept while its association is there", next.Status.EvalNamespace, got, evalTestNamespace)
+	}
+	if got := fe.roleFor(moved, "eval-analytics"); got != "" {
+		t.Errorf("bound %s in %s before the recorded namespace was cleared", got, moved)
+	}
+
+	fe.deleteReturnsErr = nil
+	if outcome, err := r.ensureEvalIdentity(ctx, refetched(t, cl, p)); err != nil || outcome != evalIdentityBound {
+		t.Fatalf("next pass: ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
+	}
+	if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != "" {
+		t.Errorf("the association in %s still binds %s after the next pass", evalTestNamespace, got)
+	}
+	if got := storedEvalNamespace(t, cl, p); got != moved {
+		t.Errorf("stored status.evalNamespace = %q after the next pass, want %s", got, moved)
 	}
 }
