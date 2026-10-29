@@ -219,14 +219,18 @@ evalRuntime:
   # S3 bucket the eval workflow writes reports to (terraform eval-runtime output).
   # Injected per-cluster; empty in the base chart.
   evalReportsBucket: ""
-  # The eval-runner image the WorkflowTemplate's run/score/writeback steps run.
-  # Built + cosign-signed + SBOM-attested by release.yaml — on an eval-runner-v*
-  # tag, or on a push to main that moves this pin to a version GHCR does not
-  # have yet. The tag here is the released version, never a floating :latest,
-  # and scripts/check-image-refs.py fails CI if it names something unpublished.
+  # The eval-runner image the WorkflowTemplate's steps run.
+  # templates/eval-runtime/workflowtemplate.yaml rewrites each eval-runner image
+  # literal in files/eval-runtime/workflow-template.yaml to this repository and
+  # tag. .github/workflows/release.yaml builds, cosign-signs and SBOM-attests the
+  # image from an eval-runner-v<version> tag and from nothing else, so the tag
+  # here names a release, never a floating :latest. Move it after that release
+  # publishes: pull-request CI reads image references offline, and
+  # scripts/check-image-refs.py resolves them against GHCR from
+  # .github/workflows/image-refs-registry.yaml on each push to main and weekly.
   image:
     repository: ghcr.io/nanohype/eks-agent-platform/eval-runner
-    tag: "0.1.0"
+    tag: "0.1.1"
   rollouts:
     # The Argo Rollouts AnalysisTemplate (eval-suite-gate). Off by default: it
     # needs the Argo Rollouts CRD, which is not guaranteed on every cluster.
