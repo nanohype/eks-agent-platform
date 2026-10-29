@@ -172,7 +172,8 @@
           "type": "string"
         },
         "clusterName": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 37
         },
         "region": {
           "type": "string"
@@ -383,15 +384,6 @@
         },
         "namespace": {
           "type": "string"
-        },
-        "serviceAccount": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "name": {
-              "type": "string"
-            }
-          }
         },
         "evalReportsBucket": {
           "type": "string"

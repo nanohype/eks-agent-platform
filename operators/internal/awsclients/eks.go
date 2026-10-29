@@ -13,12 +13,15 @@ import (
 )
 
 // EKS is the slice of the aws-sdk-go-v2 EKS client the operator uses to manage
-// the Pod Identity association that binds a tenant ServiceAccount to its IAM
-// role. Keep this list minimal — every method added expands the surface that
-// fakes must implement.
+// the Pod Identity associations that bind a Platform's ServiceAccounts to the
+// IAM roles it mints. Describe is here because the list summary carries no
+// role, and the operator verifies the role every association it keeps names.
+// Keep this list minimal — every method added expands the surface that fakes
+// must implement.
 type EKS interface {
 	CreatePodIdentityAssociation(ctx context.Context, params *eks.CreatePodIdentityAssociationInput, optFns ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error)
 	ListPodIdentityAssociations(ctx context.Context, params *eks.ListPodIdentityAssociationsInput, optFns ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error)
+	DescribePodIdentityAssociation(ctx context.Context, params *eks.DescribePodIdentityAssociationInput, optFns ...func(*eks.Options)) (*eks.DescribePodIdentityAssociationOutput, error)
 	DeletePodIdentityAssociation(ctx context.Context, params *eks.DeletePodIdentityAssociationInput, optFns ...func(*eks.Options)) (*eks.DeletePodIdentityAssociationOutput, error)
 }
 

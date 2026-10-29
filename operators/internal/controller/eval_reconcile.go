@@ -14,11 +14,14 @@ import (
 	"slices"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
@@ -65,14 +68,19 @@ const (
 	evalRunTTLAfterFailure       int64 = 86400
 )
 
-// defaultEvalRunnerNamespace is the fallback when the reconciler is built
-// without an EvalRunnerNamespace override (envtest / dev paths). Production
-// resolves this from SSM via operatorconfig.EvalRunnerNamespace and the
-// value flows through EvalReconciler.RunnerNamespace.
-const (
-	defaultEvalRunnerNamespace      = "eval-runner"
-	defaultEvalRunnerServiceAccount = "eval-runner"
-)
+// defaultEvalRunnerNamespace is the eval runtime namespace when none is
+// configured (envtest / dev paths). Production resolves it from SSM via
+// operatorconfig.EvalRunnerNamespace, and the value reaches both
+// EvalReconciler.RunnerNamespace and PlatformReconciler.Eval.Namespace.
+const defaultEvalRunnerNamespace = "eval-runner"
+
+// evalRuntimeNamespace resolves a configured eval runtime namespace, empty
+// meaning the default. The EvalSuite reconciler submits runs there and the
+// Platform reconciler creates each Platform's eval ServiceAccount there, so
+// both resolve it through here.
+func evalRuntimeNamespace(configured string) string {
+	return orDefault(configured, defaultEvalRunnerNamespace)
+}
 
 // errNoReportsBucket is returned when the operator has no eval-reports bucket
 // to hand the workflow. Submitting anyway produces a run whose every upload
@@ -85,22 +93,27 @@ var errNoReportsBucket = errors.New(
 		"eval-runtime terraform component publishes",
 )
 
-// evalRunnerNamespace returns the per-reconciler namespace where Workflows
-// land — RunnerNamespace if set, otherwise the default.
+// evalRunnerNamespace returns the namespace where Workflows land —
+// RunnerNamespace if set, otherwise the default.
 func (r *EvalReconciler) evalRunnerNamespace() string {
-	if r.RunnerNamespace != "" {
-		return r.RunnerNamespace
-	}
-	return defaultEvalRunnerNamespace
+	return evalRuntimeNamespace(r.RunnerNamespace)
 }
 
-// evalRunnerServiceAccount returns the ServiceAccount the emitted Workflow
-// runs under — RunnerServiceAccount if set, otherwise the default.
-func (r *EvalReconciler) evalRunnerServiceAccount() string {
-	if r.RunnerServiceAccount != "" {
-		return r.RunnerServiceAccount
+// errEvalIdentityMissing is a Platform whose eval identity is not in place to
+// run under: its EvalIdentityReady condition is not True, or the eval
+// ServiceAccount the condition vouched for is gone.
+var errEvalIdentityMissing = errors.New("the Platform's eval identity is not bound")
+
+// evalIdentityNotBound says why a Platform's EvalIdentityReady condition does
+// not admit a run, quoting the Platform reconciler's own reason when it wrote
+// one.
+func evalIdentityNotBound(c *metav1.Condition) string {
+	if c == nil {
+		return "the Platform reports no " + conditionEvalIdentityReady + " condition; " +
+			"the Platform reconciler writes it on a pass that has the eval-reports bucket configured " +
+			"and both its IAM and EKS clients wired"
 	}
-	return defaultEvalRunnerServiceAccount
+	return fmt.Sprintf("%s=%s (%s): %s", c.Type, c.Status, c.Reason, c.Message)
 }
 
 // argoWorkflowsGV is the GroupVersion the Argo Workflows controller
@@ -174,9 +187,9 @@ func evalWorkflowName(suite *governancev1alpha1.EvalSuite) string {
 
 // ensureArgoWorkflow emits either a CronWorkflow (if Schedule is set) or
 // a one-shot Workflow. The pod-spec is intentionally thin — the actual
-// container image + script lives in the platform-shared
-// `eval-runner` WorkflowTemplate that terraform/components/eval-runtime
-// installs; this reconciler just references it via templateRef.
+// container image + script lives in the shared `eval-runner` WorkflowTemplate
+// the operator chart installs; this reconciler references it via templateRef
+// and runs it under the Platform's own eval ServiceAccount.
 func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governancev1alpha1.EvalSuite, platform *platformv1alpha1.Platform, fleet *agentsv1alpha1.AgentFleet) error {
 	// Refuse before submitting rather than after. A run with no bucket still
 	// executes every case against a live model and only fails at the upload,
@@ -205,6 +218,27 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 			errRouteNotPublished, fleet.Name, routeName, strings.Join(routeNames(routes), ", "))
 	}
 
+	// The run holds the Platform's own eval identity (ensureEvalIdentity), never
+	// a shared one, and only once the Platform reports it bound
+	// (evalIdentityAdmitsRun).
+	runnerSA := EvalServiceAccountName(platform)
+	if err := evalIdentityAdmitsRun(platform); err != nil {
+		return err
+	}
+	// The account is read as well, for the window between a Platform pass and
+	// an out-of-band delete of it. Argo cannot create a pod under a
+	// ServiceAccount that does not exist, so a run submitted then fails without
+	// running a step, and its exit handler — a pod under the same account —
+	// cannot report the failure. The suite would sit in Provisioning with no
+	// reason given.
+	saKey := types.NamespacedName{Namespace: r.evalRunnerNamespace(), Name: runnerSA}
+	if err := r.Get(ctx, saKey, &corev1.ServiceAccount{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: eval ServiceAccount %s does not exist", errEvalIdentityMissing, saKey)
+		}
+		return fmt.Errorf("get eval ServiceAccount %s: %w", saKey, err)
+	}
+
 	kind := "Workflow"
 	if suite.Spec.Schedule != "" {
 		kind = "CronWorkflow"
@@ -215,6 +249,21 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 	obj.SetNamespace(r.evalRunnerNamespace())
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+		// A write that can start runs re-reads the Platform through the API
+		// reader first (recheckPlatform): creating the object, or rewriting one
+		// that is suspended, which the whole-spec write below resumes. The
+		// Platform this pass resolved is the cache's copy, and it can trail a
+		// deletion whose finalizer has already suspended the schedule
+		// (suspendEvalSchedules). A schedule that is not suspended needs no
+		// re-read: suspending it changes it, so a write based on the copy
+		// fetched before that conflicts. A deletion that starts after the
+		// re-read reaches the suite as a Platform event (platformToSuites), and
+		// the Pending passes from then on suspend the schedule again.
+		if startsRuns(obj) {
+			if err := r.recheckPlatform(ctx, platform); err != nil {
+				return err
+			}
+		}
 		obj.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  platform.Name,
@@ -274,12 +323,16 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		wfSpec := map[string]any{
 			"workflowTemplateRef":   map[string]any{"name": "eval-runner"},
 			"arguments":             map[string]any{"parameters": params},
-			"serviceAccountName":    r.evalRunnerServiceAccount(),
+			"serviceAccountName":    runnerSA,
 			"activeDeadlineSeconds": evalRunActiveDeadlineSeconds,
 			"podGC":                 map[string]any{"strategy": "OnWorkflowSuccess"},
 		}
 
 		if kind == "CronWorkflow" {
+			// The spec is written whole, with no suspend key, so a schedule
+			// suspended while the suite was Pending (suspendSchedule) resumes
+			// here, on the pass that finds every precondition met.
+			//
 			// ttlStrategy belongs to the CHILD workflows a schedule spawns, and
 			// only there. On the one-shot form it would delete the object this
 			// reconciler owns and recreates by a deterministic name, so the next
@@ -307,6 +360,54 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		return fmt.Errorf("ensure argo %s %s/%s: %w", kind, r.evalRunnerNamespace(), evalWorkflowName(suite), err)
 	}
 	return nil
+}
+
+// evalIdentityAdmitsRun reports why platform's eval identity admits no run, or
+// nil when it admits one. The account alone is not enough: a Platform pass that
+// fails after creating it leaves an account with no role behind it, and a run
+// under it does not hold the eval role, so its S3 calls fail after it has run
+// every inline case against a live model. EvalIdentityReady is True only after
+// a pass in which the account, the role and the association binding them all
+// exist. A Platform being deleted admits no run whatever its condition still
+// says: its finalizer is removing the identity the run would hold.
+func evalIdentityAdmitsRun(platform *platformv1alpha1.Platform) error {
+	if !platform.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("%w: Platform %s is being deleted, and its finalizer removes the eval identity", errEvalIdentityMissing, platform.Name)
+	}
+	if c := apimeta.FindStatusCondition(platform.Status.Conditions, conditionEvalIdentityReady); c == nil || c.Status != metav1.ConditionTrue {
+		return fmt.Errorf("%w: %s", errEvalIdentityMissing, evalIdentityNotBound(c))
+	}
+	return nil
+}
+
+// startsRuns reports whether writing obj, as CreateOrUpdate fetched it, can
+// start runs: obj does not exist yet, or it is suspended and the write, which
+// carries no suspend key, resumes it.
+func startsRuns(obj *unstructured.Unstructured) bool {
+	if obj.GetResourceVersion() == "" {
+		return true
+	}
+	suspended, _, _ := unstructured.NestedBool(obj.Object, "spec", "suspend")
+	return suspended
+}
+
+// recheckPlatform reads platform again through APIReader and applies
+// evalIdentityAdmitsRun to what it reads. A Platform gone since the pass
+// resolved it admits no run either.
+func (r *EvalReconciler) recheckPlatform(ctx context.Context, platform *platformv1alpha1.Platform) error {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	key := client.ObjectKeyFromObject(platform)
+	var live platformv1alpha1.Platform
+	if err := reader.Get(ctx, key, &live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: Platform %s no longer exists", errEvalIdentityMissing, platform.Name)
+		}
+		return fmt.Errorf("re-read Platform %s: %w", key, err)
+	}
+	return evalIdentityAdmitsRun(&live)
 }
 
 // inlineCase is the wire shape consumed by the eval-runner script. It
@@ -348,6 +449,41 @@ func buildInlineCasesParam(cases []governancev1alpha1.EvalCase) (string, error) 
 		return "", fmt.Errorf("marshal inline eval cases: %w", err)
 	}
 	return string(b), nil
+}
+
+// suspendSchedule suspends the suite's CronWorkflow, if it has one. A suite is
+// Pending when this reconciler would not submit a run for it now, and a
+// schedule left running would submit that same run on its own, under the same
+// missing precondition: an eval identity unbound, deleted or never minted, a
+// Platform or fleet absent or not Ready, Argo Workflows not installed, no
+// reports bucket, no ModelGateway or none that has published its route
+// contract. Every Pending pass requeues, and the pass that finds the
+// preconditions met rewrites the schedule's spec, which resumes it.
+func (r *EvalReconciler) suspendSchedule(ctx context.Context, suite *governancev1alpha1.EvalSuite) error {
+	cw := &unstructured.Unstructured{}
+	cw.SetGroupVersionKind(argoWorkflowsGV.WithKind("CronWorkflow"))
+	key := types.NamespacedName{Namespace: r.evalRunnerNamespace(), Name: evalWorkflowName(suite)}
+	if err := r.Get(ctx, key, cw); err != nil {
+		if apierrors.IsNotFound(err) || isNoKindMatch(err) {
+			return nil
+		}
+		return fmt.Errorf("get argo CronWorkflow %s: %w", key, err)
+	}
+	return suspendCronWorkflow(ctx, r.Client, cw)
+}
+
+// suspendCronWorkflow sets spec.suspend on a CronWorkflow, so Argo schedules no
+// further run from it. One already suspended is not written again, and one
+// deleted since it was read needs no suspending.
+func suspendCronWorkflow(ctx context.Context, c client.Client, cw *unstructured.Unstructured) error {
+	if suspended, _, _ := unstructured.NestedBool(cw.Object, "spec", "suspend"); suspended {
+		return nil
+	}
+	patch := client.RawPatch(types.MergePatchType, []byte(`{"spec":{"suspend":true}}`))
+	if err := c.Patch(ctx, cw, patch); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("suspend argo CronWorkflow %s/%s: %w", cw.GetNamespace(), cw.GetName(), err)
+	}
+	return nil
 }
 
 // cleanupArgoWorkflow is the finalizer counterpart: deletes both the
@@ -404,6 +540,9 @@ func (r *EvalReconciler) reconcileEval(ctx context.Context, suite *governancev1a
 		}
 		if errors.Is(err, errNoReportsBucket) {
 			return phasePending, errNoReportsBucket.Error(), nil
+		}
+		if errors.Is(err, errEvalIdentityMissing) {
+			return phasePending, err.Error(), nil
 		}
 		if errors.Is(err, errGatewayNotFound) || errors.Is(err, errGatewayNotPublished) {
 			return phasePending, err.Error(), nil

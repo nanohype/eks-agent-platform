@@ -1,137 +1,36 @@
 locals {
-  prefix = "${var.cluster_name}-evalrunner"
   tags = merge(var.tags, {
     Component = "eval-runtime"
     Tier      = "platform"
   })
 }
 
-# The eval-reports bucket is owned by landing-zone's agent-iam component (the
-# sole model-artifacts writer, published under the per-cluster SSM contract).
-# The eval-runner IAM scope reads its ARN here rather than through a terraform
-# input, so this component depends only on the SSM contract, not on a sibling
-# terraform state.
-data "aws_ssm_parameter" "eval_reports_bucket_arn" {
-  name = "/eks-agent-platform/${var.cluster_name}/model-artifacts/eval_reports_bucket_arn"
-}
-
+# The eval-reports bucket is owned by landing-zone's agent-iam component and
+# published under the per-cluster SSM contract. Its name is read here rather
+# than through a terraform input, so this component depends only on that
+# contract, not on a sibling terraform state.
 data "aws_ssm_parameter" "eval_reports_bucket_name" {
   name = "/eks-agent-platform/${var.cluster_name}/model-artifacts/eval_reports_bucket_name"
 }
 
 ################################################################################
-# IRSA role for the eval-runner ServiceAccount
+# No IAM here.
 #
-# Argo Workflow pods spawned by the operator's eval Workflow / CronWorkflow CRs
-# (see operators/internal/controller/eval_reconcile.go) run under this role.
-# They need:
-#   - bedrock:InvokeModel — to drive the agent under test
-#   - s3:PutObject on eval-reports/{platform}/runs/{suiteName}/{runId}/* — HTML
-#     + junit.xml artifacts
-#   - s3:GetObject on eval-reports/{platform}/manifests/* — when EvalSuite.spec
-#     .casesFromManifest points at a manifest JSON
-#   - kms:Decrypt on the platform data CMK — eval-reports is SSE-KMS-encrypted
+# An eval run holds its Platform's own identity, not one this component mints.
+# The operator creates, per Platform, a <cluster>-<platform>-eval role under the
+# tenant IAM path and permissions boundary, an eval-<platform> ServiceAccount in
+# the eval runtime namespace, and the EKS Pod Identity association between them.
+# That role reaches only the Platform's own prefixes in the shared eval-reports
+# bucket — GetObject on <platform>/manifests/*, PutObject on <platform>/runs/* —
+# and KMS only through S3 for that bucket
+# (operators/internal/controller/platform_eval_identity.go).
 #
-# Region access is constrained via aws:RequestedRegion to match the agent-iam
-# baseline policy convention (model ARNs aren't taggable).
+# One role for every run could not draw that line: whatever it may read or write
+# under one Platform's prefix, it may under every Platform's. Nor does a run need
+# Bedrock. eval-runner reaches the model through the Platform's ModelGateway over
+# HTTP, so a Bedrock grant here would only be a path around the per-Platform
+# model scoping the operator generates.
 ################################################################################
-
-resource "aws_iam_role" "eval_runner" {
-  name = local.prefix
-  tags = local.tags
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "pods.eks.amazonaws.com" }
-      Action    = ["sts:AssumeRole", "sts:TagSession"]
-    }]
-  })
-}
-
-# EKS Pod Identity binds this role to the eval-runner ServiceAccount — no IRSA
-# annotation, no OIDC trust.
-resource "aws_eks_pod_identity_association" "eval_runner" {
-  cluster_name    = var.cluster_name
-  namespace       = var.eval_runner_namespace
-  service_account = var.eval_runner_service_account
-  role_arn        = aws_iam_role.eval_runner.arn
-  tags            = local.tags
-}
-
-resource "aws_iam_role_policy" "eval_runner" {
-  name = "eval-runner-actions"
-  role = aws_iam_role.eval_runner.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "InvokeBedrock"
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-        Resource = var.bedrock_invoke_resource_arns
-        Condition = {
-          StringEquals = {
-            "aws:RequestedRegion" = var.allowed_regions
-          }
-        }
-      },
-      {
-        # Per-platform path-scoped object writes. The eval-runner
-        # workflow template uploads HTML + junit.xml under
-        # eval-reports/<platform>/runs/<suite>/<runId>/*; restrict the
-        # IAM policy to that prefix so a compromised eval-runner pod
-        # can't overwrite another tenant's reports or manifests. The
-        # bucket is shared across platforms (one S3 bucket from
-        # model-artifacts) so this is the only multi-tenant boundary
-        # at the IAM layer.
-        Sid      = "WriteEvalReports"
-        Effect   = "Allow"
-        Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
-        Resource = ["${data.aws_ssm_parameter.eval_reports_bucket_arn.value}/*/runs/*"]
-      },
-      {
-        # ListBucketMultipartUploads is a bucket-level action; put it
-        # on the bucket ARN (no /* suffix) or AWS silently denies it.
-        # Used by the AWS CLI when an upload is resumed across pod
-        # restarts.
-        Sid      = "ListMultipartUploadsBucket"
-        Effect   = "Allow"
-        Action   = ["s3:ListBucketMultipartUploads"]
-        Resource = [data.aws_ssm_parameter.eval_reports_bucket_arn.value]
-      },
-      {
-        Sid      = "ReadEvalManifests"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:GetObjectVersion"]
-        Resource = ["${data.aws_ssm_parameter.eval_reports_bucket_arn.value}/*/manifests/*"]
-      },
-      {
-        Sid      = "ListEvalReports"
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket"]
-        Resource = [data.aws_ssm_parameter.eval_reports_bucket_arn.value]
-      },
-      {
-        Sid    = "DecryptEvalData"
-        Effect = "Allow"
-        Action = [
-          "kms:Decrypt",
-          "kms:GenerateDataKey",
-          "kms:DescribeKey"
-        ]
-        Resource = [var.data_kms_key_arn]
-        Condition = {
-          StringEquals = {
-            "kms:ViaService" = ["s3.${var.region}.amazonaws.com"]
-          }
-        }
-      }
-    ]
-  })
-}
 
 ################################################################################
 # Argo Workflows controller logs — separate from per-Workflow pod logs so the
@@ -146,18 +45,14 @@ resource "aws_cloudwatch_log_group" "controller" {
   tags              = local.tags
 }
 
-
+# The two values the operator reads at startup. It submits eval Workflows into
+# runner_namespace and creates each Platform's eval ServiceAccount there, and it
+# scopes each Platform's eval role into eval_reports_bucket and hands the same
+# bucket to every run as its upload target.
 resource "aws_ssm_parameter" "eval_runner_namespace" {
   name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/runner_namespace"
   type  = "String"
   value = var.eval_runner_namespace
-  tags  = local.tags
-}
-
-resource "aws_ssm_parameter" "eval_runner_service_account" {
-  name  = "/eks-agent-platform/${var.cluster_name}/eval-runtime/runner_service_account"
-  type  = "String"
-  value = var.eval_runner_service_account
   tags  = local.tags
 }
 

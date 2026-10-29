@@ -40,7 +40,10 @@ import (
 //   - the ArgoCD AppProject scoped to that namespace + Platform source repos,
 //   - the per-Platform tenant IAM role (baseline attachment + the
 //     bedrock-model-scoping inline policy reconciled from spec.identity),
-//     and the per-tenant S3 bucket-policy statement.
+//     and the per-tenant S3 bucket-policy statement,
+//   - the per-Platform eval identity: a ServiceAccount in the eval runtime
+//     namespace bound to a role scoped to the Platform's own eval-reports
+//     prefixes (platform_eval_identity.go).
 //
 // The k8s-side reconciliation runs first and unconditionally; AWS-side
 // state is reconciled behind interface-injected clients (IAM/S3) that
@@ -90,6 +93,10 @@ type PlatformReconciler struct {
 	// AWSCfg carries the SSM-resolved values the S3 step needs:
 	// ArtifactsBucketName, Environment.
 	AWSCfg PlatformAWSConfig
+	// Eval locates the eval runtime each Platform's eval identity is minted
+	// into. The zero value (no reports bucket) mints no eval identity; the
+	// finalizer still removes one a Platform records (deleteEvalIdentity).
+	Eval EvalIdentityConfig
 
 	// VCluster builds the per-Platform virtual-cluster client for the vcluster
 	// isolation tier. nil in the namespace tier and in k8s-only test paths; the
@@ -128,6 +135,9 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// The finalizer suspends the Platform's eval schedules before it deletes the
+// eval ServiceAccount they run under (suspendEvalSchedules).
+// +kubebuilder:rbac:groups=argoproj.io,resources=cronworkflows,verbs=list;patch
 
 // Reconcile drives a Platform CR toward its desired state.
 func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -182,6 +192,10 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			// Attribution resources (no-ops when attribution was never enabled).
 			if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.ClusterName); err != nil {
 				logger.Error(err, "session role cleanup failed; will retry")
+				return ctrl.Result{}, err
+			}
+			if err := r.deleteEvalIdentity(ctx, platform); err != nil {
+				logger.Error(err, "eval identity cleanup failed; will retry")
 				return ctrl.Result{}, err
 			}
 			if err := r.deleteOperatorImpersonateRBAC(ctx, platform); err != nil {
@@ -297,6 +311,20 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{}, err
 		}
 	}
+
+	// The identity the Platform's eval runs hold. Not gated on suspension: the
+	// eval role carries no model access for the kill-switch to withdraw. Its
+	// outcome goes on the EvalIdentityReady condition rather than into the
+	// reconcile's result, so a failure here neither holds the Platform's own
+	// phase nor drops this pass's status write; the periodic requeue every
+	// IAM-wired pass ends with retries it.
+	evalOutcome, evalErr := r.ensureEvalIdentity(ctx, platform)
+	if evalErr != nil {
+		logger.Error(evalErr, "ensureEvalIdentity failed; reported on EvalIdentityReady")
+		r.recordWarning(platform, "EvalIdentityNotBound", "ReconcileEvalIdentity",
+			"eval identity not bound, so no eval run is submitted: %s", evalErr.Error())
+	}
+	r.setEvalIdentityCondition(platform, evalOutcome, evalErr)
 
 	// Update status. status.phase = Suspended when the kill-switch tag is
 	// set; otherwise Ready.

@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
@@ -73,6 +75,10 @@ type fakeIAM struct {
 	deleteInlineReturnsErr map[string]error
 	// putInlineReturnsErr injects a PutRolePolicy error keyed by policy name.
 	putInlineReturnsErr map[string]error
+	// absentReadsDenied answers GetRole on a name no role holds with
+	// AccessDenied instead of NoSuchEntity — what IAM returns to an identity
+	// whose read grant covers the tenant path but not the root-path name.
+	absentReadsDenied bool
 	// inlinePageSize, when > 0, paginates ListRolePolicies at that size so a
 	// test can drive the marker-following branch of deleteInlinePolicies. A
 	// loop that ignores the marker deletes only the first page, which on the
@@ -124,7 +130,17 @@ func (f *fakeIAM) CreateRole(_ context.Context, params *iam.CreateRoleInput, _ .
 	name := aws.ToString(params.RoleName)
 	arn := "arn:aws:iam::123456789012:role/" + name
 	f.seedRole(name, arn, params.Tags...)
-	return &iam.CreateRoleOutput{Role: f.roles[name]}, nil
+	role := f.roles[name]
+	role.Path = params.Path
+	// GetRole returns the trust policy URL-encoded, as IAM does.
+	role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(params.AssumeRolePolicyDocument)))
+	if params.PermissionsBoundary != nil {
+		role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{
+			PermissionsBoundaryArn:  params.PermissionsBoundary,
+			PermissionsBoundaryType: iamtypes.PermissionsBoundaryAttachmentTypePolicy,
+		}
+	}
+	return &iam.CreateRoleOutput{Role: role}, nil
 }
 
 func (f *fakeIAM) GetRole(_ context.Context, params *iam.GetRoleInput, _ ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
@@ -133,6 +149,9 @@ func (f *fakeIAM) GetRole(_ context.Context, params *iam.GetRoleInput, _ ...func
 	}
 	name := aws.ToString(params.RoleName)
 	role, ok := f.roles[name]
+	if !ok && f.absentReadsDenied {
+		return nil, &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: iam:GetRole on resource: role " + name}
+	}
 	if !ok {
 		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role: " + name)}
 	}
@@ -158,6 +177,9 @@ func (f *fakeIAM) UpdateAssumeRolePolicy(_ context.Context, params *iam.UpdateAs
 		return nil, f.updateAssumeErr
 	}
 	f.updateAssumeCalls = append(f.updateAssumeCalls, *params)
+	if role, ok := f.roles[aws.ToString(params.RoleName)]; ok {
+		role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(params.PolicyDocument)))
+	}
 	return &iam.UpdateAssumeRolePolicyOutput{}, nil
 }
 
@@ -529,21 +551,58 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 }
 
 // fakeEKS is a minimal in-memory awsclients.EKS covering the Pod Identity
-// association the operator binds the tenant ServiceAccount with.
+// associations the operator binds a Platform's ServiceAccounts with.
 type fakeEKS struct {
 	associations map[string]string // "namespace/serviceAccount" -> association id
-	createCalls  []eks.CreatePodIdentityAssociationInput
-	deleteCalls  []eks.DeletePodIdentityAssociationInput
-	nextID       int
+	// bound is what DescribePodIdentityAssociation returns, by association id.
+	// CreatePodIdentityAssociation records the role it was handed; a test seeds
+	// another role, or a target role, to stand for an association made out of
+	// band.
+	bound       map[string]*ekstypes.PodIdentityAssociation
+	createCalls []eks.CreatePodIdentityAssociationInput
+	deleteCalls []eks.DeletePodIdentityAssociationInput
+	nextID      int
 
 	// Error-injection hooks (default nil = no error).
-	listReturnsErr   error
-	createReturnsErr error
-	deleteReturnsErr error
+	listReturnsErr     error
+	createReturnsErr   error
+	deleteReturnsErr   error
+	describeReturnsErr error
 }
 
 func newFakeEKS() *fakeEKS {
-	return &fakeEKS{associations: map[string]string{}}
+	return &fakeEKS{associations: map[string]string{}, bound: map[string]*ekstypes.PodIdentityAssociation{}}
+}
+
+// seedAssociation stands for an association made out of band: the
+// (namespace, serviceAccount) bound to roleARN, chaining to targetRoleARN when
+// that is set.
+func (f *fakeEKS) seedAssociation(namespace, serviceAccount, roleARN, targetRoleARN string) string {
+	f.nextID++
+	id := fmt.Sprintf("a-%d", f.nextID)
+	f.associations[namespace+"/"+serviceAccount] = id
+	a := &ekstypes.PodIdentityAssociation{AssociationId: aws.String(id), RoleArn: aws.String(roleARN)}
+	if targetRoleARN != "" {
+		a.TargetRoleArn = aws.String(targetRoleARN)
+	}
+	f.bound[id] = a
+	return id
+}
+
+// roleFor returns the role the (namespace, serviceAccount) association names.
+func (f *fakeEKS) roleFor(namespace, serviceAccount string) string {
+	a := f.bound[f.associations[namespace+"/"+serviceAccount]]
+	if a == nil {
+		return ""
+	}
+	return aws.ToString(a.RoleArn)
+}
+
+func (f *fakeEKS) DescribePodIdentityAssociation(_ context.Context, params *eks.DescribePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DescribePodIdentityAssociationOutput, error) {
+	if f.describeReturnsErr != nil {
+		return nil, f.describeReturnsErr
+	}
+	return &eks.DescribePodIdentityAssociationOutput{Association: f.bound[aws.ToString(params.AssociationId)]}, nil
 }
 
 func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
@@ -570,6 +629,7 @@ func (f *fakeEKS) CreatePodIdentityAssociation(_ context.Context, params *eks.Cr
 	f.nextID++
 	id := fmt.Sprintf("a-%d", f.nextID)
 	f.associations[aws.ToString(params.Namespace)+"/"+aws.ToString(params.ServiceAccount)] = id
+	f.bound[id] = &ekstypes.PodIdentityAssociation{AssociationId: aws.String(id), RoleArn: params.RoleArn}
 	return &eks.CreatePodIdentityAssociationOutput{}, nil
 }
 
@@ -583,6 +643,7 @@ func (f *fakeEKS) DeletePodIdentityAssociation(_ context.Context, params *eks.De
 			delete(f.associations, k)
 		}
 	}
+	delete(f.bound, aws.ToString(params.AssociationId))
 	return &eks.DeletePodIdentityAssociationOutput{}, nil
 }
 

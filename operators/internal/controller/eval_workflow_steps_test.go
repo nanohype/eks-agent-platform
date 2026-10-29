@@ -448,8 +448,8 @@ func wiringGlobals() map[string]string {
 //
 // The values these steps handle include tenant-authored case inputs, the
 // EvalSuite's manifest name and the model's replies to adversarial cases, and
-// the step pods hold the eval-runner role and kubectl. A value that reaches a
-// script as source runs there: written into the score step as
+// the step pods hold their Platform's eval role and kubectl. A value that
+// reaches a script as source runs there: written into the score step as
 //
 //	echo '<results-json, substituted by Argo>' > /tmp/results.json
 //
@@ -569,8 +569,9 @@ func TestEachStepReceivesItsOwnValues(t *testing.T) {
 			"--pass-threshold": g["workflow.parameters.pass-threshold"],
 		})
 		assertDocumentHanded(t, "score", run, "score", "--results", g["tasks.run.outputs.parameters.results"])
-		// The eval-runner role is granted writes under <bucket>/*/runs/ only, and
-		// the platform segment is what keeps one platform's reports from another's.
+		// A run holds its Platform's eval role, granted writes under
+		// <bucket>/<platform>/runs/* and nowhere else, so an upload outside the
+		// run's own Platform segment is refused.
 		prefix := "s3://" + bucket + "/" + platform + "/runs/" + g["workflow.name"] + "/"
 		uploads := run.commands("aws")
 		files := []string{"report.html", "junit.xml"}
@@ -588,9 +589,9 @@ func TestEachStepReceivesItsOwnValues(t *testing.T) {
 
 // TestResolveCasesReadsOnlyThePlatformsManifests hands the resolve-cases step
 // manifest values that name an object outside the platform's own prefix, and
-// checks the step still fetches under <bucket>/<platform>/manifests/. The
-// eval-runner role reads every platform's manifests, so a step that fetched
-// a URI as given would read another platform's cases. The EvalSuite CRD
+// checks the step still fetches under <bucket>/<platform>/manifests/, the only
+// prefix the platform's eval role can read. A step that fetched a URI as given
+// would ask for another platform's cases and fail the run. The EvalSuite CRD
 // admits only a bare file name; this holds the step to building the key
 // itself whatever value reaches it.
 func TestResolveCasesReadsOnlyThePlatformsManifests(t *testing.T) {

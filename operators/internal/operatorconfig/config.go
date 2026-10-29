@@ -76,10 +76,10 @@ type Config struct {
 	AthenaDatabase  string
 	CURTableName    string
 
-	// eval-runtime outputs
-	EvalRunnerNamespace      string
-	EvalRunnerServiceAccount string
-	EvalReportsBucket        string
+	// eval-runtime outputs. The ServiceAccount an eval run holds is not among
+	// them: it is per Platform, created by the operator in EvalRunnerNamespace.
+	EvalRunnerNamespace string
+	EvalReportsBucket   string
 }
 
 // Load fetches every parameter under /eks-agent-platform/<cluster-name>/
@@ -154,8 +154,6 @@ func (c *Config) assign(suffix, value string) {
 		c.CURTableName = value
 	case "eval-runtime/runner_namespace":
 		c.EvalRunnerNamespace = value
-	case "eval-runtime/runner_service_account":
-		c.EvalRunnerServiceAccount = value
 	case "eval-runtime/eval_reports_bucket":
 		c.EvalReportsBucket = value
 	}

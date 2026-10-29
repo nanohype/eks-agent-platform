@@ -16,9 +16,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
+	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 )
 
 // EvalReconciler reconciles EvalSuite CRs into Argo Workflows
@@ -39,17 +42,6 @@ type EvalReconciler struct {
 	// Empty falls back to the package default.
 	RunnerNamespace string
 
-	// RunnerServiceAccount is the ServiceAccount the emitted Workflow runs
-	// under. Resolved from SSM
-	// /eks-agent-platform/<cluster>/eval-runtime/runner_service_account.
-	// Empty falls back to the package default.
-	//
-	// The chart makes this name a value, so a cluster that overrides it gets
-	// a ServiceAccount and a WorkflowTemplate under the new name. Emitting a
-	// hardcoded name here would submit Workflows bound to a ServiceAccount
-	// that does not exist on such a cluster.
-	RunnerServiceAccount string
-
 	// ReportsBucket is the S3 bucket the workflow uploads reports to,
 	// resolved from SSM
 	// /eks-agent-platform/<cluster>/eval-runtime/eval_reports_bucket.
@@ -61,6 +53,11 @@ type EvalReconciler struct {
 	// chain stops being load-bearing for it. Empty means the reconciler
 	// refuses to submit: every upload in the run would resolve to `s3:///…`.
 	ReportsBucket string
+
+	// APIReader reads the Platform past the manager's cache ahead of a write
+	// that can start runs (recheckPlatform). SetupWithManager sets it to the
+	// manager's API reader when it is unset; with none set, Client is read.
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites,verbs=get;list;watch;update;patch
@@ -68,6 +65,10 @@ type EvalReconciler struct {
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites/finalizers,verbs=update
 // +kubebuilder:rbac:groups=argoproj.io,resources=workflows;workflowtemplates;cronworkflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=argoproj.io,resources=analysisruns;analysistemplates,verbs=get;list;watch
+// A run is submitted only while the Platform's eval ServiceAccount exists.
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+// A Platform event re-runs the suites that reference it (platformToSuites).
+// +kubebuilder:rbac:groups=platform.nanohype.dev,resources=platforms,verbs=get;list;watch
 
 // Reconcile drives an EvalSuite CR into a CronWorkflow (scheduled) or Workflow (manual).
 func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -106,6 +107,12 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		logger.Error(err, "reconcile failed")
 		return ctrl.Result{}, err
 	}
+	if phase == phasePending {
+		if err := r.suspendSchedule(ctx, &suite); err != nil {
+			logger.Error(err, "suspending the schedule of a Pending suite failed")
+			return ctrl.Result{}, err
+		}
+	}
 	if err := r.applyEvalStatus(ctx, &suite, phase, reason); err != nil {
 		return ctrl.Result{}, fmt.Errorf("status update: %w", err)
 	}
@@ -121,9 +128,41 @@ func (r *EvalReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if c <= 0 {
 		c = 1
 	}
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&governancev1alpha1.EvalSuite{}).
+		Watches(&platformv1alpha1.Platform{}, handler.EnqueueRequestsFromMapFunc(r.platformToSuites)).
 		Named("eval").
 		WithOptions(ctrlruntime.Options{MaxConcurrentReconciles: c}).
 		Complete(r)
+}
+
+// platformToSuites maps a Platform event onto every suite that references it.
+//
+// A suite past Pending is not requeued, so without this watch the Platform's
+// eval identity would reach a suite only when the suite itself changed. A
+// Platform whose EvalIdentityReady condition goes False, whose deletion starts,
+// or which is gone would leave the suite's schedule submitting runs under an
+// identity no longer bound. Namespace-scoped, matching how a suite resolves
+// its Platform.
+func (r *EvalReconciler) platformToSuites(ctx context.Context, obj client.Object) []reconcile.Request {
+	p, ok := obj.(*platformv1alpha1.Platform)
+	if !ok {
+		return nil
+	}
+	var suites governancev1alpha1.EvalSuiteList
+	if err := r.List(ctx, &suites, client.InNamespace(p.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "list EvalSuites for a Platform event", "platform", client.ObjectKeyFromObject(p))
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range suites.Items {
+		if suites.Items[i].Spec.PlatformRef.Name != p.Name {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&suites.Items[i])})
+	}
+	return out
 }

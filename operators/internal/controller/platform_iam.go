@@ -15,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/smithy-go"
@@ -87,17 +88,54 @@ type iamReconcileResult struct {
 // of the same name without their tenant roles colliding. Capped at 64 chars (IAM
 // role-name limit); long platform names get hash-truncated like PlatformNamespace.
 func tenantRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	const suffix = "-tenant"
-	const maxLen = 64
-	full := clusterName + "-" + p.Name + suffix
-	if len(full) <= maxLen {
-		return full
+	return boundedName(clusterName+"-", p.Name, tenantRoleSuffix, iamRoleNameMax)
+}
+
+// iamRoleNameMax is IAM's role-name length limit.
+const iamRoleNameMax = 64
+
+// The suffixes of the roles the operator mints for a Platform, each named
+// <cluster-name>-<platform.name><suffix> through boundedName.
+const (
+	tenantRoleSuffix          = "-tenant"
+	sessionRoleSuffix         = "-session"
+	evalRoleSuffix            = "-eval"
+	schedulerInvokeRoleSuffix = "-scheduler-invoke"
+)
+
+// MaxClusterNameLen is the longest cluster name with which every role name the
+// operator derives fits IAM's limit. boundedName can cut a Platform name down to
+// nothing but always keeps the hyphen and hash that stand in for it, so the
+// bound is the limit less the cluster's own hyphen, that hash, and the longest
+// role suffix.
+const MaxClusterNameLen = iamRoleNameMax - len("-") - boundedNameHashLen - len(schedulerInvokeRoleSuffix)
+
+// ValidateClusterName rejects a cluster name too long for every role name
+// derived from it to fit IAM's role-name limit. On such a name, a Platform whose
+// name boundedName has to cut gets a role name over that limit, whose
+// CreateRole IAM refuses at reconcile time. main.go calls it at startup on the
+// AWS path, the only one that mints roles, so the operator refuses the name
+// before it mints anything.
+func ValidateClusterName(name string) error {
+	if len(name) > MaxClusterNameLen {
+		return fmt.Errorf("cluster name %q is %d characters; the role names the operator derives from it "+
+			"(<cluster-name>-<platform>%s the longest) fit IAM's %d-character limit only for cluster names of at most %d",
+			name, len(name), schedulerInvokeRoleSuffix, iamRoleNameMax, MaxClusterNameLen)
 	}
-	prefix := clusterName + "-"
-	// budget = maxLen - len(prefix) - len(suffix) - 1(hyphen) - 8(hash)
-	budget := maxLen - len(prefix) - len(suffix) - 1 - 8
-	h := fnv1a64(p.Name)
-	return fmt.Sprintf("%s%s-%08x%s", prefix, p.Name[:budget], h&0xffffffff, suffix)
+	return nil
+}
+
+// tenantPath is the IAM path the operator creates a Platform's tenant, session
+// and eval roles under, normalized to the trailing slash IAM requires. The
+// operator's own IAM grants on those roles are scoped to this path, so one of
+// them created anywhere else is one it cannot manage afterwards. The
+// scheduler-invoke role sits at the root path instead (schedulerInvokeRoleName).
+func (c IAMConfig) tenantPath() string {
+	path := orDefault(c.TenantIAMPath, "/eks-agent-platform/tenants/")
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+	return path
 }
 
 // assumeRolePolicyForPodIdentity returns the trust policy JSON for a role
@@ -158,6 +196,10 @@ type IAMConfig struct {
 	Compliance         string
 }
 
+// roleManagedBy is the ManagedBy tag value on every role the operator mints
+// (tenantRoleTags).
+const roleManagedBy = "eks-agent-platform"
+
 // orDefault returns def when v is empty.
 func orDefault(v, def string) string {
 	if v == "" {
@@ -189,7 +231,7 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 		tag("Persona", p.Spec.Persona),
 		// Required-tier resource-tagging keys.
 		tag("Environment", cfg.Environment),
-		tag("ManagedBy", "eks-agent-platform"),
+		tag("ManagedBy", roleManagedBy),
 		tag("Project", "eks-agent-platform"),
 		tag("Repository", "nanohype/eks-agent-platform"),
 		tag("Component", "tenant-iam"),
@@ -199,6 +241,20 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 		tag("DataClassification", orDefault(cfg.DataClassification, "internal")),
 		tag("Compliance", orDefault(cfg.Compliance, "soc2")),
 	}
+}
+
+// roleTagsWithComponent is tenantRoleTags with the Component tag set to
+// component. Every other role the operator mints for a Platform carries the
+// tenant role's tag set, so cost attribution and the cloudgov tag gate group it
+// under the Platform, and Component is what tells the roles apart.
+func roleTagsWithComponent(p *platformv1alpha1.Platform, cfg IAMConfig, component string) []iamtypes.Tag {
+	tags := tenantRoleTags(p, cfg)
+	for i := range tags {
+		if aws.ToString(tags[i].Key) == "Component" {
+			tags[i].Value = aws.String(component)
+		}
+	}
+	return tags
 }
 
 // ensureIamRole creates (or no-ops if already present) the tenant role
@@ -220,13 +276,6 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		return iamReconcileResult{}, nil
 	}
 	name := tenantRoleName(cfg.ClusterName, p)
-	path := cfg.TenantIAMPath
-	if path == "" {
-		path = "/eks-agent-platform/tenants/"
-	}
-	if !strings.HasSuffix(path, "/") {
-		path += "/"
-	}
 
 	// The tenant ServiceAccount (tenantSAName, created by this reconciler and
 	// ensured again by the AgentFleet / AgentSandbox reconcilers) is bound to
@@ -289,7 +338,7 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 
 	createInput := &iam.CreateRoleInput{
 		RoleName:                 aws.String(name),
-		Path:                     aws.String(path),
+		Path:                     aws.String(cfg.tenantPath()),
 		AssumeRolePolicyDocument: aws.String(trust),
 		Description:              aws.String(fmt.Sprintf("Tenant role for Platform %s (tenant %s)", p.Name, p.Spec.Tenant)),
 		Tags:                     tenantRoleTags(p, cfg),
@@ -377,12 +426,15 @@ func (r *PlatformReconciler) ensureTenantPodIdentity(
 	}, nil
 }
 
-// ensurePodIdentityAssociation binds the tenant ServiceAccount to its IAM role
-// through EKS Pod Identity, so pods using the SA receive the role's credentials
-// with no role-arn annotation. Idempotent: it lists associations for the
-// (namespace, serviceAccount) on the cluster first and creates one only when
-// none exists. A nil EKS client (envtest / dev without AWS) is a silent no-op,
-// mirroring the IAM-nil short-circuit.
+// ensurePodIdentityAssociation binds a ServiceAccount to an IAM role through
+// EKS Pod Identity, so pods using the SA receive the role's credentials with no
+// role-arn annotation. It converges on that binding and no other: an
+// association for the (namespace, serviceAccount) that names another role, or
+// chains to a target role, hands those pods credentials the operator did not
+// scope, so it is deleted and the binding created in its place. The list
+// summary carries no role, so each association listed is described. A pass
+// over a converged binding writes nothing. A nil EKS client (envtest / dev
+// without AWS) is a silent no-op, mirroring the IAM-nil short-circuit.
 func (r *PlatformReconciler) ensurePodIdentityAssociation(ctx context.Context, cfg IAMConfig, namespace, serviceAccount, roleARN string) error {
 	if r.EKS == nil {
 		return nil
@@ -398,7 +450,29 @@ func (r *PlatformReconciler) ensurePodIdentityAssociation(ctx context.Context, c
 	if err != nil {
 		return fmt.Errorf("eks ListPodIdentityAssociations: %w", err)
 	}
-	if len(listOut.Associations) > 0 {
+	bound := false
+	for _, a := range listOut.Associations {
+		id := aws.ToString(a.AssociationId)
+		desc, err := r.EKS.DescribePodIdentityAssociation(ctx, &eks.DescribePodIdentityAssociationInput{
+			ClusterName:   aws.String(cfg.ClusterName),
+			AssociationId: a.AssociationId,
+		})
+		if err != nil {
+			return fmt.Errorf("eks DescribePodIdentityAssociation %s: %w", id, err)
+		}
+		if !bound && bindsExactly(desc.Association, roleARN) {
+			bound = true
+			continue
+		}
+		if _, err := r.EKS.DeletePodIdentityAssociation(ctx, &eks.DeletePodIdentityAssociationInput{
+			ClusterName:   aws.String(cfg.ClusterName),
+			AssociationId: a.AssociationId,
+		}); err != nil {
+			return fmt.Errorf("eks DeletePodIdentityAssociation %s (bound to %s, not %s): %w",
+				id, associationRole(desc.Association), roleARN, err)
+		}
+	}
+	if bound {
 		return nil
 	}
 	if _, err := r.EKS.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
@@ -412,9 +486,31 @@ func (r *PlatformReconciler) ensurePodIdentityAssociation(ctx context.Context, c
 	return nil
 }
 
-// deletePodIdentityAssociation removes the Pod Identity association for the
-// tenant ServiceAccount so the binding doesn't outlive the role. Tolerates a
-// nil EKS client and a missing association so finalizer re-runs are safe.
+// bindsExactly reports whether an association hands its pods roleARN's own
+// credentials: it names that role and chains to no target role, whose
+// credentials the pods would receive instead.
+func bindsExactly(a *ekstypes.PodIdentityAssociation, roleARN string) bool {
+	return a != nil && aws.ToString(a.RoleArn) == roleARN && aws.ToString(a.TargetRoleArn) == ""
+}
+
+// associationRole names the role an association hands its pods, for an error
+// that says what is being replaced.
+func associationRole(a *ekstypes.PodIdentityAssociation) string {
+	switch {
+	case a == nil:
+		return "an undescribed role"
+	case aws.ToString(a.TargetRoleArn) != "":
+		return aws.ToString(a.RoleArn) + " chaining to " + aws.ToString(a.TargetRoleArn)
+	default:
+		return aws.ToString(a.RoleArn)
+	}
+}
+
+// deletePodIdentityAssociation removes the Pod Identity association for
+// serviceAccount in namespace, the tenant's or the eval runner's, so the
+// binding doesn't outlive its role. It runs from the finalizer and from a pass
+// that retires an eval account from a namespace it moved out of, and tolerates
+// a nil EKS client and a missing association so either can repeat safely.
 func (r *PlatformReconciler) deletePodIdentityAssociation(ctx context.Context, cfg IAMConfig, namespace, serviceAccount string) error {
 	if r.EKS == nil || cfg.ClusterName == "" {
 		return nil
@@ -512,8 +608,8 @@ func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alp
 
 // detachAndDeleteRole detaches every managed policy from a role, deletes its
 // inline policies (IAM refuses DeleteRole while the bedrock-model-scoping
-// policy remains), and deletes it. Shared by the tenant-role and session-role
-// finalizers. Tolerates NotFound at every step so re-runs (and roles that
+// policy remains), and deletes it. Every deletion of a role the operator mints
+// goes through it. Tolerates NotFound at every step so re-runs (and roles that
 // were never created) are safe no-ops.
 func (r *PlatformReconciler) detachAndDeleteRole(ctx context.Context, name string) error {
 	if r.IAM == nil {
@@ -551,6 +647,14 @@ func (r *PlatformReconciler) detachAndDeleteRole(ctx context.Context, name strin
 		return fmt.Errorf("iam DeleteRole: %w", err)
 	}
 	return nil
+}
+
+// isIAMAccessDenied reports IAM refusing a call. For a call naming a role,
+// that is also IAM's answer for a name no role holds when the caller's grants
+// do not reach the name's root-path ARN (see ensureEvalRole).
+func isIAMAccessDenied(err error) bool {
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied"
 }
 
 // isIAMNotFound returns true for IAM's NoSuchEntityException.

@@ -8,6 +8,27 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) behind evalRuntime.*. It ships no SLO
 # manifests — see 0.6.0 below, which removed them.
 #
+# 0.7.0 gives every Platform its own eval identity. The chart creates no
+# ServiceAccount for eval runs and takes no evalRuntime.serviceAccount value
+# (values.schema.json rejects one); the WorkflowTemplate names no ServiceAccount;
+# and the run RBAC binds the eval runtime namespace's ServiceAccount group,
+# narrowed to what a run calls. The operator creates each Platform's
+# eval-<platform> ServiceAccount and the <cluster>-<platform>-eval role behind
+# it, and submits every run under that account. The Platform CRD gains
+# status.evalRoleArn and status.evalNamespace, where that operator records each
+# Platform's eval role and the namespace its account is bound in, for its
+# finalizer to read. So 0.7.0 is a lockstep version in the sense 0.5.0
+# records: an operator without per-Platform eval identities submits runs under
+# an account this chart does not create, and each run fails before its first
+# step. The chart is published only once appVersion names an operator release
+# that mints them. The charts-oci release job runs
+# scripts/check-runtime-contract.py --release before it pushes this chart, and
+# holds the chart while the CRDs it installs and the CRDs generated at the
+# operator-v<appVersion> tag differ in a field, a version or a kind they
+# declare. Descriptions, defaults and validation are not compared.
+# status.evalRoleArn and status.evalNamespace are the fields that tell a
+# release minting eval identities apart.
+#
 # 0.6.8 is documentation only. The CRD's `isolation` description cites an ADR by
 # path, and the ADR sequence closed up, so the packaged CRD carries different
 # bytes for the same schema — no field, type, default or validation marker
@@ -52,8 +73,9 @@ type: application
 # binary has no such field on its Go struct, so an errorSelector would be
 # dropped on decode and the objective would silently fall back to the
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
-# honour — nor, as 0.6.3 records, a workflow parameter.
-version: 0.6.19
+# honour — nor, as 0.6.3 records, a workflow parameter. The charts-oci release
+# job enforces both with scripts/check-runtime-contract.py --release.
+version: 0.7.0
 appVersion: "0.6.2"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).

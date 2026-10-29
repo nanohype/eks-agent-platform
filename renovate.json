@@ -41,7 +41,7 @@
       "datasourceTemplate": "pypi"
     },
     {
-      "description": "PyYAML, installed from PyPI at the one workflow-level version by every ci.yaml job that runs a gate parsing YAML.",
+      "description": "PyYAML, installed from PyPI at a workflow- or job-level version by every job that runs a gate parsing YAML.",
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
       "matchStrings": ["PYYAML_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"],

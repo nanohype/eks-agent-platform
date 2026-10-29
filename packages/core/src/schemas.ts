@@ -209,6 +209,8 @@ export const PlatformStatus = z.object({
   phase: z.string().optional(),
   iamRoleArn: z.string().optional(),
   sessionRoleArn: z.string().optional(),
+  evalRoleArn: z.string().optional(),
+  evalNamespace: z.string().optional(),
   namespace: z.string().optional(),
   observedGeneration: z.number().int().optional(),
   suspendedAt: z.string().datetime().optional(),

@@ -33,13 +33,14 @@ func TestSetupWithManager_RegistersEveryReconciler(t *testing.T) {
 		t.Fatalf("new manager: %v", err)
 	}
 
+	eval := &controller.EvalReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}
 	setups := map[string]func(ctrl.Manager) error{
 		"platform":     (&controller.PlatformReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"tenant":       (&controller.TenantReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"agentfleet":   (&controller.AgentFleetReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"agentsandbox": (&controller.AgentSandboxReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"budget":       (&controller.BudgetReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
-		"eval":         (&controller.EvalReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
+		"eval":         eval.SetupWithManager,
 		"modelgateway": (&controller.ModelGatewayReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"sandboxpool":  (&controller.SandboxPoolReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
 		"slo":          (&controller.SLOReconciler{Client: mgr.GetClient(), Scheme: scheme, Concurrency: 1}).SetupWithManager,
@@ -48,5 +49,11 @@ func TestSetupWithManager_RegistersEveryReconciler(t *testing.T) {
 		if err := setup(mgr); err != nil {
 			t.Errorf("SetupWithManager(%s): %v", name, err)
 		}
+	}
+	// The manager's client reads Platforms from its cache, so the EvalSuite
+	// reconciler's re-read ahead of a write that starts runs needs the
+	// manager's uncached reader.
+	if eval.APIReader != mgr.GetAPIReader() {
+		t.Errorf("EvalReconciler.APIReader = %v after SetupWithManager, want the manager's API reader", eval.APIReader)
 	}
 }

@@ -38,8 +38,8 @@
 #   values flowing through this pipeline include tenant-authored case inputs,
 #   the EvalSuite's manifest name and model replies to adversarial cases; one
 #   carrying a quote, a $( or a newline would run as shell in a pod holding the
-#   eval-runner role and kubectl. So a value reaches a script as data, never as
-#   source:
+#   Platform's eval role and kubectl. So a value reaches a script as data, never
+#   as source:
 #
 #   - a JSON document (the cases, the results, the score) is a raw input
 #     artifact: Argo writes the value to the artifact's path before the script
@@ -58,14 +58,21 @@
 #   both in a fixed format, and nothing a submitter, a tenant or a model
 #   supplies reaches either. scripts/check-argo-script-splices.py fails on any
 #   other expression in a script's source or in a shell's program argument.
+#
+# Identity. The template names no ServiceAccount. Every run is submitted with
+# spec.serviceAccountName set to its Platform's own eval ServiceAccount
+# (eval-<platform>), which the operator creates in this namespace and binds by
+# EKS Pod Identity to a role scoped to that Platform's prefixes in the
+# eval-reports bucket: Get on <platform>/manifests/*, Put on <platform>/runs/*.
+# A run therefore reaches no other Platform's cases or reports. resolve-cases
+# builds its manifest key from casesFromManifest, a bare file name, under
+# <platform>/manifests/, the one prefix that role can read.
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
   name: eval-runner
   namespace: eval-runner
 spec:
-  serviceAccountName: eval-runner
-
   # The eval-runner namespace enforces the restricted Pod Security Standard
   # (templates/eval-runtime/namespace.yaml), and PSA is a built-in admission
   # plugin with no exclusion list — so a non-compliant step pod is REJECTED, not
@@ -244,9 +251,8 @@ spec:
           elif [ -n "$CASES_MANIFEST" ]; then
             # CASES_MANIFEST is EvalSuite.spec.casesFromManifest, a bare file
             # name the CRD's pattern holds to one path segment. The key is
-            # always built under this platform's own manifests/ prefix: the
-            # eval-runner role reads every platform's, so the prefix is what
-            # keeps a suite to its own platform's manifests.
+            # always built under this platform's own manifests/ prefix, the
+            # only one the platform's eval role can read.
             aws s3 cp "s3://$REPORTS_BUCKET/$PLATFORM/manifests/$CASES_MANIFEST" /tmp/cases.json
           else
             echo "no cases supplied (inline empty + manifest empty)" >&2
@@ -428,7 +434,7 @@ spec:
         # dev or staging — the step fails after the run, on a file it has
         # already delivered. The script above uploads report.html and junit.xml
         # to s3://<eval-reports>/<platform>/runs/<suite>/<runId>/ itself, which
-        # is the prefix the eval-runner role is granted and the one
+        # is the prefix the Platform's eval role is granted and the one
         # status.lastReportUrl points at. An artifact declaration here would
         # be a second, differently-permissioned copy of a delivery that has
         # already happened.
@@ -521,8 +527,9 @@ spec:
 
     # ─────────────── 4. writeback ───────────────
     # PATCH EvalSuite.status with the computed mean score + phase. Uses
-    # kubectl which is in the eval-runner image and the SA's RBAC permits
-    # patching evalsuites/status.
+    # kubectl, which is in the eval-runner image; the eval runtime namespace's
+    # ServiceAccounts are granted patch on evalsuites/status
+    # (templates/eval-runtime/rbac.yaml).
     - name: writeback
       inputs:
         parameters:

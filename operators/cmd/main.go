@@ -251,6 +251,17 @@ func main() {
 			"why", "it qualifies tenant role names and the PlatformId cost-attribution tag, and an empty value degrades silently rather than failing")
 		os.Exit(1)
 	}
+	// Too long fails too, later and per Platform: every role name is
+	// <cluster>-<platform><suffix>, and past controller.MaxClusterNameLen a
+	// Platform name long enough to be cut yields a role name over IAM's limit,
+	// whose CreateRole IAM refuses at reconcile time. Gated like the empty
+	// check, since only the AWS path mints roles.
+	if !disableAWS {
+		if err := controller.ValidateClusterName(clusterName); err != nil {
+			setupLog.Error(err, "--cluster-name (or AGENTS_CLUSTER_NAME) is too long; refusing to start")
+			os.Exit(1)
+		}
+	}
 
 	// AWS clients. Building them is local: it resolves the SDK's configuration
 	// chain and constructs service clients, and it reaches nothing. A failure
@@ -343,6 +354,7 @@ func main() {
 			})
 			platformReconciler.AWSCfg = platformAWSConfigFrom(opConfig, environment)
 		}
+		platformReconciler.Eval = evalIdentityConfigFrom(opConfig)
 		if err := platformReconciler.SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("register the Platform reconciler: %w", err)
 		}
@@ -472,7 +484,6 @@ func main() {
 		}
 		if opConfig != nil {
 			evalReconciler.RunnerNamespace = opConfig.EvalRunnerNamespace
-			evalReconciler.RunnerServiceAccount = opConfig.EvalRunnerServiceAccount
 			evalReconciler.ReportsBucket = opConfig.EvalReportsBucket
 		}
 		if err := evalReconciler.SetupWithManager(mgr); err != nil {
@@ -586,6 +597,17 @@ func iamConfigFrom(cfg *operatorconfig.Config, tags orgTags) controller.IAMConfi
 		BusinessUnit:                 tags.BusinessUnit,
 		DataClassification:           tags.DataClassification,
 		Compliance:                   tags.Compliance,
+	}
+}
+
+// evalIdentityConfigFrom carries the eval-runtime outputs to the Platform
+// reconciler. They are the same two values the EvalSuite reconciler is handed,
+// so each Platform's eval ServiceAccount lands in the namespace its runs are
+// submitted to, and its role is scoped into the bucket they upload to.
+func evalIdentityConfigFrom(cfg *operatorconfig.Config) controller.EvalIdentityConfig {
+	return controller.EvalIdentityConfig{
+		Namespace:     cfg.EvalRunnerNamespace,
+		ReportsBucket: cfg.EvalReportsBucket,
 	}
 }
 

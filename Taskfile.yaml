@@ -136,8 +136,8 @@ tasks:
           elif [ "$name" = "operator" ]; then
             # default state, then the gated eval path so the Files.Get-wrapped
             # Argo CRs get exercised. Only flags this chart reads: slo.* belongs
-            # to charts/tenant and there is no evalRuntime.serviceAccount.roleArn
-            # (Pod Identity binds the role in AWS).
+            # to charts/tenant, and the chart takes no identity for eval runs
+            # (the operator mints one per Platform).
             helm template "$name" "$d" >/dev/null || exit 1
             helm template "$name" "$d" \
               --set evalRuntime.rollouts.enabled=true \

@@ -161,9 +161,8 @@ func submittedRunForms(t *testing.T) []struct {
 } {
 	t.Helper()
 	r := &EvalReconciler{
-		RunnerNamespace:      "eval-runner",
-		RunnerServiceAccount: "eval-runner-custom",
-		ReportsBucket:        testReportsBucket,
+		RunnerNamespace: "eval-runner",
+		ReportsBucket:   testReportsBucket,
 	}
 	return []struct {
 		name string
@@ -181,14 +180,13 @@ func submitScheduledEvalRun(t *testing.T) *unstructured.Unstructured {
 	suite, platform, fleet := evalFixtures()
 	suite.Spec.Schedule = "0 2 * * *"
 
-	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
-		WithObjects(publishedGateway(platform, "chat")).Build()
 	r := &EvalReconciler{
-		Client:               c,
-		RunnerNamespace:      "eval-runner",
-		RunnerServiceAccount: "eval-runner-custom",
-		ReportsBucket:        testReportsBucket,
+		RunnerNamespace: "eval-runner",
+		ReportsBucket:   testReportsBucket,
 	}
+	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(publishedGateway(platform, "chat"), boundEvalIdentity(r, platform), platform).Build()
+	r.Client = c
 	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
 		t.Fatalf("ensureArgoWorkflow: %v", err)
 	}
@@ -277,9 +275,8 @@ func TestSubmittedRunIsBoundedWithoutTheOperator(t *testing.T) {
 // schedule as manual only, and that is the sentence this keeps true.
 func TestAManualSuiteIsNotCollectedIntoRunningAgain(t *testing.T) {
 	r := &EvalReconciler{
-		RunnerNamespace:      "eval-runner",
-		RunnerServiceAccount: "eval-runner-custom",
-		ReportsBucket:        testReportsBucket,
+		RunnerNamespace: "eval-runner",
+		ReportsBucket:   testReportsBucket,
 	}
 	wf := submitEvalWorkflow(t, r)
 

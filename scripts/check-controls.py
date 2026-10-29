@@ -723,7 +723,7 @@ CONTROLS = [
         after="          echo '{{inputs.parameters.results-json}}' > /tmp/results.json\n"
         '          run_id="$(date -u +%Y%m%dT%H%M%SZ)-{{workflow.uid}}"\n',
         catches="a step input spliced into script source — a model reply holding a single quote "
-        "then runs as shell in a pod holding the eval-runner role and kubectl, and helm lint, "
+        "then runs as shell in a pod holding the Platform's eval role and kubectl, and helm lint, "
         "kubeconform and the PodSecurity gate all pass the template",
         expect_output="{{inputs.parameters.results-json}} in template score script.source",
     ),
@@ -830,7 +830,7 @@ CONTROLS = [
         after='# reports/{platform}/manifests/* are written beside this\n'
               'resource "aws_ssm_parameter" "baseline_guardrail_id" {',
         catches="a hash comment containing a slash-star erasing the resources below it",
-        expect_output="22 parameters published",
+        expect_output="21 parameters published",
         expect_reject=False,
     ),
     # Per FEATURE, not per spelling: -n is the same absence as -A, and the table

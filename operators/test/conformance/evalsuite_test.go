@@ -107,9 +107,8 @@ func TestEvalSuite_RejectsCasesPlusCasesFromManifest(t *testing.T) {
 
 // TestEvalSuite_CasesFromManifestIsABareFileName holds casesFromManifest to a
 // bare file name. The eval run reads <platform>/manifests/<casesFromManifest>,
-// and the eval-runner role reads every Platform's manifests, so a value
-// carrying a path, a URI or a parent segment would point a suite at cases
-// outside its own Platform's prefix.
+// and a value carrying a path, a URI or a parent segment would point a suite
+// at cases outside its own Platform's prefix, which its eval role cannot read.
 //
 // Every refusal must name spec.casesFromManifest and nothing else: the rest of
 // the object is valid, so a refusal anywhere else is a test passing for a

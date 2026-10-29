@@ -126,17 +126,7 @@ func anySidPresent(sids []string, granted map[string]struct{}) bool {
 // PassRole grant composes role/<name> with no path segment). Capped at 64 chars
 // with the same FNV-1a hash-truncation as tenantRoleName.
 func schedulerInvokeRoleName(clusterName string, p *platformv1alpha1.Platform) string {
-	const suffix = "-scheduler-invoke"
-	const maxLen = 64
-	full := clusterName + "-" + p.Name + suffix
-	if len(full) <= maxLen {
-		return full
-	}
-	prefix := clusterName + "-"
-	// budget = maxLen - len(prefix) - len(suffix) - 1(hyphen) - 8(hash)
-	budget := maxLen - len(prefix) - len(suffix) - 1 - 8
-	h := fnv1a64(p.Name)
-	return fmt.Sprintf("%s%s-%08x%s", prefix, p.Name[:budget], h&0xffffffff, suffix)
+	return boundedName(clusterName+"-", p.Name, schedulerInvokeRoleSuffix, iamRoleNameMax)
 }
 
 // schedulerInvokeRoleARN composes the invoke role's ARN from the same scope the
@@ -320,7 +310,6 @@ func schedulerInvokeTrustPolicy(env string, p *platformv1alpha1.Platform, scope 
 
 // reconcileInlinePolicy converges one inline policy on a role: it writes the
 // desired document when it drifts and removes the policy when desired is empty.
-// Shared by the tenant-role capability policy and the invoke role's send policy.
 // Idempotent — reads the current document and writes only on drift; NotFound is
 // tolerated at every step so re-runs and cleared declarations are safe.
 func (r *PlatformReconciler) reconcileInlinePolicy(ctx context.Context, roleName, policyName, desired string) error {
@@ -450,13 +439,7 @@ func (r *PlatformReconciler) ensureSchedulerInvokeRole(ctx context.Context, p *p
 // invoke role apart from the path-prefixed tenant and session roles without
 // knowing every name formula.
 func schedulerInvokeRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag {
-	tags := tenantRoleTags(p, cfg)
-	for i := range tags {
-		if aws.ToString(tags[i].Key) == "Component" {
-			tags[i].Value = aws.String("scheduler-invoke")
-		}
-	}
-	return tags
+	return roleTagsWithComponent(p, cfg, "scheduler-invoke")
 }
 
 // deleteSchedulerInvokeRole removes the invoke role. Used both when the

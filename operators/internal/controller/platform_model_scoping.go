@@ -270,8 +270,7 @@ type policyStatement struct {
 	Resource    []string `json:"Resource,omitempty"`
 	NotResource []string `json:"NotResource,omitempty"`
 	// Condition is the IAM condition block (operator -> condition-key -> value).
-	// Only the capability policy sets it today (ses:FromAddress, iam:PassedToService);
-	// omitempty keeps the datastore and model-scoping documents byte-identical.
+	// omitempty keeps a statement that sets none free of an empty Condition key.
 	// Single scalar values match how IAM returns them from GetRolePolicy, so the
 	// structural compare in policyDocEqual stays stable across reconciles.
 	Condition map[string]map[string]string `json:"Condition,omitempty"`

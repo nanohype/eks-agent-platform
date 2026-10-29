@@ -98,13 +98,9 @@ and their `/eks-agent-platform/<cluster>/model-artifacts/*` SSM keys; this tree 
 the operator role, tenant baseline, and the eval-reports/model-artifacts buckets
 from that landing-zone SSM contract.
 
-**Prereq:** the `eks-pod-identity-agent` EKS addon must be installed — the
-eval-runner role binds via EKS Pod Identity, which is inert without it. Check: `aws eks describe-addon
---cluster-name <cluster> --addon-name eks-pod-identity-agent`.
-
 From `eks-agent-platform/`, export `AWS_ACCOUNT_ID` (it names the state bucket)
 and the `TF_VAR_*` infrastructure identifiers the orchestrator supplies —
-`TF_VAR_data_kms_key_arn`, `TF_VAR_logs_kms_key_arn` (lz-secrets); the
+`TF_VAR_logs_kms_key_arn` (lz-secrets); the
 agent-egress VPC / subnet / route-table / security-group IDs (lz-network /
 lz-cluster); `TF_VAR_node_role_name` (lz-cluster, changes on cluster recreate) —
 then apply in dependency order:
@@ -113,15 +109,16 @@ then apply in dependency order:
 task tofu:apply CLUSTER=<cluster> COMPONENT=all   # terragrunt run --all resolves the graph
 ```
 
-Verify the Pod Identity associations bound:
-`aws eks list-pod-identity-associations --cluster-name <cluster>` should list the
-`aws-neuron/neuron-device-plugin`, `gpu-operator/gpu-operator`, and
-`eval-runner/eval-runner` tuples. From one of those pods,
-`AWS_CONTAINER_CREDENTIALS_FULL_URI` is injected (Pod Identity), not
-`AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` (IRSA), and `aws sts
-get-caller-identity` resolves to the bound role. A `(namespace, serviceAccount)`
-mismatch against the running chart is a silent no-credentials failure — confirm
-the chart-rendered SA names before assuming a deeper problem.
+Verify the eval runtime keys:
+`aws ssm get-parameters-by-path --path /eks-agent-platform/<cluster>/eval-runtime/ --query 'Parameters[].Name'`
+lists `runner_namespace` and `eval_reports_bucket`. This tree creates no Pod
+Identity association. The operator mints each Platform's eval identity from
+those two values when the Platform reconciles, and B3 verifies it. The operator
+reads the keys it takes from this tree once, in the SSM sweep that registers its
+reconcilers, and that sweep succeeds as soon as the keys `agent-iam` publishes
+(B1 step 5) are in SSM. An operator that registered its reconcilers before this
+apply holds none of them, and mints no eval identity, until it restarts:
+`kubectl --context <cluster> rollout restart deployment -n eks-agent-platform -l app.kubernetes.io/name=operator`.
 
 ### B2. Operator on EKS
 
@@ -129,11 +126,12 @@ The operator syncs itself. The `addons-agent-operator` ApplicationSet in
 eks-gitops git-sources `charts/operator` and targets every cluster carrying
 `eks-agent-platform/enabled=true`. It injects the per-cluster bits the chart
 can't hardcode — the operator IAM role ARN and the eval-reports bucket — from
-the annotations `cluster-bootstrap` publishes on the ArgoCD cluster Secret (the
-eval-runner role is bound by Pod Identity, see B1b). The cluster name comes from
+the annotations `cluster-bootstrap` publishes on the ArgoCD cluster Secret. Eval
+runs take no role ARN from the chart: the operator mints each Platform's eval
+role and binds it by Pod Identity. The cluster name comes from
 SSM
 (`/eks-agent-platform/<cluster>/cluster/name`), read by the operator's config
-loader. So once B1 step 3
+loader. So once B1 step 4
 landed, the operator (with the AWS reconcile ON and its eval-runtime bundle
 enabled by the chart defaults) is already on its way. Get the image
 published so the ApplicationSet has something to pull:
@@ -147,7 +145,7 @@ published so the ApplicationSet has something to pull:
 The operator loads the rest of its config (tenant IAM path, baseline +
 boundary ARNs) from SSM via its IRSA role. Verify:
 `kubectl --context <cluster> logs -n eks-agent-platform -l app.kubernetes.io/name=operator`
-→ "AWS substrate loaded".
+→ "reconcilers registered against the operator substrate".
 
 **First-boot fallback.** If you need the operator up before the ApplicationSet
 reconciles (or you're debugging outside ArgoCD), install the chart by hand with
@@ -161,12 +159,16 @@ helm upgrade --install eks-agent-platform eks-agent-platform/charts/operator \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=<agent-iam operator role ARN> \
   --set config.environment=<env> --set config.region=<r> \
   --set config.clusterName=<cluster> \
-  --set evalRuntime.serviceAccount.roleArn=<eval-runner role ARN> \
   --set evalRuntime.evalReportsBucket=<eval-reports bucket> \
   --set networkPolicy.engine=cilium --wait
 ```
 
 ### B3. Deploy tenants through the portal
+
+**Prereq:** the `eks-pod-identity-agent` EKS addon must be installed. The
+operator binds every tenant role and every Platform's eval role by EKS Pod
+Identity, which is inert without it. Check: `aws eks describe-addon
+--cluster-name <cluster> --addon-name eks-pod-identity-agent`.
 
 ```bash
 cd portal && docker compose up -d && task dev
@@ -193,6 +195,29 @@ ApplicationSet, with per-env values from `tofu output`.
 > (server/worker/DB) + the `portal-tenants` ApplicationSet's ArgoCD apply — verify
 > those on first EKS use. (On kx, ArgoCD is idle by design, so the rehearsal applied
 > the rendered manifest directly.)
+
+Verify each Platform's eval identity bound. Its `EvalIdentityReady` condition is
+`True` with reason `Bound`, and the message names the ServiceAccount and the role:
+`kubectl --context <cluster> get platform <name> -n <namespace> -o jsonpath='{.status.conditions[?(@.type=="EvalIdentityReady")].message}'`
+→ `ServiceAccount <eval-namespace>/<eval-serviceaccount> is bound by EKS Pod Identity to role <arn>`.
+`aws eks list-pod-identity-associations --cluster-name <cluster> --namespace
+<eval-namespace> --service-account <eval-serviceaccount>` returns the
+association id, and `aws eks describe-pod-identity-association --cluster-name
+<cluster> --association-id <id>` shows a `roleArn` equal to the Platform's
+`status.evalRoleArn`, the `<cluster>-<platform>-eval` role under the tenant IAM
+path. The namespace is `runner_namespace` (B1b), and the ServiceAccount is
+`eval-<platform>`, hash-truncated to 63 characters for a long Platform name. A
+`False` condition says why in its reason and message, and no eval run is
+submitted for the Platform until it is `True`. A Platform that reaches Ready
+with no `EvalIdentityReady` condition is reconciled by an operator that mints no
+eval identity: it holds no eval-reports bucket (see the restart in B1b), or it
+lacks its IAM or EKS client. An eval run's pods carry
+`AWS_CONTAINER_CREDENTIALS_FULL_URI` (Pod Identity), not
+`AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` (IRSA). The chart's
+`evalRuntime.namespace` must equal `runner_namespace`: the operator creates each
+eval ServiceAccount and submits every run in `runner_namespace`, the chart
+installs the `eval-runner` WorkflowTemplate in `evalRuntime.namespace`, and a run
+resolves its template only in its own namespace.
 
 ### B4. Validate
 
@@ -249,6 +274,29 @@ green.
 - **Upstream chart value schemas:** don't inject `clusterName`/`vpcId` (or other
   unknown `--set` values) into upstream charts with strict schemas (cert-manager,
   envoy-ai-gateway) — they fail to render. (Fixed in the ApplicationSets.)
-- **Operator IAM idempotency GetRole:** authorizes against the bare-name (root)
-  ARN before the role exists, so the operator role allows GetRole on the
-  `<cluster>-*-tenant` name pattern as well as the scoped path. (In `agent-iam`.)
+- **Operator IAM idempotency GetRole:** IAM authorizes a call naming a role
+  that does not exist against the bare-name (root) ARN, not the tenant path the
+  operator's grants are scoped to. The tenant role's pre-create `GetRole`
+  therefore needs the `<cluster>-*-tenant` name pattern beside the scoped path
+  (`agent-iam`'s `TenantRoleRead` statement). The eval role needs no such
+  grant: the operator reads AccessDenied on its existence check as "no role
+  under the tenant path holds this name" and lets `CreateRole`, which names the
+  path, settle it. A Platform whose eval identity cannot be minted still
+  reaches Ready and reports why on its `EvalIdentityReady` condition.
+- **Platform held terminating on its eval role:** on delete, the operator reads
+  AccessDenied on the eval role as an absent role only when the Platform's
+  `status.evalRoleArn` is empty. With a role recorded, the finalizer logs
+  `iam GetRole <cluster>-<platform>-eval: ... AccessDenied ...; status.evalRoleArn
+  records <arn>` and retries rather than leave the role and its eval-reports
+  grant behind. If the role still exists, restore the operator's read of the
+  tenant path and the finalizer deletes it. If it was deleted out of band, clear
+  the record and the finalizer releases:
+  `kubectl patch platform <name> -n <namespace> --subresource=status --type=merge -p '{"status":{"evalRoleArn":null,"evalNamespace":null}}'`.
+- **Platform held terminating under `--disable-aws`:** an operator without its
+  IAM and EKS clients cannot remove an eval identity a Platform records, so
+  its finalizer logs `status.evalRoleArn records eval role <arn>, and this
+  reconciler has no IAM and EKS clients to remove it ...` and retries. Run the
+  operator with its AWS clients and the finalizer removes the identity and
+  releases. An eval runtime that is no longer configured does not hold it: the
+  finalizer removes whatever `status.evalRoleArn` and `status.evalNamespace`
+  record.

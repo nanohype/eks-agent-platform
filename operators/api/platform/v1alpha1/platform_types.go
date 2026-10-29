@@ -351,6 +351,30 @@ type PlatformStatus struct {
 	// +optional
 	SessionRoleArn string `json:"sessionRoleArn,omitempty"`
 
+	// EvalRoleArn is the per-Platform role the Platform's eval runs hold, bound
+	// by EKS Pod Identity to the eval ServiceAccount the EvalIdentityReady
+	// condition names. A reconcile writes it as soon as it holds the role,
+	// created or found under the tenant path, and binds the role only once that
+	// write has succeeded. It is kept until the finalizer has read the role and
+	// is about to delete it. While it is set, a refused read of the role holds
+	// the finalizer instead of releasing it, and the finalizer removes the eval
+	// identity whether or not the eval runtime is still configured. Empty until
+	// a reconcile holds the role.
+	// +optional
+	EvalRoleArn string `json:"evalRoleArn,omitempty"`
+
+	// EvalNamespace is the eval runtime namespace holding the eval
+	// ServiceAccount and the Pod Identity association that bind
+	// status.evalRoleArn. It is written in the same status write as
+	// status.evalRoleArn and cleared with it. A reconcile that finds the eval
+	// runtime configured with another namespace removes the account and its
+	// association from this one before it records the other, and the finalizer
+	// removes them from this namespace, so a runtime namespace that moves or is
+	// unconfigured after the identity was minted leaves no association naming
+	// the role behind.
+	// +optional
+	EvalNamespace string `json:"evalNamespace,omitempty"`
+
 	// Namespace is the tenant namespace the controller provisioned.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`

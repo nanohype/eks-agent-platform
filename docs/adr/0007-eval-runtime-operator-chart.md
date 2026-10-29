@@ -13,7 +13,7 @@ _builds_ the operator (chart, CRDs, terraform) and is no longer a deploy catalog
 part of the delivery path.
 
 That leaves two candidate homes for the operator's own runtime — the eval-runtime
-(`WorkflowTemplate` + `AnalysisTemplate` + Namespace/SA/RBAC):
+(`WorkflowTemplate` + `AnalysisTemplate` + Namespace + RBAC):
 
 > **Scope.** This decision governs the eval-runtime. The operator ships no SLO
 > manifests: the catalog installs the prometheus-operator CRDs and no ruler, so
@@ -57,8 +57,11 @@ changes the calculus:
   operator's own per-env sizing lives), via the `evalRuntime.*` toggle.
 
 The operator is still the consumer, not the publisher (reason 2): `EvalReconciler` references the
-template by name (`eval-runner`), which the chart keeps byte-identical, along with the
-`eval-runner` namespace + ServiceAccount that the `terraform/components/eval-runtime` IRSA trust pins.
+template by name (`eval-runner`), which the chart keeps byte-identical, and submits runs into the
+`eval-runner` namespace, the name `terraform/components/eval-runtime` publishes to SSM as
+`runner_namespace`; the chart creates the namespace unless `evalRuntime.createNamespace` is off.
+The identity a run holds is not part of the chart: the operator mints one per Platform in that
+namespace ([ARCHITECTURE.md](../../ARCHITECTURE.md#each-platforms-evals-run-under-that-platforms-identity)).
 
 ## Trade-offs
 
@@ -67,7 +70,7 @@ template by name (`eval-runner`), which the chart keeps byte-identical, along wi
   defined by the eks-gitops kube-state-metrics addon's customResourceState config — the single
   source KSM actually loads. This chart consumes those metrics; it does not ship its own
   (duplicate) copy.
-- **The eval IRSA role ARN is injected, not in-chart.** It embeds the AWS account id, so the
+- **The report bucket is injected, not in-chart.** Its name embeds the AWS account id, so the
   eks-gitops `addons-agent-operator` ApplicationSet injects it from a cluster-Secret annotation —
   the same pattern as the operator role.
 
@@ -75,7 +78,7 @@ template by name (`eval-runner`), which the chart keeps byte-identical, along wi
 
 - Implementation: `charts/operator/{files,templates}/eval-runtime/`, `charts/operator/values.yaml`.
 - Consumer: `operators/internal/controller/eval_reconcile.go`.
-- Terraform-side: `terraform/components/eval-runtime/` (IRSA + SSM publication).
+- Terraform-side: `terraform/components/eval-runtime/` (controller log group + SSM publication).
 - Deploy + per-env enablement: `eks-gitops/applicationsets/addons-agent-operator.yaml`,
   `eks-gitops/addons/ai-platform/operator/values*.yaml`.
 - Flow diagram: [`docs/architecture/eval-gating-flow.md`](../architecture/eval-gating-flow.md).

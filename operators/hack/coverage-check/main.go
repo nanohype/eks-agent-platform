@@ -34,10 +34,11 @@ import (
 // 100% override (the rubric's security-critical-100 rule): the tenant and
 // session IAM role reconcilers, the KMS-grant + bucket-policy reconciler, and
 // the policy generators — model scoping, datastore access, capability grants,
-// tenant secrets, and the tenant key policy. These mint the IAM roles, KMS
-// grants, S3 policies, and the per-model, per-datastore, per-capability and
-// per-secret grants that are the tenant isolation boundary; a single uncovered
-// branch there is an unproven security control.
+// tenant secrets, the tenant key policy, and the eval identity's per-Platform
+// eval-reports policy. These mint the IAM roles, KMS grants, S3 policies, and
+// the per-model, per-datastore, per-capability, per-secret and per-Platform
+// eval grants that are the tenant isolation boundary; a single uncovered branch
+// there is an unproven security control.
 //
 // The membership test is what the file GENERATES, not where it sits. Model
 // scoping renders the explicit-Deny document that bounds which Bedrock models a
@@ -70,6 +71,7 @@ var floors = config{
 		"internal/controller/platform_capability_policy.go":     100,
 		"internal/controller/platform_tenant_secrets_policy.go": 100,
 		"internal/controller/platform_tenant_key_policy.go":     100,
+		"internal/controller/platform_eval_identity.go":         100,
 	},
 }
 

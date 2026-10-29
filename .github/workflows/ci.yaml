@@ -674,7 +674,7 @@ jobs:
   # Argo substitutes {{...}} into a template's text before the pod exists, so an
   # expression inside a script's source or a shell's -c program becomes part of
   # the program. The eval steps handle tenant-authored cases and model replies,
-  # and a quote in either would run as shell beside the eval-runner role and
+  # and a quote in either would run as shell beside the Platform's eval role and
   # kubectl. This fails on any expression in code outside an allowlist of
   # Argo-generated values, in every tracked workflow manifest. The self-test
   # runs first: it proves the rule rejects the splices it names and accepts
@@ -909,6 +909,13 @@ jobs:
   # that literal string and score every case zero, reading as a failed model
   # rather than a mispaired release.
   #
+  # The CRD half of the contract — the chart's CRDs decoding the same fields as
+  # the binary's — is reported here as a publication hold rather than failed:
+  # the chart's CRDs are generated from this tree's Go types, so a CRD change
+  # always merges ahead of the release that carries it. release.yaml's
+  # charts-oci job runs the same gate with --release and holds the operator
+  # chart until appVersion names that release.
+  #
   # fetch-depth: 0 because the check resolves appVersion to source through the
   # release tag, and a shallow checkout has no tags to resolve it with.
   runtime-contract:
@@ -920,6 +927,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - run: pip install "pyyaml==${PYYAML_VERSION}"
+      - run: ./scripts/check-runtime-contract.py --self-test
       - run: ./scripts/check-runtime-contract.py --list
 
   # ── vcluster chart acceptance gate ───────────────────────────────────────
@@ -1008,12 +1016,10 @@ jobs:
             elif [[ "$name" == "operator" ]]; then
               # Default state, then the gated eval path so the Files.Get-wrapped
               # Argo CRs are exercised (they don't render at the defaults —
-              # rollouts is off). Only flags the chart actually reads: `slo.*`
-              # exists on charts/tenant, not here, and this chart has no
-              # evalRuntime.serviceAccount.roleArn — Pod Identity binds the role
-              # in AWS, so no ARN is injected. Both were passed here for a while
-              # and set nothing, while the comment claimed they exercised the
-              # alerting CRs.
+              # rollouts is off). Only flags the chart reads: `slo.*` exists on
+              # charts/tenant, not here, and the chart takes no identity for eval
+              # runs — the operator mints one per Platform — so no role ARN or
+              # ServiceAccount is passed.
               helm template "$name" "$d" >/dev/null
               helm template "$name" "$d" \
                 --set evalRuntime.rollouts.enabled=true \

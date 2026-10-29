@@ -32,10 +32,13 @@ See [`values.yaml`](./values.yaml). Highlights:
 
 ### eval-runtime (`evalRuntime.*`)
 
-The Argo Workflows runtime the operator submits EvalSuite runs to (WorkflowTemplate `eval-runner` + the gating AnalysisTemplate + SA/RBAC). Enabled by default; needs the Argo Workflows CRD.
+The Argo Workflows runtime the operator submits EvalSuite runs to (WorkflowTemplate `eval-runner` + the gating AnalysisTemplate + the RBAC its runs hold). Enabled by default; needs the Argo Workflows CRD.
 
-- `evalRuntime.namespace` / `serviceAccount.name` — byte-pinned to the `aws_eks_pod_identity_association` in `terraform/components/eval-runtime` (`eval-runner`/`eval-runner`), which binds the role to that exact namespace/SA pair; change both together or the association matches nothing and the runner gets no credentials
-- No role ARN is passed to this chart. Pod Identity binds the role to the ServiceAccount in AWS, so nothing needs injecting into the manifest — there is no `evalRuntime.serviceAccount.roleArn` value and the ApplicationSet sets none
+Runs hold no shared AWS identity. The operator creates one ServiceAccount per Platform in the eval runtime namespace (`eval-<platform>`), binds it by EKS Pod Identity to a `<cluster>-<platform>-eval` role scoped to that Platform's prefixes in the eval-reports bucket, and submits each run under it once the Platform reports `EvalIdentityReady=True`. The chart creates no ServiceAccount and takes no role ARN for them.
+
+The chart's run RBAC is the Kubernetes half, and it is shared by every Platform's runs. A ClusterRoleBinding gives the eval runtime namespace's ServiceAccount group `get` on `evalsuites` and `get`/`patch` on `evalsuites/status` in every namespace, which is what writeback and the exit handler call; a RoleBinding gives the same group `create`/`patch` on `workflowtaskresults` in the eval runtime namespace for Argo's executor. So any run can read any EvalSuite and patch any suite's status, and nothing on the Kubernetes side keeps one Platform's run off another Platform's score. A grant narrowed to one suite's status would not change that: a step's outputs, the score among them, travel to the next step through `workflowtaskresults`, which Argo's executor writes namespace-wide. What separates Platforms is the IAM role, inside the bucket they share. A run cannot create a Workflow, so it cannot start one under another Platform's account.
+
+- `evalRuntime.namespace` — must equal the `runner_namespace` that `terraform/components/eval-runtime` publishes to SSM: the operator submits runs and creates each Platform's eval ServiceAccount in the namespace it reads there, and this chart installs the WorkflowTemplate and the run RBAC in this one
 - `evalRuntime.evalReportsBucket` — S3 bucket for eval reports (terraform output, injected per-cluster)
 - `evalRuntime.rollouts.enabled` — the AnalysisTemplate; **off by default** (needs the Argo Rollouts CRD)
 
