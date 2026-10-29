@@ -251,9 +251,8 @@ spec:
           elif [ -n "$CASES_MANIFEST" ]; then
             # CASES_MANIFEST is EvalSuite.spec.casesFromManifest, a bare file
             # name the CRD's pattern holds to one path segment. The key is
-            # always built under this platform's own manifests/ prefix: the
-            # eval-runner role reads every platform's, so the prefix is what
-            # keeps a suite to its own platform's manifests.
+            # always built under this platform's own manifests/ prefix, the
+            # only one the platform's eval role can read.
             aws s3 cp "s3://$REPORTS_BUCKET/$PLATFORM/manifests/$CASES_MANIFEST" /tmp/cases.json
           else
             echo "no cases supplied (inline empty + manifest empty)" >&2

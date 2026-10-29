@@ -440,8 +440,9 @@ func (r *PlatformReconciler) deleteEvalIdentity(ctx context.Context, p *platform
 // status.evalNamespace records holds any association binding the recorded
 // role. While this reconciler mints eval identities, the configured namespace
 // is added: a pass creates the account there before it records anything, so an
-// account can sit there unrecorded. With no namespace recorded, the configured
-// namespace is the only one a pass can have created the account in.
+// account can sit there unrecorded. With no namespace recorded, only the
+// configured namespace is checked: an account a pass created and never
+// recorded before the configured namespace moved stays in the earlier one.
 func (r *PlatformReconciler) evalTeardownNamespaces(p *platformv1alpha1.Platform) []string {
 	configured, recorded := r.Eval.namespace(), p.Status.EvalNamespace
 	switch {

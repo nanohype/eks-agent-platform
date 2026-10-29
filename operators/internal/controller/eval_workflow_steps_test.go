@@ -589,9 +589,9 @@ func TestEachStepReceivesItsOwnValues(t *testing.T) {
 
 // TestResolveCasesReadsOnlyThePlatformsManifests hands the resolve-cases step
 // manifest values that name an object outside the platform's own prefix, and
-// checks the step still fetches under <bucket>/<platform>/manifests/. The
-// eval-runner role reads every platform's manifests, so a step that fetched
-// a URI as given would read another platform's cases. The EvalSuite CRD
+// checks the step still fetches under <bucket>/<platform>/manifests/, the only
+// prefix the platform's eval role can read. A step that fetched a URI as given
+// would ask for another platform's cases and fail the run. The EvalSuite CRD
 // admits only a bare file name; this holds the step to building the key
 // itself whatever value reaches it.
 func TestResolveCasesReadsOnlyThePlatformsManifests(t *testing.T) {

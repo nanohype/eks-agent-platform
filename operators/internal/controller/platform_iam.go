@@ -498,9 +498,11 @@ func associationRole(a *ekstypes.PodIdentityAssociation) string {
 	}
 }
 
-// deletePodIdentityAssociation removes the Pod Identity association for the
-// tenant ServiceAccount so the binding doesn't outlive the role. Tolerates a
-// nil EKS client and a missing association so finalizer re-runs are safe.
+// deletePodIdentityAssociation removes the Pod Identity association for
+// serviceAccount in namespace, the tenant's or the eval runner's, so the
+// binding doesn't outlive its role. It runs from the finalizer and from a pass
+// that retires an eval account from a namespace it moved out of, and tolerates
+// a nil EKS client and a missing association so either can repeat safely.
 func (r *PlatformReconciler) deletePodIdentityAssociation(ctx context.Context, cfg IAMConfig, namespace, serviceAccount string) error {
 	if r.EKS == nil || cfg.ClusterName == "" {
 		return nil

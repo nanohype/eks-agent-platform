@@ -138,10 +138,9 @@ spec:
 
                   The value is a bare file name: a letter or digit, then letters, digits,
                   `.`, `_` and `-` with no two dots together, ending in `.json`. A path, a
-                  URI or a `..` segment is refused. The eval-runner role is shared by every
-                  Platform and reads every Platform's `manifests/` prefix, so the key the
-                  run builds from this name is what keeps a suite to its own Platform's
-                  manifests.
+                  URI or a `..` segment is refused, so the key the run builds from this
+                  name stays under the Platform's `manifests/` prefix, the only one its
+                  eval role can read.
                 pattern: ^[A-Za-z0-9](\.?[A-Za-z0-9_-])*\.json$
                 type: string
               passThreshold:
