@@ -1,0 +1,24 @@
+# Fixed CRITICAL vulnerabilities the sandbox-worker image knowingly ships, and
+# why. The image scan in .github/actions/image-scan reads this file for this
+# image alone, in ci.yaml and in release.yaml, and fails on an entry with no
+# expired_at or one that matches nothing in the image it scans. Past its
+# expired_at an entry stops suppressing, so the finding fails the scan until
+# the case is read again.
+#
+# An entry names the file and the exact package version that carry the
+# finding, so a release that moves either one surfaces the finding again
+# rather than inheriting the acknowledgement. It clears by moving the pin that
+# carries the finding, and is deleted in the same change.
+
+vulnerabilities:
+  - id: CVE-2026-33186
+    paths:
+      - usr/local/bin/ant
+    purls:
+      - pkg:golang/google.golang.org/grpc@v1.78.0
+    expired_at: 2027-01-31
+    statement: >-
+      The ant CLI release binary links grpc-go 1.78.0, fixed in 1.79.3. The
+      image installs that binary as published, verified against upstream's
+      checksum, and cannot rebuild it against a patched module. Clears when
+      ANT_VERSION moves to a release that links grpc-go 1.79.3 or later.

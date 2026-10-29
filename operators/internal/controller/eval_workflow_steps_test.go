@@ -497,13 +497,10 @@ func TestNoStepRunsAParameterValueAsCode(t *testing.T) {
 
 				variants := []map[string]string{stepValues(step, attack)}
 				if name == "resolve-cases" {
-					// The manifest branches run only when there are no inline cases.
-					for _, scheme := range []string{"", "s3://"} {
-						v := stepValues(step, attack)
-						v["inputs.parameters.cases-inline"] = ""
-						v["inputs.parameters.cases-manifest"] = scheme + v["inputs.parameters.cases-manifest"]
-						variants = append(variants, v)
-					}
+					// The manifest branch runs only when there are no inline cases.
+					v := stepValues(step, attack)
+					v["inputs.parameters.cases-inline"] = ""
+					variants = append(variants, v)
 				}
 
 				for i, values := range variants {
@@ -588,6 +585,39 @@ func TestEachStepReceivesItsOwnValues(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestResolveCasesReadsOnlyThePlatformsManifests hands the resolve-cases step
+// manifest values that name an object outside the platform's own prefix, and
+// checks the step still fetches under <bucket>/<platform>/manifests/. The
+// eval-runner role reads every platform's manifests, so a step that fetched
+// a URI as given would read another platform's cases. The EvalSuite CRD
+// admits only a bare file name; this holds the step to building the key
+// itself whatever value reaches it.
+func TestResolveCasesReadsOnlyThePlatformsManifests(t *testing.T) {
+	w := parseEvalWorkflow(t)
+	g := wiringGlobals()
+	bucket, platform := g["workflow.parameters.eval-reports-bucket"], g["workflow.parameters.platform"]
+	prefix := "s3://" + bucket + "/" + platform + "/manifests/"
+
+	for _, c := range []struct{ name, manifest string }{
+		{"a URI into another bucket", "s3://elsewhere/" + platform + "/manifests/smoke.json"},
+		{"a URI into another platform's prefix", "s3://" + bucket + "/another-platform/manifests/smoke.json"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			globals := wiringGlobals()
+			globals["workflow.parameters.cases-manifest"] = c.manifest
+			run := runEvalStep(t, w.steps["resolve-cases"], w.wiredValues(t, globals)["resolve-cases"])
+			calls := run.commands("aws")
+			if len(calls) != 1 || len(calls[0]) < 4 || calls[0][1] != "s3" || calls[0][2] != "cp" {
+				t.Fatalf("the resolve-cases step made %q, want one `aws s3 cp`", calls)
+			}
+			if src, want := calls[0][3], prefix+c.manifest; src != want {
+				t.Errorf("the resolve-cases step fetched %q for cases-manifest %q, want %q: the key "+
+					"is built under the platform's own prefix, never taken from the value", src, c.manifest, want)
+			}
+		})
+	}
 }
 
 // TestArgoTagGrammarMatchesTheGate holds this harness and

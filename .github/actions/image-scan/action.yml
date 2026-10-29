@@ -1,0 +1,98 @@
+name: image scan
+description: >-
+  Scans one platform of a container image and fails on any CRITICAL
+  vulnerability with a published fix that the image does not acknowledge, the
+  bar eks-gitops' image gate sets for every image its charts render. Every
+  image this repository releases is held to it twice: per platform in its
+  ci.yaml job on a pull request, and per platform of the pushed digest in its
+  release.yaml job before that digest is tagged or signed.
+
+inputs:
+  image:
+    description: >-
+      The image to scan: a local tag for an image built with load, or a
+      registry reference by digest. A digest naming a multi-platform index is
+      scanned at `platform`.
+    required: true
+  platform:
+    description: >-
+      The platform to scan the image as, such as linux/arm64. The step fails
+      when the image trivy scanned is any other platform.
+    required: true
+  acknowledged:
+    description: >-
+      A trivy ignore file in YAML, relative to the workspace, naming fixed
+      CRITICALs a person has read and accepted for this image. Every entry
+      carries an expired_at date and has to suppress a finding in this scan.
+      Empty for an image that acknowledges nothing, in which case no finding
+      may be suppressed at all.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # The report check runs against fixtures before it is trusted with a real
+    # report, so a check that cannot fail fails here instead of passing.
+    - name: report check self-test
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/verify-report.sh" --self-test
+    - name: report path
+      id: report
+      shell: bash
+      run: echo "path=$(mktemp "$RUNNER_TEMP/image-scan-XXXXXX")" >> "$GITHUB_OUTPUT"
+    # cache: false. The trivy database cache is writable by any workflow on the
+    # repository, including one running from a pull request, so a database
+    # restored from it could clear an image the release then signs.
+    #
+    # trivy-action has no platform input; trivy reads TRIVY_PLATFORM itself.
+    # It selects that platform's manifest from an index, and without it an
+    # index is scanned as linux/amd64 whatever platform the caller names.
+    #
+    # TRIVY_SHOW_SUPPRESSED lists every suppressed finding in the report beside
+    # the file that suppressed it. trivy also reads a .trivyignore in the
+    # working directory without being asked, so the report is where a
+    # suppression from anywhere other than `acknowledged` shows.
+    - name: no fixed CRITICAL
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      env:
+        TRIVY_PLATFORM: ${{ inputs.platform }}
+        TRIVY_SHOW_SUPPRESSED: "true"
+      with:
+        scan-type: image
+        image-ref: ${{ inputs.image }}
+        scanners: vuln
+        severity: CRITICAL
+        ignore-unfixed: true
+        exit-code: "1"
+        format: json
+        output: ${{ steps.report.outputs.path }}
+        trivyignores: ${{ inputs.acknowledged }}
+        cache: false
+        # The scanner's release is part of the verdict, so it is pinned here
+        # rather than left to whatever the action defaults to.
+        # renovate: datasource=github-releases depName=aquasecurity/trivy
+        version: v0.72.0
+    # The report is JSON so the step after this one can read it. This prints
+    # it as the tables trivy would have, suppressed findings included, whether
+    # the scan passed or not.
+    - name: findings
+      if: always() && steps.report.outputs.path != ''
+      shell: bash
+      env:
+        REPORT: ${{ steps.report.outputs.path }}
+      run: |
+        if [ ! -s "$REPORT" ]; then
+          echo "trivy wrote no report; its own output above says why"
+          exit 0
+        fi
+        trivy convert --format table --show-suppressed --scanners vuln "$REPORT"
+    - name: scanned the platform named, suppressed only what is acknowledged
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        PLATFORM: ${{ inputs.platform }}
+        ACKNOWLEDGED: ${{ inputs.acknowledged }}
+        REPORT: ${{ steps.report.outputs.path }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/verify-report.sh" "$REPORT" "$IMAGE" "$PLATFORM" ${ACKNOWLEDGED:+"$ACKNOWLEDGED"}

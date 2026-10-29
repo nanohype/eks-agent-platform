@@ -132,8 +132,17 @@ spec:
                 type: array
               casesFromManifest:
                 description: |-
-                  CasesFromManifest loads from `eval-reports/<platform>/manifests/<name>.json`
-                  in the eval-reports S3 bucket.
+                  CasesFromManifest names the JSON file the suite's cases load from, such
+                  as `smoke.json`. The run reads `<platform>/manifests/<casesFromManifest>`
+                  in the eval-reports S3 bucket, under the referenced Platform's own prefix.
+
+                  The value is a bare file name: a letter or digit, then letters, digits,
+                  `.`, `_` and `-` with no two dots together, ending in `.json`. A path, a
+                  URI or a `..` segment is refused. The eval-runner role is shared by every
+                  Platform and reads every Platform's `manifests/` prefix, so the key the
+                  run builds from this name is what keeps a suite to its own Platform's
+                  manifests.
+                pattern: ^[A-Za-z0-9](\.?[A-Za-z0-9_-])*\.json$
                 type: string
               passThreshold:
                 default: "0.85"

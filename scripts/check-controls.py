@@ -305,10 +305,10 @@ CONTROLS = [
         before='"managerFilePatterns": ["/^\\\\.github/(workflows/[^/]+|actions/[^/]+/action)\\\\.ya?ml$/"]',
         after='"managerFilePatterns": ["/^\\\\.github/workflows/[^/]+\\\\.ya?ml$/"]',
         catches="a manager whose file patterns stop reaching a file its regex still matches: the "
-        "trivy release the eval-runner image check pins inside its composite action. Renovate "
-        "applies a manager only to the files its managerFilePatterns select, so the pin goes "
-        "unwatched while its text still matches. This also proves the gate reads .github/actions/",
-        expect_output="eval-runner-image-check/action.yml: aquasecurity/trivy",
+        "trivy release the image scan pins inside its composite action. Renovate applies a "
+        "manager only to the files its managerFilePatterns select, so the pin goes unwatched "
+        "while its text still matches. This also proves the gate reads .github/actions/",
+        expect_output="image-scan/action.yml: aquasecurity/trivy",
     ),
     Control(
         gate="check-version-pins.py",
@@ -339,29 +339,63 @@ CONTROLS = [
     # 1 means a changed path is an image input and the image has to be built. It
     # reads the working tree against HEAD by default, so the mutation IS the
     # change it classifies. The failure it exists to prevent is the quiet one —
-    # a dependency change scoped out, so CI builds nothing and passes — so the
-    # reject control edits a package the image reaches only through the
-    # workspace graph, never by name.
+    # an input change scoped out, so CI builds nothing and passes — so the
+    # eval-runner reject control edits a package the image reaches only through
+    # the workspace graph, never by name, and the operator and sandbox-worker
+    # ones each edit a file in that image's build context.
     Control(
-        gate="check-eval-runner-image-scope.py",
+        gate="check-image-scope.py",
         path="packages/pricing/src/index.ts",
         before="import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };",
         after="import bedrockPricing from './data/bedrock-pricing.json' with { type: 'json' };\n"
         "// zzsynthetic-scope-control",
+        args=["--image", "eval-runner"],
         catches="a change under a workspace package eval-runner depends on, which the image "
         "bundles and the eval-runner-image job therefore has to build",
         expect_output="in scope: packages/pricing/src/index.ts",
     ),
     Control(
-        gate="check-eval-runner-image-scope.py",
+        gate="check-image-scope.py",
+        path="operators/cmd/main.go",
+        before="\npackage main\n",
+        after="\npackage main\n\n// zzsynthetic-scope-control\n",
+        args=["--image", "operator"],
+        catches="a change to operator source, which the operator image compiles and the "
+        "operator-image job therefore has to build",
+        expect_output="in scope: operators/cmd/main.go",
+    ),
+    Control(
+        gate="check-image-scope.py",
+        path="sandbox-worker/Dockerfile",
+        before="# syntax=docker/dockerfile:1\n",
+        after="# syntax=docker/dockerfile:1\n# zzsynthetic-scope-control\n",
+        args=["--image", "sandbox-worker"],
+        catches="a change to the sandbox-worker Dockerfile, which the sandbox-worker-image job "
+        "therefore has to build",
+        expect_output="in scope: sandbox-worker/Dockerfile",
+    ),
+    Control(
+        gate="check-image-scope.py",
         path="docs/architecture/eval-gating-flow.md",
         before="# Architecture — Eval gating flow\n",
         after="# Architecture — Eval gating flow\n\nzzsynthetic-scope-control\n",
         args=["--list"],
-        catches="a documentation-only change, which must NOT be scoped into the image build. The "
+        catches="a documentation-only change, which must NOT be scoped into any image build. The "
         "expected line names the planted path, so a gate that never saw the change cannot pass "
         "this control by reporting nothing to build",
         expect_output="out of scope: docs/architecture/eval-gating-flow.md",
+        expect_reject=False,
+    ),
+    Control(
+        gate="check-image-scope.py",
+        path="operators/cmd/main.go",
+        before="\npackage main\n",
+        after="\npackage main\n\n// zzsynthetic-scope-control\n",
+        args=["--image", "sandbox-worker", "--list"],
+        catches="an operator change, which must NOT be scoped into the sandbox-worker build: each "
+        "image job decides its own image, so a scope that let one image's inputs reach another "
+        "would build every image on every change",
+        expect_output="out of scope: operators/cmd/main.go",
         expect_reject=False,
     ),
     Control(

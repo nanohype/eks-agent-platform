@@ -263,7 +263,8 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 
 		// Parameters consumed by the platform-shared eval-runner template:
 		//   - platform / tenant / fleet → target the right tenant namespace
-		//   - cases-source → either inline JSON or s3://… manifest
+		//   - cases-inline or cases-manifest → inline JSON, or the file name of
+		//     a manifest under the Platform's own manifests/ prefix
 		//   - pass-threshold → AnalysisTemplate gate value
 		// []any, not []map[string]any. This slice is handed to
 		// unstructured.SetNestedField, whose deep copy walks only the
