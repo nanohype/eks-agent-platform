@@ -38,7 +38,7 @@ sequenceDiagram
   alt cases-inline non-empty
     RC->>RC: parse inline JSON
   else cases-manifest set
-    RC->>S3: aws s3 cp manifest.json
+    RC->>S3: aws s3 cp {platform}/manifests/{casesFromManifest}
   end
   RC-->>WF: /tmp/cases.json
 

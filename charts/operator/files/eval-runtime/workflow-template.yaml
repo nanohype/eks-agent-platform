@@ -16,7 +16,8 @@
 #   1. resolve-cases  — emit the case list as JSON to /tmp/cases.json
 #      (inline branch copies the inline-cases raw artifact, which Argo
 #      writes to /tmp/inline-cases.json; manifest branch pulls from
-#      s3://<eval-reports>/<platform>/manifests/<name>.json)
+#      s3://<eval-reports>/<platform>/manifests/<cases-manifest>, and from
+#      nowhere else)
 #   2. run-cases      — iterate cases, invoke the agent under test via
 #      the Platform's ModelGateway, capture latency + output. Emits
 #      per-case JSON results to /tmp/results.json.
@@ -241,12 +242,12 @@ spec:
           if [ -s /tmp/inline-cases.json ] && [ "$(cat /tmp/inline-cases.json)" != "[]" ]; then
             cp /tmp/inline-cases.json /tmp/cases.json
           elif [ -n "$CASES_MANIFEST" ]; then
-            # CASES_MANIFEST is an s3:// URI or a bare key under
-            # <platform>/manifests/<name>.json
-            case "$CASES_MANIFEST" in
-              s3://*) aws s3 cp "$CASES_MANIFEST" /tmp/cases.json ;;
-              *)      aws s3 cp "s3://$REPORTS_BUCKET/$PLATFORM/manifests/$CASES_MANIFEST" /tmp/cases.json ;;
-            esac
+            # CASES_MANIFEST is EvalSuite.spec.casesFromManifest, a bare file
+            # name the CRD's pattern holds to one path segment. The key is
+            # always built under this platform's own manifests/ prefix: the
+            # eval-runner role reads every platform's, so the prefix is what
+            # keeps a suite to its own platform's manifests.
+            aws s3 cp "s3://$REPORTS_BUCKET/$PLATFORM/manifests/$CASES_MANIFEST" /tmp/cases.json
           else
             echo "no cases supplied (inline empty + manifest empty)" >&2
             exit 1
