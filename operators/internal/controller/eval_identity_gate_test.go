@@ -36,7 +36,7 @@ func assertNoEvalWorkflow(ctx context.Context, t *testing.T, c client.Client, na
 // reports its eval identity bound, and the suite says why while it waits. The
 // ServiceAccount exists in every case: a Platform pass that failed after
 // creating it leaves an account with no role behind it, and a run under that
-// holds no AWS credential.
+// does not hold the eval role.
 func TestEvalRunWaitsForABoundIdentity(t *testing.T) {
 	cases := []struct {
 		name string

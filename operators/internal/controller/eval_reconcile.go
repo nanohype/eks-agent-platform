@@ -455,8 +455,9 @@ func buildInlineCasesParam(cases []governancev1alpha1.EvalCase) (string, error) 
 // Pending when this reconciler would not submit a run for it now, and a
 // schedule left running would submit that same run on its own, under the same
 // missing precondition: an eval identity unbound, deleted or never minted, a
-// Platform or fleet absent or not Ready, no reports bucket, no published
-// route. Every Pending pass requeues, and the pass that finds the
+// Platform or fleet absent or not Ready, Argo Workflows not installed, no
+// reports bucket, no ModelGateway or none that has published its route
+// contract. Every Pending pass requeues, and the pass that finds the
 // preconditions met rewrites the schedule's spec, which resumes it.
 func (r *EvalReconciler) suspendSchedule(ctx context.Context, suite *governancev1alpha1.EvalSuite) error {
 	cw := &unstructured.Unstructured{}

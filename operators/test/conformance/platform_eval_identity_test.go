@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
@@ -881,5 +882,85 @@ func TestPlatformReconciler_EvalIdentityFollowsAMovedRuntimeNamespace(t *testing
 	}
 	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the finalizer was not released (err=%v)", err)
+	}
+}
+
+// TestPlatformReconciler_NoEvalIdentityConditionWhileNoneIsMinted: an operator
+// that mints no eval identity — the cluster runs no eval runtime, or the
+// operator is missing its IAM or EKS client — writes no EvalIdentityReady
+// condition, and its pass removes the one an earlier pass wrote. False there
+// would report a pass that failed when none was attempted, and a True left
+// standing would vouch for an identity no pass converges any longer.
+func TestPlatformReconciler_NoEvalIdentityConditionWhileNoneIsMinted(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	cases := []struct {
+		name      string
+		unmanaged func(*memIAM, *memEKS) *controller.PlatformReconciler
+	}{
+		{"no eval runtime", func(i *memIAM, e *memEKS) *controller.PlatformReconciler {
+			r := newEvalIdentityReconciler(i, e, "")
+			r.Eval = controller.EvalIdentityConfig{}
+			return r
+		}},
+		{"no EKS client", func(i *memIAM, e *memEKS) *controller.PlatformReconciler {
+			r := newEvalIdentityReconciler(i, e, evalBucket)
+			r.EKS = nil
+			return r
+		}},
+		{"no IAM client", func(i *memIAM, e *memEKS) *controller.PlatformReconciler {
+			r := newEvalIdentityReconciler(i, e, evalBucket)
+			r.IAM = nil
+			return r
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			iamFake, eksFake := newMemIAM(), newMemEKS()
+			unmanaged := c.unmanaged(iamFake, eksFake)
+
+			fresh := evalPlatform(ctx, t, "fresh")
+			reconcileSettled(ctx, t, unmanaged, fresh)
+			assertNoEvalIdentityCondition(ctx, t, fresh)
+			err := k8sClient.Get(ctx, types.NamespacedName{Namespace: evalRuntimeNs, Name: controller.EvalServiceAccountName(fresh)}, &corev1.ServiceAccount{})
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("eval ServiceAccount created by an operator that mints no eval identity (err=%v)", err)
+			}
+
+			bound := evalPlatform(ctx, t, "bound")
+			reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), bound)
+			assertEvalIdentityCondition(ctx, t, bound, metav1.ConditionTrue, "Bound", evalRoleFor(bound))
+			reconcileSettled(ctx, t, unmanaged, bound)
+			assertNoEvalIdentityCondition(ctx, t, bound)
+		})
+	}
+}
+
+// reconcileSettled drives Reconcile until it stops asking to be run again
+// straight away: no requeue, which is where a reconciler with no IAM client
+// ends, or the periodic poll requeue an IAM-wired one ends with.
+func reconcileSettled(ctx context.Context, t *testing.T, r *controller.PlatformReconciler, p *platformv1alpha1.Platform) {
+	t.Helper()
+	for i := 0; i < 5; i++ {
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}})
+		if err != nil {
+			t.Fatalf("reconcile attempt %d: %v", i+1, err)
+		}
+		if res.RequeueAfter == 0 || res.RequeueAfter >= 60*time.Second {
+			return
+		}
+	}
+	t.Fatalf("reconcile did not settle in 5 attempts")
+}
+
+// assertNoEvalIdentityCondition checks that the Platform, as the API server
+// holds it, carries no EvalIdentityReady condition.
+func assertNoEvalIdentityCondition(ctx context.Context, t *testing.T, p *platformv1alpha1.Platform) {
+	t.Helper()
+	got := getPlatform(ctx, t, p.Namespace, p.Name)
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, condEvalIdentityReady); c != nil {
+		t.Errorf("%s: %s = %s (%s) %q from an operator that mints no eval identity", p.Name, condEvalIdentityReady, c.Status, c.Reason, c.Message)
 	}
 }

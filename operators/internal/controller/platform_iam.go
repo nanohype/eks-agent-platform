@@ -110,9 +110,12 @@ const (
 // role suffix.
 const MaxClusterNameLen = iamRoleNameMax - len("-") - boundedNameHashLen - len(schedulerInvokeRoleSuffix)
 
-// ValidateClusterName rejects a cluster name too long for the role names derived
-// from it to fit IAM's role-name limit. Every Platform's CreateRole would fail
-// on such a name at reconcile time, so the operator refuses it at startup.
+// ValidateClusterName rejects a cluster name too long for every role name
+// derived from it to fit IAM's role-name limit. On such a name, a Platform whose
+// name boundedName has to cut gets a role name over that limit, whose
+// CreateRole IAM refuses at reconcile time. main.go calls it at startup on the
+// AWS path, the only one that mints roles, so the operator refuses the name
+// before it mints anything.
 func ValidateClusterName(name string) error {
 	if len(name) > MaxClusterNameLen {
 		return fmt.Errorf("cluster name %q is %d characters; the role names the operator derives from it "+
@@ -122,10 +125,11 @@ func ValidateClusterName(name string) error {
 	return nil
 }
 
-// tenantPath is the IAM path every operator-minted tenant-scoped role is
-// created under, normalized to the trailing slash IAM requires. The operator's
-// own IAM grants are scoped to this path, so a role created anywhere else is
-// one it cannot manage afterwards.
+// tenantPath is the IAM path the operator creates a Platform's tenant, session
+// and eval roles under, normalized to the trailing slash IAM requires. The
+// operator's own IAM grants on those roles are scoped to this path, so one of
+// them created anywhere else is one it cannot manage afterwards. The
+// scheduler-invoke role sits at the root path instead (schedulerInvokeRoleName).
 func (c IAMConfig) tenantPath() string {
 	path := orDefault(c.TenantIAMPath, "/eks-agent-platform/tenants/")
 	if !strings.HasSuffix(path, "/") {

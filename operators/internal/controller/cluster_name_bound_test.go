@@ -71,7 +71,8 @@ func TestValidateClusterName(t *testing.T) {
 }
 
 // TestChartCapsClusterNameAtTheOperatorsBound: the chart refuses at render
-// time the cluster names the operator refuses at startup, and no others.
+// time the cluster names the operator refuses at startup on the AWS path, and
+// no others.
 func TestChartCapsClusterNameAtTheOperatorsBound(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "charts", "operator", "values.schema.json"))
 	if err != nil {

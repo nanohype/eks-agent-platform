@@ -61,7 +61,8 @@ config:
   # role the operator mints for a Platform, isolating co-located sibling
   # clusters. Required — set per cluster at install time. values.schema.json
   # caps its length at what keeps every role name it prefixes within IAM's
-  # 64-character limit; the operator refuses a longer one at startup.
+  # 64-character limit; the operator refuses a longer one at startup, unless run
+  # with --disable-aws, which mints no role.
   clusterName: ""
   region: us-west-2
   # Org-dimension tag values stamped on the tenant IAM roles the operator

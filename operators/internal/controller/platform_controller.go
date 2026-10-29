@@ -94,7 +94,8 @@ type PlatformReconciler struct {
 	// ArtifactsBucketName, Environment.
 	AWSCfg PlatformAWSConfig
 	// Eval locates the eval runtime each Platform's eval identity is minted
-	// into. The zero value (no reports bucket) reconciles no eval identity.
+	// into. The zero value (no reports bucket) mints no eval identity; the
+	// finalizer still removes one a Platform records (deleteEvalIdentity).
 	Eval EvalIdentityConfig
 
 	// VCluster builds the per-Platform virtual-cluster client for the vcluster

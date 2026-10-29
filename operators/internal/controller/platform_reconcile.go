@@ -57,13 +57,15 @@ func PlatformNamespace(p *platformv1alpha1.Platform) string {
 // FNV-1a hash before the suffix: two long names that share the cut prefix still
 // map to different results (~32 bits of collision resistance), and the suffix
 // survives intact, which matters because IAM grants and the kill-switch match
-// role names on it. Every per-Platform name the operator derives — the tenant
-// namespace, the eval ServiceAccount, the tenant, session, eval and
-// scheduler-invoke role names — goes through here, so they truncate alike.
+// role names on it. The tenant namespace and the eval ServiceAccount, held to
+// Kubernetes' 63-character label limit, and the tenant, session, eval and
+// scheduler-invoke role names, held to IAM's 64-character role-name limit, go
+// through here, so they truncate alike.
 //
 // A prefix and suffix that leave no room for the hash yield a name over maxLen.
-// The role-name prefix is the only one that varies, and ValidateClusterName
-// refuses at startup a cluster name that would leave a role name there.
+// The role-name prefix is the only one that varies, and on the AWS path, the
+// only one that mints roles, the operator refuses at startup a cluster name
+// that would leave a role name there (ValidateClusterName).
 func boundedName(prefix, name, suffix string, maxLen int) string {
 	full := prefix + name + suffix
 	if len(full) <= maxLen {

@@ -80,10 +80,10 @@ func (c EvalIdentityConfig) namespace() string { return evalRuntimeNamespace(c.N
 
 // evalIdentityWired reports whether this reconciler mints eval identities: an
 // eval runtime is configured, and the IAM and EKS clients the role and its
-// association are made with are wired. On a running operator the three arrive
-// together, because the eval-reports bucket is read from SSM through the same
-// AWS clients. Without either client there is no role a run could be bound to,
-// so nothing is created and the Platform reports no EvalIdentityReady
+// association are made with are wired. On a running operator the eval-reports
+// bucket never arrives without the clients, because it is read from SSM through
+// them. Missing the IAM or the EKS client, there is no role a run could be bound
+// to, so nothing is created and the Platform reports no EvalIdentityReady
 // condition. Teardown is not gated on it: deleteEvalIdentity removes whatever
 // status.evalRoleArn and status.evalNamespace record, whatever this reconciler
 // is configured with.
