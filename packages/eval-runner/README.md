@@ -120,11 +120,12 @@ of that digest; and only then tags, cosign-signs and SPDX SBOM-attests the
 same digest, after reading each tag back to confirm it resolves there. The
 check is `.github/actions/eval-runner-image-check`: `packages/eval-runner/scripts/smoke-image.sh`
 (`score` reproduces `testdata/score.golden.json`, the tools run, no package
-manager is on `PATH`) and a trivy scan failing on any fixed CRITICAL. The
-`eval-runner-image` job in `ci.yaml` runs the same check on each platform for
-every pull request that changes what the image is built from, a scope
-`scripts/check-eval-runner-image-scope.py` decides. Run the smoke against a
-local build:
+manager is on `PATH`) and `.github/actions/image-scan`, the trivy scan every
+released image passes, failing on any fixed CRITICAL. The `eval-runner-image`
+job in `ci.yaml` runs the same check on each platform for every pull request
+that changes what the image is built from, a scope
+`scripts/check-image-scope.py --image eval-runner` decides. Run the smoke
+against a local build:
 
 ```sh
 docker buildx build --platform linux/arm64 --load -t eval-runner:dev \

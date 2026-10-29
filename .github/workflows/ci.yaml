@@ -193,8 +193,8 @@ jobs:
       # This job runs EVERY gate for real, so it needs every binary any gate
       # asserts a precondition on — not only the ones its own name suggests.
       # check-vcluster-chart resolves the operator constants with go, and
-      # check-eval-runner-image-scope reads the workspace graph with pnpm, which
-      # needs node and no install.
+      # check-image-scope reads the workspace graph with pnpm, which needs node
+      # and no install.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: operators/go.mod
@@ -698,15 +698,14 @@ jobs:
   # builds each release platform from the pull request and runs
   # .github/actions/eval-runner-image-check against it, the check the release
   # runs on every platform before it tags or signs: the `score` golden smoke,
-  # node / aws / kubectl / jq present, no package manager, and the bar
-  # eks-gitops' image gate sets for every image its charts render, no fixed
-  # CRITICAL.
+  # node / aws / kubectl / jq present, no package manager, and
+  # .github/actions/image-scan, the scan every released image passes.
   #
   # Scoped to the pull requests that can change the image, which
-  # scripts/check-eval-runner-image-scope.py decides from the workspace graph.
-  # Outside that scope the job runs and builds nothing rather than being
-  # skipped, because the merge gate counts a skipped job as a failure. A push to
-  # main always builds.
+  # scripts/check-image-scope.py decides from the workspace graph. Outside that
+  # scope the job runs and builds nothing rather than being skipped, because
+  # the merge gate counts a skipped job as a failure. A push to main always
+  # builds.
   eval-runner-image:
     name: eval-runner image (${{ matrix.platform }})
     runs-on: ubuntu-latest
@@ -726,7 +725,7 @@ jobs:
         with:
           node-version-file: package.json
           package-manager-cache: false
-      - run: ./scripts/check-eval-runner-image-scope.py --self-test
+      - run: ./scripts/check-image-scope.py --self-test
       # The script's exit status is the verdict: 0 nothing to build, 1 build,
       # anything else means the scope could not be decided, and the job fails.
       - name: scope
@@ -742,7 +741,7 @@ jobs:
           # A pull_request checkout is the merge commit, and its first parent is
           # the base it merges into, so this is exactly what the PR changes.
           rc=0
-          ./scripts/check-eval-runner-image-scope.py --base HEAD^1 --head HEAD --list || rc=$?
+          ./scripts/check-image-scope.py --image eval-runner --base HEAD^1 --head HEAD --list || rc=$?
           case "$rc" in
             0) echo "build=false" >> "$GITHUB_OUTPUT" ;;
             1) echo "build=true" >> "$GITHUB_OUTPUT" ;;
@@ -768,6 +767,129 @@ jobs:
         with:
           image: eval-runner:ci
           platform: ${{ matrix.platform }}
+
+  # ── operator image ───────────────────────────────────────────────────────
+  # Outside this job only release.yaml builds the operator image — on a tag,
+  # after the merge — and it scans each platform of the pushed digest before it
+  # tags or signs it. A change that breaks the build, or brings a fixed CRITICAL
+  # into the image, would otherwise merge green and surface as a release that
+  # cannot publish. This builds each release platform from the pull request and
+  # runs the same scan against it, .github/actions/image-scan.
+  #
+  # Scoped the way eval-runner-image is, by scripts/check-image-scope.py, here
+  # from the image's build context: out of scope the job builds nothing rather
+  # than being skipped, and a push to main always builds.
+  operator-image:
+    name: operator image (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # The scope compares the merge commit with its first parent.
+          fetch-depth: 2
+      - run: ./scripts/check-image-scope.py --self-test
+      # The script's exit status is the verdict: 0 nothing to build, 1 build,
+      # anything else means the scope could not be decided, and the job fails.
+      - name: scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "scope: a $EVENT builds unconditionally"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull_request checkout is the merge commit, and its first parent is
+          # the base it merges into, so this is exactly what the PR changes.
+          rc=0
+          ./scripts/check-image-scope.py --image operator --base HEAD^1 --head HEAD --list || rc=$?
+          case "$rc" in
+            0) echo "build=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "build=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+      - if: steps.scope.outputs.build == 'true'
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - if: steps.scope.outputs.build == 'true'
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: build
+        if: steps.scope.outputs.build == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: operators/
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: operator:ci
+      - name: scan
+        if: steps.scope.outputs.build == 'true'
+        uses: $/.github/actions/image-scan
+        with:
+          image: operator:ci
+          platform: ${{ matrix.platform }}
+
+  # ── sandbox-worker image ─────────────────────────────────────────────────
+  # The same build and scan for the sandbox worker, for the same reason. Its
+  # scan reads sandbox-worker/.trivyignore.yaml, the fixed CRITICALs this image
+  # acknowledges and until when, and fails on an entry the image it scanned
+  # does not carry.
+  sandbox-worker-image:
+    name: sandbox-worker image (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # The scope compares the merge commit with its first parent.
+          fetch-depth: 2
+      - run: ./scripts/check-image-scope.py --self-test
+      # The script's exit status is the verdict: 0 nothing to build, 1 build,
+      # anything else means the scope could not be decided, and the job fails.
+      - name: scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "scope: a $EVENT builds unconditionally"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull_request checkout is the merge commit, and its first parent is
+          # the base it merges into, so this is exactly what the PR changes.
+          rc=0
+          ./scripts/check-image-scope.py --image sandbox-worker --base HEAD^1 --head HEAD --list || rc=$?
+          case "$rc" in
+            0) echo "build=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "build=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+      - if: steps.scope.outputs.build == 'true'
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - if: steps.scope.outputs.build == 'true'
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: build
+        if: steps.scope.outputs.build == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: sandbox-worker/
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: sandbox-worker:ci
+      - name: scan
+        if: steps.scope.outputs.build == 'true'
+        uses: $/.github/actions/image-scan
+        with:
+          image: sandbox-worker:ci
+          platform: ${{ matrix.platform }}
+          acknowledged: sandbox-worker/.trivyignore.yaml
 
   # ── runtime contract gate ────────────────────────────────────────────────
   # The chart and the binary are one contract in two files: the eval
@@ -1113,6 +1235,8 @@ jobs:
         eval-workflow,
         argo-script-splices,
         eval-runner-image,
+        operator-image,
+        sandbox-worker-image,
         runtime-contract,
         vcluster-chart,
         image-refs,
