@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -129,8 +130,17 @@ func (f *fakeIAM) CreateRole(_ context.Context, params *iam.CreateRoleInput, _ .
 	name := aws.ToString(params.RoleName)
 	arn := "arn:aws:iam::123456789012:role/" + name
 	f.seedRole(name, arn, params.Tags...)
-	f.roles[name].Path = params.Path
-	return &iam.CreateRoleOutput{Role: f.roles[name]}, nil
+	role := f.roles[name]
+	role.Path = params.Path
+	// GetRole returns the trust policy URL-encoded, as IAM does.
+	role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(params.AssumeRolePolicyDocument)))
+	if params.PermissionsBoundary != nil {
+		role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{
+			PermissionsBoundaryArn:  params.PermissionsBoundary,
+			PermissionsBoundaryType: iamtypes.PermissionsBoundaryAttachmentTypePolicy,
+		}
+	}
+	return &iam.CreateRoleOutput{Role: role}, nil
 }
 
 func (f *fakeIAM) GetRole(_ context.Context, params *iam.GetRoleInput, _ ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
@@ -167,6 +177,9 @@ func (f *fakeIAM) UpdateAssumeRolePolicy(_ context.Context, params *iam.UpdateAs
 		return nil, f.updateAssumeErr
 	}
 	f.updateAssumeCalls = append(f.updateAssumeCalls, *params)
+	if role, ok := f.roles[aws.ToString(params.RoleName)]; ok {
+		role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(params.PolicyDocument)))
+	}
 	return &iam.UpdateAssumeRolePolicyOutput{}, nil
 }
 

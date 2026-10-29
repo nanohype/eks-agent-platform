@@ -152,7 +152,7 @@ func TestEachPlatformsRunsHoldItsOwnIdentity(t *testing.T) {
 		fleet.Spec.PlatformRef.Name = name
 		r := &EvalReconciler{RunnerNamespace: "eval-runner", ReportsBucket: testReportsBucket}
 		c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
-			WithObjects(publishedGateway(platform, "chat"), boundEvalIdentity(r, platform)).Build()
+			WithObjects(publishedGateway(platform, "chat"), boundEvalIdentity(r, platform), platform).Build()
 		r.Client = c
 		if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
 			t.Fatalf("%s: %v", name, err)

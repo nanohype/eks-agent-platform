@@ -149,6 +149,12 @@ func (m *memIAM) hasRole(name string) bool {
 	return ok
 }
 
+func (m *memIAM) trustUpdateCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.trustUpdates
+}
+
 func (m *memIAM) putCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -328,10 +334,13 @@ func TestPlatformReconciler_EvalIdentityConvergesOnUpdate(t *testing.T) {
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
 
 	// A converged pass writes nothing.
-	puts := iamFake.putCount()
+	puts, trusts := iamFake.putCount(), iamFake.trustUpdateCount()
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
 	if got := iamFake.putCount(); got != puts {
 		t.Errorf("a converged reconcile made %d PutRolePolicy calls", got-puts)
+	}
+	if got := iamFake.trustUpdateCount(); got != trusts {
+		t.Errorf("a converged reconcile made %d UpdateAssumeRolePolicy calls", got-trusts)
 	}
 
 	// A policy widened out of band is narrowed back.
@@ -344,6 +353,47 @@ func TestPlatformReconciler_EvalIdentityConvergesOnUpdate(t *testing.T) {
 	const moved = "conformance-111111111111-us-west-2-eval-reports-2"
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, moved), p)
 	assertEvalPolicy(t, iamFake, p, moved)
+}
+
+// TestPlatformReconciler_EvalRoleNotInTheMintedShapeIsLeftAlone: a role of the
+// eval role's name under the tenant path that does not carry the operator's
+// ManagedBy tag is refused through the whole reconcile. The Platform reports
+// the refusal on EvalIdentityReady, nothing is written to the role, recorded or
+// bound to it, and the finalizer releases with the role still in place.
+func TestPlatformReconciler_EvalRoleNotInTheMintedShapeIsLeftAlone(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+	ensureEvalRuntimeNs(ctx, t)
+
+	iamFake, eksFake := newMemIAM(), newMemEKS()
+	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
+	p := evalPlatform(ctx, t, "p")
+	iamFake.seedRole(evalRoleFor(p))
+	reconcileIAM(ctx, t, r, p)
+
+	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionFalse, "ReconcileFailed", `is tagged ManagedBy="", not "eks-agent-platform"`)
+	if _, ok := iamFake.inlinePolicy(evalRoleFor(p), evalPolicyName); ok {
+		t.Error("the eval grant was written onto a role the operator does not hold")
+	}
+	if _, ok := eksFake.roleFor(evalRuntimeNs, controller.EvalServiceAccountName(p)); ok {
+		t.Error("the eval account was bound to a role the operator does not hold")
+	}
+	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalRoleArn; got != "" {
+		t.Errorf("status.evalRoleArn = %q, want nothing recorded for a refused role", got)
+	}
+
+	if err := k8sClient.Delete(ctx, p); err != nil {
+		t.Fatalf("delete platform: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}); err != nil {
+		t.Fatalf("finalizer reconcile: %v", err)
+	}
+	if !iamFake.hasRole(evalRoleFor(p)) {
+		t.Errorf("the finalizer deleted %s, a role the operator does not hold", evalRoleFor(p))
+	}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: p.Namespace}, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the finalizer was not released (err=%v)", err)
+	}
 }
 
 func TestPlatformReconciler_EvalIdentityRemovedOnDelete(t *testing.T) {

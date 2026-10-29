@@ -438,6 +438,9 @@ func TestEnsureEvalIdentity_ConvergedPassWritesNothing(t *testing.T) {
 		t.Errorf("writes over three passes: CreateRole %d, PutRolePolicy %d, CreatePodIdentityAssociation %d, status patches %d; want 1 each",
 			len(f.createCalls), len(f.putInlineCalls), len(fe.createCalls), statusPatches)
 	}
+	if n := len(f.updateAssumeCalls); n != 0 {
+		t.Errorf("UpdateAssumeRolePolicy calls = %d over three passes; the trust the role was created with is already converged", n)
+	}
 }
 
 // TestEnsureEvalIdentity_ConvergesThePolicy covers the update path: a policy
@@ -758,32 +761,206 @@ func TestDeleteEvalIdentity_ReleasesWhenNoRoleWasMinted(t *testing.T) {
 	}
 }
 
-// TestEvalRoleOutsideTheTenantPathIsNeverAdopted: the operator mints the eval
-// role only under the tenant path, so a role of its name anywhere else is not
-// one it minted. It is neither written to, bound to the Platform's runs, nor
-// deleted with the Platform.
-func TestEvalRoleOutsideTheTenantPathIsNeverAdopted(t *testing.T) {
+// heldEvalRole is the eval role in the shape ensureEvalRole creates it under
+// the reconciler's configuration, for evalRoleMismatch cases to vary.
+func heldEvalRole(cfg IAMConfig) *iamtypes.Role {
+	role := &iamtypes.Role{
+		RoleName: aws.String("production-cluster-analytics-eval"),
+		Path:     aws.String(cfg.tenantPath()),
+		Tags:     evalRoleTags(newPlatform("analytics", "acme"), cfg),
+	}
+	if cfg.TenantPermissionsBoundaryARN != "" {
+		role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{PermissionsBoundaryArn: aws.String(cfg.TenantPermissionsBoundaryARN)}
+	}
+	return role
+}
+
+// withTag returns tags with key set to value, or removed when value is empty.
+func withTag(tags []iamtypes.Tag, key, value string) []iamtypes.Tag {
+	out := make([]iamtypes.Tag, 0, len(tags)+1)
+	for _, t := range tags {
+		if aws.ToString(t.Key) != key {
+			out = append(out, t)
+		}
+	}
+	if value != "" {
+		out = append(out, iamtypes.Tag{Key: aws.String(key), Value: aws.String(value)})
+	}
+	return out
+}
+
+// TestEvalRoleMismatch pins the shape an existing role must have to be held as
+// a Platform's eval role: the tenant path, the operator's ManagedBy tag and,
+// where one is configured, the tenant permissions boundary. Each case varies
+// one of them from the shape ensureEvalRole creates.
+func TestEvalRoleMismatch(t *testing.T) {
+	r, _, _, _ := evalIdentityReconciler(t, nil)
+	bounded := r.IAMCfg
+	unbounded := bounded
+	unbounded.TenantPermissionsBoundaryARN = ""
+	cases := []struct {
+		name string
+		cfg  IAMConfig
+		vary func(*iamtypes.Role)
+		want string
+	}{
+		{name: "as created", cfg: bounded, vary: func(*iamtypes.Role) {}},
+		{name: "as created with no boundary configured", cfg: unbounded, vary: func(*iamtypes.Role) {}},
+		{
+			name: "boundary on the role with none configured", cfg: unbounded,
+			vary: func(role *iamtypes.Role) {
+				role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{PermissionsBoundaryArn: aws.String(evalTestBoundary)}
+			},
+		},
+		{name: "root path", cfg: bounded, vary: func(role *iamtypes.Role) { role.Path = aws.String("/") }, want: `exists under path "/", not the tenant path /eks-agent-platform/tenants/`},
+		{name: "untagged", cfg: bounded, vary: func(role *iamtypes.Role) { role.Tags = nil }, want: `is tagged ManagedBy="", not "eks-agent-platform"`},
+		{
+			name: "managed by something else", cfg: bounded,
+			vary: func(role *iamtypes.Role) { role.Tags = withTag(role.Tags, "ManagedBy", "opentofu") },
+			want: `is tagged ManagedBy="opentofu", not "eks-agent-platform"`,
+		},
+		{
+			name: "no boundary", cfg: bounded, vary: func(role *iamtypes.Role) { role.PermissionsBoundary = nil },
+			want: `carries permissions boundary "", not the tenant boundary ` + evalTestBoundary,
+		},
+		{
+			name: "another boundary", cfg: bounded,
+			vary: func(role *iamtypes.Role) {
+				role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{PermissionsBoundaryArn: aws.String("arn:aws:iam::123456789012:policy/wide-open")}
+			},
+			want: `carries permissions boundary "arn:aws:iam::123456789012:policy/wide-open", not the tenant boundary ` + evalTestBoundary,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			role := heldEvalRole(c.cfg)
+			c.vary(role)
+			err := evalRoleMismatch(role, c.cfg)
+			switch {
+			case c.want == "" && err != nil:
+				t.Errorf("evalRoleMismatch = %v, want nil", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Errorf("evalRoleMismatch = %v, want a mismatch naming %q", err, c.want)
+			}
+		})
+	}
+}
+
+// TestEvalRoleNotInTheMintedShapeIsNeverHeld: a role of the eval role's name
+// that differs from the shape the operator creates is refused. It is not
+// written to, not recorded, not bound to the Platform's runs, and not deleted
+// with the Platform: the finalizer leaves it and its policies in place.
+func TestEvalRoleNotInTheMintedShapeIsNeverHeld(t *testing.T) {
+	cases := []struct {
+		name string
+		vary func(*iamtypes.Role)
+		want string
+	}{
+		{name: "outside the tenant path", vary: func(role *iamtypes.Role) { role.Path = aws.String("/") }, want: `under path "/"`},
+		{name: "untagged", vary: func(role *iamtypes.Role) { role.Tags = nil }, want: `ManagedBy=""`},
+		{name: "without the tenant boundary", vary: func(role *iamtypes.Role) { role.PermissionsBoundary = nil }, want: `permissions boundary ""`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			r, f, fe, cl := evalIdentityReconciler(t, nil)
+			const name = "production-cluster-analytics-eval"
+			role := heldEvalRole(r.IAMCfg)
+			role.Arn = aws.String(evalTestRoleARN)
+			role.AssumeRolePolicyDocument = aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000000:root"},"Action":"sts:AssumeRole"}]}`)
+			c.vary(role)
+			f.roles[name] = role
+			f.inline[name] = map[string]string{"someone-elses": `{"Version":"2012-10-17","Statement":[]}`}
+			f.seedAttachment(name, "arn:aws:iam::aws:policy/ReadOnlyAccess")
+			p := storedPlatform(t, cl)
+
+			outcome, err := r.ensureEvalIdentity(ctx, p)
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "only in the shape it creates one in") {
+				t.Fatalf("ensureEvalIdentity = (%v, %v), want a refusal naming %q", outcome, err, c.want)
+			}
+			if len(f.putInlineCalls) != 0 || len(f.updateAssumeCalls) != 0 || len(fe.createCalls) != 0 {
+				t.Errorf("wrote to or bound a role the operator does not hold: PutRolePolicy %d, UpdateAssumeRolePolicy %d, CreatePodIdentityAssociation %d",
+					len(f.putInlineCalls), len(f.updateAssumeCalls), len(fe.createCalls))
+			}
+			if got := storedEvalRoleArn(t, cl, p); got != "" || p.Status.EvalRoleArn != "" {
+				t.Errorf("status.evalRoleArn = %q (stored %q), want nothing recorded for a refused role", p.Status.EvalRoleArn, got)
+			}
+
+			if err := r.deleteEvalIdentity(ctx, p); err != nil {
+				t.Fatalf("deleteEvalIdentity: %v", err)
+			}
+			if _, ok := f.roles[name]; !ok {
+				t.Error("the finalizer deleted a role the operator does not hold")
+			}
+			if len(f.detachCalls) != 0 || len(f.deleteInlineCalls) != 0 {
+				t.Errorf("the finalizer stripped a role it does not hold: DetachRolePolicy %d, DeleteRolePolicy %d", len(f.detachCalls), len(f.deleteInlineCalls))
+			}
+		})
+	}
+}
+
+// TestEnsureEvalRole_ConvergesTheTrustPolicy: a held role's trust is the fixed
+// Pod Identity trust. One edited out of band, here to let another account
+// assume the role and so read the Platform's cases, is rewritten on the next
+// pass, and a pass over the converged trust writes none.
+func TestEnsureEvalRole_ConvergesTheTrustPolicy(t *testing.T) {
 	ctx := context.Background()
-	r, f, fe, _ := evalIdentityReconciler(t, nil)
+	r, f, _, cl := evalIdentityReconciler(t, nil)
+	p := storedPlatform(t, cl)
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.updateAssumeCalls); n != 0 {
+		t.Fatalf("UpdateAssumeRolePolicy calls = %d on the pass that created the role with its trust", n)
+	}
+
 	const name = "production-cluster-analytics-eval"
-	f.seedRole(name, "arn:aws:iam::123456789012:role/"+name)
-	f.roles[name].Path = aws.String("/")
-	p := newPlatform("analytics", "acme")
+	f.roles[name].AssumeRolePolicyDocument = aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000000:root"},"Action":"sts:AssumeRole"}]}`)
+	outcome, err := r.ensureEvalIdentity(ctx, p)
+	if err != nil || outcome != evalIdentityBound {
+		t.Fatalf("ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
+	}
+	trust, _ := assumeRolePolicyForPodIdentity()
+	if len(f.updateAssumeCalls) != 1 || aws.ToString(f.updateAssumeCalls[0].RoleName) != name ||
+		aws.ToString(f.updateAssumeCalls[0].PolicyDocument) != trust {
+		t.Fatalf("UpdateAssumeRolePolicy calls = %+v, want one rewriting %s to the Pod Identity trust", f.updateAssumeCalls, name)
+	}
+
+	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.updateAssumeCalls); n != 1 {
+		t.Errorf("UpdateAssumeRolePolicy calls = %d after a pass over the converged trust, want 1", n)
+	}
+}
+
+// TestEnsureEvalRole_TrustWriteFailureRecordsTheRole: a held role whose trust
+// could not be rewritten is still the operator's role, so it is recorded for
+// the finalizer, and the pass binds nothing to it and reports why.
+func TestEnsureEvalRole_TrustWriteFailureRecordsTheRole(t *testing.T) {
+	ctx := context.Background()
+	r, f, fe, cl := evalIdentityReconciler(t, nil)
+	const name = "production-cluster-analytics-eval"
+	role := heldEvalRole(r.IAMCfg)
+	role.Arn = aws.String(evalTestRoleARN)
+	role.AssumeRolePolicyDocument = aws.String(`{"Version":"2012-10-17","Statement":[]}`)
+	f.roles[name] = role
+	boom := errors.New("boom")
+	f.updateAssumeErr = boom
+	p := storedPlatform(t, cl)
 
 	outcome, err := r.ensureEvalIdentity(ctx, p)
-	if err == nil || !strings.Contains(err.Error(), `under path "/"`) {
-		t.Fatalf("ensureEvalIdentity = (%v, %v), want a refusal naming the foreign path", outcome, err)
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "iam UpdateAssumeRolePolicy "+name) || outcome == evalIdentityBound {
+		t.Fatalf("ensureEvalIdentity = (%v, %v), want the failed trust write, unbound", outcome, err)
 	}
-	if len(f.putInlineCalls) != 0 || len(fe.createCalls) != 0 {
-		t.Errorf("wrote to or bound a role the operator did not mint: PutRolePolicy %d, CreatePodIdentityAssociation %d",
-			len(f.putInlineCalls), len(fe.createCalls))
+	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
+		t.Errorf("stored status.evalRoleArn = %q, want the held role %s recorded", got, evalTestRoleARN)
 	}
-
-	if err := r.deleteEvalIdentity(ctx, p); err != nil {
-		t.Fatalf("deleteEvalIdentity: %v", err)
+	if len(fe.createCalls) != 0 {
+		t.Error("bound the account to a role whose trust was not converged")
 	}
-	if _, ok := f.roles[name]; !ok {
-		t.Error("deleted a role the operator did not mint")
+	if len(f.createCalls) != 0 {
+		t.Errorf("CreateRole calls = %d; a held role is converged in place", len(f.createCalls))
 	}
 }
 

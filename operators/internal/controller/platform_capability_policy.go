@@ -310,7 +310,6 @@ func schedulerInvokeTrustPolicy(env string, p *platformv1alpha1.Platform, scope 
 
 // reconcileInlinePolicy converges one inline policy on a role: it writes the
 // desired document when it drifts and removes the policy when desired is empty.
-// Shared by the tenant-role capability policy and the invoke role's send policy.
 // Idempotent — reads the current document and writes only on drift; NotFound is
 // tolerated at every step so re-runs and cleared declarations are safe.
 func (r *PlatformReconciler) reconcileInlinePolicy(ctx context.Context, roleName, policyName, desired string) error {

@@ -309,3 +309,226 @@ func TestPlatformToSuites(t *testing.T) {
 		t.Errorf("a failed list mapped to %v", got)
 	}
 }
+
+// apiReader is an uncached view of the cluster for EvalReconciler.APIReader,
+// holding objs, which can differ from what the reconciler's client holds.
+func apiReader(t *testing.T, objs ...client.Object) client.Reader {
+	t.Helper()
+	return fake.NewClientBuilder().WithScheme(evalScheme(t)).WithObjects(objs...).Build()
+}
+
+// TestAResumeReReadsThePlatform: the reconciler's client is the manager's
+// cache, and its Platform can trail what the API server holds. Here the cache
+// still has the Platform admitting runs while the API server has moved on. A
+// pass that would resume a suspended schedule re-reads the Platform first, and
+// only a Platform that still admits runs gets its schedule back.
+func TestAResumeReReadsThePlatform(t *testing.T) {
+	cases := []struct {
+		name    string
+		live    func(*platformv1alpha1.Platform) client.Object
+		reason  string
+		resumed bool
+	}{
+		{
+			name: "being deleted",
+			live: func(p *platformv1alpha1.Platform) client.Object {
+				now := metav1.Now()
+				p.DeletionTimestamp, p.Finalizers = &now, []string{finalizerName}
+				return p
+			},
+			reason: "Platform analytics is being deleted",
+		},
+		{name: "gone", live: func(*platformv1alpha1.Platform) client.Object { return nil }, reason: "Platform analytics no longer exists"},
+		{
+			name: "identity no longer bound",
+			live: func(p *platformv1alpha1.Platform) client.Object {
+				apimeta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{
+					Type: conditionEvalIdentityReady, Status: metav1.ConditionFalse, Reason: "ReconcileFailed", Message: "iam GetRole: boom",
+				})
+				return p
+			},
+			reason: "EvalIdentityReady=False (ReconcileFailed)",
+		},
+		{name: "still admitted", live: func(p *platformv1alpha1.Platform) client.Object { return p }, resumed: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := &EvalReconciler{RunnerNamespace: "eval-runner", ReportsBucket: testReportsBucket}
+			suite, platform, fleet, objs := scheduledSuite(r)
+			var live []client.Object
+			if obj := c.live(platform.DeepCopy()); obj != nil {
+				live = append(live, obj)
+			}
+			r.APIReader = apiReader(t, live...)
+			objs = append(objs, suite, platform, fleet, evalSchedule(evalWorkflowName(suite), "eval-runner", platform.Name, true))
+			r.Client = fake.NewClientBuilder().WithScheme(evalScheme(t)).
+				WithStatusSubresource(&governancev1alpha1.EvalSuite{}).WithObjects(objs...).Build()
+
+			got, err := reconcileSuite(t, r, suite)
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if resumed := !suspended(t, r.Client, "eval-runner", evalWorkflowName(suite)); resumed != c.resumed {
+				t.Fatalf("schedule resumed = %v, want %v", resumed, c.resumed)
+			}
+			if c.resumed {
+				return
+			}
+			if got.Status.Phase != phasePending {
+				t.Errorf("phase = %q, want Pending", got.Status.Phase)
+			}
+			cond := apimeta.FindStatusCondition(got.Status.Conditions, "EvalReconciled")
+			if cond == nil || !strings.Contains(cond.Message, c.reason) {
+				t.Errorf("EvalReconciled = %+v, want a message carrying %q", cond, c.reason)
+			}
+		})
+	}
+}
+
+// TestAFailedReReadIsRetried: a pass that cannot re-read the Platform does not
+// resume the schedule on the cache's copy, and is retried rather than reported
+// as Pending.
+func TestAFailedReReadIsRetried(t *testing.T) {
+	r := &EvalReconciler{RunnerNamespace: "eval-runner", ReportsBucket: testReportsBucket}
+	suite, platform, fleet, objs := scheduledSuite(r)
+	boom := errors.New("boom")
+	r.APIReader = fake.NewClientBuilder().WithScheme(evalScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return boom
+		},
+	}).Build()
+	objs = append(objs, suite, platform, fleet, evalSchedule(evalWorkflowName(suite), "eval-runner", platform.Name, true))
+	r.Client = fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithStatusSubresource(&governancev1alpha1.EvalSuite{}).WithObjects(objs...).Build()
+
+	got, err := reconcileSuite(t, r, suite)
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "re-read Platform "+testSuiteNamespace+"/analytics") {
+		t.Fatalf("Reconcile = %v, want the failed re-read returned for a retry", err)
+	}
+	if !suspended(t, r.Client, "eval-runner", evalWorkflowName(suite)) {
+		t.Error("the schedule was resumed without the Platform being re-read")
+	}
+	if got.Status.Phase != "" {
+		t.Errorf("phase = %q written over a pass that was not completed", got.Status.Phase)
+	}
+}
+
+// TestCreatingARunReReadsThePlatform: creating the object starts runs too, a
+// one-shot Workflow at once and a CronWorkflow on its schedule, so a pass that
+// would create either re-reads the Platform first and creates neither for one
+// being deleted.
+func TestCreatingARunReReadsThePlatform(t *testing.T) {
+	for _, kind := range []string{"Workflow", "CronWorkflow"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			r := &EvalReconciler{RunnerNamespace: "eval-runner", ReportsBucket: testReportsBucket}
+			suite, platform, fleet, objs := scheduledSuite(r)
+			if kind == "Workflow" {
+				suite.Spec.Schedule = ""
+			}
+			live := platform.DeepCopy()
+			now := metav1.Now()
+			live.DeletionTimestamp, live.Finalizers = &now, []string{finalizerName}
+			r.APIReader = apiReader(t, live)
+			r.Client = fake.NewClientBuilder().WithScheme(evalScheme(t)).WithObjects(append(objs, platform)...).Build()
+
+			err := r.ensureArgoWorkflow(ctx, suite, platform, fleet)
+			if !errors.Is(err, errEvalIdentityMissing) || !strings.Contains(err.Error(), "Platform analytics is being deleted") {
+				t.Fatalf("ensureArgoWorkflow = %v, want errEvalIdentityMissing naming the deletion", err)
+			}
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(argoWorkflowsGV.WithKind(kind))
+			if err := r.Get(ctx, client.ObjectKey{Namespace: "eval-runner", Name: evalWorkflowName(suite)}, obj); !apierrors.IsNotFound(err) {
+				t.Errorf("a %s was created for a Platform being deleted (get err=%v)", kind, err)
+			}
+		})
+	}
+}
+
+// TestRewritingARunningScheduleSkipsTheReRead: a schedule that is not
+// suspended is already running, so rewriting it starts nothing and the pass
+// makes no uncached read.
+func TestRewritingARunningScheduleSkipsTheReRead(t *testing.T) {
+	r := &EvalReconciler{RunnerNamespace: "eval-runner", ReportsBucket: testReportsBucket}
+	suite, platform, fleet, objs := scheduledSuite(r)
+	reads := 0
+	r.APIReader = fake.NewClientBuilder().WithScheme(evalScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			reads++
+			return errors.New("uncached read")
+		},
+	}).Build()
+	r.Client = fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(append(objs, platform, evalSchedule(evalWorkflowName(suite), "eval-runner", platform.Name, false))...).Build()
+
+	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
+		t.Fatalf("ensureArgoWorkflow: %v", err)
+	}
+	if reads != 0 {
+		t.Errorf("uncached reads = %d rewriting a running schedule, want 0", reads)
+	}
+	if suspended(t, r.Client, "eval-runner", evalWorkflowName(suite)) {
+		t.Error("rewriting a running schedule suspended it")
+	}
+}
+
+// TestASuspendAfterTheFetchConflicts: the schedule was running when the pass
+// fetched it, and the Platform's finalizer suspends it before the pass writes.
+// The write is based on the fetched copy, so it is refused as a conflict and
+// the suspension stands, with no re-read needed to keep it.
+func TestASuspendAfterTheFetchConflicts(t *testing.T) {
+	ctx := context.Background()
+	r := &EvalReconciler{RunnerNamespace: "eval-runner", ReportsBucket: testReportsBucket}
+	suite, platform, fleet, objs := scheduledSuite(r)
+	r.APIReader = apiReader(t)
+	r.Client = fake.NewClientBuilder().WithScheme(evalScheme(t)).
+		WithObjects(append(objs, platform, evalSchedule(evalWorkflowName(suite), "eval-runner", platform.Name, false))...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				stored := &unstructured.Unstructured{}
+				stored.SetGroupVersionKind(argoWorkflowsGV.WithKind("CronWorkflow"))
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), stored); err != nil {
+					return err
+				}
+				if err := suspendCronWorkflow(ctx, cl, stored); err != nil {
+					return err
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).Build()
+
+	err := r.ensureArgoWorkflow(ctx, suite, platform, fleet)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("ensureArgoWorkflow = %v, want the write refused as a conflict", err)
+	}
+	if !suspended(t, r.Client, "eval-runner", evalWorkflowName(suite)) {
+		t.Error("a write fetched before the suspension resumed the schedule")
+	}
+}
+
+// TestStartsRuns: an object not yet created, or one suspended, is a write that
+// starts runs; rewriting one that is running is not.
+func TestStartsRuns(t *testing.T) {
+	stored := func(o *unstructured.Unstructured) *unstructured.Unstructured {
+		o.SetResourceVersion("7")
+		return o
+	}
+	absent := &unstructured.Unstructured{}
+	absent.SetGroupVersionKind(argoWorkflowsGV.WithKind("Workflow"))
+	workflow := stored(&unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"serviceAccountName": "eval-analytics"}}})
+	cases := []struct {
+		name string
+		obj  *unstructured.Unstructured
+		want bool
+	}{
+		{"not created", absent, true},
+		{"suspended schedule", stored(evalSchedule("analytics-nightly", "eval-runner", "analytics", true)), true},
+		{"running schedule", stored(evalSchedule("analytics-nightly", "eval-runner", "analytics", false)), false},
+		{"stored workflow", workflow, false},
+	}
+	for _, c := range cases {
+		if got := startsRuns(c.obj); got != c.want {
+			t.Errorf("%s: startsRuns = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

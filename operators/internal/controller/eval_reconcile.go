@@ -219,21 +219,11 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 	}
 
 	// The run holds the Platform's own eval identity (ensureEvalIdentity), never
-	// a shared one, and only once the Platform reports it bound. The account
-	// alone is not that: a Platform pass that fails after creating it leaves an
-	// account with no role behind it, and a run under it does not hold the eval
-	// role, so its S3 calls fail — after it has run every inline case against a
-	// live model. EvalIdentityReady is True only after a pass in which the
-	// account, the role and the association binding them all exist.
-	//
-	// A Platform being deleted admits no run either, whatever its condition
-	// still says: its finalizer is removing the identity the run would hold.
+	// a shared one, and only once the Platform reports it bound
+	// (evalIdentityAdmitsRun).
 	runnerSA := EvalServiceAccountName(platform)
-	if !platform.DeletionTimestamp.IsZero() {
-		return fmt.Errorf("%w: Platform %s is being deleted, and its finalizer removes the eval identity", errEvalIdentityMissing, platform.Name)
-	}
-	if c := apimeta.FindStatusCondition(platform.Status.Conditions, conditionEvalIdentityReady); c == nil || c.Status != metav1.ConditionTrue {
-		return fmt.Errorf("%w: %s", errEvalIdentityMissing, evalIdentityNotBound(c))
+	if err := evalIdentityAdmitsRun(platform); err != nil {
+		return err
 	}
 	// The account is read as well, for the window between a Platform pass and
 	// an out-of-band delete of it. Argo cannot create a pod under a
@@ -259,6 +249,21 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 	obj.SetNamespace(r.evalRunnerNamespace())
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+		// A write that can start runs re-reads the Platform through the API
+		// reader first (recheckPlatform): creating the object, or rewriting one
+		// that is suspended, which the whole-spec write below resumes. The
+		// Platform this pass resolved is the cache's copy, and it can trail a
+		// deletion whose finalizer has already suspended the schedule
+		// (suspendEvalSchedules). A schedule that is not suspended needs no
+		// re-read: suspending it changes it, so a write based on the copy
+		// fetched before that conflicts. A deletion that starts after the
+		// re-read reaches the suite as a Platform event (platformToSuites), and
+		// the Pending passes from then on suspend the schedule again.
+		if startsRuns(obj) {
+			if err := r.recheckPlatform(ctx, platform); err != nil {
+				return err
+			}
+		}
 		obj.SetLabels(map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  platform.Name,
@@ -355,6 +360,54 @@ func (r *EvalReconciler) ensureArgoWorkflow(ctx context.Context, suite *governan
 		return fmt.Errorf("ensure argo %s %s/%s: %w", kind, r.evalRunnerNamespace(), evalWorkflowName(suite), err)
 	}
 	return nil
+}
+
+// evalIdentityAdmitsRun reports why platform's eval identity admits no run, or
+// nil when it admits one. The account alone is not enough: a Platform pass that
+// fails after creating it leaves an account with no role behind it, and a run
+// under it does not hold the eval role, so its S3 calls fail after it has run
+// every inline case against a live model. EvalIdentityReady is True only after
+// a pass in which the account, the role and the association binding them all
+// exist. A Platform being deleted admits no run whatever its condition still
+// says: its finalizer is removing the identity the run would hold.
+func evalIdentityAdmitsRun(platform *platformv1alpha1.Platform) error {
+	if !platform.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("%w: Platform %s is being deleted, and its finalizer removes the eval identity", errEvalIdentityMissing, platform.Name)
+	}
+	if c := apimeta.FindStatusCondition(platform.Status.Conditions, conditionEvalIdentityReady); c == nil || c.Status != metav1.ConditionTrue {
+		return fmt.Errorf("%w: %s", errEvalIdentityMissing, evalIdentityNotBound(c))
+	}
+	return nil
+}
+
+// startsRuns reports whether writing obj, as CreateOrUpdate fetched it, can
+// start runs: obj does not exist yet, or it is suspended and the write, which
+// carries no suspend key, resumes it.
+func startsRuns(obj *unstructured.Unstructured) bool {
+	if obj.GetResourceVersion() == "" {
+		return true
+	}
+	suspended, _, _ := unstructured.NestedBool(obj.Object, "spec", "suspend")
+	return suspended
+}
+
+// recheckPlatform reads platform again through APIReader and applies
+// evalIdentityAdmitsRun to what it reads. A Platform gone since the pass
+// resolved it admits no run either.
+func (r *EvalReconciler) recheckPlatform(ctx context.Context, platform *platformv1alpha1.Platform) error {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	key := client.ObjectKeyFromObject(platform)
+	var live platformv1alpha1.Platform
+	if err := reader.Get(ctx, key, &live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: Platform %s no longer exists", errEvalIdentityMissing, platform.Name)
+		}
+		return fmt.Errorf("re-read Platform %s: %w", key, err)
+	}
+	return evalIdentityAdmitsRun(&live)
 }
 
 // inlineCase is the wire shape consumed by the eval-runner script. It

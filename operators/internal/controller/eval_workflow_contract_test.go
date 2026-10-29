@@ -96,7 +96,7 @@ func submitEvalWorkflow(t *testing.T, r *EvalReconciler) *unstructured.Unstructu
 	suite, platform, fleet := evalFixtures()
 
 	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
-		WithObjects(publishedGateway(platform, "chat"), boundEvalIdentity(r, platform)).Build()
+		WithObjects(publishedGateway(platform, "chat"), boundEvalIdentity(r, platform), platform).Build()
 	r.Client = c
 
 	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
@@ -412,7 +412,7 @@ func TestScheduledSuiteForbidsConcurrentRuns(t *testing.T) {
 		ReportsBucket:   testReportsBucket,
 	}
 	c := fake.NewClientBuilder().WithScheme(evalScheme(t)).
-		WithObjects(publishedGateway(platform, "chat"), boundEvalIdentity(r, platform)).Build()
+		WithObjects(publishedGateway(platform, "chat"), boundEvalIdentity(r, platform), platform).Build()
 	r.Client = c
 	if err := r.ensureArgoWorkflow(context.Background(), suite, platform, fleet); err != nil {
 		t.Fatalf("ensureArgoWorkflow: %v", err)

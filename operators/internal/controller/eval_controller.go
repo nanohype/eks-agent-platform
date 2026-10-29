@@ -53,6 +53,11 @@ type EvalReconciler struct {
 	// chain stops being load-bearing for it. Empty means the reconciler
 	// refuses to submit: every upload in the run would resolve to `s3:///…`.
 	ReportsBucket string
+
+	// APIReader reads the Platform past the manager's cache ahead of a write
+	// that can start runs (recheckPlatform). SetupWithManager sets it to the
+	// manager's API reader when it is unset; with none set, Client is read.
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=evalsuites,verbs=get;list;watch;update;patch
@@ -122,6 +127,9 @@ func (r *EvalReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	c := r.Concurrency
 	if c <= 0 {
 		c = 1
+	}
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&governancev1alpha1.EvalSuite{}).

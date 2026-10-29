@@ -64,9 +64,9 @@
 # (eval-<platform>), which the operator creates in this namespace and binds by
 # EKS Pod Identity to a role scoped to that Platform's prefixes in the
 # eval-reports bucket: Get on <platform>/manifests/*, Put on <platform>/runs/*.
-# A run therefore reaches no other Platform's cases or reports: an s3://
-# casesFromManifest into the eval-reports bucket resolves only inside its own
-# Platform's manifests prefix.
+# A run therefore reaches no other Platform's cases or reports. resolve-cases
+# builds its manifest key from casesFromManifest, a bare file name, under
+# <platform>/manifests/, the one prefix that role can read.
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:

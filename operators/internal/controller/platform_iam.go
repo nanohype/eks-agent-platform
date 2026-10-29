@@ -192,6 +192,10 @@ type IAMConfig struct {
 	Compliance         string
 }
 
+// roleManagedBy is the ManagedBy tag value on every role the operator mints
+// (tenantRoleTags).
+const roleManagedBy = "eks-agent-platform"
+
 // orDefault returns def when v is empty.
 func orDefault(v, def string) string {
 	if v == "" {
@@ -223,7 +227,7 @@ func tenantRoleTags(p *platformv1alpha1.Platform, cfg IAMConfig) []iamtypes.Tag 
 		tag("Persona", p.Spec.Persona),
 		// Required-tier resource-tagging keys.
 		tag("Environment", cfg.Environment),
-		tag("ManagedBy", "eks-agent-platform"),
+		tag("ManagedBy", roleManagedBy),
 		tag("Project", "eks-agent-platform"),
 		tag("Repository", "nanohype/eks-agent-platform"),
 		tag("Component", "tenant-iam"),

@@ -327,13 +327,18 @@ func (r *PlatformReconciler) setEvalIdentityCondition(p *platformv1alpha1.Platfo
 	upsertCondition(&p.Status.Conditions, cond)
 }
 
-// ensureEvalRole creates the eval role when no role under the tenant path
-// holds its name — under that path, with the tenant permissions boundary and
-// the Pod Identity trust the tenant role also carries — and converges its
-// inline policy on every pass, so a changed bucket or a policy edited out of
-// band is rewritten. It returns the role's ARN once it holds the role, found
-// under the tenant path or created, including from a pass whose policy write
-// failed, so the caller can record it.
+// ensureEvalRole holds the Platform's eval role and converges it. A role of its
+// name that GetRole returns is held only when evalRoleMismatch finds nothing,
+// and any other is refused, failing the pass. With no role of the name, the
+// role is created in that shape: under the tenant path, with evalRoleTags, the
+// tenant permissions boundary and the Pod Identity trust the tenant role also
+// carries. A held role's trust policy and its eval-reports-access
+// inline policy are rewritten whenever they differ from what this pass derives,
+// so a changed bucket or an out-of-band edit is converged. Policies attached to
+// the role out of band are not read; where the tenant permissions boundary is
+// configured, it caps what they grant. It returns the role's ARN once it holds
+// the role, including from a pass whose trust or policy write failed, so the
+// caller can record it.
 //
 // IAM authorizes a call naming an existing role against that role's ARN, path
 // included, and a call naming no existing role against the root-path ARN
@@ -344,32 +349,38 @@ func (r *PlatformReconciler) setEvalIdentityCondition(p *platformv1alpha1.Platfo
 // the eval role needs no grant on its root-path name: CreateRole, which names
 // the path, settles whether the name is free.
 //
-// A role of this name the operator did not mint is never adopted. One that
-// GetRole returns under another path is refused outright. One that GetRole is
-// refused for, because it sits outside what the operator can read, surfaces as
-// EntityAlreadyExists when CreateRole tries the name, and is refused there.
-// EntityAlreadyExists after a NoSuchEntity is a role created between the two
-// calls; the pass fails, and the next one reads the role and holds it to the
-// same path rule.
+// A role GetRole is refused for, because it sits outside what the operator can
+// read, surfaces as EntityAlreadyExists when CreateRole tries the name, and is
+// refused there. EntityAlreadyExists after a NoSuchEntity is a role created
+// between the two calls; the pass fails, and the next one reads the role and
+// holds it to evalRoleMismatch.
 func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) (string, error) {
 	name := evalRoleName(cfg.ClusterName, p)
 	path := cfg.tenantPath()
+	trust, err := assumeRolePolicyForPodIdentity()
+	if err != nil {
+		return "", err //coverage:ignore unreachable — see assumeRolePolicyForPodIdentity
+	}
 
 	var roleARN string
 	getOut, getErr := r.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	switch {
 	case getErr == nil:
-		if got := aws.ToString(getOut.Role.Path); got != path {
-			return "", fmt.Errorf("eval role %s exists under path %q, not the tenant path %s; the operator does not adopt a role it did not mint", name, got, path)
+		if mismatch := evalRoleMismatch(getOut.Role, cfg); mismatch != nil {
+			return "", fmt.Errorf("%w; the operator holds an existing eval role only in the shape it creates one in", mismatch)
 		}
 		roleARN = aws.ToString(getOut.Role.Arn)
+		if !policyDocEqual(aws.ToString(getOut.Role.AssumeRolePolicyDocument), trust) {
+			if _, err := r.IAM.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
+				RoleName:       aws.String(name),
+				PolicyDocument: aws.String(trust),
+			}); err != nil {
+				return roleARN, fmt.Errorf("iam UpdateAssumeRolePolicy %s: %w", name, err)
+			}
+		}
 	case !isIAMNotFound(getErr) && !isIAMAccessDenied(getErr):
 		return "", fmt.Errorf("iam GetRole %s: %w", name, getErr)
 	default:
-		trust, err := assumeRolePolicyForPodIdentity()
-		if err != nil {
-			return "", err //coverage:ignore unreachable — see assumeRolePolicyForPodIdentity
-		}
 		createInput := &iam.CreateRoleInput{
 			RoleName:                 aws.String(name),
 			Path:                     aws.String(path),
@@ -386,7 +397,7 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 		case errors.As(err, &taken) && isIAMAccessDenied(getErr):
 			return "", fmt.Errorf("iam CreateRole %s: the name is held by a role the operator cannot read under the tenant path %s (GetRole: %v): %w", name, path, getErr, err)
 		case errors.As(err, &taken):
-			return "", fmt.Errorf("iam CreateRole %s: a role of this name was created after GetRole answered NoSuchEntity; the next pass reads it and holds it to the tenant path %s: %w", name, path, err)
+			return "", fmt.Errorf("iam CreateRole %s: a role of this name was created after GetRole answered NoSuchEntity; the next pass reads it and holds it only in the shape the operator creates it in: %w", name, err)
 		case err != nil:
 			return "", fmt.Errorf("iam CreateRole %s: %w", name, err)
 		}
@@ -401,6 +412,41 @@ func (r *PlatformReconciler) ensureEvalRole(ctx context.Context, p *platformv1al
 		return roleARN, err
 	}
 	return roleARN, nil
+}
+
+// evalRoleMismatch reports how role differs from the eval role ensureEvalRole
+// creates, or nil when it does not. Only a role with no mismatch is held:
+// written to, bound to the Platform's runs, and deleted with the Platform. The
+// role must sit under the tenant path, carry the ManagedBy tag every role the
+// operator mints carries, and, where a tenant permissions boundary is
+// configured, carry that boundary. GetRole returns all three, so the check
+// costs no call beyond the read. The operator's own IAM policy requires the
+// boundary on its role writes (IAMConfig.TenantPermissionsBoundaryARN), so a
+// role without it is one whose policies the operator cannot write.
+func evalRoleMismatch(role *iamtypes.Role, cfg IAMConfig) error {
+	name := aws.ToString(role.RoleName)
+	if got, want := aws.ToString(role.Path), cfg.tenantPath(); got != want {
+		return fmt.Errorf("eval role %s exists under path %q, not the tenant path %s", name, got, want)
+	}
+	managedBy := ""
+	for _, t := range role.Tags {
+		if aws.ToString(t.Key) == "ManagedBy" {
+			managedBy = aws.ToString(t.Value)
+		}
+	}
+	if managedBy != roleManagedBy {
+		return fmt.Errorf("eval role %s is tagged ManagedBy=%q, not %q", name, managedBy, roleManagedBy)
+	}
+	if want := cfg.TenantPermissionsBoundaryARN; want != "" {
+		got := ""
+		if role.PermissionsBoundary != nil {
+			got = aws.ToString(role.PermissionsBoundary.PermissionsBoundaryArn)
+		}
+		if got != want {
+			return fmt.Errorf("eval role %s carries permissions boundary %q, not the tenant boundary %s", name, got, want)
+		}
+	}
+	return nil
 }
 
 // deleteEvalIdentity is the finalizer counterpart of ensureEvalIdentity: in
@@ -493,10 +539,11 @@ func (r *PlatformReconciler) removeEvalAccount(ctx context.Context, p *platformv
 // suspendEvalSchedules suspends every CronWorkflow the EvalSuite reconciler
 // made for this Platform in namespace ns, ahead of the ServiceAccount's
 // deletion there, so no schedule fires a run under an account that no longer
-// exists. The EvalSuite reconciler keeps a schedule suspended while
-// its Platform is being deleted or absent, and resumes it on the pass that
-// finds a Platform of that name with its identity bound. A cluster without the
-// CronWorkflow kind has no schedules to suspend.
+// exists. The EvalSuite reconciler keeps a schedule suspended while its
+// Platform is being deleted or absent, and resumes it only on a pass that finds
+// a Platform of that name with its identity bound, read past the cache
+// (recheckPlatform). A cluster without the CronWorkflow kind has no schedules
+// to suspend.
 func (r *PlatformReconciler) suspendEvalSchedules(ctx context.Context, p *platformv1alpha1.Platform, ns string) error {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(argoWorkflowsGV.WithKind("CronWorkflowList"))
@@ -537,13 +584,13 @@ func (r *PlatformReconciler) suspendEvalSchedules(ctx context.Context, p *platfo
 //     would leave the role and its grant into the eval-reports bucket behind,
 //     so the finalizer holds and retries.
 //
-// The record is cleared after a read has found the role under the tenant path
-// and before the role is deleted. A deleted role's read is refused like any
-// absent name's, so a record outliving the deletion would hold a finalizer
-// retried after a later step fails on a role that no longer exists.
+// The record is cleared after a read has found the role held and before the
+// role is deleted. A deleted role's read is refused like any absent name's, so
+// a record outliving the deletion would hold a finalizer retried after a later
+// step fails on a role that no longer exists.
 //
-// A role of the name under another path is not one the operator minted and is
-// left alone.
+// A role of the name that ensureEvalRole would refuse (evalRoleMismatch) is
+// left in place: the finalizer deletes only a role the operator holds.
 func (r *PlatformReconciler) deleteEvalRole(ctx context.Context, p *platformv1alpha1.Platform) error {
 	name := evalRoleName(r.IAMCfg.ClusterName, p)
 	out, err := r.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
@@ -557,9 +604,10 @@ func (r *PlatformReconciler) deleteEvalRole(ctx context.Context, p *platformv1al
 			name, err, p.Status.EvalRoleArn)
 	case err != nil:
 		return fmt.Errorf("iam GetRole %s: %w", name, err)
-	case aws.ToString(out.Role.Path) != r.IAMCfg.tenantPath():
-		log.FromContext(ctx).Info("eval role name is held by a role outside the tenant path; leaving it",
-			"role", name, "path", aws.ToString(out.Role.Path))
+	}
+	if mismatch := evalRoleMismatch(out.Role, r.IAMCfg); mismatch != nil {
+		log.FromContext(ctx).Info("eval role name is held by a role the operator does not hold; leaving it",
+			"role", name, "mismatch", mismatch.Error())
 		return nil
 	}
 	if err := r.clearEvalRoleRecord(ctx, p); err != nil {

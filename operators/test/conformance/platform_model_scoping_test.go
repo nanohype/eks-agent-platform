@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -57,6 +58,8 @@ type memIAM struct {
 	attached map[string]map[string]struct{}
 	inline   map[string]map[string]string
 	puts     int
+	// trustUpdates counts UpdateAssumeRolePolicy calls.
+	trustUpdates int
 
 	// deniedAbsentSuffix makes every call naming an absent role whose name ends
 	// in it answer AccessDenied instead of NoSuchEntity: IAM's answer to an
@@ -117,7 +120,13 @@ func (m *memIAM) CreateRole(_ context.Context, p *iam.CreateRoleInput, _ ...func
 	m.seedRole(aws.ToString(p.RoleName), p.Tags...)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return &iam.CreateRoleOutput{Role: m.roles[aws.ToString(p.RoleName)]}, nil
+	role := m.roles[aws.ToString(p.RoleName)]
+	// GetRole returns the trust policy URL-encoded, as IAM does.
+	role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(p.AssumeRolePolicyDocument)))
+	if p.PermissionsBoundary != nil {
+		role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{PermissionsBoundaryArn: p.PermissionsBoundary}
+	}
+	return &iam.CreateRoleOutput{Role: role}, nil
 }
 
 func (m *memIAM) GetRole(_ context.Context, p *iam.GetRoleInput, _ ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
@@ -147,7 +156,13 @@ func (m *memIAM) TagRole(_ context.Context, _ *iam.TagRoleInput, _ ...func(*iam.
 	return &iam.TagRoleOutput{}, nil
 }
 
-func (m *memIAM) UpdateAssumeRolePolicy(_ context.Context, _ *iam.UpdateAssumeRolePolicyInput, _ ...func(*iam.Options)) (*iam.UpdateAssumeRolePolicyOutput, error) {
+func (m *memIAM) UpdateAssumeRolePolicy(_ context.Context, p *iam.UpdateAssumeRolePolicyInput, _ ...func(*iam.Options)) (*iam.UpdateAssumeRolePolicyOutput, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.trustUpdates++
+	if role, ok := m.roles[aws.ToString(p.RoleName)]; ok {
+		role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(p.PolicyDocument)))
+	}
 	return &iam.UpdateAssumeRolePolicyOutput{}, nil
 }
 
