@@ -8,6 +8,11 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) behind evalRuntime.*. It ships no SLO
 # manifests — see 0.6.0 below, which removed them.
 #
+# 0.7.1 names the operator release that mints per-Platform eval identities,
+# appVersion 0.7.0, and runs the eval steps on eval-runner 0.1.2, whose image
+# carries kubectl v1.36.6. 0.7.0 named operator 0.6.2, a pairing the release
+# job's runtime-contract check refuses, so 0.7.0 has no published chart.
+#
 # 0.7.0 gives every Platform its own eval identity. The chart creates no
 # ServiceAccount for eval runs and takes no evalRuntime.serviceAccount value
 # (values.schema.json rejects one); the WorkflowTemplate names no ServiceAccount;
@@ -75,8 +80,8 @@ type: application
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour — nor, as 0.6.3 records, a workflow parameter. The charts-oci release
 # job enforces both with scripts/check-runtime-contract.py --release.
-version: 0.7.0
-appVersion: "0.6.2"
+version: 0.7.1
+appVersion: "0.7.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
 kubeVersion: ">=1.32.0-0"
