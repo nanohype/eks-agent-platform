@@ -231,7 +231,7 @@ evalRuntime:
   # .github/workflows/image-refs-registry.yaml on each push to main and weekly.
   image:
     repository: ghcr.io/nanohype/eks-agent-platform/eval-runner
-    tag: "0.1.1"
+    tag: "0.1.2"
   rollouts:
     # The Argo Rollouts AnalysisTemplate (eval-suite-gate). Off by default: it
     # needs the Argo Rollouts CRD, which is not guaranteed on every cluster.
