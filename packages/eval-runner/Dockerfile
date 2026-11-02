@@ -63,7 +63,7 @@ ARG TARGETARCH
 # KUBECTL_VERSION to that minor, so moving to another minor follows a change of
 # the cluster version target. The AWS CLI is the newest 2.x release past the
 # same floor.
-ARG AWSCLI_VERSION=2.38.5
+ARG AWSCLI_VERSION=2.39.3
 ARG AWSCLI_SHA256_amd64=5def7d1b7e55d892f9a381bb2cb2081a685712464be0d36d5d706af0ac48d0d3
 ARG AWSCLI_SHA256_arm64=07711a936e9d271045ab937d2c2c5390c25f419e4ba9e25adb9e996031e3f6be
 ARG KUBECTL_VERSION=v1.36.6
