@@ -72,7 +72,7 @@ runs:
         # The scanner's release is part of the verdict, so it is pinned here
         # rather than left to whatever the action defaults to.
         # renovate: datasource=github-releases depName=aquasecurity/trivy
-        version: v0.72.0
+        version: v0.76.1
     # The report is JSON so the step after this one can read it. This prints
     # it as the tables trivy would have, suppressed findings included, whether
     # the scan passed or not.
