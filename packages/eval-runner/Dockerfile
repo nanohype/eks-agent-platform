@@ -7,7 +7,7 @@
 #
 # Both stages pin the multi-arch manifest-list digest, not just the tag — buildx
 # still picks the right per-platform manifest, but the bytes are fixed. Refresh
-# with `docker buildx imagetools inspect node:24-trixie-slim`, take a digest
+# with `docker buildx imagetools inspect node:26-trixie-slim`, take a digest
 # past the release-age floor Renovate holds updates to, and move both stages
 # together.
 
@@ -15,11 +15,14 @@
 # Runs on the build host's platform. Its only output is one JavaScript file,
 # the same for every target, so emulating this stage per target platform would
 # only make an arm64 build under QEMU slower.
-FROM --platform=$BUILDPLATFORM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS builder
+FROM --platform=$BUILDPLATFORM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS builder
 WORKDIR /src
 
-# corepack pins pnpm from the root package.json's packageManager field.
-RUN corepack enable
+# pnpm at exactly the version the root package.json's packageManager field
+# names. Node 26 images no longer bundle corepack, which is what read that
+# field before, so the field is read here and handed to npm instead.
+COPY package.json ./
+RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+")[0]')"
 
 # Whole workspace: pnpm --frozen-lockfile validates the lockfile against every
 # declared workspace package, so a partial copy would fail.
@@ -37,7 +40,7 @@ RUN pnpm --filter "@eks-agent/eval-runner..." build \
     && pnpm --filter @eks-agent/eval-runner bundle
 
 # ── runtime stage: slim node + the OS tools the workflow shells to ──────────
-FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS runtime
+FROM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS runtime
 
 # Populated per platform by buildx, and declared without a default: a default
 # shadows the per-platform value and cross-builds the wrong architecture.

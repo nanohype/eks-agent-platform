@@ -1,0 +1,22 @@
+diff --git a/dist/node-utils.js b/dist/node-utils.js
+index 96a483d44c9ca066a5128dc40abcffdb8a3aee4b..b024f9a3b8a5f560b5ba0f6273f13420723c1609 100644
+--- a/dist/node-utils.js
++++ b/dist/node-utils.js
+@@ -325,12 +325,11 @@ function glob(pattern, root, options = {}) {
+       if (childPath[childPath.length - 1] === "node_modules" && !shouldIncludeNodeModules) {
+         return false;
+       }
+-      return mini.set.some((row) => mini.matchOne(
+-        childPath,
+-        row,
+-        /* partial */
+-        true
+-      ));
++      // minimatch 11 made matchOne private (GHSA-g3hv-75wg-m249 is fixed only
++      // there). match(path, partial) runs the same partial row match;
++      // un-flip negation so a "!" pattern recurses exactly as before.
++      const hit = mini.match(childPath.join("/"), true);
++      return mini.negate ? !hit : hit;
+     },
+     matchDirectories: options.includeDirectories,
+     followSymlinks: options.followSymlinks

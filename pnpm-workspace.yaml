@@ -24,7 +24,14 @@ overrides:
   js-yaml: "^4.3.1" # CVE-2026-53550 (merge-key quadratic DoS), CVE-2026-59869 (crafted-document DoS), CVE-2026-59870 (!!omap quadratic DoS)
   read-yaml-file: "^3.0.0"
   fast-uri: "^4.2.3" # GHSA-7p8r-x3mc-p8w7 (backslash authority introducer parsed as host), GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h
-  brace-expansion: "^5.0.9" # CVE-2026-69152 (quadratic blowup on a crafted brace pattern)
+  # GHSA-g3hv-75wg-m249 (globparts amplification DoS), fixed only in minimatch 11.
+  # minimatch reaches this tree only through typedoc, which declares ^10.2.5 and
+  # calls Minimatch#matchOne, private in 11; patches/typedoc@0.28.20.patch moves
+  # that one call to the public match(path, partial). Drop both when a typedoc
+  # release declares minimatch 11. minimatch 11 declares brace-expansion
+  # ^5.0.12, past CVE-2026-69152, so the brace-expansion override it replaces
+  # is no longer needed.
+  minimatch: "^11.0.1"
   # CVE-2026-67213 (a custom generator loops forever when size is zero), reached
   # through postcss. The caret is load-bearing and must not be widened to `>=`:
   # the open-ended form resolves to nanoid 6, which is ESM-only and is not the
@@ -34,3 +41,6 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     typescript: "^6.0.0"
+
+patchedDependencies:
+  typedoc@0.28.20: patches/typedoc@0.28.20.patch
