@@ -18,8 +18,11 @@
 FROM --platform=$BUILDPLATFORM node:26-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS builder
 WORKDIR /src
 
-# corepack pins pnpm from the root package.json's packageManager field.
-RUN corepack enable
+# pnpm at exactly the version the root package.json's packageManager field
+# names. Node 26 images no longer bundle corepack, which is what read that
+# field before, so the field is read here and handed to npm instead.
+COPY package.json ./
+RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+")[0]')"
 
 # Whole workspace: pnpm --frozen-lockfile validates the lockfile against every
 # declared workspace package, so a partial copy would fail.
