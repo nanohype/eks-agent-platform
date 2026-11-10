@@ -16,12 +16,12 @@ allowBuilds:
 # the runtime tree is. Until the trivy job was told to include dev dependencies it
 # could not see them, and the last two below sat unreported in a green build.
 overrides:
-  vite: "^8.0.16" # GHSA-v6wh-96g9-6wx3, GHSA-fx2h-pf6j-xcff
+  vite: "^8.1.6" # GHSA-v6wh-96g9-6wx3, GHSA-fx2h-pf6j-xcff; 8.1.6 for GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-9jrq-w75r-8gcw, GHSA-r825-w8mm-5pxw, GHSA-rq7h-c2jc-7f22
   esbuild: "^0.28.1" # GHSA-g7r4-m6w7-qqqr
   ws: "^8.21.0" # CVE-2026-48779 (memory-exhaustion DoS)
   form-data: "^4.0.6" # CVE-2026-12143 (CRLF header injection)
   ip-address: "^10.7.4" # CVE-2026-69192 (leading-zero octets parsed as decimal, splitting SSRF filters from resolvers), GHSA-rxp7-6hxx-x8q5
-  js-yaml: "^4.3.1" # CVE-2026-53550 (merge-key quadratic DoS), CVE-2026-59869 (crafted-document DoS), CVE-2026-59870 (!!omap quadratic DoS)
+  js-yaml: "^4.3.2" # CVE-2026-53550 (merge-key quadratic DoS), CVE-2026-59869 (crafted-document DoS), CVE-2026-59870 (!!omap quadratic DoS), GHSA-2883-xcg3-v3hh (4.3.2)
   read-yaml-file: "^3.0.0"
   fast-uri: "^4.2.3" # GHSA-7p8r-x3mc-p8w7 (backslash authority introducer parsed as host), GHSA-333x-w4r6-6crp, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h
   # GHSA-g3hv-75wg-m249 (globparts amplification DoS), fixed only in minimatch 11.
