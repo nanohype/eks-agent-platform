@@ -340,7 +340,7 @@ jobs:
     # merges come from pull requests; on push it is skipped and gates nothing.
     if: always() && github.event_name == 'pull_request'
     steps:
-      - uses: nanohype/.github/actions/merge-gate@cb1c34008a390e775dcb69a4542b7e960abe72bb # main
+      - uses: nanohype/.github/actions/merge-gate@9911d2952b1f9078816c323baa253a63242c1c31 # v1
         with:
           needs: ${{ toJSON(needs) }}
           gate-job-id: merge-gate-security
