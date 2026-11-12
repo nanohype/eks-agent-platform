@@ -5,12 +5,26 @@
 # index, but the exact bytes are fixed. Refresh a digest with
 # `docker buildx imagetools inspect <image>:<tag>` and bump the tag comment
 # alongside it.
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:eb61c3873c97416fff0116553fff65d67a3549f72e11d9758849a689cdd8b523 AS builder
 
 WORKDIR /workspace
 
 # Cache deps separately from source for faster rebuilds
 COPY go.mod go.sum* ./
+
+# The golang images set GOTOOLCHAIN=local, so go.mod's `toolchain` line is not
+# honoured here: the binary is compiled by whatever Go the image above ships,
+# however far go.mod has moved. A security bump to the toolchain directive
+# therefore does not reach the shipped image unless the digest moves with it.
+# Fail the build when the image is older than the directive, instead of
+# shipping the older compiler without a word.
+RUN want="$(sed -n 's/^toolchain go//p' go.mod)"; have="$(go env GOVERSION)"; have="${have#go}"; \
+    num() { echo "$1" | awk -F. '{ printf "%d%04d%04d", $1, $2, $3 }'; }; \
+    if [ -n "$want" ] && [ "$(num "$have")" -lt "$(num "$want")" ]; then \
+      echo "builder image ships go${have}, but go.mod declares toolchain go${want} and GOTOOLCHAIN=local builds with the image's go: move the golang digest above to an image with go${want} or newer" >&2; \
+      exit 1; \
+    fi
+
 RUN go mod download
 
 COPY api/ api/
