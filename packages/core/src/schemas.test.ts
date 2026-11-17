@@ -38,6 +38,12 @@ describe('PlatformResource', () => {
         sessionRoleArn: 'arn:aws:iam::000000000000:role/cluster-acme-session',
         evalRoleArn: 'arn:aws:iam::000000000000:role/eks-agent-platform/tenants/cluster-acme-eval',
         evalNamespace: 'eval-runner',
+        gatewayPodIdentity: {
+          clusterName: 'cluster',
+          namespace: 'tenants-acme',
+          serviceAccount: 'acme-gateway',
+          roleArn: 'arn:aws:iam::000000000000:role/cluster-acme-tenant',
+        },
         observedGeneration: 4,
         suspendedAt: '2026-07-18T00:00:00.000Z',
         suspendedReason: 'budget-exceeded',
@@ -57,6 +63,7 @@ describe('PlatformResource', () => {
     expect(p.status?.sessionRoleArn).toContain('session');
     expect(p.status?.evalRoleArn).toContain('eval');
     expect(p.status?.evalNamespace).toBe('eval-runner');
+    expect(p.status?.gatewayPodIdentity?.serviceAccount).toBe('acme-gateway');
     expect(p.status?.conditions?.[0]?.type).toBe('Suspended');
   });
 
