@@ -70,6 +70,10 @@ type iamReconcileResult struct {
 	// than clearing it.
 	PodIdentity *platformv1alpha1.PodIdentityStatus
 
+	// GatewayPodIdentity is the association binding the ModelGateway's Envoy
+	// ServiceAccount to the same role, nil on exactly the paths PodIdentity is.
+	GatewayPodIdentity *platformv1alpha1.PodIdentityStatus
+
 	// UngrantedCapabilities lists capabilities the Platform declares that this
 	// pass granted nothing for — a declaration whose substrate precondition is
 	// absent. Empty on every path that returns before the capability policy is
@@ -330,7 +334,11 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 		if err != nil {
 			return iamReconcileResult{RoleARN: arn}, err
 		}
-		return iamReconcileResult{RoleARN: arn, PodIdentity: binding, UngrantedCapabilities: ungranted}, nil
+		gwBinding, err := r.ensureGatewayPodIdentity(ctx, p, cfg, arn)
+		if err != nil {
+			return iamReconcileResult{RoleARN: arn, PodIdentity: binding}, err
+		}
+		return iamReconcileResult{RoleARN: arn, PodIdentity: binding, GatewayPodIdentity: gwBinding, UngrantedCapabilities: ungranted}, nil
 	}
 	if !isIAMNotFound(getErr) {
 		return iamReconcileResult{}, fmt.Errorf("iam GetRole: %w", getErr)
@@ -379,7 +387,11 @@ func (r *PlatformReconciler) ensureIamRole(ctx context.Context, p *platformv1alp
 	if err != nil {
 		return iamReconcileResult{RoleARN: arn}, err
 	}
-	return iamReconcileResult{RoleARN: arn, PodIdentity: binding, UngrantedCapabilities: ungranted}, nil
+	gwBinding, err := r.ensureGatewayPodIdentity(ctx, p, cfg, arn)
+	if err != nil {
+		return iamReconcileResult{RoleARN: arn, PodIdentity: binding}, err
+	}
+	return iamReconcileResult{RoleARN: arn, PodIdentity: binding, GatewayPodIdentity: gwBinding, UngrantedCapabilities: ungranted}, nil
 }
 
 // ensureTenantPodIdentity binds the Platform's IAM role to the ServiceAccount
@@ -422,6 +434,48 @@ func (r *PlatformReconciler) ensureTenantPodIdentity(
 		ClusterName:    cfg.ClusterName,
 		Namespace:      ns,
 		ServiceAccount: saName,
+		RoleArn:        roleARN,
+	}, nil
+}
+
+// ensureGatewayPodIdentity binds the ModelGateway's Envoy ServiceAccount to the
+// tenant role, so the gateway invokes Bedrock as the tenant: the per-tenant
+// model scoping, quota and cost attribution all key on that role's ARN.
+//
+// It is a second ServiceAccount because Envoy Gateway will not run a gateway
+// under the first. In GatewayNamespace deploy mode its infrastructure provider
+// applies the proxy's ServiceAccount before anything else and skips the whole
+// data plane when a same-named ServiceAccount exists without its own ownership
+// labels (checkOwnership in internal/infrastructure/kubernetes/infra_resource.go
+// at v1.10.0) — which tenant-runtime always does. Labelling tenant-runtime as
+// gateway-owned would get past the check and hand the account to Envoy
+// Gateway: it server-side applies its own labels, an owner reference to the
+// Gateway and automountServiceAccountToken: false onto it, and deletes it with
+// the Gateway (deleteServiceAccount, and garbage collection through that owner
+// reference), taking every tenant workload's identity with it. So Envoy Gateway
+// owns <platform>-gateway outright, and this association is the only thing the
+// operator holds about it.
+//
+// The name is deterministic and the same on both isolation tiers: the gateway
+// runs on the host in the tenant namespace, never inside a vcluster. EKS takes
+// an association for a ServiceAccount that does not exist yet, and the
+// ModelGateway reconciler waits for the binding this returns to be published
+// before it renders the gateway, so no Envoy pod is admitted without it.
+func (r *PlatformReconciler) ensureGatewayPodIdentity(
+	ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig, roleARN string,
+) (*platformv1alpha1.PodIdentityStatus, error) {
+	ns := PlatformNamespace(p)
+	sa := gatewayServiceAccountName(p)
+	if err := r.ensurePodIdentityAssociation(ctx, cfg, ns, sa, roleARN); err != nil {
+		return nil, fmt.Errorf("gateway ServiceAccount %s/%s: %w", ns, sa, err)
+	}
+	if r.EKS == nil {
+		return nil, nil
+	}
+	return &platformv1alpha1.PodIdentityStatus{
+		ClusterName:    cfg.ClusterName,
+		Namespace:      ns,
+		ServiceAccount: sa,
 		RoleArn:        roleARN,
 	}, nil
 }
@@ -592,10 +646,14 @@ func (r *PlatformReconciler) reconcileManagedPolicies(ctx context.Context, roleN
 }
 
 // deleteIamRole is the finalizer counterpart: remove the Pod Identity
-// association, detach all policies, and delete the tenant role. Tolerates a
-// missing association and NotFound so re-runs are safe.
+// associations (tenant-runtime's and the gateway's), detach all policies, and
+// delete the tenant role. Tolerates a missing association and NotFound so
+// re-runs are safe.
 func (r *PlatformReconciler) deleteIamRole(ctx context.Context, p *platformv1alpha1.Platform, cfg IAMConfig) error {
 	if err := r.deletePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), tenantSAName); err != nil {
+		return err
+	}
+	if err := r.deletePodIdentityAssociation(ctx, cfg, PlatformNamespace(p), gatewayServiceAccountName(p)); err != nil {
 		return err
 	}
 	// The scheduler-invoke role is operator-owned (unlike a datastore), so the

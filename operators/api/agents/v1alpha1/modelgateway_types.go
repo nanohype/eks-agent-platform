@@ -163,7 +163,14 @@ type RouteStatus struct {
 
 // ModelGatewayStatus surfaces the gateway's route and listener state.
 type ModelGatewayStatus struct {
-	// Phase: Pending, Provisioning, Ready, Failed.
+	// Phase: Pending, Provisioning, Ready, Failed. Pending waits on the
+	// Platform, the Gateway-API / Envoy AI Gateway CRDs, the Platform's
+	// gateway identity binding, or one requeue after releasing a tenant-runtime
+	// ServiceAccount Envoy Gateway had adopted; Provisioning has applied the gateway's
+	// resources and waits on Envoy Gateway to report the Gateway Programmed;
+	// Ready means it did at the last check, so an Envoy data plane was serving
+	// the routes then. A Ready gateway is re-checked every two minutes and
+	// returns to Provisioning when the Gateway stops being Programmed.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
@@ -184,15 +191,26 @@ type ModelGatewayStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// Conditions carry what the last reconcile learned. Two are written:
+	// Conditions carry what the last reconcile learned. Three are written:
 	//
 	//	RoutesReconciled                  the routes were emitted (False while
-	//	                                  waiting on the Platform or the
-	//	                                  Gateway-API CRDs)
+	//	                                  waiting on the Platform, its gateway
+	//	                                  identity binding or the Gateway-API
+	//	                                  CRDs)
+	//	DataPlaneProgrammed               whether Envoy Gateway reports the
+	//	                                  rendered Gateway Programmed, its Envoy
+	//	                                  Service addressed and Deployment
+	//	                                  available. False/GatewayNotProgrammed
+	//	                                  carries Envoy Gateway's reason, False/
+	//	                                  AwaitingGatewayStatus means it has not
+	//	                                  reported on this generation, Unknown/
+	//	                                  NotRendered means no Gateway was applied
 	//	ImportedRouteGuardrailUnenforced  whether any imported route is served
 	//	                                  without its guardrail
 	//
-	// The second is three-valued, and the three are three different sentences.
+	// Endpoint and Routes are published only while DataPlaneProgrammed is True.
+	//
+	// The last is three-valued, and the three are three different sentences.
 	// True names the routes. False says the routes were walked and none of them
 	// is unguarded. Unknown says the walk did not happen — which is every pass
 	// that returns before the routes are reached — so a reader deciding whether

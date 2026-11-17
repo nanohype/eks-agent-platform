@@ -191,19 +191,28 @@ spec:
               state.
             properties:
               conditions:
-                description: "Conditions carry what the last reconcile learned. Two
+                description: "Conditions carry what the last reconcile learned. Three
                   are written:\n\n\tRoutesReconciled                  the routes were
                   emitted (False while\n\t                                  waiting
-                  on the Platform or the\n\t                                  Gateway-API
-                  CRDs)\n\tImportedRouteGuardrailUnenforced  whether any imported
-                  route is served\n\t                                  without its
-                  guardrail\n\nThe second is three-valued, and the three are three
-                  different sentences.\nTrue names the routes. False says the routes
-                  were walked and none of them\nis unguarded. Unknown says the walk
-                  did not happen — which is every pass\nthat returns before the routes
-                  are reached — so a reader deciding whether\nto point sensitive traffic
-                  at an imported route must treat Unknown as an\nunanswered question
-                  rather than as an absence of findings."
+                  on the Platform, its gateway\n\t                                  identity
+                  binding or the Gateway-API\n\t                                  CRDs)\n\tDataPlaneProgrammed
+                  \              whether Envoy Gateway reports the\n\t                                  rendered
+                  Gateway Programmed, its Envoy\n\t                                  Service
+                  addressed and Deployment\n\t                                  available.
+                  False/GatewayNotProgrammed\n\t                                  carries
+                  Envoy Gateway's reason, False/\n\t                                  AwaitingGatewayStatus
+                  means it has not\n\t                                  reported on
+                  this generation, Unknown/\n\t                                  NotRendered
+                  means no Gateway was applied\n\tImportedRouteGuardrailUnenforced
+                  \ whether any imported route is served\n\t                                  without
+                  its guardrail\n\nEndpoint and Routes are published only while DataPlaneProgrammed
+                  is True.\n\nThe last is three-valued, and the three are three different
+                  sentences.\nTrue names the routes. False says the routes were walked
+                  and none of them\nis unguarded. Unknown says the walk did not happen
+                  — which is every pass\nthat returns before the routes are reached
+                  — so a reader deciding whether\nto point sensitive traffic at an
+                  imported route must treat Unknown as an\nunanswered question rather
+                  than as an absence of findings."
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -273,7 +282,15 @@ spec:
                 format: int64
                 type: integer
               phase:
-                description: 'Phase: Pending, Provisioning, Ready, Failed.'
+                description: |-
+                  Phase: Pending, Provisioning, Ready, Failed. Pending waits on the
+                  Platform, the Gateway-API / Envoy AI Gateway CRDs, the Platform's
+                  gateway identity binding, or one requeue after releasing a tenant-runtime
+                  ServiceAccount Envoy Gateway had adopted; Provisioning has applied the gateway's
+                  resources and waits on Envoy Gateway to report the Gateway Programmed;
+                  Ready means it did at the last check, so an Envoy data plane was serving
+                  the routes then. A Ready gateway is re-checked every two minutes and
+                  returns to Provisioning when the Gateway stops being Programmed.
                 type: string
               routes:
                 description: |-

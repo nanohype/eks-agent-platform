@@ -341,6 +341,9 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if susp.PodIdentity != nil {
 		platform.Status.PodIdentity = susp.PodIdentity
 	}
+	if susp.GatewayPodIdentity != nil {
+		platform.Status.GatewayPodIdentity = susp.GatewayPodIdentity
+	}
 	platform.Status.ObservedGeneration = platform.Generation
 
 	// Create the tenant-runtime ServiceAccount (no role-arn annotation — its IAM

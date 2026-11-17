@@ -235,8 +235,26 @@ names it, and `aws eks list-pod-identity-associations --cluster-name <cluster>
 `aws eks describe-pod-identity-association --cluster-name <cluster>
 --association-id <id>` shows a `roleArn` equal to `status.podIdentity.roleArn`.
 The ServiceAccount is `tenant-runtime` under namespace isolation and the
-vcluster-translated host name under `spec.isolation: vcluster`. Tenant `/readyz`
+vcluster-translated host name under `spec.isolation: vcluster`.
+`Platform.status.gatewayPodIdentity` names the second association, binding the
+ModelGateway's Envoy ServiceAccount `<platform>-gateway` to the same role, and
+checks out the same way. A ModelGateway reports `Ready` only once Envoy Gateway
+reports its Gateway `Programmed`; one held at `Provisioning` names Envoy
+Gateway's reason on its `DataPlaneProgrammed` condition. Tenant `/readyz`
 green.
+
+On a cluster upgraded from an operator that ran the gateway under
+`tenant-runtime`, also check that `tenant-runtime` is no longer Envoy Gateway's:
+`kubectl get sa tenant-runtime -n tenants-<platform> -o yaml` shows no
+`app.kubernetes.io/managed-by: envoy-gateway` or `gateway.envoyproxy.io/*` label,
+no owner reference to a Gateway, and no `automountServiceAccountToken: false`.
+Envoy Gateway 1.8 left all three on it, and either of the first two lets the
+account be deleted with the Gateway or by Envoy Gateway's sweep of proxy
+ServiceAccounts once the gateway moves to `<platform>-gateway`. The operator
+strips them before it renders that move, holding the ModelGateway in `Pending`
+for one requeue with a message naming the release; one stuck there means Envoy
+Gateway keeps re-adopting the account, which only Envoy Gateway older than 1.10
+does — upgrade it.
 
 ### B5. Teardown (reverse order — stops spend)
 

@@ -134,3 +134,71 @@ func TestEnsureIamRole_RebindsTheTenantAssociation(t *testing.T) {
 		t.Errorf("tenant-runtime is bound to %q and reported as %q, want the tenant role %s", bound, got.PodIdentity.RoleArn, got.RoleARN)
 	}
 }
+
+// TestEnsureIamRole_GatewayBindingFailureIsReported: the gateway's association
+// is part of the Platform's identity, so failing to bind it fails the pass on
+// both the fresh-role and existing-role paths — and the tenant binding that did
+// land is still reported, while no gateway binding is. A published
+// gatewayPodIdentity is what releases the ModelGateway to render, so reporting
+// one that was never made would admit an Envoy pod with no credentials.
+func TestEnsureIamRole_GatewayBindingFailureIsReported(t *testing.T) {
+	boom := errors.New("boom")
+	platform := newPlatform("analytics", "acme")
+	gatewaySA := gatewayServiceAccountName(platform)
+	cfg := IAMConfig{ClusterName: "production-cluster", Environment: "production"}
+
+	check := func(t *testing.T, got iamReconcileResult, err error) {
+		t.Helper()
+		if !errors.Is(err, boom) || !strings.Contains(err.Error(), "gateway ServiceAccount") {
+			t.Fatalf("got %v, want the gateway binding's error, naming it", err)
+		}
+		if got.PodIdentity == nil || got.PodIdentity.ServiceAccount != tenantSAName {
+			t.Errorf("the tenant binding landed and must still be reported, got %+v", got.PodIdentity)
+		}
+		if got.GatewayPodIdentity != nil {
+			t.Errorf("a gateway binding that was never made was reported: %+v", got.GatewayPodIdentity)
+		}
+	}
+
+	t.Run("fresh role", func(t *testing.T) {
+		fe := newFakeEKS()
+		fe.createReturnsErr, fe.failOnlyFor = boom, gatewaySA
+		r := &PlatformReconciler{IAM: newFakeIAM(), EKS: fe}
+		got, err := r.ensureIamRole(context.Background(), platform, cfg)
+		check(t, got, err)
+	})
+
+	t.Run("existing role", func(t *testing.T) {
+		fe := newFakeEKS()
+		r := &PlatformReconciler{IAM: newFakeIAM(), EKS: fe}
+		if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
+			t.Fatalf("first pass: %v", err)
+		}
+		delete(fe.associations, PlatformNamespace(platform)+"/"+gatewaySA)
+		fe.createReturnsErr, fe.failOnlyFor = boom, gatewaySA
+		got, err := r.ensureIamRole(context.Background(), platform, cfg)
+		check(t, got, err)
+	})
+}
+
+// TestDeleteIamRole_GatewayAssociationFailureHoldsTheFinalizer: the role is
+// deleted only after both associations are gone, so a failure removing the
+// gateway's stops the teardown before the role rather than orphaning an
+// association that names a deleted role.
+func TestDeleteIamRole_GatewayAssociationFailureHoldsTheFinalizer(t *testing.T) {
+	boom := errors.New("boom")
+	platform := newPlatform("analytics", "acme")
+	f, fe := newFakeIAM(), newFakeEKS()
+	r := &PlatformReconciler{IAM: f, EKS: fe}
+	cfg := IAMConfig{ClusterName: "production-cluster", Environment: "production"}
+	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
+		t.Fatal(err)
+	}
+	fe.listReturnsErr, fe.failOnlyFor = boom, gatewayServiceAccountName(platform)
+	if err := r.deleteIamRole(context.Background(), platform, cfg); !errors.Is(err, boom) {
+		t.Fatalf("got %v, want the gateway association's error", err)
+	}
+	if fe.roleFor(PlatformNamespace(platform), gatewayServiceAccountName(platform)) == "" {
+		t.Error("the gateway association is gone although its removal failed")
+	}
+}

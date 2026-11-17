@@ -568,6 +568,16 @@ type fakeEKS struct {
 	createReturnsErr   error
 	deleteReturnsErr   error
 	describeReturnsErr error
+	// failOnlyFor narrows listReturnsErr and createReturnsErr to calls naming
+	// this ServiceAccount, so a test can fail one of a Platform's two
+	// associations and not the other. Empty fails every call.
+	failOnlyFor string
+}
+
+// failsFor reports whether an injected error applies to a call naming
+// serviceAccount.
+func (f *fakeEKS) failsFor(serviceAccount *string) bool {
+	return f.failOnlyFor == "" || f.failOnlyFor == aws.ToString(serviceAccount)
 }
 
 func newFakeEKS() *fakeEKS {
@@ -606,7 +616,7 @@ func (f *fakeEKS) DescribePodIdentityAssociation(_ context.Context, params *eks.
 }
 
 func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
-	if f.listReturnsErr != nil {
+	if f.listReturnsErr != nil && f.failsFor(params.ServiceAccount) {
 		return nil, f.listReturnsErr
 	}
 	key := aws.ToString(params.Namespace) + "/" + aws.ToString(params.ServiceAccount)
@@ -622,7 +632,7 @@ func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.Lis
 }
 
 func (f *fakeEKS) CreatePodIdentityAssociation(_ context.Context, params *eks.CreatePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error) {
-	if f.createReturnsErr != nil {
+	if f.createReturnsErr != nil && f.failsFor(params.ServiceAccount) {
 		return nil, f.createReturnsErr
 	}
 	f.createCalls = append(f.createCalls, *params)
@@ -675,9 +685,10 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 		t.Errorf("trust policy must not use the IRSA web-identity action: %s", trust)
 	}
 
-	// A Pod Identity association binds the tenant SA (tenant-runtime) to the role.
-	if len(fe.createCalls) != 1 {
-		t.Fatalf("expected one CreatePodIdentityAssociation, got %d", len(fe.createCalls))
+	// A Pod Identity association binds the tenant SA (tenant-runtime) to the
+	// role, and a second binds the ModelGateway's Envoy SA to the same role.
+	if len(fe.createCalls) != 2 {
+		t.Fatalf("expected two CreatePodIdentityAssociation calls (tenant-runtime, gateway), got %d", len(fe.createCalls))
 	}
 	assoc := fe.createCalls[0]
 	if aws.ToString(assoc.ClusterName) != "production-cluster" {
@@ -708,20 +719,44 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 		t.Errorf("published binding does not match the association created:\n got %+v\nwant %+v", *got.PodIdentity, want)
 	}
 
-	// Idempotent: a second reconcile finds the existing association, no duplicate.
+	gw := fe.createCalls[1]
+	wantGW := platformv1alpha1.PodIdentityStatus{
+		ClusterName:    "production-cluster",
+		Namespace:      PlatformNamespace(platform),
+		ServiceAccount: platform.Name + "-gateway",
+		RoleArn:        got.RoleARN,
+	}
+	gotGW := platformv1alpha1.PodIdentityStatus{
+		ClusterName:    aws.ToString(gw.ClusterName),
+		Namespace:      aws.ToString(gw.Namespace),
+		ServiceAccount: aws.ToString(gw.ServiceAccount),
+		RoleArn:        aws.ToString(gw.RoleArn),
+	}
+	if gotGW != wantGW {
+		t.Errorf("gateway association:\n got %+v\nwant %+v", gotGW, wantGW)
+	}
+	if got.GatewayPodIdentity == nil || *got.GatewayPodIdentity != wantGW {
+		t.Errorf("published gateway binding: got %+v want %+v", got.GatewayPodIdentity, wantGW)
+	}
+
+	// Idempotent: a second reconcile finds the existing associations, no duplicate.
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("second ensureIamRole: %v", err)
 	}
-	if len(fe.createCalls) != 1 {
+	if len(fe.createCalls) != 2 {
 		t.Errorf("association creation not idempotent: got %d creates", len(fe.createCalls))
 	}
 
-	// deleteIamRole removes the association before the role.
+	// deleteIamRole removes both associations before the role, so neither
+	// outlives the role it names.
 	if err := r.deleteIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("deleteIamRole: %v", err)
 	}
-	if len(fe.deleteCalls) != 1 {
-		t.Errorf("expected one DeletePodIdentityAssociation, got %d", len(fe.deleteCalls))
+	if len(fe.deleteCalls) != 2 {
+		t.Errorf("expected two DeletePodIdentityAssociation calls, got %d", len(fe.deleteCalls))
+	}
+	if len(fe.associations) != 0 {
+		t.Errorf("associations survived deleteIamRole: %v", fe.associations)
 	}
 }
 

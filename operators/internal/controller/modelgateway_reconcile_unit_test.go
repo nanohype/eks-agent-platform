@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,6 +33,9 @@ import (
 func mgwScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
+	if err := corev1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 	if err := platformv1alpha1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +49,40 @@ func mgwScheme(t *testing.T) *runtime.Scheme {
 // reconciler requires before it will render anything.
 func readyPlatform(t *testing.T, s *runtime.Scheme) client.Client {
 	t.Helper()
+	return fake.NewClientBuilder().WithScheme(s).WithObjects(readyTestPlatform()).Build()
+}
+
+// readyTestPlatform is the Platform readyPlatform seeds.
+func readyTestPlatform() *platformv1alpha1.Platform {
 	p := newPlatform(ctrlTestPlatform, "team")
 	p.Namespace = ctrlTestNS
 	p.Status.Phase = phaseReady
-	return fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	return p
+}
+
+// setGatewayProgrammed writes the Programmed condition Envoy Gateway would put
+// on the rendered Gateway, at the Gateway's current generation.
+func setGatewayProgrammed(t *testing.T, cl client.Client, status, reason string) {
+	t.Helper()
+	gw := getRendered(t, cl, gatewayAPIGV, "Gateway", ctrlTestPlatform+"-gateway")
+	setGatewayCondition(t, cl, gw, status, reason, gw.GetGeneration())
+}
+
+func setGatewayCondition(t *testing.T, cl client.Client, gw *unstructured.Unstructured, status, reason string, observed int64) {
+	t.Helper()
+	cond := map[string]any{
+		"type":               "Programmed",
+		"status":             status,
+		"reason":             reason,
+		"message":            "set by test",
+		"observedGeneration": observed,
+	}
+	if err := unstructured.SetNestedSlice(gw.Object, []any{cond}, "status", "conditions"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Update(context.Background(), gw); err != nil {
+		t.Fatalf("write Gateway status: %v", err)
+	}
 }
 
 // getRendered fetches one generated resource by kind and name from the tenant
@@ -154,6 +188,17 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reconcileSelf (ready): %v", err)
 		}
+		// Applied is not serving: until Envoy Gateway reports the Gateway
+		// Programmed, the pass is Provisioning and publishes no endpoint.
+		if res.phase != phaseProvisioning || res.endpoint != "" || len(res.routes) != 0 {
+			t.Fatalf("an unprogrammed Gateway: got phase %q endpoint %q routes %v, want Provisioning with nothing published",
+				res.phase, res.endpoint, res.routes)
+		}
+		setGatewayProgrammed(t, cl, "True", "Programmed")
+		res, err = r.reconcileSelf(context.Background(), twoRouteGateway())
+		if err != nil {
+			t.Fatalf("reconcileSelf (programmed): %v", err)
+		}
 		if res.phase != phaseReady {
 			t.Errorf("phase: got %q want Ready", res.phase)
 		}
@@ -173,10 +218,11 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 // that carry the most weight.
 //
 // The ServiceAccount is what makes the gateway inherit the tenant's Bedrock
-// identity: it already holds a Pod Identity association to the tenant role, so
-// the gateway needs no credential of its own and Bedrock still attributes every
-// invocation to the tenant. Pointing it anywhere else silently collapses
-// per-tenant cost attribution onto one shared role.
+// identity: the Platform reconciler binds <platform>-gateway to the tenant role
+// with a Pod Identity association, so the gateway needs no credential of its own
+// and Bedrock still attributes every invocation to the tenant. It must not be
+// tenant-runtime: in GatewayNamespace mode Envoy Gateway skips the whole data
+// plane rather than run under a ServiceAccount it did not create.
 //
 // The Service type defaults to LoadBalancer, so leaving it unset provisions an
 // AWS load balancer per Platform — billed hourly, idle, for a gateway only
@@ -191,8 +237,14 @@ func TestModelGatewayEnvoyProxyIdentityAndService(t *testing.T) {
 
 	proxy := getRendered(t, cl, envoyGatewayGV, "EnvoyProxy", ctrlTestPlatform+"-gateway")
 	sa, _, _ := unstructured.NestedString(proxy.Object, "spec", "provider", "kubernetes", "envoyServiceAccount", "name")
-	if sa != tenantSAName {
-		t.Errorf("envoyServiceAccount: got %q want the tenant ServiceAccount %q", sa, tenantSAName)
+	if sa == tenantSAName {
+		t.Errorf("envoyServiceAccount names %q: Envoy Gateway refuses to run a gateway under a ServiceAccount it did not create, "+
+			"and would take over and delete one it did", tenantSAName)
+	}
+	// The name the Platform reconciler binds to the tenant role. Rendering any
+	// other leaves the proxy with no Bedrock identity at all.
+	if want := gatewayServiceAccountName(readyTestPlatform()); sa != want {
+		t.Errorf("envoyServiceAccount: got %q want %q, the ServiceAccount bound to the tenant role", sa, want)
 	}
 	svcType, _, _ := unstructured.NestedString(proxy.Object, "spec", "provider", "kubernetes", "envoyService", "type")
 	if svcType != "ClusterIP" {
@@ -462,8 +514,10 @@ func TestModelGatewayImportedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileSelf (imported): %v", err)
 	}
-	if res.phase != phaseReady {
-		t.Errorf("phase: got %q want Ready", res.phase)
+	// Rendered but not yet programmed: the unenforced route is still reported,
+	// because the routes were walked.
+	if !res.routesRendered() {
+		t.Errorf("phase: got %q want the routes rendered", res.phase)
 	}
 	if len(res.unenforcedGuardrail) != 1 || res.unenforcedGuardrail[0] != "oss" {
 		t.Fatalf("imported route with a baseline guardrail must report unenforced [oss], got %v", res.unenforcedGuardrail)

@@ -138,9 +138,10 @@ Per-persona Grafana dashboards live in `eks-gitops` (`dashboards/`, rendered by 
 3. The AIGatewayRoute matches the route name and rewrites it to the Bedrock model
    ID via modelNameOverride
 4. Bedrock Guardrails attached as request headers run input policy
-5. Envoy, running under the tenant ServiceAccount and its Pod Identity
-   association, signs and issues bedrock-runtime InvokeModel via the PrivateLink
-   VPC endpoint
+5. Envoy, running under its own ServiceAccount (<platform>-gateway, which Envoy
+   Gateway owns) and the Pod Identity association binding it to the tenant
+   role, signs and issues bedrock-runtime InvokeModel via the PrivateLink VPC
+   endpoint
 6. Bedrock response flows back through Guardrails output policy
 7. The gateway emits OTel spans with cost attrs (input/output tokens × pricing)
 8. SDK in app pod emits OTel span with correlation_id linking the request

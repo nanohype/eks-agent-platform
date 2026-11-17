@@ -126,6 +126,12 @@ func TestReconcilePublishesRouteContract(t *testing.T) {
 	cl := readyPlatform(t, s)
 	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
 
+	// The contract is published once the data plane serves it: render, then
+	// let Envoy Gateway report the Gateway Programmed, then reconcile again.
+	if _, err := r.reconcileSelf(context.Background(), mixedRouteGateway()); err != nil {
+		t.Fatalf("reconcileSelf (render): %v", err)
+	}
+	setGatewayProgrammed(t, cl, "True", "Programmed")
 	res, err := r.reconcileSelf(context.Background(), mixedRouteGateway())
 	if err != nil {
 		t.Fatalf("reconcileSelf: %v", err)

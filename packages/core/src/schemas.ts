@@ -218,6 +218,9 @@ export const PlatformStatus = z.object({
   conditions: z.array(Condition).optional(),
   datastores: z.array(DatastoreStatus).optional(),
   podIdentity: PodIdentityStatus.optional(),
+  // The association binding the ModelGateway's Envoy ServiceAccount
+  // (<platform>-gateway) to the same tenant role.
+  gatewayPodIdentity: PodIdentityStatus.optional(),
 });
 export type PlatformStatus = z.infer<typeof PlatformStatus>;
 

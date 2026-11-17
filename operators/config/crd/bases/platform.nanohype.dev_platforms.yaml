@@ -925,6 +925,41 @@ spec:
                   identity whether or not the eval runtime is still configured. Empty until
                   a reconcile holds the role.
                 type: string
+              gatewayPodIdentity:
+                description: |-
+                  GatewayPodIdentity reports the second association the operator creates
+                  for this tenant's role: the one binding the ModelGateway's Envoy
+                  ServiceAccount, <platform>-gateway in the tenant namespace, to
+                  status.iamRoleArn. Envoy Gateway creates and owns that ServiceAccount — it
+                  refuses to run a gateway under one it does not own — so the gateway cannot
+                  share tenant-runtime, and this binding is what keeps it invoking Bedrock as
+                  the tenant. The ModelGateway reconciler renders no gateway until this is
+                  set on a cluster that reports status.podIdentity, so an Envoy pod is never
+                  admitted before its credentials exist. Same lifecycle as podIdentity.
+                properties:
+                  clusterName:
+                    description: |-
+                      ClusterName is the EKS cluster the association lives on. Associations are
+                      cluster-scoped resources, so this is required to look one up.
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the host namespace the association targets — the tenant
+                      namespace on both isolation tiers.
+                    type: string
+                  roleArn:
+                    description: |-
+                      RoleArn is the role the association vends. Always equal to
+                      status.iamRoleArn at the moment it was written; reported separately so a
+                      reader can tell a stale binding from a current one.
+                    type: string
+                  serviceAccount:
+                    description: |-
+                      ServiceAccount is the host ServiceAccount name the association targets:
+                      tenant-runtime under namespace isolation, the vcluster-translated host
+                      name under vcluster isolation.
+                    type: string
+                type: object
               iamRoleArn:
                 description: |-
                   IamRoleArn is the per-Platform tenant role created by the controller.

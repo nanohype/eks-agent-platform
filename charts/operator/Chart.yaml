@@ -8,6 +8,31 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) behind evalRuntime.*. It ships no SLO
 # manifests — see 0.6.0 below, which removed them.
 #
+# 0.7.2 adds status.gatewayPodIdentity to the Platform CRD and documents the
+# ModelGateway's DataPlaneProgrammed condition and Provisioning phase. The
+# operator that writes them gives each ModelGateway's Envoy its own
+# ServiceAccount, <platform>-gateway, which Envoy Gateway creates and owns, and
+# binds it to the tenant role with a second Pod Identity association recorded in
+# that field; it renders no gateway until the binding is published, and reports
+# a ModelGateway Ready only once Envoy Gateway reports its Gateway Programmed.
+# An operator pinning the proxy to tenant-runtime gets no data plane from Envoy
+# Gateway 1.10 in GatewayNamespace mode, which refuses a ServiceAccount it did
+# not create.
+#
+# Upgrading from an operator that pinned the proxy to tenant-runtime: Envoy
+# Gateway 1.8 adopted that account unconditionally (1.10 does when it carries
+# Envoy Gateway's labels, as a hand-applied workaround leaves it), stamping its
+# labels, an owner reference to the Gateway and automount off onto it. Either
+# would let Envoy Gateway or the garbage collector delete tenant-runtime once
+# the proxy moves to <platform>-gateway or the Gateway is deleted. The operator
+# strips all three before it renders the move — the ModelGateway sits in
+# Pending for one requeue while it does — and again before it deletes a
+# Gateway, so no manual step is needed; `kubectl get sa tenant-runtime -n
+# tenants-<platform> -o yaml` afterwards shows no envoy-gateway label and no
+# Gateway owner reference. Like 0.7.0, this is a lockstep version: appVersion still names
+# 0.7.0, which has no such field, so the release job's runtime-contract check
+# holds the chart until appVersion names the operator release that carries it.
+#
 # 0.7.1 names the operator release that mints per-Platform eval identities,
 # appVersion 0.7.0, and runs the eval steps on eval-runner 0.1.2, whose image
 # carries kubectl v1.36.6. 0.7.0 named operator 0.6.2, a pairing the release
@@ -80,7 +105,7 @@ type: application
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour — nor, as 0.6.3 records, a workflow parameter. The charts-oci release
 # job enforces both with scripts/check-runtime-contract.py --release.
-version: 0.7.1
+version: 0.7.2
 appVersion: "0.7.0"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).
