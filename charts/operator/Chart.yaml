@@ -17,7 +17,19 @@ type: application
 # a ModelGateway Ready only once Envoy Gateway reports its Gateway Programmed.
 # An operator pinning the proxy to tenant-runtime gets no data plane from Envoy
 # Gateway 1.10 in GatewayNamespace mode, which refuses a ServiceAccount it did
-# not create. Like 0.7.0, this is a lockstep version: appVersion still names
+# not create.
+#
+# Upgrading from an operator that pinned the proxy to tenant-runtime: Envoy
+# Gateway 1.8 adopted that account unconditionally (1.10 does when it carries
+# Envoy Gateway's labels, as a hand-applied workaround leaves it), stamping its
+# labels, an owner reference to the Gateway and automount off onto it. Either
+# would let Envoy Gateway or the garbage collector delete tenant-runtime once
+# the proxy moves to <platform>-gateway or the Gateway is deleted. The operator
+# strips all three before it renders the move — the ModelGateway sits in
+# Pending for one requeue while it does — and again before it deletes a
+# Gateway, so no manual step is needed; `kubectl get sa tenant-runtime -n
+# tenants-<platform> -o yaml` afterwards shows no envoy-gateway label and no
+# Gateway owner reference. Like 0.7.0, this is a lockstep version: appVersion still names
 # 0.7.0, which has no such field, so the release job's runtime-contract check
 # holds the chart until appVersion names the operator release that carries it.
 #

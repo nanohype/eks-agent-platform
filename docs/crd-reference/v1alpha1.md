@@ -234,7 +234,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `phase` _string_ | Phase: Pending, Provisioning, Ready, Failed. Pending waits on the<br />Platform, the Gateway-API / Envoy AI Gateway CRDs, or the Platform's<br />gateway identity binding; Provisioning has applied the gateway's<br />resources and waits on Envoy Gateway to report the Gateway Programmed;<br />Ready means it has, so an Envoy data plane is serving the routes. |  | Optional: \{\} <br /> |
+| `phase` _string_ | Phase: Pending, Provisioning, Ready, Failed. Pending waits on the<br />Platform, the Gateway-API / Envoy AI Gateway CRDs, the Platform's<br />gateway identity binding, or one requeue after releasing a tenant-runtime<br />ServiceAccount Envoy Gateway had adopted; Provisioning has applied the gateway's<br />resources and waits on Envoy Gateway to report the Gateway Programmed;<br />Ready means it did at the last check, so an Envoy data plane was serving<br />the routes then. A Ready gateway is re-checked every two minutes and<br />returns to Provisioning when the Gateway stops being Programmed. |  | Optional: \{\} <br /> |
 | `endpoint` _string_ | Endpoint is the cluster-internal hostname of the gateway. It addresses<br />the gateway, not any one API on it — see Routes for the base URL a<br />client is actually configured with. |  | Optional: \{\} <br /> |
 | `routes` _[RouteStatus](#routestatus) array_ | Routes is the per-route client contract: the resolved wire format and<br />the base URL that format is served at. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the last spec.generation reconciled. |  | Optional: \{\} <br /> |

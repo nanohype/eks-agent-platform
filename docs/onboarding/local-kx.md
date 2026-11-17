@@ -78,13 +78,13 @@ This delegates to kx's `bedrock-credentials` slice, which needs kx's security sl
 
 1. Resolves AWS credentials from `${AWS_PROFILE:-default}` via `aws configure export-credentials`, which turns SSO and role-chained sessions into static ones.
 2. Stores them once, where Kyverno can clone them.
-3. Installs a policy that clones the Secret into each `tenants-*` namespace as it appears, and adds it to that namespace's gateway `envoy` container.
+3. Installs a policy that clones the Secret into each `tenants-*` namespace as it appears, and adds it to that namespace's gateway `ai-gateway-extproc` container.
 
-**Why a policy rather than a patch.** On a real cluster the gateway reaches Bedrock as the tenant: the operator points each Platform's EnvoyProxy at the tenant ServiceAccount, which carries a Pod Identity association, and the `BackendSecurityPolicy` names only a region — the ambient credential chain. kind has no Pod Identity, so that chain finds nothing.
+**Why a policy rather than a patch.** On a real cluster the gateway reaches Bedrock as the tenant: the operator points each Platform's EnvoyProxy at the ServiceAccount `<platform>-gateway`, which Envoy Gateway creates and the operator binds to the tenant role with a Pod Identity association, and the `BackendSecurityPolicy` names only a region — the ambient credential chain. kind has no Pod Identity, so that chain finds nothing.
 
 Credentials cannot simply be written onto the pod, because the data plane is generated: Envoy Gateway renders the Deployment from the EnvoyProxy the operator renders, so anything patched onto either is reconciled away — it works just long enough to look correct. Mutating at admission reapplies itself every time the pod is recreated, and the operator is untouched.
 
-The credentials land on the `envoy` container specifically, because Envoy AI Gateway signs AWS requests in Envoy itself rather than in a sidecar.
+The credentials land on the `ai-gateway-extproc` container specifically, because Envoy AI Gateway resolves AWS credentials and signs requests in that external processor rather than in Envoy itself.
 
 ### Verify the Bedrock loop end-to-end
 

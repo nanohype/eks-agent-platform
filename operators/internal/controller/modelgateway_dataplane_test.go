@@ -11,11 +11,14 @@ import (
 	"strings"
 	"testing"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	agentsv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/agents/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
@@ -242,6 +245,86 @@ func TestModelGatewayReconcilePollsAProvisioningGateway(t *testing.T) {
 	}
 	if stored.Status.Phase != phaseProvisioning || stored.Status.Endpoint != "" {
 		t.Errorf("stored status: phase %q endpoint %q, want Provisioning with no endpoint", stored.Status.Phase, stored.Status.Endpoint)
+	}
+}
+
+// TestModelGatewayReadyIsReChecked: Ready is a reading of the Gateway's
+// Programmed condition, and nothing watches the Gateway. A Ready pass must
+// schedule its own next look, and that look must take the ModelGateway back to
+// Provisioning — endpoint withdrawn — once the data plane stops serving.
+func TestModelGatewayReadyIsReChecked(t *testing.T) {
+	s := mgwScheme(t)
+	ctx := context.Background()
+	mg := twoRouteGateway()
+	mg.Finalizers = []string{modelGatewayFinalizer}
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(readyTestPlatform(), mg).WithStatusSubresource(mg).Build()
+	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: mg.Namespace, Name: mg.Name}}
+	stored := func() agentsv1alpha1.ModelGateway {
+		t.Helper()
+		var got agentsv1alpha1.ModelGateway
+		if err := cl.Get(ctx, req.NamespacedName, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (render): %v", err)
+	}
+	setGatewayProgrammed(t, cl, "True", "Programmed")
+	got, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile (programmed): %v", err)
+	}
+	if st := stored(); st.Status.Phase != phaseReady || st.Status.Endpoint == "" {
+		t.Fatalf("programmed gateway: phase %q endpoint %q, want Ready with an endpoint", st.Status.Phase, st.Status.Endpoint)
+	}
+	if got.RequeueAfter <= 0 {
+		t.Fatalf("a Ready pass returned %+v; nothing else would notice the data plane going away", got)
+	}
+
+	// Envoy Gateway withdraws Programmed — the Envoy Deployment lost its
+	// available replica.
+	setGatewayProgrammed(t, cl, "False", "NoResources")
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (unprogrammed): %v", err)
+	}
+	st := stored()
+	if st.Status.Phase != phaseProvisioning || st.Status.Endpoint != "" || len(st.Status.Routes) != 0 {
+		t.Errorf("a gateway that stopped serving: phase %q endpoint %q routes %v, want Provisioning with nothing published",
+			st.Status.Phase, st.Status.Endpoint, st.Status.Routes)
+	}
+	if dp := findCondition(st.Status.Conditions, dataPlaneConditionType); dp == nil || dp.Reason != reasonGatewayNotProgrammed || !strings.Contains(dp.Message, "NoResources") {
+		t.Errorf("%s: got %+v want False/%s relaying NoResources", dataPlaneConditionType, dp, reasonGatewayNotProgrammed)
+	}
+}
+
+// TestModelGatewayGatewayKindGoneOnReadIsPending: a Gateway CRD removed between
+// the apply and the status read is the same bootstrap ordering a missing CRD
+// is on the apply, and reads as Pending rather than as a reconcile error.
+func TestModelGatewayGatewayKindGoneOnReadIsPending(t *testing.T) {
+	s := mgwScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(readyTestPlatform()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				err := c.Get(ctx, key, obj, opts...)
+				// Only the read after the apply: the apply's own lookup finds
+				// nothing and creates the Gateway, so the kind was there then.
+				if u, ok := obj.(*unstructured.Unstructured); ok && err == nil && u.GetKind() == "Gateway" && u.GetAPIVersion() == gatewayAPIGV.String() {
+					return &apimeta.NoKindMatchError{GroupKind: gatewayAPIGV.WithKind("Gateway").GroupKind()}
+				}
+				return err
+			},
+		}).Build()
+	r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
+	res, err := r.reconcileSelf(context.Background(), twoRouteGateway())
+	if err != nil {
+		t.Fatalf("reconcileSelf: %v", err)
+	}
+	if res.phase != phasePending || res.waitingOn != gatewayPrerequisitesMessage {
+		t.Errorf("got phase %q waiting on %q, want Pending on the prerequisites", res.phase, res.waitingOn)
 	}
 }
 

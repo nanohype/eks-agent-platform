@@ -673,6 +673,14 @@ func (r *ModelGatewayReconciler) cleanupGatewayResources(ctx context.Context, mg
 	}
 	n := namesFor(platform)
 
+	// Deleting the Gateway below garbage-collects whatever carries an owner
+	// reference to it, and Envoy Gateway deletes the proxy ServiceAccounts its
+	// labels select. A tenant-runtime an earlier operator release let Envoy
+	// Gateway adopt carries both, so release it first.
+	if _, err := releaseTenantServiceAccount(ctx, r.Client, platform); err != nil {
+		return err
+	}
+
 	for _, route := range mg.Spec.Routes {
 		routeName := platform.Name + "-" + route.Name
 		if err := r.deleteUnstructured(ctx, aiGatewayGV, "BackendSecurityPolicy", n.namespace, routeName); err != nil {
@@ -762,6 +770,7 @@ const (
 const (
 	gatewayPrerequisitesMessage  = "waiting on Platform or Envoy AI Gateway / Gateway-API CRDs"
 	gatewayIdentityWaitMessage   = "waiting on the Platform to bind the gateway's ServiceAccount to the tenant role (status.gatewayPodIdentity)"
+	tenantSAReleaseMessage       = "released tenant-runtime from Envoy Gateway, which an earlier operator release let adopt it; the gateway renders once a pass finds it still released"
 	dataPlaneNotRenderedMessage  = "no Gateway was rendered this pass, so whether its data plane is serving is unknown"
 	dataPlaneTroubleshootingHint = "Envoy Gateway's controller log names the cause — for example a proxy ServiceAccount, Deployment or Service it refuses to adopt because it does not own it"
 )
@@ -845,10 +854,10 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 		}
 		return gatewayReconcileResult{}, err
 	}
-	// Don't emit routes until the Platform itself is Ready. The gateway runs
-	// under the tenant ServiceAccount, so before the Platform has minted that
-	// account and its Pod Identity association the Envoy pod would come up with
-	// no path to Bedrock and every request would fail AccessDenied.
+	// Don't emit routes until the Platform itself is Ready. The Platform mints
+	// the tenant IAM role the gateway's ServiceAccount is bound to, so before it
+	// is Ready the Envoy pod would come up with no path to Bedrock and every
+	// request would fail AccessDenied.
 	if platform.Status.Phase != phaseReady {
 		return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayPrerequisitesMessage}, nil
 	}
@@ -862,6 +871,22 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 		return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayIdentityWaitMessage}, nil
 	}
 
+	// An earlier operator release pointed the EnvoyProxy at tenant-runtime, and
+	// Envoy Gateway may have adopted it then. Rendering the EnvoyProxy below
+	// moves Envoy Gateway onto <platform>-gateway, and the first thing it does
+	// after applying that account is delete every other proxy ServiceAccount its
+	// labels select — which includes an adopted tenant-runtime. So the rename is
+	// only rendered on a pass that found tenant-runtime already clean: a pass
+	// that had to release it waits one requeue, and the next one confirms Envoy
+	// Gateway did not take it back in between.
+	released, err := releaseTenantServiceAccount(ctx, r.Client, platform)
+	if err != nil {
+		return gatewayReconcileResult{}, err
+	}
+	if released {
+		return gatewayReconcileResult{phase: phasePending, waitingOn: tenantSAReleaseMessage}, nil
+	}
+
 	endpoint, unenforcedGuardrail, err := r.ensureGatewayResources(ctx, mg, platform, r.GuardrailID, r.GuardrailVersion)
 	if err != nil {
 		if errors.Is(err, errGatewayCRDsNotInstalled) {
@@ -871,6 +896,11 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 	}
 	dataPlane, err := r.dataPlaneProgrammed(ctx, namesFor(platform))
 	if err != nil {
+		// The Gateway kind was there a moment ago for the apply; if its CRD has
+		// gone since, this is the same bootstrap ordering as above, not a fault.
+		if errors.Is(err, errGatewayCRDsNotInstalled) {
+			return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayPrerequisitesMessage}, nil
+		}
 		return gatewayReconcileResult{}, err
 	}
 	res := gatewayReconcileResult{

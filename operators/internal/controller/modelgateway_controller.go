@@ -55,6 +55,7 @@ type ModelGatewayReconciler struct {
 // +kubebuilder:rbac:groups=aigateway.envoyproxy.io,resources=aigatewayroutes;aiservicebackends;backendsecuritypolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=envoyproxies;backends;clienttrafficpolicies;backendtrafficpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;backendtlspolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;update
 
 // Reconcile drives a ModelGateway CR toward its desired state.
 func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -105,8 +106,16 @@ func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if res.phase == phaseProvisioning {
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
-	return ctrl.Result{}, nil
+	// Ready → keep looking. Ready is a reading of the Gateway's Programmed
+	// condition, and nothing watches the Gateway, so without a requeue a data
+	// plane that stopped serving would leave the ModelGateway Ready, publishing
+	// its endpoint, until the manager's next resync hours later.
+	return ctrl.Result{RequeueAfter: readyRecheckInterval}, nil
 }
+
+// readyRecheckInterval is how often a Ready ModelGateway re-reads its Gateway's
+// Programmed condition, which bounds how long Ready can outlive the data plane.
+const readyRecheckInterval = 2 * time.Minute
 
 // SetupWithManager registers the reconciler with the controller manager.
 func (r *ModelGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {

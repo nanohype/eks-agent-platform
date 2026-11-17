@@ -48,15 +48,22 @@ func (r *AgentFleetReconciler) resolvePlatform(ctx context.Context, fleet *agent
 }
 
 // ensureTenantServiceAccount creates the ServiceAccount tenant pods run under —
-// AgentFleet agent pods, AgentSandbox session pods, the ModelGateway's Envoy
-// proxy, and the tenant app chart's pods, which reference it with
-// serviceAccount.create: false rather than creating their own. SA name +
+// AgentFleet agent pods, AgentSandbox session pods, and the tenant app chart's
+// pods, which reference it with serviceAccount.create: false rather than
+// creating their own. The ModelGateway's Envoy proxy does not run under it: it
+// runs under <platform>-gateway, which Envoy Gateway owns (see
+// gatewayServiceAccountName). SA name +
 // namespace match the Pod Identity association the operator creates in
 // platform_iam.go (tenants-<platform>:tenant-runtime) under namespace
 // isolation; under spec.isolation: vcluster the client is the virtual
 // cluster's and the association targets the SA's synced host copy. The
 // association binds it to the tenant IAM role. The SA carries no role-arn
 // annotation: Pod Identity is the binding.
+//
+// Each pass also releases the account from Envoy Gateway if an earlier operator
+// release let Envoy Gateway adopt it (releaseFromEnvoyGateway). Replacing the
+// label map below drops Envoy Gateway's labels on its own; the owner reference
+// to the Gateway and the automount setting it applied would otherwise survive.
 func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platformv1alpha1.Platform) error {
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -65,6 +72,7 @@ func ensureTenantServiceAccount(ctx context.Context, c client.Client, p *platfor
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, c, sa, func() error {
+		releaseFromEnvoyGateway(sa)
 		sa.Labels = map[string]string{
 			"app.kubernetes.io/managed-by": "eks-agent-platform",
 			LabelPlatform:                  p.Name,
