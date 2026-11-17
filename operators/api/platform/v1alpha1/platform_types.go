@@ -417,6 +417,18 @@ type PlatformStatus struct {
 	// last observed binding is preserved rather than cleared).
 	// +optional
 	PodIdentity *PodIdentityStatus `json:"podIdentity,omitempty"`
+
+	// GatewayPodIdentity reports the second association the operator creates
+	// for this tenant's role: the one binding the ModelGateway's Envoy
+	// ServiceAccount, <platform>-gateway in the tenant namespace, to
+	// status.iamRoleArn. Envoy Gateway creates and owns that ServiceAccount — it
+	// refuses to run a gateway under one it does not own — so the gateway cannot
+	// share tenant-runtime, and this binding is what keeps it invoking Bedrock as
+	// the tenant. The ModelGateway reconciler renders no gateway until this is
+	// set on a cluster that reports status.podIdentity, so an Envoy pod is never
+	// admitted before its credentials exist. Same lifecycle as podIdentity.
+	// +optional
+	GatewayPodIdentity *PodIdentityStatus `json:"gatewayPodIdentity,omitempty"`
 }
 
 // PodIdentityStatus is the observed (namespace, serviceAccount) → role binding.

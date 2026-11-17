@@ -324,15 +324,30 @@ type gatewayNames struct {
 	namespace string
 	gateway   string
 	backend   string
+	// serviceAccount is the ServiceAccount the Envoy proxy runs under. Envoy
+	// Gateway creates and owns it; the operator only names it, so the Platform
+	// reconciler can bind it to the tenant role (ensureGatewayPodIdentity).
+	serviceAccount string
 }
 
 func namesFor(platform *platformv1alpha1.Platform) gatewayNames {
 	name := platform.Name + "-gateway"
 	return gatewayNames{
-		namespace: PlatformNamespace(platform),
-		gateway:   name,
-		backend:   platform.Name + "-bedrock",
+		namespace:      PlatformNamespace(platform),
+		gateway:        name,
+		backend:        platform.Name + "-bedrock",
+		serviceAccount: gatewayServiceAccountName(platform),
 	}
+}
+
+// gatewayServiceAccountName is the ServiceAccount a Platform's gateway Envoy
+// runs under: the Gateway's own name, which is also what Envoy Gateway would
+// pick unpinned in GatewayNamespace mode (the proxy infra takes the Gateway's
+// name there). Pinned anyway, because the Platform reconciler binds a Pod
+// Identity association to it ahead of the ServiceAccount existing, and that
+// binding must not depend on another project's default.
+func gatewayServiceAccountName(platform *platformv1alpha1.Platform) string {
+	return platform.Name + "-gateway"
 }
 
 // ModelGatewayEndpoint is the in-cluster base URL for a Platform's gateway.
@@ -350,11 +365,13 @@ func ModelGatewayEndpoint(platform *platformv1alpha1.Platform) string {
 // plane living in the tenant's own namespace, and returns the in-cluster
 // endpoint tenant workloads target.
 //
-// The Envoy proxy runs under the tenant ServiceAccount, which already carries a
-// Pod Identity association to the tenant IAM role. Two things follow: the
-// gateway reaches Bedrock with no credential of its own, and Bedrock sees the
-// tenant's role ARN on every invocation — so per-tenant cost attribution keeps
-// working exactly as it did when the app called Bedrock directly.
+// The Envoy proxy runs under its own ServiceAccount, <platform>-gateway, which
+// Envoy Gateway creates and the Platform reconciler binds to the tenant IAM role
+// with a Pod Identity association (ensureGatewayPodIdentity). Two things
+// follow: the gateway reaches Bedrock with no credential of its own, and
+// Bedrock sees the tenant's role ARN on every invocation — so per-tenant cost
+// attribution keeps working exactly as it did when the app called Bedrock
+// directly.
 //
 // Idempotent (CreateOrUpdate keyed by stable Platform+route names).
 func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg *agentsv1alpha1.ModelGateway, platform *platformv1alpha1.Platform, guardrailID, guardrailVersion string) (string, []string, error) {
@@ -363,8 +380,16 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 
 	// 1. EnvoyProxy — the data-plane shape. Two settings carry weight:
 	//
-	//    envoyServiceAccount pins the proxy to the tenant ServiceAccount, which
-	//    is what makes the gateway inherit the tenant's Bedrock identity.
+	//    envoyServiceAccount names the proxy's ServiceAccount, the one the
+	//    Platform reconciler bound to the tenant role. It is deliberately not
+	//    tenant-runtime. In GatewayNamespace mode Envoy Gateway applies the
+	//    proxy ServiceAccount first and, finding one it did not create (no
+	//    app.kubernetes.io/managed-by: envoy-gateway and owning-gateway labels),
+	//    skips the entire data plane — no Deployment, no Service — while the
+	//    Gateway still applies cleanly. And an account it does own it manages:
+	//    its labels, an owner reference to the Gateway, automount off, and
+	//    deletion with the Gateway. tenant-runtime is every tenant pod's
+	//    identity, so it cannot be handed over; the gateway gets its own.
 	//
 	//    envoyService forces ClusterIP and a deterministic name. The Service
 	//    type defaults to LoadBalancer, so leaving it unset provisions an AWS
@@ -375,7 +400,7 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 		"provider": map[string]any{
 			"type": "Kubernetes",
 			"kubernetes": map[string]any{
-				"envoyServiceAccount": map[string]any{"name": tenantSAName},
+				"envoyServiceAccount": map[string]any{"name": n.serviceAccount},
 				"envoyService": map[string]any{
 					"name": n.gateway,
 					"type": "ClusterIP",
@@ -402,9 +427,8 @@ func (r *ModelGatewayReconciler) ensureGatewayResources(ctx context.Context, mg 
 				// All would let a Route in any namespace on the cluster attach
 				// here: Gateway API allows a cross-namespace parentRef, and
 				// ReferenceGrant gates backendRefs, not attachment. Anything that
-				// attached would be proxied by this tenant's Envoy, which runs
-				// under the tenant ServiceAccount and therefore the tenant's IAM
-				// role — inheriting its Bedrock model scoping, its quota and its
+				// attached would be proxied by this tenant's Envoy, which holds
+				// the tenant's IAM role — inheriting its Bedrock model scoping, its quota and its
 				// cost attribution — while carrying neither the guardrail
 				// headerMutation nor a rate-limit clientSelector that matches it.
 				"allowedRoutes": map[string]any{
@@ -694,11 +718,117 @@ type gatewayReconcileResult struct {
 	routes []agentsv1alpha1.RouteStatus
 	// unenforcedGuardrail names imported routes served without their guardrail.
 	unenforcedGuardrail []string
+	// waitingOn says what a Pending pass is waiting for, for the
+	// RoutesReconciled message. Empty on every other phase.
+	waitingOn string
+	// dataPlane is what Envoy Gateway reported about the rendered Gateway. Its
+	// zero value — no status — is a pass that never rendered one.
+	dataPlane dataPlaneState
+}
+
+// routesRendered reports whether this pass walked the routes and applied the
+// gateway's resources — true for Provisioning as well as Ready, since the
+// difference between the two is the data plane, not the routes.
+func (res gatewayReconcileResult) routesRendered() bool {
+	return res.phase == phaseReady || res.phase == phaseProvisioning
+}
+
+// dataPlaneState is the DataPlaneProgrammed condition one pass derived from
+// the rendered Gateway's own status.
+type dataPlaneState struct {
+	status  metav1.ConditionStatus
+	reason  string
+	message string
+}
+
+// The DataPlaneProgrammed condition and its reasons. Programmed is Envoy
+// Gateway's word for a Gateway whose Service has an address and whose Envoy
+// Deployment has an available replica; GatewayNotProgrammed and
+// AwaitingGatewayStatus separate "Envoy Gateway reported the data plane is not
+// serving" from "Envoy Gateway has not reported on this generation yet".
+const (
+	dataPlaneConditionType      = "DataPlaneProgrammed"
+	reasonDataPlaneProgrammed   = "Programmed"
+	reasonGatewayNotProgrammed  = "GatewayNotProgrammed"
+	reasonAwaitingGatewayStatus = "AwaitingGatewayStatus"
+	reasonDataPlaneNotRendered  = "NotRendered"
+
+	// gatewayProgrammedCondition is the Gateway API condition type read off the
+	// rendered Gateway.
+	gatewayProgrammedCondition = "Programmed"
+)
+
+// Messages for the passes that do not reach a Programmed Gateway.
+const (
+	gatewayPrerequisitesMessage  = "waiting on Platform or Envoy AI Gateway / Gateway-API CRDs"
+	gatewayIdentityWaitMessage   = "waiting on the Platform to bind the gateway's ServiceAccount to the tenant role (status.gatewayPodIdentity)"
+	dataPlaneNotRenderedMessage  = "no Gateway was rendered this pass, so whether its data plane is serving is unknown"
+	dataPlaneTroubleshootingHint = "Envoy Gateway's controller log names the cause — for example a proxy ServiceAccount, Deployment or Service it refuses to adopt because it does not own it"
+)
+
+// dataPlaneProgrammed reads the rendered Gateway's Programmed condition, the
+// one signal that the tenant's Envoy data plane actually exists. Applying the
+// Gateway proves nothing about that: Envoy Gateway accepts the object and then
+// renders its infrastructure — ServiceAccount, Deployment, Service — on its own
+// schedule, and can decline to render any of it. In GatewayNamespace mode it
+// declines whenever one of those names is already held by something it did not
+// create, and the only trace of that is its own log and a Gateway that never
+// reaches Programmed=True. Envoy Gateway sets Programmed=True only once the
+// Service has an address and the Envoy Deployment has an available replica, so
+// a ModelGateway that waits for it publishes no endpoint for a gateway with no
+// pod behind it.
+//
+// A Programmed condition written for an earlier generation of the Gateway says
+// nothing about the current spec, so it is treated as not yet reported.
+func (r *ModelGatewayReconciler) dataPlaneProgrammed(ctx context.Context, n gatewayNames) (dataPlaneState, error) {
+	gw := &unstructured.Unstructured{}
+	gw.SetGroupVersionKind(gatewayAPIGV.WithKind("Gateway"))
+	if err := r.Get(ctx, types.NamespacedName{Namespace: n.namespace, Name: n.gateway}, gw); err != nil {
+		if isNoKindMatch(err) {
+			return dataPlaneState{}, errGatewayCRDsNotInstalled
+		}
+		return dataPlaneState{}, fmt.Errorf("read Gateway %s/%s status: %w", n.namespace, n.gateway, err)
+	}
+	ref := n.namespace + "/" + n.gateway
+	conds, _, _ := unstructured.NestedSlice(gw.Object, "status", "conditions")
+	for _, c := range conds {
+		cond, ok := c.(map[string]any)
+		if !ok || cond["type"] != gatewayProgrammedCondition {
+			continue
+		}
+		if observed, _ := cond["observedGeneration"].(int64); observed < gw.GetGeneration() {
+			break
+		}
+		status, _ := cond["status"].(string)
+		reason, _ := cond["reason"].(string)
+		message, _ := cond["message"].(string)
+		if status == string(metav1.ConditionTrue) {
+			return dataPlaneState{
+				status:  metav1.ConditionTrue,
+				reason:  reasonDataPlaneProgrammed,
+				message: fmt.Sprintf("Gateway %s is Programmed: %s", ref, message),
+			}, nil
+		}
+		return dataPlaneState{
+			status: metav1.ConditionFalse,
+			reason: reasonGatewayNotProgrammed,
+			message: fmt.Sprintf("Gateway %s is not Programmed (%s: %s), so the tenant's Envoy data plane is not serving; %s",
+				ref, reason, message, dataPlaneTroubleshootingHint),
+		}, nil
+	}
+	return dataPlaneState{
+		status: metav1.ConditionFalse,
+		reason: reasonAwaitingGatewayStatus,
+		message: fmt.Sprintf("Envoy Gateway has not reported Programmed for generation %d of Gateway %s; if this persists, check that GatewayClass %s is accepted and the Envoy Gateway controller is running",
+			gw.GetGeneration(), ref, gatewayClassName),
+	}, nil
 }
 
 // reconcileSelf does the substantive work of ModelGatewayReconciler.
-// 'Ready' = gateway resources emitted; 'Pending' = waiting on the data-plane
-// CRDs or Platform readiness; error = real failure to retry.
+// 'Ready' = gateway resources emitted and Envoy Gateway reports the Gateway
+// Programmed; 'Provisioning' = resources emitted, data plane not (yet) serving;
+// 'Pending' = waiting on the data-plane CRDs, Platform readiness or the
+// gateway's identity binding; error = real failure to retry.
 func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (gatewayReconcileResult, error) {
 	// The Bedrock upstream address is built from the region, so an empty one
 	// would emit a Backend pointing at "bedrock-runtime..amazonaws.com" and a
@@ -720,22 +850,44 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 	// account and its Pod Identity association the Envoy pod would come up with
 	// no path to Bedrock and every request would fail AccessDenied.
 	if platform.Status.Phase != phaseReady {
-		return gatewayReconcileResult{phase: phasePending}, nil
+		return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayPrerequisitesMessage}, nil
+	}
+	// On a cluster where the Platform binds identities with Pod Identity, the
+	// gateway's own ServiceAccount must be bound before Envoy Gateway admits a
+	// pod under it: the Pod Identity webhook injects credentials at admission
+	// only, so an Envoy pod that starts first runs without any until something
+	// restarts it — and still reports Programmed. A Platform that publishes no
+	// podIdentity binds nothing (no EKS client), and there is nothing to wait for.
+	if platform.Status.PodIdentity != nil && platform.Status.GatewayPodIdentity == nil {
+		return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayIdentityWaitMessage}, nil
 	}
 
 	endpoint, unenforcedGuardrail, err := r.ensureGatewayResources(ctx, mg, platform, r.GuardrailID, r.GuardrailVersion)
 	if err != nil {
 		if errors.Is(err, errGatewayCRDsNotInstalled) {
-			return gatewayReconcileResult{phase: phasePending}, nil
+			return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayPrerequisitesMessage}, nil
 		}
 		return gatewayReconcileResult{}, err
 	}
-	return gatewayReconcileResult{
-		phase:               phaseReady,
-		endpoint:            endpoint,
-		routes:              routeStatuses(mg, platform),
+	dataPlane, err := r.dataPlaneProgrammed(ctx, namesFor(platform))
+	if err != nil {
+		return gatewayReconcileResult{}, err
+	}
+	res := gatewayReconcileResult{
+		phase:               phaseProvisioning,
 		unenforcedGuardrail: unenforcedGuardrail,
-	}, nil
+		dataPlane:           dataPlane,
+	}
+	if dataPlane.status != metav1.ConditionTrue {
+		// The routes are applied and nothing serves them. Publishing the
+		// endpoint or the route contract now would hand tenants a base URL with
+		// no pod behind it, which is the failure this phase exists to name.
+		return res, nil
+	}
+	res.phase = phaseReady
+	res.endpoint = endpoint
+	res.routes = routeStatuses(mg, platform)
+	return res, nil
 }
 
 // guardrailCondition reports what this reconcile learned about imported routes
@@ -746,14 +898,14 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 // the walk did not happen, which is every path that returns before
 // ensureGatewayResources: a reader who cannot tell that from False is reading a
 // safety claim the operator never made.
-func guardrailCondition(mg *agentsv1alpha1.ModelGateway, phase string, unenforced []string) metav1.Condition {
+func guardrailCondition(mg *agentsv1alpha1.ModelGateway, routesRendered bool, unenforced []string) metav1.Condition {
 	cond := metav1.Condition{
 		Type:               "ImportedRouteGuardrailUnenforced",
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: mg.Generation,
 	}
 	switch {
-	case phase != phaseReady:
+	case !routesRendered:
 		cond.Status = metav1.ConditionUnknown
 		cond.Reason = "RoutesNotEvaluated"
 		cond.Message = "the gateway's routes were not reached this tick, so whether any imported route is served without its guardrail is unknown"
@@ -788,12 +940,20 @@ func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: mg.Generation,
 	}
-	if phase != phaseReady {
+	if !res.routesRendered() {
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = phasePending
-		cond.Message = "waiting on Platform or Envoy AI Gateway / Gateway-API CRDs"
+		cond.Message = res.waitingOn
+		if cond.Message == "" {
+			cond.Message = gatewayPrerequisitesMessage
+		}
 	}
 	upsertCondition(&mg.Status.Conditions, cond)
+
+	// Whether the rendered routes have anything serving them. Ready requires
+	// True here; Provisioning is every pass where it is False, and the reason
+	// and message carry Envoy Gateway's own account of why.
+	upsertCondition(&mg.Status.Conditions, dataPlaneCondition(mg, res))
 
 	// Surface imported routes whose configured guardrail can't attach inline, so
 	// an unguarded imported route is visible rather than silent. True = at least
@@ -811,7 +971,27 @@ func (r *ModelGatewayReconciler) modelGatewayApplyStatus(ctx context.Context, mg
 	// Unknown is what separates them, in the shape burnRateCondition uses for an
 	// absent signal: it is not a claim about the routes, it is the absence of
 	// one.
-	upsertCondition(&mg.Status.Conditions, guardrailCondition(mg, phase, unenforcedGuardrail))
+	upsertCondition(&mg.Status.Conditions, guardrailCondition(mg, res.routesRendered(), unenforcedGuardrail))
 
 	return r.Status().Update(ctx, mg)
+}
+
+// dataPlaneCondition is the DataPlaneProgrammed condition for one pass. A pass
+// that rendered no Gateway has nothing to report on, and says so as Unknown
+// rather than as a False that would read as Envoy Gateway refusing it.
+func dataPlaneCondition(mg *agentsv1alpha1.ModelGateway, res gatewayReconcileResult) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               dataPlaneConditionType,
+		Status:             res.dataPlane.status,
+		Reason:             res.dataPlane.reason,
+		Message:            res.dataPlane.message,
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: mg.Generation,
+	}
+	if !res.routesRendered() || cond.Status == "" {
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = reasonDataPlaneNotRendered
+		cond.Message = dataPlaneNotRenderedMessage
+	}
+	return cond
 }

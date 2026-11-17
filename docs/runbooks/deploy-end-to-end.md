@@ -235,7 +235,12 @@ names it, and `aws eks list-pod-identity-associations --cluster-name <cluster>
 `aws eks describe-pod-identity-association --cluster-name <cluster>
 --association-id <id>` shows a `roleArn` equal to `status.podIdentity.roleArn`.
 The ServiceAccount is `tenant-runtime` under namespace isolation and the
-vcluster-translated host name under `spec.isolation: vcluster`. Tenant `/readyz`
+vcluster-translated host name under `spec.isolation: vcluster`.
+`Platform.status.gatewayPodIdentity` names the second association, binding the
+ModelGateway's Envoy ServiceAccount `<platform>-gateway` to the same role, and
+checks out the same way. A ModelGateway reports `Ready` only once Envoy Gateway
+reports its Gateway `Programmed`; one held at `Provisioning` names Envoy
+Gateway's reason on its `DataPlaneProgrammed` condition. Tenant `/readyz`
 green.
 
 ### B5. Teardown (reverse order — stops spend)

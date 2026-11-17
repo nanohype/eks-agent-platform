@@ -79,8 +79,13 @@ func TestEnsureIamRole_VClusterTier_BindsSyncedSA(t *testing.T) {
 		t.Fatalf("ensureIamRole (vcluster tier): %v", err)
 	}
 
-	if len(fe.createCalls) != 1 {
-		t.Fatalf("expected exactly one Pod Identity association, got %d", len(fe.createCalls))
+	// Two associations: the synced tenant SA, and the gateway's Envoy SA, which
+	// lives on the host in the tenant namespace on this tier too.
+	if len(fe.createCalls) != 2 {
+		t.Fatalf("expected exactly two Pod Identity associations, got %d", len(fe.createCalls))
+	}
+	if gw := aws.ToString(fe.createCalls[1].ServiceAccount); gw != gatewayServiceAccountName(platform) {
+		t.Errorf("second association SA: got %q want the gateway's %q", gw, gatewayServiceAccountName(platform))
 	}
 	got := aws.ToString(fe.createCalls[0].ServiceAccount)
 	wantSynced := syncedHostSAName(PlatformNamespace(platform), vclusterInstanceName)
@@ -138,10 +143,11 @@ func TestEnsureIamRole_VClusterTier_NeverBindsSyncerSA(t *testing.T) {
 			t.Errorf("a Pod Identity association was created for the syncer/control-plane SA %q — it must have zero AWS reach", sa)
 		case tenantSAName:
 			t.Errorf("a Pod Identity association was created for the virtual tenant-runtime SA %q", sa)
-		case wantSynced:
-			// the one legitimate binding
+		case wantSynced, gatewayServiceAccountName(platform):
+			// the two legitimate bindings: the tenant's synced SA, and the
+			// gateway's host SA, which Envoy Gateway owns
 		default:
-			t.Errorf("unexpected Pod Identity association for SA %q (only the synced tenant SA should be bound)", sa)
+			t.Errorf("unexpected Pod Identity association for SA %q (only the synced tenant SA and the gateway SA should be bound)", sa)
 		}
 	}
 }

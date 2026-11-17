@@ -80,6 +80,7 @@ var stateNamedConditions = map[string]bool{
 	"Aggregated":          true,
 	"BudgetReconciled":    true,
 	"CapabilitiesGranted": true,
+	"DataPlaneProgrammed": true,
 	"EvalIdentityReady":   true,
 	"EvalReconciled":      true,
 	"ModelAccessScoped":   true,
