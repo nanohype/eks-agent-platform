@@ -205,12 +205,16 @@ spec:
                   carries\n\t                                  Envoy Gateway's reason,
                   False/\n\t                                  AwaitingGatewayStatus
                   means it has not\n\t                                  reported on
-                  this generation, False/\n\t                                  NoReadyEnvoyPod,
-                  ExtProcNotInjected and\n\t                                  ExtProcNotReady
-                  mean it is Programmed\n\t                                  but the
-                  named pods cannot sign a\n\t                                  request
-                  yet, Unknown/NotRendered means\n\t                                  no
-                  Gateway was applied\n\tImportedRouteGuardrailUnenforced  whether
+                  this generation, False/\n\t                                  NoReadyEnvoyPod
+                  means it is Programmed\n\t                                  but
+                  no Ready, non-terminating Envoy pod\n\t                                  was
+                  found, False/ExtProcNotInjected and\n\t                                  False/ExtProcNotReady
+                  mean it is\n\t                                  Programmed but the
+                  pods they name\n\t                                  cannot sign
+                  a request yet, Unknown/\n\t                                  EnvoyPodsUnreadable
+                  means the Envoy pods\n\t                                  could
+                  not be read, Unknown/NotRendered\n\t                                  means
+                  no Gateway was applied\n\tImportedRouteGuardrailUnenforced  whether
                   any imported route is served\n\t                                  without
                   its guardrail\n\nEndpoint and Routes are published only while DataPlaneProgrammed
                   is True.\n\nThe last is three-valued, and the three are three different

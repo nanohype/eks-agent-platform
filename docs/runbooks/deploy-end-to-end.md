@@ -242,19 +242,27 @@ checks out the same way. A ModelGateway reports `Ready` only once Envoy Gateway
 reports its Gateway `Programmed` and every Ready, non-terminating Envoy pod of
 that Gateway carries a ready `ai-gateway-extproc` container; one held at
 `Provisioning` says which on its `DataPlaneProgrammed` condition —
-`GatewayNotProgrammed` carries Envoy Gateway's reason, and `NoReadyEnvoyPod`,
+`GatewayNotProgrammed` carries Envoy Gateway's reason, `NoReadyEnvoyPod` means
+no Ready, non-terminating Envoy pod of the Gateway was found, and
 `ExtProcNotInjected` or `ExtProcNotReady` name the pods that cannot sign a
-request yet. Tenant `/readyz` green.
+request yet. `Unknown`/`EnvoyPodsUnreadable` means the operator could not read
+those pods at all — check its pods `get`/`list` grant and its log — and holds
+`Provisioning`, with nothing published, until a read succeeds. Tenant `/readyz`
+green.
 
-`ExtProcNotInjected` for a minute or so on a new gateway is expected, not a
-fault. Envoy AI Gateway injects the extproc only when a pod is created, and
+`ExtProcNotInjected` for a minute or so on a new gateway is usually expected,
+not a fault. Envoy AI Gateway injects the extproc only when a pod is created, and
 admits the pod without it when the Gateway's filter-config Secret does not exist
 yet — which it cannot for the first pod, because its controller writes that
 Secret only once the Envoy Deployment exists. Envoy Gateway still reports the
 Gateway `Programmed` on that pod, which answers every model request with HTTP
 500, and Envoy AI Gateway then rolls the Deployment to a second ReplicaSet that
 carries the extproc. The ModelGateway holds `Provisioning`, publishing no
-endpoint or routes, until that rollout has replaced the pod; if it persists,
+endpoint or routes, until that rollout has replaced the pod. If it persists,
+the cause is not that window: Envoy AI Gateway's pod webhook may not be
+installed, or its namespace or object selector may not match the tenant
+namespace, so the pod was never sent to it and was admitted unmutated; or its
+controller may not be rolling the Deployment.
 `kubectl get pods -n tenants-<platform> -l
 gateway.envoyproxy.io/owning-gateway-name=<platform>-gateway` shows which pods
 lack the container, and Envoy AI Gateway's controller log says why it has not

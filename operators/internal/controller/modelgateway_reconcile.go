@@ -907,6 +907,17 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 		if errors.Is(err, errGatewayCRDsNotInstalled) {
 			return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayPrerequisitesMessage}, nil
 		}
+		// A failed Envoy pod read is retried as an error, and it also comes
+		// back with a state to write: Provisioning with the condition Unknown,
+		// which withdraws the endpoint and routes of a gateway that was Ready
+		// instead of leaving them published for as long as the read fails.
+		if dataPlane.reason == reasonEnvoyPodsUnreadable {
+			return gatewayReconcileResult{
+				phase:               phaseProvisioning,
+				unenforcedGuardrail: unenforcedGuardrail,
+				dataPlane:           dataPlane,
+			}, err
+		}
 		return gatewayReconcileResult{}, err
 	}
 	res := gatewayReconcileResult{

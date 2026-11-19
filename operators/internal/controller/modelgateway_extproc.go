@@ -37,7 +37,8 @@ const (
 )
 
 // The DataPlaneProgrammed reasons for a Gateway Envoy Gateway reports
-// Programmed whose serving pods cannot yet sign a request.
+// Programmed whose serving pods cannot yet sign a request, or could not be
+// read.
 const (
 	// reasonNoReadyEnvoyPod: Programmed, but the pod read found no Ready,
 	// non-terminating Envoy pod — the Deployment's status and its pods
@@ -50,6 +51,12 @@ const (
 	// reasonExtProcNotReady: every Ready Envoy pod carries the extproc, and at
 	// least one of those containers is not passing its readiness probe.
 	reasonExtProcNotReady = "ExtProcNotReady"
+	// reasonEnvoyPodsUnreadable: Programmed, and the pod read itself failed —
+	// an apiserver error, or a Forbidden on a cluster whose RBAC was narrowed.
+	// That is no evidence about the pods either way, so the condition is
+	// Unknown, and the ModelGateway withdraws its endpoint and routes rather
+	// than keep publishing a contract nothing has confirmed.
+	reasonEnvoyPodsUnreadable = "EnvoyPodsUnreadable"
 )
 
 // envoyRolloutRequeueInterval is how often a ModelGateway held on its Envoy
@@ -98,7 +105,16 @@ func (r *ModelGatewayReconciler) envoyPodsCanSign(ctx context.Context, n gateway
 			envoyOwningGatewayNamespaceLabel: n.namespace,
 		},
 	); err != nil {
-		return dataPlaneState{}, fmt.Errorf("list Envoy pods of Gateway %s/%s: %w", n.namespace, n.gateway, err)
+		err = fmt.Errorf("list Envoy pods of Gateway %s/%s: %w", n.namespace, n.gateway, err)
+		// Returned with the error, not instead of it: the pass is retried as a
+		// failure, and the caller still writes this state so a gateway that was
+		// Ready does not keep its endpoint and routes while the read fails.
+		return dataPlaneState{
+			status: metav1.ConditionUnknown,
+			reason: reasonEnvoyPodsUnreadable,
+			message: fmt.Sprintf("Gateway %s/%s is Programmed, but its Envoy pods could not be read (%v), so whether they can sign a request is unknown; the endpoint and routes are withheld until a read succeeds",
+				n.namespace, n.gateway, err),
+		}, err
 	}
 
 	ref := n.namespace + "/" + n.gateway
@@ -136,7 +152,7 @@ func (r *ModelGatewayReconciler) envoyPodsCanSign(ctx context.Context, n gateway
 				ref),
 		}, nil
 	case len(notInjected) > 0:
-		msg := fmt.Sprintf("Gateway %s is Programmed, but Ready Envoy pod(s) %s carry no %s container and answer every model request with HTTP 500; Envoy AI Gateway admitted them before it had written the Gateway's filter-config Secret and rolls the Deployment once it has",
+		msg := fmt.Sprintf("Gateway %s is Programmed, but Ready Envoy pod(s) %s carry no %s container and answer every model request with HTTP 500. On a new Gateway this is usually the first pod, admitted before Envoy AI Gateway had written the filter-config Secret, and it clears when Envoy AI Gateway's controller rolls the Deployment; if it persists, check that Envoy AI Gateway's pod webhook is installed and selects this namespace, and read its controller log",
 			ref, strings.Join(notInjected, ", "), extProcContainerName)
 		if len(incoming) > 0 {
 			msg += fmt.Sprintf(" (pod(s) %s carrying it are not Ready yet)", strings.Join(incoming, ", "))

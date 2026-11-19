@@ -210,11 +210,15 @@ type ModelGatewayStatus struct {
 	//	                                  Envoy Gateway's reason, False/
 	//	                                  AwaitingGatewayStatus means it has not
 	//	                                  reported on this generation, False/
-	//	                                  NoReadyEnvoyPod, ExtProcNotInjected and
-	//	                                  ExtProcNotReady mean it is Programmed
-	//	                                  but the named pods cannot sign a
-	//	                                  request yet, Unknown/NotRendered means
-	//	                                  no Gateway was applied
+	//	                                  NoReadyEnvoyPod means it is Programmed
+	//	                                  but no Ready, non-terminating Envoy pod
+	//	                                  was found, False/ExtProcNotInjected and
+	//	                                  False/ExtProcNotReady mean it is
+	//	                                  Programmed but the pods they name
+	//	                                  cannot sign a request yet, Unknown/
+	//	                                  EnvoyPodsUnreadable means the Envoy pods
+	//	                                  could not be read, Unknown/NotRendered
+	//	                                  means no Gateway was applied
 	//	ImportedRouteGuardrailUnenforced  whether any imported route is served
 	//	                                  without its guardrail
 	//

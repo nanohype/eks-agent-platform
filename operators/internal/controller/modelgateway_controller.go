@@ -102,6 +102,15 @@ func (r *ModelGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	res, err := r.reconcileSelf(ctx, &gw)
 	if err != nil {
 		logger.Error(err, "reconcile failed")
+		// A failure that still determined a phase — the Envoy pod read, which
+		// leaves the gateway Provisioning with its contract withdrawn — writes
+		// it before the retry, so a stale Ready does not outlive the failure.
+		// Every other failure returns no phase and leaves the status alone.
+		if res.phase != "" {
+			if serr := r.modelGatewayApplyStatus(ctx, &gw, res); serr != nil {
+				logger.Error(serr, "status update after a failed reconcile")
+			}
+		}
 		return ctrl.Result{}, err
 	}
 	if err := r.modelGatewayApplyStatus(ctx, &gw, res); err != nil {

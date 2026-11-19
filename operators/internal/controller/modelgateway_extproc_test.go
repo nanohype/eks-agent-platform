@@ -47,10 +47,14 @@ type envoyPodSpec struct {
 	name string
 	// namespace and gateway default to the test Platform's gateway.
 	namespace, gateway string
-	podReady           bool
-	extProc            extProcShape
-	extProcReady       bool
-	terminating        bool
+	// labelNamespace is the owning-gateway-namespace label, which Envoy
+	// Gateway sets to the pod's own namespace; it defaults to that, and is set
+	// apart only to prove each of the two namespace guards on its own.
+	labelNamespace string
+	podReady       bool
+	extProc        extProcShape
+	extProcReady   bool
+	terminating    bool
 }
 
 // testGatewayNamespace and testGatewayName are where the reconciler renders the
@@ -71,13 +75,17 @@ func newEnvoyPod(s envoyPodSpec) *corev1.Pod {
 	if gw == "" {
 		gw = testGatewayName
 	}
+	labelNS := s.labelNamespace
+	if labelNS == "" {
+		labelNS = ns
+	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      s.name,
 			Namespace: ns,
 			Labels: map[string]string{
 				envoyOwningGatewayNameLabel:      gw,
-				envoyOwningGatewayNamespaceLabel: ns,
+				envoyOwningGatewayNamespaceLabel: labelNS,
 			},
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy", Image: "envoy"}}},
@@ -229,6 +237,23 @@ func TestModelGatewayReadyWaitsForEveryEnvoyPodToSign(t *testing.T) {
 			wantPhase:    phaseReady,
 			wantReason:   reasonDataPlaneProgrammed,
 			wantNotInMsg: []string{"envoy-other-gateway", "envoy-other-namespace"},
+		},
+		{
+			// Each namespace guard on its own. The first pod carries both of
+			// this Gateway's labels and sits in another namespace, so only
+			// InNamespace excludes it; the second sits in this namespace with
+			// an owning-gateway-namespace label naming another, so only that
+			// label excludes it. Both are Ready with no extproc, so dropping
+			// either guard counts one and turns the gateway ExtProcNotInjected.
+			name: "each namespace guard excludes a pod the other would not",
+			pods: []envoyPodSpec{
+				{name: "envoy-ours", podReady: true, extProc: nativeSidecar, extProcReady: true},
+				{name: "envoy-foreign-namespace", namespace: "tenants-elsewhere", labelNamespace: testGatewayNamespace, podReady: true},
+				{name: "envoy-foreign-label", labelNamespace: "tenants-elsewhere", podReady: true},
+			},
+			wantPhase:    phaseReady,
+			wantReason:   reasonDataPlaneProgrammed,
+			wantNotInMsg: []string{"envoy-foreign-namespace", "envoy-foreign-label"},
 		},
 		{
 			name:       "native extproc injected but not ready",
@@ -413,6 +438,7 @@ func TestAwaitingEnvoyPods(t *testing.T) {
 		reasonNoReadyEnvoyPod:       true,
 		reasonExtProcNotInjected:    true,
 		reasonExtProcNotReady:       true,
+		reasonEnvoyPodsUnreadable:   false,
 		reasonGatewayNotProgrammed:  false,
 		reasonAwaitingGatewayStatus: false,
 		reasonDataPlaneProgrammed:   false,
@@ -439,8 +465,8 @@ func TestExtProcStatusWithoutAContainerStatus(t *testing.T) {
 }
 
 // TestModelGatewayEnvoyPodListErrorIsAReconcileError: a pod read that fails is
-// not evidence about the pods either way, so it is retried as an error rather
-// than reported as a hold or as Ready.
+// not evidence about the pods either way, so it comes back as an error to retry
+// together with an Unknown state for the caller to write.
 func TestModelGatewayEnvoyPodListErrorIsAReconcileError(t *testing.T) {
 	s := mgwScheme(t)
 	reader := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
@@ -449,8 +475,104 @@ func TestModelGatewayEnvoyPodListErrorIsAReconcileError(t *testing.T) {
 		},
 	}).Build()
 	r := &ModelGatewayReconciler{Client: reader, APIReader: reader, Scheme: s}
-	_, err := r.envoyPodsCanSign(context.Background(), gatewayNames{namespace: testGatewayNamespace, gateway: testGatewayName}, "ok")
+	dp, err := r.envoyPodsCanSign(context.Background(), gatewayNames{namespace: testGatewayNamespace, gateway: testGatewayName}, "ok")
 	if err == nil || !strings.Contains(err.Error(), "apiserver unavailable") || !strings.Contains(err.Error(), testGatewayName) {
 		t.Errorf("got %v, want the list error wrapped with the Gateway it was for", err)
+	}
+	if dp.status != metav1.ConditionUnknown || dp.reason != reasonEnvoyPodsUnreadable || !strings.Contains(dp.message, "apiserver unavailable") {
+		t.Errorf("got %+v, want Unknown/%s carrying the read error", dp, reasonEnvoyPodsUnreadable)
+	}
+}
+
+// TestModelGatewayReadyWithdrawsItsContractWhenThePodReadFails: a Ready
+// gateway whose pod read starts failing does not keep its phase, endpoint and
+// routes for as long as the read fails. The pass is still an error, so it is
+// retried with backoff, and the status it writes first is Provisioning with
+// DataPlaneProgrammed Unknown and nothing published.
+func TestModelGatewayReadyWithdrawsItsContractWhenThePodReadFails(t *testing.T) {
+	s := mgwScheme(t)
+	ctx := context.Background()
+	mg := twoRouteGateway()
+	mg.Finalizers = []string{modelGatewayFinalizer}
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(readyTestPlatform(), mg).WithStatusSubresource(mg).Build()
+	failList := false
+	reader := fake.NewClientBuilder().WithScheme(s).WithObjects(servingEnvoyPod("envoy-a")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if failList {
+					return errors.New(`pods is forbidden: cannot list resource "pods"`)
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+	r := &ModelGatewayReconciler{Client: cl, APIReader: reader, Scheme: s, Region: "us-west-2"}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: mg.Namespace, Name: mg.Name}}
+	stored := func() agentsv1alpha1.ModelGateway {
+		t.Helper()
+		var got agentsv1alpha1.ModelGateway
+		if err := cl.Get(ctx, req.NamespacedName, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (render): %v", err)
+	}
+	setGatewayProgrammed(t, cl, "True", "Programmed")
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (serving): %v", err)
+	}
+	if st := stored(); st.Status.Phase != phaseReady || st.Status.Endpoint == "" || len(st.Status.Routes) == 0 {
+		t.Fatalf("serving gateway: phase %q endpoint %q routes %v, want Ready with its contract published",
+			st.Status.Phase, st.Status.Endpoint, st.Status.Routes)
+	}
+
+	failList = true
+	if _, err := r.Reconcile(ctx, req); err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("Reconcile with the pod read failing: got %v, want the read error returned for retry", err)
+	}
+	st := stored()
+	if st.Status.Phase != phaseProvisioning || st.Status.Endpoint != "" || len(st.Status.Routes) != 0 {
+		t.Errorf("a Ready gateway whose pod read fails: phase %q endpoint %q routes %v, want Provisioning with nothing published",
+			st.Status.Phase, st.Status.Endpoint, st.Status.Routes)
+	}
+	dp := findCondition(st.Status.Conditions, dataPlaneConditionType)
+	if dp == nil || dp.Status != metav1.ConditionUnknown || dp.Reason != reasonEnvoyPodsUnreadable || !strings.Contains(dp.Message, "forbidden") {
+		t.Errorf("%s: got %+v want Unknown/%s carrying the read error", dataPlaneConditionType, dp, reasonEnvoyPodsUnreadable)
+	}
+	if rr := findCondition(st.Status.Conditions, "RoutesReconciled"); rr == nil || rr.Status != metav1.ConditionTrue {
+		t.Errorf("RoutesReconciled: got %+v, want True — the routes were applied before the pod read", rr)
+	}
+
+	failList = false
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (read recovered): %v", err)
+	}
+	if st := stored(); st.Status.Phase != phaseReady || st.Status.Endpoint == "" {
+		t.Errorf("once the read succeeds again: phase %q endpoint %q, want Ready with an endpoint", st.Status.Phase, st.Status.Endpoint)
+	}
+}
+
+// TestExtProcStatusRequiresARunningContainer: a status reporting Ready on a
+// container that is not running is not a serving extproc, in either shape the
+// webhook injects. The kubelet should not report that combination, so this is
+// the contract held against a status read mid-transition, not an observed case.
+func TestExtProcStatusRequiresARunningContainer(t *testing.T) {
+	for _, shape := range []extProcShape{nativeSidecar, regularContainer} {
+		pod := newEnvoyPod(envoyPodSpec{name: "envoy-a", podReady: true, extProc: shape, extProcReady: true})
+		statuses := pod.Status.ContainerStatuses
+		if shape == nativeSidecar {
+			statuses = pod.Status.InitContainerStatuses
+		}
+		for i := range statuses {
+			if statuses[i].Name == extProcContainerName {
+				statuses[i].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}
+			}
+		}
+		if injected, ready := extProcStatus(pod); !injected || ready {
+			t.Errorf("shape %d with a Ready, terminated extproc: got injected=%v ready=%v, want injected and not ready", shape, injected, ready)
+		}
 	}
 }

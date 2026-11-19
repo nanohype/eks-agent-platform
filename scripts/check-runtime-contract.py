@@ -54,9 +54,24 @@ WHAT THIS CHECKS
        struct field for is dropped on decode; a field the binary writes that the
        chart's CRD does not declare is pruned by the API server; a kind the
        binary watches and the chart does not install keeps it from starting.
-       Descriptions, defaults and validation are not compared: they change what
-       the API server documents or admits, not what the binary can decode, and
-       a documentation-only or admission-only chart bump is legitimate.
+
+       Every description under `status` is compared too. Status is what the
+       binary writes, so its description is the binary's account of its own
+       behaviour — the phases it moves through, the conditions and reasons it
+       sets, what it waits on before publishing a field. Chart 0.7.4 is the
+       case: it documents a ModelGateway that holds Ready until every Envoy pod
+       carries a ready ai-gateway-extproc, with new reasons, and names operator
+       0.7.1, which decodes every field the chart declares and applies none of
+       that hold. Comparing fields alone passes it, and `kubectl explain` would
+       then promise a gate the running operator never applies.
+
+       Spec descriptions, defaults and validation are not compared: they change
+       what the API server documents or admits, not what the binary does, and a
+       documentation-only or admission-only chart bump is legitimate. A status
+       description reworded with no behaviour behind it is held until the next
+       operator release carries the same text — the cost of a check that cannot
+       tell a rewording from a behaviour change, paid at publication rather
+       than at merge.
 
 The appVersion is resolved to source through the release tag (`operator-v<X>`),
 which is the only thing that builds an image — see `.github/workflows/release.yaml`.
@@ -194,6 +209,57 @@ def crd_fields(text: str, where: str) -> dict[str, set[str]]:
     return out
 
 
+def status_descriptions(text: str) -> dict[str, dict[str, str]]:
+    """version name -> {path: description} for `status` and every field under it.
+
+    A path present on one side and not the other is compared as a missing
+    description, so a status description added or removed counts as changed.
+    crd_fields() has already refused a document it cannot compare, so this
+    only reads what that one accepted.
+    """
+    doc = yaml.safe_load(text) or {}
+    out: dict[str, dict[str, str]] = {}
+    for v in (doc.get("spec") or {}).get("versions") or []:
+        schema = (v.get("schema") or {}).get("openAPIV3Schema") or {}
+        found: dict[str, str] = {}
+
+        def walk(node: object, path: str) -> None:
+            if not isinstance(node, dict):
+                return
+            if isinstance(node.get("description"), str):
+                found[path] = node["description"]
+            for name, sub in (node.get("properties") or {}).items():
+                walk(sub, f"{path}.{name}")
+            walk(node.get("items"), path + "[]")
+            walk(node.get("additionalProperties"), path + "{}")
+
+        walk((schema.get("properties") or {}).get("status"), "status")
+        out[v["name"]] = found
+    return out
+
+
+def status_description_skew(
+    chart: dict[str, dict[str, dict[str, str]]], binary: dict[str, dict[str, dict[str, str]]], ref: str
+) -> list[str]:
+    """Check C, behaviour half: status descriptions that differ from the binary's.
+
+    Both arguments map a CRD file name to status_descriptions() of it. Kinds and
+    versions only one side has are crd_skew's findings, not repeated here.
+    """
+    findings: list[str] = []
+    for name in sorted(set(chart) & set(binary)):
+        for version in sorted(set(chart[name]) & set(binary[name])):
+            c, b = chart[name][version], binary[name][version]
+            for path in sorted(set(c) | set(b)):
+                if c.get(path) != b.get(path):
+                    findings.append(
+                        f"{name} {version}: the chart's CRD describes {path} differently from the operator at {ref}; "
+                        "a status description documents what the binary writes, so the chart would document "
+                        "behaviour that release may not have"
+                    )
+    return findings
+
+
 def crd_skew(chart: dict[str, dict[str, set[str]]], binary: dict[str, dict[str, set[str]]], ref: str) -> list[str]:
     """Check C: the chart's CRDs against the CRDs the binary at `ref` generates.
 
@@ -217,15 +283,17 @@ def crd_skew(chart: dict[str, dict[str, set[str]]], binary: dict[str, dict[str, 
     return findings
 
 
-def chart_crds() -> dict[str, dict[str, set[str]]]:
+def chart_crd_texts() -> dict[str, tuple[str, str]]:
+    """CRD file name -> (text, where) for every CRD the chart installs."""
     files = sorted(CHART_CRDS.glob("*.yaml"))
     if not files:
         print(f"FAIL: no CRDs under {CHART_CRDS.relative_to(ROOT)}; check C would compare nothing.")
         sys.exit(EXIT_CANNOT_EVALUATE)
-    return {f.name: crd_fields(f.read_text(), str(f.relative_to(ROOT))) for f in files}
+    return {f.name: (f.read_text(), str(f.relative_to(ROOT))) for f in files}
 
 
-def binary_crds(ref: str) -> dict[str, dict[str, set[str]]]:
+def binary_crd_texts(ref: str) -> dict[str, tuple[str, str]]:
+    """CRD file name -> (text, where) for every CRD generated at `ref`."""
     names = [
         line.rsplit("/", 1)[-1]
         for line in run("git", "ls-tree", "--name-only", f"{ref}:{OPERATOR_CRDS}").split()
@@ -234,7 +302,18 @@ def binary_crds(ref: str) -> dict[str, dict[str, set[str]]]:
     if not names:
         print(f"FAIL: no CRDs under {OPERATOR_CRDS} at {ref}; check C would compare nothing.")
         sys.exit(EXIT_CANNOT_EVALUATE)
-    return {n: crd_fields(run("git", "show", f"{ref}:{OPERATOR_CRDS}/{n}"), f"{OPERATOR_CRDS}/{n} at {ref}") for n in names}
+    return {n: (run("git", "show", f"{ref}:{OPERATOR_CRDS}/{n}"), f"{OPERATOR_CRDS}/{n} at {ref}") for n in names}
+
+
+def crd_contract_skew(chart: dict[str, tuple[str, str]], binary: dict[str, tuple[str, str]], ref: str) -> list[str]:
+    """Check C in full: the fields both sides decode, then the status both describe."""
+    chart_fields = {n: crd_fields(t, w) for n, (t, w) in chart.items()}
+    binary_fields = {n: crd_fields(t, w) for n, (t, w) in binary.items()}
+    return crd_skew(chart_fields, binary_fields, ref) + status_description_skew(
+        {n: status_descriptions(t) for n, (t, _) in chart.items()},
+        {n: status_descriptions(t) for n, (t, _) in binary.items()},
+        ref,
+    )
 
 
 def declared_parameters() -> dict[str, str | None]:
@@ -336,8 +415,9 @@ def main(listing: bool, release: bool) -> int:
             + ", ".join(sorted(appset_owned))
         )
 
-    # C. the chart's CRDs and the binary's decode the same fields
-    skew = crd_skew(chart_crds(), binary_crds(tag), tag)
+    # C. the chart's CRDs and the binary's decode the same fields and describe
+    # the same status
+    skew = crd_contract_skew(chart_crd_texts(), binary_crd_texts(tag), tag)
     if release:
         failures.extend(skew)
 
@@ -367,7 +447,8 @@ def main(listing: bool, release: bool) -> int:
         f"Runtime contract OK{' for the merge' if skew else ''}: chart names operator {app_version} ({commit}); "
         f"it supplies all {len(reconciler_owned)} reconciler-owned parameter(s) and "
         f"declares all {len(supplied)} it sends"
-        + ("; publication is held above." if skew else ", and its CRDs decode every field the chart's declare.")
+        + ("; publication is held above." if skew
+           else ", and its CRDs decode every field the chart's declare and describe the same status.")
     )
     return 0
 
@@ -375,7 +456,9 @@ def main(listing: bool, release: bool) -> int:
 def self_test() -> int:
     """Check C against synthetic CRDs: each skew it must report, and each change it must not."""
 
-    def crd(*fields: str, version: str = "v1alpha1", description: str = "", pattern: str = "") -> str:
+    def crd(*fields: str, version: str = "v1alpha1", description: str = "", pattern: str = "",
+            described: str = "") -> str:
+        """`description` goes on every leaf whose path starts with `described`."""
         props = {}
         for f in fields:
             node = props
@@ -383,7 +466,7 @@ def self_test() -> int:
             for part in parts[:-1]:
                 node = node.setdefault(part, {"type": "object", "properties": {}})["properties"]
             leaf = {"type": "string"}
-            if description:
+            if description and f.startswith(described):
                 leaf["description"] = description
             if pattern:
                 leaf["pattern"] = pattern
@@ -403,10 +486,28 @@ def self_test() -> int:
         return spec_doc({"selectors": {"type": "object", "additionalProperties": {
             "type": "object", "properties": {f: {"type": "string"} for f in fields}}}})
 
+    def conditions(reason_description: str) -> str:
+        reason = {"type": "string", "description": reason_description}
+        status = {"type": "object", "properties": {"conditions": {
+            "type": "array", "items": {"type": "object", "properties": {"reason": reason}}}}}
+        schema = {"type": "object", "properties": {"status": status}}
+        return yaml.safe_dump({"spec": {"versions": [{"name": "v1alpha1", "schema": {"openAPIV3Schema": schema}}]}})
+
     base = crd("spec.tenant", "status.phase")
     cases: list[tuple[str, dict[str, str], dict[str, str], str | None]] = [
         ("identical CRDs", {"p.yaml": base}, {"p.yaml": base}, None),
-        ("description changed", {"p.yaml": crd("spec.tenant", "status.phase", description="reworded")}, {"p.yaml": base}, None),
+        ("spec description changed", {"p.yaml": crd("spec.tenant", "status.phase", description="reworded", described="spec.")},
+         {"p.yaml": base}, None),
+        ("status description added", {"p.yaml": crd("spec.tenant", "status.phase", description="waits on pods", described="status.")},
+         {"p.yaml": base}, "describes status.phase differently"),
+        ("status description changed",
+         {"p.yaml": crd("spec.tenant", "status.phase", description="waits on pods", described="status.")},
+         {"p.yaml": crd("spec.tenant", "status.phase", description="waits on Programmed", described="status.")},
+         "describes status.phase differently"),
+        ("status description of a list item changed",
+         {"p.yaml": conditions("NoReadyEnvoyPod or ExtProcNotInjected")},
+         {"p.yaml": conditions("GatewayNotProgrammed")},
+         "describes status.conditions[].reason differently"),
         ("validation changed", {"p.yaml": crd("spec.tenant", "status.phase", pattern="^[a-z]+$")}, {"p.yaml": base}, None),
         ("chart declares a field the binary lacks", {"p.yaml": crd("spec.tenant", "status.phase", "status.evalRoleArn")},
          {"p.yaml": base}, "declares status.evalRoleArn"),
@@ -425,12 +526,12 @@ def self_test() -> int:
         ("a map value gains a field", {"p.yaml": selectors("key", "operator")}, {"p.yaml": selectors("key")},
          "declares spec.selectors{}.operator"),
     ]
-    def parse(docs: dict[str, str]) -> dict[str, dict[str, set[str]]]:
-        return {n: crd_fields(t, f"self-test {n}") for n, t in docs.items()}
+    def texts(docs: dict[str, str]) -> dict[str, tuple[str, str]]:
+        return {n: (t, f"self-test {n}") for n, t in docs.items()}
 
     failures: list[str] = []
     for label, chart, binary, want in cases:
-        found = crd_skew(parse(chart), parse(binary), "operator-vX")
+        found = crd_contract_skew(texts(chart), texts(binary), "operator-vX")
         if want is None:
             ok = not found
         else:

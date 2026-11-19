@@ -15,8 +15,16 @@ type: application
 # injects that sidecar only at pod creation and admits the first pod of every
 # new Gateway without it, which Envoy Gateway still reports Programmed while it
 # answers every model request with HTTP 500. The schema and RBAC are unchanged
-# (the operator already reads pods); appVersion still names operator 0.7.1, which
-# reads only Programmed, and the gate ships with the next operator release.
+# (the operator already reads pods), and the chart could not move without its
+# version (scripts/check-chart-version-bump.py), so 0.7.4 is a lockstep version
+# in the sense 0.7.0 records, held for behaviour rather than a field: appVersion
+# still names operator 0.7.1, which reads only Programmed. The release job's
+# runtime-contract check now compares every description under `status` as well
+# as the fields, since a status description is the binary's account of what it
+# writes, and it holds this chart until appVersion names an operator release
+# whose generated ModelGateway CRD describes the same status — the release that
+# applies the gate. That supersedes "Descriptions ... are not compared" under
+# 0.7.0 for status; spec descriptions are still not compared.
 #
 # 0.7.3 names operator 0.7.1, the release cut from the commit that writes
 # status.gatewayPodIdentity and DataPlaneProgrammed (operator-v0.7.1 at
