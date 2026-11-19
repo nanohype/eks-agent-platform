@@ -132,6 +132,7 @@ func TestReconcilePublishesRouteContract(t *testing.T) {
 		t.Fatalf("reconcileSelf (render): %v", err)
 	}
 	setGatewayProgrammed(t, cl, "True", "Programmed")
+	seedServingEnvoyPod(t, cl)
 	res, err := r.reconcileSelf(context.Background(), mixedRouteGateway())
 	if err != nil {
 		t.Fatalf("reconcileSelf: %v", err)

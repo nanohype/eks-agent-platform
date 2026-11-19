@@ -94,6 +94,10 @@ func TestModelGatewayReadyFollowsTheDataPlane(t *testing.T) {
 				WithObjects(readyTestPlatform(), mg).WithStatusSubresource(mg).Build()
 			r := &ModelGatewayReconciler{Client: cl, Scheme: s, Region: "us-west-2"}
 			ctx := context.Background()
+			// Every case has a pod that can sign, so what varies is only the
+			// Gateway's Programmed condition (the pods are
+			// TestModelGatewayReadyWaitsForEveryEnvoyPodToSign's).
+			seedServingEnvoyPod(t, cl)
 
 			if _, err := r.reconcileSelf(ctx, mg); err != nil {
 				t.Fatalf("first reconcileSelf: %v", err)
@@ -274,6 +278,7 @@ func TestModelGatewayReadyIsReChecked(t *testing.T) {
 		t.Fatalf("Reconcile (render): %v", err)
 	}
 	setGatewayProgrammed(t, cl, "True", "Programmed")
+	seedServingEnvoyPod(t, cl)
 	got, err := r.Reconcile(ctx, req)
 	if err != nil {
 		t.Fatalf("Reconcile (programmed): %v", err)
