@@ -8,6 +8,24 @@ type: application
 # WorkflowTemplate/AnalysisTemplate) behind evalRuntime.*. It ships no SLO
 # manifests — see 0.6.0 below, which removed them.
 #
+# 0.7.4 documents, in the ModelGateway CRD, that Ready and DataPlaneProgrammed
+# also wait on every Ready, non-terminating Envoy pod of the Gateway carrying a
+# ready ai-gateway-extproc container, and the NoReadyEnvoyPod,
+# ExtProcNotInjected and ExtProcNotReady reasons that hold it. Envoy AI Gateway
+# injects that sidecar only at pod creation and admits the first pod of every
+# new Gateway without it, which Envoy Gateway still reports Programmed while it
+# answers every model request with HTTP 500. The schema and RBAC are unchanged
+# (the operator already reads pods), and the chart could not move without its
+# version (scripts/check-chart-version-bump.py), so 0.7.4 is a lockstep version
+# in the sense 0.7.0 records, held for behaviour rather than a field: appVersion
+# still names operator 0.7.1, which reads only Programmed. The release job's
+# runtime-contract check now compares every description under `status` as well
+# as the fields, since a status description is the binary's account of what it
+# writes, and it holds this chart until appVersion names an operator release
+# whose generated ModelGateway CRD describes the same status — the release that
+# applies the gate. That supersedes "Descriptions ... are not compared" under
+# 0.7.0 for status; spec descriptions are still not compared.
+#
 # 0.7.3 names operator 0.7.1, the release cut from the commit that writes
 # status.gatewayPodIdentity and DataPlaneProgrammed (operator-v0.7.1 at
 # 02203d4). Nothing else changes. 0.7.2 named operator 0.7.0, which has no such
@@ -111,7 +129,7 @@ type: application
 # two-counter shape. A chart may not ship a CRD field its appVersion cannot
 # honour — nor, as 0.6.3 records, a workflow parameter. The charts-oci release
 # job enforces both with scripts/check-runtime-contract.py --release.
-version: 0.7.3
+version: 0.7.4
 appVersion: "0.7.1"
 # `-0` admits pre-release-tagged versions so the constraint matches managed
 # distros that append a suffix (EKS reports e.g. v1.35.4-eks-40737a8).

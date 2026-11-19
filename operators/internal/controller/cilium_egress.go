@@ -144,10 +144,11 @@ func datastoreFQDNs(p *platformv1alpha1.Platform, region string) []string {
 // being allowed out explicitly.
 //
 // A proxy that cannot reach xDS never receives a listener, never passes its
-// startup probe, and the Gateway never reports Programmed — while the
-// ModelGateway CR that asked for it still reports Ready, because the operator
-// reconciled every resource it owns successfully. Nothing upstream of the
-// data plane looks unhealthy.
+// startup probe, and the Gateway never reports Programmed. The ModelGateway
+// that asked for it holds at Provisioning with DataPlaneProgrammed False/
+// GatewayNotProgrammed, but every resource the operator owns reconciled
+// successfully, so nothing upstream of the data plane names the cause: it is
+// this policy, not the gateway's spec.
 const (
 	envoyGatewayNamespace = "envoy-gateway-system"
 	envoyGatewayXDSPort   = 18000

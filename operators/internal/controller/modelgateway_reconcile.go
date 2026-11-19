@@ -753,7 +753,10 @@ type dataPlaneState struct {
 // Gateway's word for a Gateway whose Service has an address and whose Envoy
 // Deployment has an available replica; GatewayNotProgrammed and
 // AwaitingGatewayStatus separate "Envoy Gateway reported the data plane is not
-// serving" from "Envoy Gateway has not reported on this generation yet".
+// serving" from "Envoy Gateway has not reported on this generation yet". The
+// condition is True only when, on top of Programmed, every Ready Envoy pod
+// carries a ready extproc; the reasons for a Programmed Gateway whose pods do
+// not are in modelgateway_extproc.go.
 const (
 	dataPlaneConditionType      = "DataPlaneProgrammed"
 	reasonDataPlaneProgrammed   = "Programmed"
@@ -787,6 +790,10 @@ const (
 // a ModelGateway that waits for it publishes no endpoint for a gateway with no
 // pod behind it.
 //
+// An available replica is still not a pod that can sign: a Programmed Gateway
+// is handed on to envoyPodsCanSign, which holds the condition False until every
+// Ready Envoy pod carries a ready ai-gateway-extproc.
+//
 // A Programmed condition written for an earlier generation of the Gateway says
 // nothing about the current spec, so it is treated as not yet reported.
 func (r *ModelGatewayReconciler) dataPlaneProgrammed(ctx context.Context, n gatewayNames) (dataPlaneState, error) {
@@ -812,11 +819,9 @@ func (r *ModelGatewayReconciler) dataPlaneProgrammed(ctx context.Context, n gate
 		reason, _ := cond["reason"].(string)
 		message, _ := cond["message"].(string)
 		if status == string(metav1.ConditionTrue) {
-			return dataPlaneState{
-				status:  metav1.ConditionTrue,
-				reason:  reasonDataPlaneProgrammed,
-				message: fmt.Sprintf("Gateway %s is Programmed: %s", ref, message),
-			}, nil
+			// Programmed is the precondition, not the answer: it counts an
+			// available replica, not one that can sign a request.
+			return r.envoyPodsCanSign(ctx, n, message)
 		}
 		return dataPlaneState{
 			status: metav1.ConditionFalse,
@@ -834,8 +839,9 @@ func (r *ModelGatewayReconciler) dataPlaneProgrammed(ctx context.Context, n gate
 }
 
 // reconcileSelf does the substantive work of ModelGatewayReconciler.
-// 'Ready' = gateway resources emitted and Envoy Gateway reports the Gateway
-// Programmed; 'Provisioning' = resources emitted, data plane not (yet) serving;
+// 'Ready' = gateway resources emitted, Envoy Gateway reports the Gateway
+// Programmed, and every Ready Envoy pod carries a ready extproc;
+// 'Provisioning' = resources emitted, data plane not (yet) serving;
 // 'Pending' = waiting on the data-plane CRDs, Platform readiness or the
 // gateway's identity binding; error = real failure to retry.
 func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1alpha1.ModelGateway) (gatewayReconcileResult, error) {
@@ -900,6 +906,17 @@ func (r *ModelGatewayReconciler) reconcileSelf(ctx context.Context, mg *agentsv1
 		// gone since, this is the same bootstrap ordering as above, not a fault.
 		if errors.Is(err, errGatewayCRDsNotInstalled) {
 			return gatewayReconcileResult{phase: phasePending, waitingOn: gatewayPrerequisitesMessage}, nil
+		}
+		// A failed Envoy pod read is retried as an error, and it also comes
+		// back with a state to write: Provisioning with the condition Unknown,
+		// which withdraws the endpoint and routes of a gateway that was Ready
+		// instead of leaving them published for as long as the read fails.
+		if dataPlane.reason == reasonEnvoyPodsUnreadable {
+			return gatewayReconcileResult{
+				phase:               phaseProvisioning,
+				unenforcedGuardrail: unenforcedGuardrail,
+				dataPlane:           dataPlane,
+			}, err
 		}
 		return gatewayReconcileResult{}, err
 	}

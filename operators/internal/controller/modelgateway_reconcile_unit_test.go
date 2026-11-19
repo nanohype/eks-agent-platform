@@ -195,6 +195,7 @@ func TestModelGatewayReconcileSelf(t *testing.T) {
 				res.phase, res.endpoint, res.routes)
 		}
 		setGatewayProgrammed(t, cl, "True", "Programmed")
+		seedServingEnvoyPod(t, cl)
 		res, err = r.reconcileSelf(context.Background(), twoRouteGateway())
 		if err != nil {
 			t.Fatalf("reconcileSelf (programmed): %v", err)

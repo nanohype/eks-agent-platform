@@ -167,10 +167,13 @@ type ModelGatewayStatus struct {
 	// Platform, the Gateway-API / Envoy AI Gateway CRDs, the Platform's
 	// gateway identity binding, or one requeue after releasing a tenant-runtime
 	// ServiceAccount Envoy Gateway had adopted; Provisioning has applied the gateway's
-	// resources and waits on Envoy Gateway to report the Gateway Programmed;
-	// Ready means it did at the last check, so an Envoy data plane was serving
-	// the routes then. A Ready gateway is re-checked every two minutes and
-	// returns to Provisioning when the Gateway stops being Programmed.
+	// resources and waits on Envoy Gateway to report the Gateway Programmed and
+	// on every Ready Envoy pod to carry a ready ai-gateway-extproc container;
+	// Ready means both held at the last check, so every Envoy pod serving the
+	// routes then could sign a request for Bedrock. A Ready gateway is
+	// re-checked every two minutes and returns to Provisioning when the Gateway
+	// stops being Programmed or a Ready Envoy pod without a ready extproc
+	// appears.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
@@ -200,11 +203,22 @@ type ModelGatewayStatus struct {
 	//	DataPlaneProgrammed               whether Envoy Gateway reports the
 	//	                                  rendered Gateway Programmed, its Envoy
 	//	                                  Service addressed and Deployment
-	//	                                  available. False/GatewayNotProgrammed
-	//	                                  carries Envoy Gateway's reason, False/
+	//	                                  available, and every Ready,
+	//	                                  non-terminating Envoy pod of it carries
+	//	                                  a ready ai-gateway-extproc container.
+	//	                                  False/GatewayNotProgrammed carries
+	//	                                  Envoy Gateway's reason, False/
 	//	                                  AwaitingGatewayStatus means it has not
-	//	                                  reported on this generation, Unknown/
-	//	                                  NotRendered means no Gateway was applied
+	//	                                  reported on this generation, False/
+	//	                                  NoReadyEnvoyPod means it is Programmed
+	//	                                  but no Ready, non-terminating Envoy pod
+	//	                                  was found, False/ExtProcNotInjected and
+	//	                                  False/ExtProcNotReady mean it is
+	//	                                  Programmed but the pods they name
+	//	                                  cannot sign a request yet, Unknown/
+	//	                                  EnvoyPodsUnreadable means the Envoy pods
+	//	                                  could not be read, Unknown/NotRendered
+	//	                                  means no Gateway was applied
 	//	ImportedRouteGuardrailUnenforced  whether any imported route is served
 	//	                                  without its guardrail
 	//

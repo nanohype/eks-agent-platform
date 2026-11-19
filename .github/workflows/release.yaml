@@ -543,7 +543,9 @@ jobs:
           # appVersion, an operator release that honours it: one that supplies
           # every parameter its eval WorkflowTemplate takes from the reconciler,
           # and whose CRDs decode the same fields as the ones the chart
-          # installs. The merge gate cannot require that, because the release
+          # installs and describe the same status — a status description is
+          # the binary's account of what it writes, so a chart documenting
+          # behaviour its appVersion lacks is held too. The merge gate cannot require that, because the release
           # carrying a CRD change is tagged after the change merges. So
           # check-runtime-contract.py --release decides it here, and a chart
           # that fails it is held: not pushed, and the job fails once every
