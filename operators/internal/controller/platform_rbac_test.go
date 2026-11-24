@@ -8,14 +8,18 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func rbacTestClient(t *testing.T) client.Client {
@@ -119,5 +123,113 @@ func TestDeleteOperatorImpersonateRBAC(t *testing.T) {
 	// Deleting again is a tolerated no-op.
 	if err := r.deleteOperatorImpersonateRBAC(context.Background(), p); err != nil {
 		t.Errorf("second delete should be a no-op: %v", err)
+	}
+}
+
+func TestEnsureOperatorImpersonateRBAC_WithoutAttributionCreatesNothing(t *testing.T) {
+	cl := rbacTestClient(t)
+	r := &PlatformReconciler{Client: cl}
+	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
+	p.Spec.Attribution = nil
+
+	if err := r.ensureOperatorImpersonateRBAC(context.Background(), p); err != nil {
+		t.Fatalf("ensureOperatorImpersonateRBAC: %v", err)
+	}
+	var crs rbacv1.ClusterRoleList
+	if err := cl.List(context.Background(), &crs); err != nil {
+		t.Fatalf("list ClusterRoles: %v", err)
+	}
+	var crbs rbacv1.ClusterRoleBindingList
+	if err := cl.List(context.Background(), &crbs); err != nil {
+		t.Fatalf("list ClusterRoleBindings: %v", err)
+	}
+	if len(crs.Items) != 0 || len(crbs.Items) != 0 {
+		t.Errorf("a Platform without attribution got %d ClusterRoles and %d ClusterRoleBindings, want none",
+			len(crs.Items), len(crbs.Items))
+	}
+}
+
+// rbacFailingClient fails every write of the named kind with a server error,
+// and passes every other call through.
+func rbacFailingClient(t *testing.T, failKind string, seed ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add rbac scheme: %v", err)
+	}
+	fail := func(obj client.Object) error {
+		kind := ""
+		switch obj.(type) {
+		case *rbacv1.ClusterRole:
+			kind = "ClusterRole"
+		case *rbacv1.ClusterRoleBinding:
+			kind = "ClusterRoleBinding"
+		}
+		if kind == failKind {
+			return apierrors.NewInternalError(errors.New("injected " + kind + " write failure"))
+		}
+		return nil
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(seed...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if err := fail(obj); err != nil {
+					return err
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if err := fail(obj); err != nil {
+					return err
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if err := fail(obj); err != nil {
+					return err
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+}
+
+func TestEnsureOperatorImpersonateRBAC_ReturnsWriteFailures(t *testing.T) {
+	for _, kind := range []string{"ClusterRole", "ClusterRoleBinding"} {
+		t.Run(kind, func(t *testing.T) {
+			r := &PlatformReconciler{Client: rbacFailingClient(t, kind)}
+			p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
+
+			err := r.ensureOperatorImpersonateRBAC(context.Background(), p)
+			if err == nil {
+				t.Fatalf("a failed %s write returned nil, so the reconcile would report the grant in place", kind)
+			}
+			if !strings.Contains(err.Error(), "ensure impersonate "+kind+" ") {
+				t.Errorf("error %q does not name the %s write that failed", err, kind)
+			}
+		})
+	}
+}
+
+func TestDeleteOperatorImpersonateRBAC_ReturnsDeleteFailures(t *testing.T) {
+	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
+	name := impersonateResourceName(p)
+	seed := func() []client.Object {
+		return []client.Object{
+			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}},
+			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		}
+	}
+	for _, kind := range []string{"ClusterRoleBinding", "ClusterRole"} {
+		t.Run(kind, func(t *testing.T) {
+			r := &PlatformReconciler{Client: rbacFailingClient(t, kind, seed()...)}
+
+			err := r.deleteOperatorImpersonateRBAC(context.Background(), p)
+			if err == nil {
+				t.Fatalf("a failed %s delete returned nil, so the finalizer would release with the grant still in place", kind)
+			}
+			if !strings.Contains(err.Error(), "delete impersonate "+kind+" ") {
+				t.Errorf("error %q does not name the %s delete that failed", err, kind)
+			}
+		})
 	}
 }

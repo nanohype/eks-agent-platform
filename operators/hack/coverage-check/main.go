@@ -32,21 +32,25 @@ import (
 //
 // On top of the package floors, the security-critical files carry a per-file
 // 100% override (the rubric's security-critical-100 rule): the tenant and
-// session IAM role reconcilers, the KMS-grant + bucket-policy reconciler, and
-// the policy generators — model scoping, datastore access, capability grants,
+// session IAM role reconcilers, the KMS-grant + bucket-policy reconciler, the
+// policy generators — model scoping, datastore access, capability grants,
 // tenant secrets, the tenant key policy, and the eval identity's per-Platform
-// eval-reports policy. These mint the IAM roles, KMS grants, S3 policies, and
-// the per-model, per-datastore, per-capability, per-secret and per-Platform
-// eval grants that are the tenant isolation boundary; a single uncovered branch
-// there is an unproven security control.
+// eval-reports policy — and the impersonation RBAC renderer. These mint the IAM
+// roles, KMS grants, S3 policies, the per-model, per-datastore, per-capability,
+// per-secret and per-Platform eval grants, and the ClusterRole that lets
+// tenant-runtime impersonate a Platform's named operators. Together they are
+// the tenant isolation boundary; a single uncovered branch there is an
+// unproven security control.
 //
 // The membership test is what the file GENERATES, not where it sits. Model
 // scoping renders the explicit-Deny document that bounds which Bedrock models a
 // tenant may invoke, which makes it the model-authorization boundary on an
 // agent platform and the entry whose absence costs the most — the deny document
 // is what stands between a declared model list and the baseline's wildcard
-// Allow. A file that renders an IAM, KMS or S3 document belongs here; one that
-// only reads them does not.
+// Allow. A file that renders an authorization document — an IAM, KMS or S3
+// policy, or Kubernetes RBAC — belongs here; one that only reads them does not.
+// TestAuthorizationRenderersCarryTheFileFloor parses internal/ and fails when a
+// file that renders one has no entry at 100.
 //
 // The list below is the authority; this paragraph describes it. Adding an entry
 // without extending the description leaves a reader counting one set and the
@@ -72,6 +76,7 @@ var floors = config{
 		"internal/controller/platform_tenant_secrets_policy.go": 100,
 		"internal/controller/platform_tenant_key_policy.go":     100,
 		"internal/controller/platform_eval_identity.go":         100,
+		"internal/controller/platform_rbac.go":                  100,
 	},
 }
 
