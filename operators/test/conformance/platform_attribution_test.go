@@ -116,3 +116,36 @@ func TestPlatformReconciler_AttributionGrantIsRevokedWhenRemoved(t *testing.T) {
 		t.Errorf("session role %s survived the removal of attribution", sessionARN)
 	}
 }
+
+// TestPlatformReconciler_AttributionGrantIsRevokedWithoutASessionRole drives
+// attribution declared, then removed, through a reconciler with no IAM client.
+// No session role is minted, so the grant's revocation cannot wait on one.
+func TestPlatformReconciler_AttributionGrantIsRevokedWithoutASessionRole(t *testing.T) {
+	ctx := context.Background()
+	ensureNs(ctx, t)
+
+	p := attributedScopingPlatform(ctx, t)
+	reconcileOnce(ctx, t, p)
+
+	name := impersonateName(p)
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, &rbacv1.ClusterRoleBinding{}); err != nil {
+		t.Fatalf("impersonate ClusterRoleBinding %s: %v", name, err)
+	}
+	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.SessionRoleArn; got != "" {
+		t.Fatalf("status.sessionRoleArn = %q with no IAM client, want empty", got)
+	}
+
+	stored := getPlatform(ctx, t, p.Namespace, p.Name)
+	stored.Spec.Attribution = nil
+	if err := k8sClient.Update(ctx, stored); err != nil {
+		t.Fatalf("remove spec.attribution: %v", err)
+	}
+	reconcileOnce(ctx, t, p)
+
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, &rbacv1.ClusterRoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Errorf("ClusterRoleBinding %s survived the removal of attribution (err=%v), so tenant-runtime can still impersonate %s", name, err, attributedOperator)
+	}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, &rbacv1.ClusterRole{}); !apierrors.IsNotFound(err) {
+		t.Errorf("ClusterRole %s survived the removal of attribution (err=%v)", name, err)
+	}
+}
