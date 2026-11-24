@@ -149,8 +149,8 @@ func TestEnsureOperatorImpersonateRBAC_WithoutAttributionCreatesNothing(t *testi
 	}
 }
 
-// rbacFailingClient fails every write of the named kind with a server error,
-// and passes every other call through.
+// rbacFailingClient fails Create, Update and Delete of the named kind with a
+// server error, and passes every other call through.
 func rbacFailingClient(t *testing.T, failKind string, seed ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()

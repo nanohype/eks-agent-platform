@@ -40,20 +40,23 @@ var rbacGrantTypes = map[string]bool{
 // document carries.
 const iamPolicyVersion = `"2012-10-17"`
 
-// policyDocumentTypes are the internal/controller types an IAM, KMS or S3
-// policy document is assembled from.
+// policyDocumentTypes are the internal/controller types the operator's IAM and
+// KMS policy documents are assembled from.
 var policyDocumentTypes = map[string]bool{
 	"policyDocument":  true,
 	"policyStatement": true,
 }
 
 // minRenderers sits below the number of authorization renderers under
-// internal/, so a detector that stops recognising one shape fails here rather
-// than passing over every file it can no longer see.
+// internal/, so a walk that stops finding them fails instead of passing over
+// files it never judged. It does not prove each shape is still recognised:
+// TestRendersAuthorization_RecognisesEachShape does.
 const minRenderers = 8
 
-// rendersAuthorization reports whether a parsed file builds an authorization
-// document: an IAM, KMS or S3 policy, or Kubernetes RBAC.
+// rendersAuthorization reports whether a parsed file contains a shape that
+// builds an authorization document: a composite literal of an rbac/v1 grant
+// type or of a policy document type, or the IAM policy-language version
+// literal.
 func rendersAuthorization(file *ast.File) bool {
 	rbacAliases := map[string]bool{}
 	for _, imp := range file.Imports {
@@ -143,7 +146,7 @@ func authorizationRenderers(t *testing.T) ([]string, int) {
 }
 
 // TestAuthorizationRenderersCarryTheFileFloor holds every file under internal/
-// that renders an authorization document at a 100% file floor.
+// that rendersAuthorization detects at a 100% file floor.
 func TestAuthorizationRenderersCarryTheFileFloor(t *testing.T) {
 	renderers, examined := authorizationRenderers(t)
 	if examined == 0 {

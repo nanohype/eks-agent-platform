@@ -61,7 +61,7 @@ func roleNameFromARN(arn string) string {
 
 // TestPlatformReconciler_AttributionGrantIsRevokedWhenRemoved drives one
 // Platform through attribution declared, then removed, against the API server:
-// the declared operator becomes impersonable by tenant-runtime alone, and
+// the grant names the declared operator and binds tenant-runtime only, and
 // removing the declaration revokes the grant and deletes the session role.
 func TestPlatformReconciler_AttributionGrantIsRevokedWhenRemoved(t *testing.T) {
 	ctx := context.Background()

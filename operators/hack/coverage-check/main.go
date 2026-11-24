@@ -50,7 +50,7 @@ import (
 // Allow. A file that renders an authorization document — an IAM, KMS or S3
 // policy, or Kubernetes RBAC — belongs here; one that only reads them does not.
 // TestAuthorizationRenderersCarryTheFileFloor parses internal/ and fails when a
-// file that renders one has no entry at 100.
+// file it detects rendering one has no entry at 100.
 //
 // The list below is the authority; this paragraph describes it. Adding an entry
 // without extending the description leaves a reader counting one set and the
