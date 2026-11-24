@@ -13,6 +13,8 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
@@ -92,4 +94,26 @@ func (r *PlatformReconciler) deleteOperatorImpersonateRBAC(ctx context.Context, 
 		return fmt.Errorf("delete impersonate ClusterRole %s: %w", name, err)
 	}
 	return nil
+}
+
+// revokeOperatorImpersonateRBAC removes the impersonate grant from a Platform
+// that declares no attribution. It reads both objects first, so a Platform
+// that never held the grant sends no delete.
+func (r *PlatformReconciler) revokeOperatorImpersonateRBAC(ctx context.Context, p *platformv1alpha1.Platform) error {
+	key := types.NamespacedName{Name: impersonateResourceName(p)}
+	held := false
+	for _, obj := range []client.Object{&rbacv1.ClusterRoleBinding{}, &rbacv1.ClusterRole{}} {
+		err := r.Get(ctx, key, obj)
+		if err == nil {
+			held = true
+			continue
+		}
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("read impersonate grant %s: %w", key.Name, err)
+		}
+	}
+	if !held {
+		return nil
+	}
+	return r.deleteOperatorImpersonateRBAC(ctx, p)
 }

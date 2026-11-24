@@ -233,3 +233,95 @@ func TestDeleteOperatorImpersonateRBAC_ReturnsDeleteFailures(t *testing.T) {
 		})
 	}
 }
+
+// deleteCountingClient counts Delete calls and fails every Get with err when
+// err is set.
+func deleteCountingClient(t *testing.T, deletes *int, getErr error, seed ...client.Object) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add rbac scheme: %v", err)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(seed...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if getErr != nil {
+					return getErr
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				*deletes++
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+}
+
+func TestRevokeOperatorImpersonateRBAC_WithNoGrantSendsNoDelete(t *testing.T) {
+	deletes := 0
+	r := &PlatformReconciler{Client: deleteCountingClient(t, &deletes, nil)}
+	p := attributedPlatform("acme", "reliability", nil, nil)
+	p.Spec.Attribution = nil
+
+	if err := r.revokeOperatorImpersonateRBAC(context.Background(), p); err != nil {
+		t.Fatalf("revokeOperatorImpersonateRBAC: %v", err)
+	}
+	if deletes != 0 {
+		t.Errorf("sent %d deletes for a Platform that holds no grant, want 0", deletes)
+	}
+}
+
+func TestRevokeOperatorImpersonateRBAC_RemovesAHeldGrant(t *testing.T) {
+	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
+	name := impersonateResourceName(p)
+	cases := map[string][]client.Object{
+		"role and binding": {
+			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}},
+			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		},
+		"role whose binding is gone": {
+			&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		},
+		"binding whose role is gone": {
+			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		},
+	}
+	for label, seed := range cases {
+		t.Run(label, func(t *testing.T) {
+			deletes := 0
+			cl := deleteCountingClient(t, &deletes, nil, seed...)
+			r := &PlatformReconciler{Client: cl}
+
+			if err := r.revokeOperatorImpersonateRBAC(context.Background(), p); err != nil {
+				t.Fatalf("revokeOperatorImpersonateRBAC: %v", err)
+			}
+			if deletes == 0 {
+				t.Fatal("sent no delete for a held grant")
+			}
+			if err := cl.Get(context.Background(), types.NamespacedName{Name: name}, &rbacv1.ClusterRole{}); !apierrors.IsNotFound(err) {
+				t.Errorf("ClusterRole %s survived revocation (err=%v)", name, err)
+			}
+			if err := cl.Get(context.Background(), types.NamespacedName{Name: name}, &rbacv1.ClusterRoleBinding{}); !apierrors.IsNotFound(err) {
+				t.Errorf("ClusterRoleBinding %s survived revocation (err=%v)", name, err)
+			}
+		})
+	}
+}
+
+func TestRevokeOperatorImpersonateRBAC_ReturnsReadFailures(t *testing.T) {
+	deletes := 0
+	readErr := apierrors.NewInternalError(errors.New("injected read failure"))
+	r := &PlatformReconciler{Client: deleteCountingClient(t, &deletes, readErr)}
+	p := attributedPlatform("acme", "reliability", nil, nil)
+
+	err := r.revokeOperatorImpersonateRBAC(context.Background(), p)
+	if err == nil {
+		t.Fatal("a failed read returned nil, so a held grant could be reported revoked")
+	}
+	if !strings.Contains(err.Error(), "read impersonate grant ") {
+		t.Errorf("error %q does not name the read that failed", err)
+	}
+	if deletes != 0 {
+		t.Errorf("sent %d deletes after a failed read, want 0", deletes)
+	}
+}
