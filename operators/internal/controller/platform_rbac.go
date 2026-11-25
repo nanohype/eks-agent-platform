@@ -96,9 +96,9 @@ func (r *PlatformReconciler) deleteOperatorImpersonateRBAC(ctx context.Context, 
 	return nil
 }
 
-// revokeOperatorImpersonateRBAC removes the impersonate grant from a Platform
-// that declares no attribution. It reads both objects first, so a Platform
-// that never held the grant sends no delete.
+// revokeOperatorImpersonateRBAC removes a Platform's impersonate grant. It
+// reads both objects first, so a Platform that never held the grant sends no
+// delete.
 func (r *PlatformReconciler) revokeOperatorImpersonateRBAC(ctx context.Context, p *platformv1alpha1.Platform) error {
 	key := types.NamespacedName{Name: impersonateResourceName(p)}
 	held := false

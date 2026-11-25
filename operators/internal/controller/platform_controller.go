@@ -388,9 +388,9 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{}, err
 		}
 	} else {
-		// Without attribution tenant-runtime may impersonate no one. The grant
-		// is written whether or not a session role was minted, so revoking it
-		// does not wait on one.
+		// Without attribution the Platform holds no impersonate grant. The
+		// grant is written whether or not a session role was minted, so
+		// revoking it does not wait on one.
 		if err := r.revokeOperatorImpersonateRBAC(ctx, platform); err != nil {
 			logger.Error(err, "revokeOperatorImpersonateRBAC failed")
 			return ctrl.Result{}, err
