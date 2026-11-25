@@ -153,7 +153,7 @@ func TestAuthorizationRenderersCarryTheFileFloor(t *testing.T) {
 		t.Fatal("parsed no Go files under internal/; the walk found nothing to judge")
 	}
 	if len(renderers) < minRenderers {
-		t.Fatalf("found %d authorization renderers in %d files, below the floor of %d: the detector no longer recognises a shape the code uses",
+		t.Fatalf("found %d authorization renderers in %d files, below the floor of %d: check the walk root and rendersAuthorization",
 			len(renderers), examined, minRenderers)
 	}
 	for _, path := range renderers {
