@@ -387,17 +387,21 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			logger.Error(err, "ensureOperatorImpersonateRBAC failed")
 			return ctrl.Result{}, err
 		}
-	} else if platform.Status.SessionRoleArn != "" {
-		// Attribution was enabled and is now removed — tear the pair down.
-		if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.ClusterName); err != nil {
-			logger.Error(err, "deleteSessionRole (attribution removed) failed")
+	} else {
+		// Without attribution the Platform holds no impersonate grant. The
+		// grant is written whether or not a session role was minted, so
+		// revoking it does not wait on one.
+		if err := r.revokeOperatorImpersonateRBAC(ctx, platform); err != nil {
+			logger.Error(err, "revokeOperatorImpersonateRBAC failed")
 			return ctrl.Result{}, err
 		}
-		if err := r.deleteOperatorImpersonateRBAC(ctx, platform); err != nil {
-			logger.Error(err, "deleteOperatorImpersonateRBAC (attribution removed) failed")
-			return ctrl.Result{}, err
+		if platform.Status.SessionRoleArn != "" {
+			if err := r.deleteSessionRole(ctx, platform, r.IAMCfg.ClusterName); err != nil {
+				logger.Error(err, "deleteSessionRole (attribution removed) failed")
+				return ctrl.Result{}, err
+			}
+			platform.Status.SessionRoleArn = ""
 		}
-		platform.Status.SessionRoleArn = ""
 	}
 
 	if susp.Suspended {
