@@ -22,4 +22,4 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Report violations to rackctl@gmail.com. All complaints will be reviewed and investigated promptly and fairly. The project maintainer is obligated to respect the privacy and security of the reporter of any incident.
+Report violations privately through the repository's private reporting form: on the **Security** tab, choose **Report a vulnerability**, and say in the title that it is a Code of Conduct report. Only you and the maintainers can see it. All complaints will be reviewed and investigated promptly and fairly. The project maintainer is obligated to respect the privacy and security of the reporter of any incident.
