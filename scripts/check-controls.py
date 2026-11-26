@@ -335,6 +335,19 @@ CONTROLS = [
         "the bytes changed, and the meaning did not, so the gate's pass was correct and the CONTROL "
         "was the thing at fault",
     ),
+    Control(
+        gate="check-version-pins.py",
+        path="renovate.json",
+        before='"matchFileNames": ["packages/pricing/package.json"],\n      "matchUpdateTypes": [',
+        after='"matchFileNames": ["packages/pricing/package.json"],\n      "matchUpdateTypesDroppedByControl": [',
+        expect_output="packages/pricing/package.json",
+        catches="a packageRule that selects a workspace package.json by file name and names no "
+        "update types, so it takes lock file maintenance. Renovate then refreshes the whole shared "
+        "pnpm-lock.yaml on that rule's branch and weekday schedule, beside the workspace-wide "
+        "refresh. The rename leaves the rule's file and group intact and removes only the update "
+        "types, which is the one difference between the rule that splits the lockfile and the one "
+        "that does not",
+    ),
     # The scope gate's verdict is its exit status, as with `git diff --quiet`:
     # 1 means a changed path is an image input and the image has to be built. It
     # reads the working tree against HEAD by default, so the mutation IS the

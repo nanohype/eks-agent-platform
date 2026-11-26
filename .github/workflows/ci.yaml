@@ -57,7 +57,7 @@ jobs:
   # listing which files carry versions goes stale the first time someone adds
   # one, and nothing fails.
   version-pins:
-    name: every version pin is Renovate-managed
+    name: every version pin is Renovate-managed, and the lockfile refreshes once
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
