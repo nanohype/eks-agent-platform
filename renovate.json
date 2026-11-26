@@ -3,8 +3,19 @@
   "extends": ["github>nanohype/.github"],
   "packageRules": [
     {
-      "description": "@eks-agent/pricing dep refresh \u2014 fast pickup on its small dep surface (@eks-agent/core via workspace:* + the standard devDeps). The PRICES table itself is NOT Renovate-managed; scripts/refresh-pricing.mjs (Phase 2) handles that via a separate AWS Pricing API workflow on its own cron schedule. The accelerated schedule here is for the package.json deps, not the PRICES content.",
+      "description": "@eks-agent/pricing dep refresh \u2014 fast pickup on its small dep surface (@eks-agent/core via workspace:* + the standard devDeps). The PRICES table itself is NOT Renovate-managed; scripts/refresh-pricing.mjs (Phase 2) handles that via a separate AWS Pricing API workflow on its own cron schedule. The accelerated schedule here is for the package.json deps, not the PRICES content. Lock file maintenance is left out: pnpm-lock.yaml belongs to the whole workspace, so a refresh matched here would re-resolve every package on this schedule beside the workspace-wide lock-file-maintenance PR.",
       "matchFileNames": ["packages/pricing/package.json"],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest",
+        "bump",
+        "rollback",
+        "replacement"
+      ],
       "schedule": ["before 6am every weekday"],
       "groupName": "pricing-deps"
     },
