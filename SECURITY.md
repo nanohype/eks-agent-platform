@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email rackctl@gmail.com with subject `[security][eks-agent-platform]`. Do not open public issues for security reports.
+Report a vulnerability privately through GitHub: on the repository's **Security** tab, choose **Report a vulnerability**, or open <https://github.com/nanohype/eks-agent-platform/security/advisories/new>. Only you and the maintainers can see the report. Do not open public issues for security reports.
 
 Acknowledgement target: within 72 hours. Triage target: within 5 business days.
 
