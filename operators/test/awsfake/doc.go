@@ -12,15 +12,16 @@ Licensed under the Apache License, Version 2.0 (the "License");
 //
 // Each fake refuses the calls listed here, with the error the SDK hands back
 // for each, so a test fails where AWS would turn a reconciler's call down for
-// one of these reasons. The list is the part of each service's validation that
-// the reconcilers' calls reach, not all of it.
+// one of these reasons. A call AWS refuses for a reason not listed here
+// passes.
 //
 // IAM refuses a role name over 64 characters, a name already taken, and a
 // policy document that is not a JSON object or breaks the policy grammar's
 // structure: a Version IAM does not accept, no Statement, or a statement
 // without an Effect of Allow or Deny, an Action or NotAction, and the
-// Resource or Principal its kind of document requires (documents.go has the
-// rule). It does not read condition operators, ARNs or action names. It
+// Resource or Principal its kind of document requires, or with the one its
+// kind forbids (documents.go has the rule). It does not read condition
+// operators, ARNs or action names. It
 // refuses a trust policy over its 2,048-character default quota, a role's
 // inline policies over 10,240 characters together, any call naming a role
 // that does not exist, a detach or inline delete of a policy the role does
