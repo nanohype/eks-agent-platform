@@ -6,6 +6,13 @@ allowBuilds:
   esbuild: true
   unrs-resolver: true
 
+# Resolve only releases published at least three days ago (4320 minutes), the
+# floor Renovate's stability-days check applies to version updates. pnpm applies
+# it on every resolution, so it also covers what that check cannot see: the
+# transitive versions a lockfile refresh re-resolves. A security fix younger than
+# the floor goes in minimumReleaseAgeExclude, in the change that takes it.
+minimumReleaseAge: 4320
+
 # Force patched transitive versions to clear known advisories. ws, form-data and
 # ip-address ship at runtime via @kubernetes/client-node inside @eks-agent/client;
 # the rest are dev-tree (vitest/tsx, changesets). read-yaml-file is bumped to v2 so
