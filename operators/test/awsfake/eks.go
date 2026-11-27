@@ -26,10 +26,10 @@ var _ awsclients.EKS = (*EKS)(nil)
 // The list summary carries no role, so the bound role is kept beside it, by
 // association id, and returned by DescribePodIdentityAssociation.
 //
-// It refuses what EKS refuses: a second association for a (namespace,
-// serviceAccount) that already has one gets ResourceInUseException, and
-// Describe or Delete naming an association id the fake does not hold gets
-// ResourceNotFoundException. The cluster name is not part of the key; every
+// It refuses two kinds of call, with EKS's errors: a second association for a
+// (namespace, serviceAccount) that already has one gets
+// ResourceInUseException, and Describe or Delete naming an association id the
+// fake does not hold gets ResourceNotFoundException. The cluster name is not part of the key; every
 // association is on the one cluster a reconciler serves.
 type EKS struct {
 	sync.Mutex

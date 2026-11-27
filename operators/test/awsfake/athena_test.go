@@ -18,9 +18,9 @@ import (
 )
 
 // TestAthenaHonoursTheClientRequestToken: a StartQueryExecution repeating an
-// earlier token starts nothing and returns the first execution's id; one
-// repeating it with another query is refused; a call with no token always
-// starts a new execution.
+// earlier token with the same parameters starts nothing and returns the first
+// execution's id; one repeating it with another query or another workgroup is
+// refused; a call with no token always starts a new execution.
 func TestAthenaHonoursTheClientRequestToken(t *testing.T) {
 	const token = "b3d1c2a4-0e9f-4c55-9a7e-5f6d7c8b9a01"
 	start := func(f *awsfake.Athena, query string, token *string) (string, error) {
@@ -47,6 +47,20 @@ func TestAthenaHonoursTheClientRequestToken(t *testing.T) {
 		{
 			name:        "the same token with another query",
 			second:      func(f *awsfake.Athena) (string, error) { return start(f, "SELECT 2", aws.String(token)) },
+			wantRefused: true,
+			wantStarted: 1,
+		},
+		{
+			name: "the same token and query in another workgroup",
+			second: func(f *awsfake.Athena) (string, error) {
+				out, err := f.StartQueryExecution(context.Background(), &athena.StartQueryExecutionInput{
+					QueryString: aws.String("SELECT 1"), WorkGroup: aws.String("other_wg"), ClientRequestToken: aws.String(token),
+				})
+				if err != nil {
+					return "", err
+				}
+				return aws.ToString(out.QueryExecutionId), nil
+			},
 			wantRefused: true,
 			wantStarted: 1,
 		},

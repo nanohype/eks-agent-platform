@@ -30,11 +30,24 @@ const (
 	roleName  = "c-analytics-tenant"
 )
 
-// sizedDoc is a policy document of exactly n characters, white space excluded,
-// carrying pad spaces between its members that IAM does not count.
-func sizedDoc(n, pad int) string {
-	const head, key, tail = `{"Version":"2012-10-17",`, `"Sid":"`, `"}`
-	return head + strings.Repeat(" ", pad) + key + strings.Repeat("x", n-len(head)-len(key)-len(tail)) + tail
+// sizedPolicy is a permissions policy of exactly n characters, white space
+// excluded, carrying pad spaces between its members that IAM does not count.
+// Its one statement's Sid takes up the length.
+func sizedPolicy(n, pad int) string {
+	return sized(n, pad, `"Effect":"Deny","Action":"bedrock:InvokeModel","Resource":"*"`)
+}
+
+// sizedTrust is a trust policy of exactly n characters, white space excluded,
+// carrying pad spaces that IAM does not count.
+func sizedTrust(n, pad int) string {
+	return sized(n, pad, `"Effect":"Allow","Principal":{"Service":"pods.eks.amazonaws.com"},"Action":"sts:AssumeRole"`)
+}
+
+// sized is a policy document of exactly n characters, white space excluded,
+// with members in its one statement and pad spaces after its Version.
+func sized(n, pad int, members string) string {
+	head, body, tail := `{"Version":"2012-10-17",`, `"Statement":[{`+members+`,"Sid":"`, `"}]}`
+	return head + strings.Repeat(" ", pad) + body + strings.Repeat("x", n-len(head)-len(body)-len(tail)) + tail
 }
 
 // apiCode is the error code an SDK error carries, "" for none.
@@ -138,16 +151,38 @@ func TestIAMRefusesWhatIAMRefuses(t *testing.T) {
 			want: malformed,
 		},
 		{
+			name: "CreateRole: a trust policy whose statement names no principal", absent: true,
+			call: func(f *awsfake.IAM) error {
+				return createRole(ctx, f, roleName, `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "CreateRole: a trust policy whose statement names a resource", absent: true,
+			call: func(f *awsfake.IAM) error {
+				return createRole(ctx, f, roleName, `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",`+
+					`"Principal":{"Service":"pods.eks.amazonaws.com"},"Action":"sts:AssumeRole","Resource":"*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "CreateRole: a trust policy with one statement object rather than an array", absent: true,
+			call: func(f *awsfake.IAM) error {
+				return createRole(ctx, f, roleName, `{"Version":"2012-10-17","Statement":{"Effect":"Allow",`+
+					`"Principal":{"Service":"pods.eks.amazonaws.com"},"Action":"sts:AssumeRole"}}`)
+			},
+		},
+		{
 			name: "CreateRole: a trust policy one character over the quota", absent: true,
 			call: func(f *awsfake.IAM) error {
-				return createRole(ctx, f, roleName, sizedDoc(awsfake.TrustPolicyMaxChars+1, 0))
+				return createRole(ctx, f, roleName, sizedTrust(awsfake.TrustPolicyMaxChars+1, 0))
 			},
 			want: limit,
 		},
 		{
 			name: "CreateRole: a trust policy at the quota, white space not counted", absent: true,
 			call: func(f *awsfake.IAM) error {
-				return createRole(ctx, f, roleName, sizedDoc(awsfake.TrustPolicyMaxChars, 500))
+				return createRole(ctx, f, roleName, sizedTrust(awsfake.TrustPolicyMaxChars, 500))
 			},
 		},
 
@@ -172,7 +207,7 @@ func TestIAMRefusesWhatIAMRefuses(t *testing.T) {
 			name: "UpdateAssumeRolePolicy: a document over the quota",
 			call: func(f *awsfake.IAM) error {
 				_, err := f.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
-					RoleName: aws.String(roleName), PolicyDocument: aws.String(sizedDoc(awsfake.TrustPolicyMaxChars+1, 0)),
+					RoleName: aws.String(roleName), PolicyDocument: aws.String(sizedTrust(awsfake.TrustPolicyMaxChars+1, 0)),
 				})
 				return err
 			},
@@ -182,7 +217,7 @@ func TestIAMRefusesWhatIAMRefuses(t *testing.T) {
 			name: "UpdateAssumeRolePolicy: a document at the quota",
 			call: func(f *awsfake.IAM) error {
 				_, err := f.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
-					RoleName: aws.String(roleName), PolicyDocument: aws.String(sizedDoc(awsfake.TrustPolicyMaxChars, 0)),
+					RoleName: aws.String(roleName), PolicyDocument: aws.String(sizedTrust(awsfake.TrustPolicyMaxChars, 0)),
 				})
 				return err
 			},
@@ -209,32 +244,108 @@ func TestIAMRefusesWhatIAMRefuses(t *testing.T) {
 			want: malformed,
 		},
 		{
-			name:  "PutRolePolicy: a role's inline policies one character over the quota together",
-			setup: func(t *testing.T, f *awsfake.IAM) { mustPut(t, f, "first", sizedDoc(6000, 0)) },
+			name: "PutRolePolicy: a document with no Statement",
+			call: func(f *awsfake.IAM) error { return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17"}`) },
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: a Statement of JSON null",
 			call: func(f *awsfake.IAM) error {
-				return putPolicy(ctx, f, roleName, "second", sizedDoc(awsfake.InlinePolicyMaxChars-6000+1, 0))
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":null}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: a Version IAM does not accept",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-18","Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: no Version, which IAM reads as 2008-10-17",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*"}]}`)
+			},
+		},
+		{
+			name: "PutRolePolicy: an Effect in the wrong case",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":[{"Effect":"deny","Action":"s3:*","Resource":"*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: a statement with no Effect",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":[{"Action":"s3:*","Resource":"*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: a statement with no Action or NotAction",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Resource":"*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: an Action that is neither a string nor strings",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":7,"Resource":"*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: a statement with no Resource or NotResource",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: a statement naming a principal",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":[{"Effect":"Deny",`+
+					`"Principal":"*","Action":"s3:*","Resource":"*"}]}`)
+			},
+			want: malformed,
+		},
+		{
+			name: "PutRolePolicy: NotAction and NotResource, with an array of actions beside them",
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "p", `{"Version":"2012-10-17","Statement":[`+
+					`{"Effect":"Deny","NotAction":"bedrock:*","NotResource":"arn:aws:bedrock:*::foundation-model/*"},`+
+					`{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:Converse"],"Resource":["*"]}]}`)
+			},
+		},
+		{
+			name:  "PutRolePolicy: a role's inline policies one character over the quota together",
+			setup: func(t *testing.T, f *awsfake.IAM) { mustPut(t, f, "first", sizedPolicy(6000, 0)) },
+			call: func(f *awsfake.IAM) error {
+				return putPolicy(ctx, f, roleName, "second", sizedPolicy(awsfake.InlinePolicyMaxChars-6000+1, 0))
 			},
 			want: limit,
 		},
 		{
 			name:  "PutRolePolicy: a role's inline policies at the quota together, white space not counted",
-			setup: func(t *testing.T, f *awsfake.IAM) { mustPut(t, f, "first", sizedDoc(6000, 300)) },
+			setup: func(t *testing.T, f *awsfake.IAM) { mustPut(t, f, "first", sizedPolicy(6000, 300)) },
 			call: func(f *awsfake.IAM) error {
-				return putPolicy(ctx, f, roleName, "second", sizedDoc(awsfake.InlinePolicyMaxChars-6000, 300))
+				return putPolicy(ctx, f, roleName, "second", sizedPolicy(awsfake.InlinePolicyMaxChars-6000, 300))
 			},
 		},
 		{
 			name:  "PutRolePolicy: a replacement counts in place of the policy it replaces",
-			setup: func(t *testing.T, f *awsfake.IAM) { mustPut(t, f, "first", sizedDoc(9000, 0)) },
-			call:  func(f *awsfake.IAM) error { return putPolicy(ctx, f, roleName, "first", sizedDoc(10000, 0)) },
+			setup: func(t *testing.T, f *awsfake.IAM) { mustPut(t, f, "first", sizedPolicy(9000, 0)) },
+			call:  func(f *awsfake.IAM) error { return putPolicy(ctx, f, roleName, "first", sizedPolicy(10000, 0)) },
 		},
 		{
 			name: "PutRolePolicy: a replacement that takes the role over the quota",
 			setup: func(t *testing.T, f *awsfake.IAM) {
-				mustPut(t, f, "first", sizedDoc(6000, 0))
-				mustPut(t, f, "second", sizedDoc(4000, 0))
+				mustPut(t, f, "first", sizedPolicy(6000, 0))
+				mustPut(t, f, "second", sizedPolicy(4000, 0))
 			},
-			call: func(f *awsfake.IAM) error { return putPolicy(ctx, f, roleName, "first", sizedDoc(6300, 0)) },
+			call: func(f *awsfake.IAM) error { return putPolicy(ctx, f, roleName, "first", sizedPolicy(6300, 0)) },
 			want: limit,
 		},
 
@@ -452,13 +563,16 @@ func TestIAMRefusalsChangeNothing(t *testing.T) {
 // them as written.
 func TestIAMReturnsDocumentsURLEncoded(t *testing.T) {
 	ctx := context.Background()
-	const spaced = `{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::b/a+b/*"}]}`
+	const (
+		spacedTrust  = `{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::123456789012:role/a+b"}, "Action": "sts:AssumeRole"}]}`
+		spacedPolicy = `{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::b/a+b/*"}]}`
+	)
 	f := awsfake.NewIAM()
-	created, err := f.CreateRole(ctx, &iam.CreateRoleInput{RoleName: aws.String(roleName), AssumeRolePolicyDocument: aws.String(spaced)})
+	created, err := f.CreateRole(ctx, &iam.CreateRoleInput{RoleName: aws.String(roleName), AssumeRolePolicyDocument: aws.String(spacedTrust)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := putPolicy(ctx, f, roleName, "p", spaced); err != nil {
+	if err := putPolicy(ctx, f, roleName, "p", spacedPolicy); err != nil {
 		t.Fatal(err)
 	}
 	role, err := f.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(roleName)})
@@ -469,25 +583,26 @@ func TestIAMReturnsDocumentsURLEncoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for what, got := range map[string]string{
-		"CreateRole trust policy": aws.ToString(created.Role.AssumeRolePolicyDocument),
-		"GetRole trust policy":    aws.ToString(role.Role.AssumeRolePolicyDocument),
-		"GetRolePolicy document":  aws.ToString(pol.PolicyDocument),
+	for what, c := range map[string]struct{ got, written string }{
+		"CreateRole trust policy": {aws.ToString(created.Role.AssumeRolePolicyDocument), spacedTrust},
+		"GetRole trust policy":    {aws.ToString(role.Role.AssumeRolePolicyDocument), spacedTrust},
+		"GetRolePolicy document":  {aws.ToString(pol.PolicyDocument), spacedPolicy},
 	} {
+		got := c.got
 		if strings.ContainsAny(got, `{}" +:`) {
 			t.Errorf("%s %q is not percent-encoded", what, got)
 		}
 		if !strings.Contains(got, "%20") || !strings.Contains(got, "%2B") {
 			t.Errorf("%s %q does not spell a space %%20 and a plus %%2B", what, got)
 		}
-		if decoded, err := url.QueryUnescape(got); err != nil || decoded != spaced {
+		if decoded, err := url.QueryUnescape(got); err != nil || decoded != c.written {
 			t.Errorf("%s decodes to %q (%v), want the document as written", what, decoded, err)
 		}
 	}
-	if got := aws.ToString(f.Roles[roleName].AssumeRolePolicyDocument); got != spaced {
+	if got := aws.ToString(f.Roles[roleName].AssumeRolePolicyDocument); got != spacedTrust {
 		t.Errorf("stored trust policy %q, want it as written", got)
 	}
-	if doc, _ := f.InlinePolicy(roleName, "p"); doc != spaced {
+	if doc, _ := f.InlinePolicy(roleName, "p"); doc != spacedPolicy {
 		t.Errorf("stored inline policy %q, want it as written", doc)
 	}
 }

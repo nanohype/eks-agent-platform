@@ -413,9 +413,7 @@ func main() {
 			ClusterName:              clusterName,
 			KillSwitchGraceIntervals: killSwitchGraceIntervals,
 			KillSwitchMaxRefires:     killSwitchMaxRefires,
-			// The wall clock, named here rather than left to the nil default
-			// that reads it too; tests inject a fake one.
-			Clock: clock.RealClock{},
+			Clock:                    clock.RealClock{},
 		}
 		if awsClients != nil {
 			budgetReconciler.Athena = awsClients.Athena

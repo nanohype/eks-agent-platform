@@ -8,6 +8,7 @@ package awsfake
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -27,8 +28,9 @@ var _ awsclients.Athena = (*Athena)(nil)
 //
 // It honours StartQueryExecution's idempotency the way Athena does: a call
 // repeating an earlier ClientRequestToken starts nothing and returns the first
-// call's QueryExecutionId, and one repeating the token with a different query
-// string gets InvalidRequestException. A call with no token starts a new
+// call's QueryExecutionId, and one repeating the token with any parameter
+// changed (the query string, workgroup, database or any other input field)
+// gets InvalidRequestException. A call with no token starts a new
 // execution every time. The real SDK client fills an absent token once per
 // StartQueryExecution invocation, before its retries, so a fake that receives
 // none is being called the way the SDK's caller calls it.
@@ -68,9 +70,21 @@ type Athena struct {
 	tokens map[string]startedQuery
 }
 
-// startedQuery is the execution a ClientRequestToken started.
+// startedQuery is the execution a ClientRequestToken started, beside the
+// parameters it started with.
 type startedQuery struct {
-	id, query string
+	id, params string
+}
+
+// idempotentParams is every field of in but its ClientRequestToken, encoded
+// for comparison: the parameters Athena holds a repeated token's call to.
+func idempotentParams(in *athena.StartQueryExecutionInput) string {
+	p := *in
+	p.ClientRequestToken = nil
+	// json.Marshal fails only on channels, functions and cycles, which the
+	// input cannot hold.
+	b, _ := json.Marshal(p)
+	return string(b)
 }
 
 // NewAthena returns an Athena that answers GetQueryExecution with states, in
@@ -92,9 +106,9 @@ func (f *Athena) StartQueryExecution(_ context.Context, in *athena.StartQueryExe
 	token := aws.ToString(in.ClientRequestToken)
 	if in.ClientRequestToken != nil {
 		if prior, ok := f.tokens[token]; ok {
-			if prior.query != query {
+			if prior.params != idempotentParams(in) {
 				return nil, &athenatypes.InvalidRequestException{
-					Message: aws.String("Idempotent parameters do not match: ClientRequestToken " + token + " was used with a different query"),
+					Message: aws.String("Idempotent parameters do not match: ClientRequestToken " + token + " was used with different parameters"),
 				}
 			}
 			return &athena.StartQueryExecutionOutput{QueryExecutionId: aws.String(prior.id)}, nil
@@ -107,7 +121,7 @@ func (f *Athena) StartQueryExecution(_ context.Context, in *athena.StartQueryExe
 		if f.tokens == nil {
 			f.tokens = map[string]startedQuery{}
 		}
-		f.tokens[token] = startedQuery{id: id, query: query}
+		f.tokens[token] = startedQuery{id: id, params: idempotentParams(in)}
 	}
 	return &athena.StartQueryExecutionOutput{QueryExecutionId: aws.String(id)}, nil
 }

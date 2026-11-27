@@ -45,13 +45,15 @@ var _ awsclients.IAM = (*IAM)(nil)
 // IAM is an in-memory awsclients.IAM holding roles, their managed policy
 // attachments and their inline policies.
 //
-// It refuses what IAM refuses. CreateRole refuses a name over RoleNameMaxLen
-// (ValidationError), a name a role already holds (EntityAlreadyExists), a trust
-// policy that is not a JSON object (MalformedPolicyDocument) and one over
+// It refuses these calls, with IAM's errors. CreateRole refuses a name over
+// RoleNameMaxLen (ValidationError), a name a role already holds
+// (EntityAlreadyExists), a trust policy that is not a JSON object or breaks
+// the trust-policy grammar's structure (MalformedPolicyDocument) and one over
 // TrustPolicyMaxChars (LimitExceeded); UpdateAssumeRolePolicy holds the new
-// trust policy to the same two document rules. PutRolePolicy refuses a policy
-// name over PolicyNameMaxLen, a document that is not a JSON object, and a
-// document that takes the role's inline policies past InlinePolicyMaxChars
+// trust policy to the same document rules. PutRolePolicy refuses a policy name
+// over PolicyNameMaxLen, a document that is not a JSON object or breaks the
+// permissions-policy grammar's structure, and a document that takes the
+// role's inline policies past InlinePolicyMaxChars
 // together, counted with it in place of any same-name policy it replaces. Every
 // call naming a role that does not exist gets NoSuchEntity, unless an
 // AccessDenied knob below applies. DetachRolePolicy of an ARN the role does not
@@ -347,10 +349,14 @@ func checkName(field, name string, maxLen int) error {
 	return nil
 }
 
-// checkTrustPolicy holds a trust policy to IAM's document rules.
+// checkTrustPolicy holds a trust policy to IAM's document rules: a JSON
+// object, the trust-policy grammar's structure, and the size quota.
 func checkTrustPolicy(roleName, doc string) error {
 	if !isJSONObject(doc) {
 		return &iamtypes.MalformedPolicyDocumentException{Message: aws.String("This policy contains invalid Json")}
+	}
+	if msg := policyGrammarError(doc, trustPolicy); msg != "" {
+		return &iamtypes.MalformedPolicyDocumentException{Message: aws.String(msg)}
 	}
 	if n := policySize(doc); n > TrustPolicyMaxChars {
 		return &iamtypes.LimitExceededException{Message: aws.String(fmt.Sprintf(
@@ -626,6 +632,9 @@ func (f *IAM) PutRolePolicy(_ context.Context, in *iam.PutRolePolicyInput, _ ...
 	doc := aws.ToString(in.PolicyDocument)
 	if !isJSONObject(doc) {
 		return nil, &iamtypes.MalformedPolicyDocumentException{Message: aws.String("Syntax errors in policy.")}
+	}
+	if msg := policyGrammarError(doc, permissionsPolicy); msg != "" {
+		return nil, &iamtypes.MalformedPolicyDocumentException{Message: aws.String(msg)}
 	}
 	total := policySize(doc)
 	for name, held := range f.Inline[roleName] {
