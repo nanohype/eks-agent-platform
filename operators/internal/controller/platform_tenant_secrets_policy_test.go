@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // platformWithSecretReads builds a Platform declaring the given
@@ -73,8 +74,8 @@ func TestTenantSecretsPolicy_EmptyWhenNoneDeclared(t *testing.T) {
 // TestEnsureTenantSecretsPolicy_WritesDeclaredAndConverges proves the reconcile
 // writes the declared secrets once and no-ops on a converged re-run.
 func TestEnsureTenantSecretsPolicy_WritesDeclaredAndConverges(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f}
 	p := platformWithSecretReads("myplat", "config")
 
@@ -101,8 +102,8 @@ func TestEnsureTenantSecretsPolicy_WritesDeclaredAndConverges(t *testing.T) {
 // ExternalSecret-only tenant (no directSecretReads) gets the inline policy
 // removed rather than a universal grant.
 func TestEnsureTenantSecretsPolicy_RemovedWhenNoneDeclared(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f}
 
 	if err := r.ensureTenantSecretsPolicy(context.Background(), "test-role", capRoleARN,
@@ -130,9 +131,9 @@ func TestEnsureTenantSecretsPolicy_NilIAM(t *testing.T) {
 // TestEnsureTenantSecretsPolicy_PutErrorPropagates proves a PutRolePolicy
 // failure surfaces.
 func TestEnsureTenantSecretsPolicy_PutErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
-	f.putInlineReturnsErr = map[string]error{tenantSecretsPolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
+	f.PutInlineReturnsErr = map[string]error{tenantSecretsPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
 	if err := r.ensureTenantSecretsPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithSecretReads("myplat", "config"), capCfg()); err == nil {
@@ -143,8 +144,8 @@ func TestEnsureTenantSecretsPolicy_PutErrorPropagates(t *testing.T) {
 // TestEnsureIamRole_TenantSecretsError_CreatePath proves ensureIamRole
 // propagates a tenant-secrets failure on the create path.
 func TestEnsureIamRole_TenantSecretsError_CreatePath(t *testing.T) {
-	f := newFakeIAM()
-	f.putInlineReturnsErr = map[string]error{tenantSecretsPolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.PutInlineReturnsErr = map[string]error{tenantSecretsPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
 	p := newPlatform("app", "tenant")
 	p.Spec.Identity.DirectSecretReads = []string{"config"}
@@ -156,14 +157,14 @@ func TestEnsureIamRole_TenantSecretsError_CreatePath(t *testing.T) {
 // TestEnsureIamRole_TenantSecretsError_ExistingRolePath proves the same on the
 // existing-role path.
 func TestEnsureIamRole_TenantSecretsError_ExistingRolePath(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	cfg := datastoreErrCfg()
 	r := &PlatformReconciler{IAM: f}
 	p := newPlatform("app", "tenant")
 	p.Spec.Identity.DirectSecretReads = []string{"config"}
 	roleName := tenantRoleName(cfg.ClusterName, p)
-	f.seedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
-	f.putInlineReturnsErr = map[string]error{tenantSecretsPolicyName: errors.New("boom")}
+	f.SeedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
+	f.PutInlineReturnsErr = map[string]error{tenantSecretsPolicyName: errors.New("boom")}
 
 	if _, err := r.ensureIamRole(context.Background(), p, cfg); err == nil {
 		t.Fatalf("expected ensureIamRole to propagate the tenant-secrets error on the existing-role path")

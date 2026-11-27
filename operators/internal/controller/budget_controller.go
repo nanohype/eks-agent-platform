@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlruntime "sigs.k8s.io/controller-runtime/pkg/controller"
@@ -77,6 +78,23 @@ type BudgetReconciler struct {
 	// when the suspension never lands (default 5). Past the cap the reconciler
 	// stops re-firing but keeps the KillSwitchUnrouted condition + metric set.
 	KillSwitchMaxRefires int
+
+	// Clock is what the reconciler reads the current time from: the in-flight
+	// window and the billing month it is clamped to, the kill-switch grace and
+	// re-fire backoff, the breach event's timestamp, and the times written to
+	// status. Nil reads the wall clock (clock.RealClock). The Athena poll's
+	// deadline is the one exception and stays on the wall clock: the poll
+	// sleeps on a real timer between reads, so a deadline read from a clock
+	// that does not advance with it would never arrive.
+	Clock clock.PassiveClock
+}
+
+// now is the current time as Clock reads it.
+func (r *BudgetReconciler) now() time.Time {
+	if r.Clock == nil {
+		return clock.RealClock{}.Now()
+	}
+	return r.Clock.Now()
 }
 
 // +kubebuilder:rbac:groups=governance.nanohype.dev,resources=budgetpolicies,verbs=get;list;watch;update;patch

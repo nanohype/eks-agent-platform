@@ -11,6 +11,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // A real CMK ARN: the key id is AWS-generated, which is why the ARN has to be
@@ -132,20 +134,20 @@ func TestEnsureTenantKeyPolicy(t *testing.T) {
 	cfg := IAMConfig{Environment: "development", Region: "us-west-2", ClusterName: cluster}
 
 	t.Run("writes the scoped grant", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+		f := awsfake.NewIAM()
+		f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 		r := &PlatformReconciler{IAM: f, SSM: &stubSSM{params: map[string]string{path: testTenantKeyARN}}}
 
 		if err := r.ensureTenantKeyPolicy(context.Background(), "test-role", p, cfg); err != nil {
 			t.Fatalf("ensureTenantKeyPolicy: %v", err)
 		}
-		if len(f.putInlineCalls) != 1 {
-			t.Fatalf("PutRolePolicy calls: got %d want 1", len(f.putInlineCalls))
+		if len(f.PutInlineCalls) != 1 {
+			t.Fatalf("PutRolePolicy calls: got %d want 1", len(f.PutInlineCalls))
 		}
-		if got := *f.putInlineCalls[0].PolicyName; got != tenantKeyPolicyName {
+		if got := *f.PutInlineCalls[0].PolicyName; got != tenantKeyPolicyName {
 			t.Errorf("policy name: got %q want %q", got, tenantKeyPolicyName)
 		}
-		if doc := *f.putInlineCalls[0].PolicyDocument; !strings.Contains(doc, testTenantKeyARN) {
+		if doc := *f.PutInlineCalls[0].PolicyDocument; !strings.Contains(doc, testTenantKeyARN) {
 			t.Errorf("policy is not scoped to the published key: %s", doc)
 		}
 	})
@@ -154,28 +156,28 @@ func TestEnsureTenantKeyPolicy(t *testing.T) {
 	// broad one — and the policy is removed, so a cleared substrate leaves no
 	// stale grant behind.
 	t.Run("removes the policy when no key is published", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+		f := awsfake.NewIAM()
+		f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 		r := &PlatformReconciler{IAM: f, SSM: &stubSSM{params: map[string]string{}}}
 
 		if err := r.ensureTenantKeyPolicy(context.Background(), "test-role", p, cfg); err != nil {
 			t.Fatalf("ensureTenantKeyPolicy: %v", err)
 		}
-		if len(f.putInlineCalls) != 0 {
-			t.Errorf("no key means no grant, got %d writes", len(f.putInlineCalls))
+		if len(f.PutInlineCalls) != 0 {
+			t.Errorf("no key means no grant, got %d writes", len(f.PutInlineCalls))
 		}
 	})
 
 	t.Run("an SSM failure surfaces", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+		f := awsfake.NewIAM()
+		f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 		r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("throttled")}}
 
 		if err := r.ensureTenantKeyPolicy(context.Background(), "test-role", p, cfg); err == nil {
 			t.Error("an SSM failure must surface, not degrade the tenant silently")
 		}
-		if len(f.putInlineCalls) != 0 {
-			t.Errorf("no policy should be written when the lookup failed, got %d", len(f.putInlineCalls))
+		if len(f.PutInlineCalls) != 0 {
+			t.Errorf("no policy should be written when the lookup failed, got %d", len(f.PutInlineCalls))
 		}
 	})
 
@@ -197,8 +199,8 @@ func TestTenantKeyPolicy_IndependentOfDatastores(t *testing.T) {
 		t.Fatalf("fixture should declare no datastores")
 	}
 
-	f := newFakeIAM()
-	f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 	cfg := IAMConfig{Environment: "development", Region: "us-west-2", ClusterName: "development-platform"}
 	path := tenantKeyParamPath(cfg.ClusterName, "myplat")
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{params: map[string]string{path: testTenantKeyARN}}}
@@ -206,8 +208,8 @@ func TestTenantKeyPolicy_IndependentOfDatastores(t *testing.T) {
 	if err := r.ensureTenantKeyPolicy(context.Background(), "test-role", noStores, cfg); err != nil {
 		t.Fatalf("ensureTenantKeyPolicy: %v", err)
 	}
-	if len(f.putInlineCalls) != 1 {
-		t.Fatalf("a datastore-less tenant must still get its key grant, got %d writes", len(f.putInlineCalls))
+	if len(f.PutInlineCalls) != 1 {
+		t.Fatalf("a datastore-less tenant must still get its key grant, got %d writes", len(f.PutInlineCalls))
 	}
 
 	// And the datastore policy really is empty for this tenant, which is what
@@ -222,7 +224,7 @@ func TestTenantKeyPolicy_IndependentOfDatastores(t *testing.T) {
 // AccessDenied on its first envelope operation, which is exactly the failure
 // mode this policy exists to remove.
 func TestEnsureIamRole_TenantKeyPolicyError_CreatePath(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("throttled")}}
 	p := newPlatform("app", "tenant")
 
@@ -232,13 +234,13 @@ func TestEnsureIamRole_TenantKeyPolicyError_CreatePath(t *testing.T) {
 }
 
 func TestEnsureIamRole_TenantKeyPolicyError_ExistingRolePath(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	cfg := datastoreErrCfg()
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("throttled")}}
 	p := newPlatform("app", "tenant")
 
 	roleName := tenantRoleName(cfg.ClusterName, p)
-	f.seedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
+	f.SeedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
 
 	if _, err := r.ensureIamRole(context.Background(), p, cfg); err == nil {
 		t.Fatal("expected ensureIamRole to propagate the tenant-key-policy error on the existing-role path")

@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // attributedPlatform builds a Platform with spec.attribution set. Shared with
@@ -32,7 +33,7 @@ func attributedPlatform(name, tenant string, operators []string, maxDur *int32) 
 func TestEnsureSessionRole_CreatesRoleWithTrustAndBaseline(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
 	const tenantARN = "arn:aws:iam::123456789012:role/production-acme-tenant"
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com", "bob@acme.com"}, nil)
@@ -48,13 +49,13 @@ func TestEnsureSessionRole_CreatesRoleWithTrustAndBaseline(t *testing.T) {
 	if name != "production-acme-session" {
 		t.Fatalf("session role name: got %s want production-acme-session", name)
 	}
-	if len(f.createCalls) != 1 {
-		t.Fatalf("create calls: got %d want 1", len(f.createCalls))
+	if len(f.CreateCalls) != 1 {
+		t.Fatalf("create calls: got %d want 1", len(f.CreateCalls))
 	}
 
 	// Trust: only the tenant role may assume, only while setting one of the
 	// operators as SourceIdentity, and NOT via web identity / broad assume.
-	trust := aws.ToString(f.createCalls[0].AssumeRolePolicyDocument)
+	trust := aws.ToString(f.CreateCalls[0].AssumeRolePolicyDocument)
 	for _, want := range []string{tenantARN, "sts:AssumeRole", "sts:SetSourceIdentity", "sts:SourceIdentity", "alice@acme.com", "bob@acme.com"} {
 		if !strings.Contains(trust, want) {
 			t.Errorf("trust policy missing %q:\n%s", want, trust)
@@ -63,16 +64,16 @@ func TestEnsureSessionRole_CreatesRoleWithTrustAndBaseline(t *testing.T) {
 	if strings.Contains(trust, "AssumeRoleWithWebIdentity") {
 		t.Errorf("session role trust must not grant web-identity assume:\n%s", trust)
 	}
-	if got := aws.ToInt32(f.createCalls[0].MaxSessionDuration); got != 3600 {
+	if got := aws.ToInt32(f.CreateCalls[0].MaxSessionDuration); got != 3600 {
 		t.Errorf("MaxSessionDuration: got %d want 3600", got)
 	}
-	if got := f.attachmentsFor(name); len(got) != 1 || got[0] != baseline {
+	if got := f.AttachmentsFor(name); len(got) != 1 || got[0] != baseline {
 		t.Errorf("baseline attachment: got %v want [%s]", got, baseline)
 	}
 }
 
 func TestEnsureSessionRole_CustomMaxDuration(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{ClusterName: "production", Environment: "production"}
 	dur := int32(7200)
@@ -81,57 +82,57 @@ func TestEnsureSessionRole_CustomMaxDuration(t *testing.T) {
 	if _, err := r.ensureSessionRole(context.Background(), p, "arn:aws:iam::1:role/tenant", false, cfg); err != nil {
 		t.Fatalf("ensureSessionRole: %v", err)
 	}
-	if got := aws.ToInt32(f.createCalls[0].MaxSessionDuration); got != 7200 {
+	if got := aws.ToInt32(f.CreateCalls[0].MaxSessionDuration); got != 7200 {
 		t.Errorf("MaxSessionDuration: got %d want 7200", got)
 	}
 }
 
 func TestEnsureSessionRole_IdempotentRefreshesTrust(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
 	name := sessionRoleName(cfg.ClusterName, p)
-	f.seedRole(name, "arn:aws:iam::123:role/"+name)
+	f.SeedRole(name, "arn:aws:iam::123:role/"+name)
 
 	if _, err := r.ensureSessionRole(context.Background(), p, "arn:aws:iam::1:role/tenant", false, cfg); err != nil {
 		t.Fatalf("ensureSessionRole: %v", err)
 	}
-	if len(f.createCalls) != 0 {
-		t.Errorf("create calls: got %d want 0 (role already existed)", len(f.createCalls))
+	if len(f.CreateCalls) != 0 {
+		t.Errorf("create calls: got %d want 0 (role already existed)", len(f.CreateCalls))
 	}
-	if len(f.updateAssumeCalls) != 1 {
-		t.Fatalf("trust-refresh calls: got %d want 1", len(f.updateAssumeCalls))
+	if len(f.UpdateAssumeCalls) != 1 {
+		t.Fatalf("trust-refresh calls: got %d want 1", len(f.UpdateAssumeCalls))
 	}
-	if !strings.Contains(aws.ToString(f.updateAssumeCalls[0].PolicyDocument), "alice@acme.com") {
+	if !strings.Contains(aws.ToString(f.UpdateAssumeCalls[0].PolicyDocument), "alice@acme.com") {
 		t.Errorf("refreshed trust should carry the operator")
 	}
-	if got := f.attachmentsFor(name); len(got) != 1 || got[0] != baseline {
+	if got := f.AttachmentsFor(name); len(got) != 1 || got[0] != baseline {
 		t.Errorf("baseline attachment: got %v", got)
 	}
 }
 
 func TestEnsureSessionRole_SuspendedDetachesBaseline(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{TenantBaselinePolicyARN: baseline, ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
 	name := sessionRoleName(cfg.ClusterName, p)
-	f.seedRole(name, "arn:aws:iam::123:role/"+name)
-	f.seedAttachment(name, baseline)
+	f.SeedRole(name, "arn:aws:iam::123:role/"+name)
+	f.SeedAttachment(name, baseline)
 
 	if _, err := r.ensureSessionRole(context.Background(), p, "arn:aws:iam::1:role/tenant", true, cfg); err != nil {
 		t.Fatalf("ensureSessionRole (suspended): %v", err)
 	}
-	if got := f.attachmentsFor(name); len(got) != 0 {
+	if got := f.AttachmentsFor(name); len(got) != 0 {
 		t.Errorf("baseline must be detached when suspended (kill-switch parity): got %v", got)
 	}
 }
 
 func TestEnsureSessionRole_NilAttributionNoop(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	p := newPlatform("acme", "reliability") // no attribution
 
@@ -139,24 +140,24 @@ func TestEnsureSessionRole_NilAttributionNoop(t *testing.T) {
 	if err != nil || arn != "" {
 		t.Fatalf("expected no-op; got arn=%q err=%v", arn, err)
 	}
-	if len(f.createCalls) != 0 {
-		t.Errorf("expected no create calls, got %d", len(f.createCalls))
+	if len(f.CreateCalls) != 0 {
+		t.Errorf("expected no create calls, got %d", len(f.CreateCalls))
 	}
 }
 
 func TestDeleteSessionRole(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{ClusterName: "production", Environment: "production"}
 	p := attributedPlatform("acme", "reliability", []string{"alice@acme.com"}, nil)
 	name := sessionRoleName(cfg.ClusterName, p)
-	f.seedRole(name, "arn:aws:iam::123:role/"+name)
-	f.seedAttachment(name, "arn:aws:iam::aws:policy/EksAgentBaseline")
+	f.SeedRole(name, "arn:aws:iam::123:role/"+name)
+	f.SeedAttachment(name, "arn:aws:iam::aws:policy/EksAgentBaseline")
 
 	if err := r.deleteSessionRole(context.Background(), p, cfg.Environment); err != nil {
 		t.Fatalf("deleteSessionRole: %v", err)
 	}
-	if _, ok := f.roles[name]; ok {
+	if _, ok := f.Roles[name]; ok {
 		t.Errorf("session role should be deleted")
 	}
 	// Deleting a non-existent session role is a tolerated no-op.

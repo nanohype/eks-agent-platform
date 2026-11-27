@@ -32,19 +32,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
+// evalTestRoleARN carries the tenant path the reconciler creates the role
+// under: IAM puts a role's path in its ARN.
 const (
 	evalTestCluster   = "production-cluster"
 	evalTestNamespace = "evals"
 	evalTestBucket    = "production-cluster-111111111111-us-west-2-eval-reports"
 	evalTestBoundary  = "arn:aws:iam::123456789012:policy/eks-agent-platform/tenant-boundary"
-	evalTestRoleARN   = "arn:aws:iam::123456789012:role/" + evalTestCluster + "-analytics-eval"
+	evalTestRoleARN   = "arn:aws:iam::123456789012:role/eks-agent-platform/tenants/" + evalTestCluster + "-analytics-eval"
 )
 
 // evalIdentityReconciler wires a PlatformReconciler with the in-memory IAM and
 // EKS fakes and an eval runtime, over a fake client that may carry interceptors.
-func evalIdentityReconciler(t *testing.T, funcs *interceptor.Funcs) (*PlatformReconciler, *fakeIAM, *fakeEKS, client.Client) {
+func evalIdentityReconciler(t *testing.T, funcs *interceptor.Funcs) (*PlatformReconciler, *awsfake.IAM, *awsfake.EKS, client.Client) {
 	t.Helper()
 	s := runtime.NewScheme()
 	if err := corev1.AddToScheme(s); err != nil {
@@ -58,7 +61,7 @@ func evalIdentityReconciler(t *testing.T, funcs *interceptor.Funcs) (*PlatformRe
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	cl := b.Build()
-	f, fe := newFakeIAM(), newFakeEKS()
+	f, fe := awsfake.NewIAM(), awsfake.NewEKS()
 	r := &PlatformReconciler{
 		Client: cl,
 		Scheme: s,
@@ -352,10 +355,10 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 		t.Errorf("ServiceAccount carries annotations %v; Pod Identity binds it, no role-arn annotation", sa.Annotations)
 	}
 
-	if len(f.createCalls) != 1 {
-		t.Fatalf("CreateRole calls = %d, want 1", len(f.createCalls))
+	if len(f.CreateCalls) != 1 {
+		t.Fatalf("CreateRole calls = %d, want 1", len(f.CreateCalls))
 	}
-	in := f.createCalls[0]
+	in := f.CreateCalls[0]
 	if got := aws.ToString(in.RoleName); got != "production-cluster-analytics-eval" {
 		t.Errorf("role name = %q", got)
 	}
@@ -379,10 +382,10 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 	// The role holds the one inline policy and no managed policy. The tenant
 	// baseline is the Bedrock grant; attaching it here would hand every eval run
 	// a model path around the Platform's model scoping.
-	if n := len(f.attachCalls); n != 0 {
+	if n := len(f.AttachCalls); n != 0 {
 		t.Errorf("AttachRolePolicy called %d times on the eval role; it carries no managed policy", n)
 	}
-	got := f.inline["production-cluster-analytics-eval"]
+	got := f.Inline["production-cluster-analytics-eval"]
 	if len(got) != 1 {
 		t.Fatalf("eval role inline policies = %v, want exactly %s", got, evalReportsPolicyName)
 	}
@@ -404,10 +407,10 @@ func TestEnsureEvalIdentity_Creates(t *testing.T) {
 		t.Errorf("stored status.evalNamespace = %q, want %s written through with the role", got, evalTestNamespace)
 	}
 
-	if len(fe.createCalls) != 1 {
-		t.Fatalf("CreatePodIdentityAssociation calls = %d, want 1", len(fe.createCalls))
+	if len(fe.CreateCalls) != 1 {
+		t.Fatalf("CreatePodIdentityAssociation calls = %d, want 1", len(fe.CreateCalls))
 	}
-	a := fe.createCalls[0]
+	a := fe.CreateCalls[0]
 	if aws.ToString(a.ClusterName) != evalTestCluster || aws.ToString(a.Namespace) != evalTestNamespace ||
 		aws.ToString(a.ServiceAccount) != "eval-analytics" || aws.ToString(a.RoleArn) != evalTestRoleARN {
 		t.Errorf("association = (%s, %s, %s → %s), want (%s, %s, eval-analytics → %s)",
@@ -434,11 +437,11 @@ func TestEnsureEvalIdentity_ConvergedPassWritesNothing(t *testing.T) {
 			t.Fatalf("pass %d: %v", i+1, err)
 		}
 	}
-	if len(f.createCalls) != 1 || len(f.putInlineCalls) != 1 || len(fe.createCalls) != 1 || statusPatches != 1 {
+	if len(f.CreateCalls) != 1 || len(f.PutInlineCalls) != 1 || len(fe.CreateCalls) != 1 || statusPatches != 1 {
 		t.Errorf("writes over three passes: CreateRole %d, PutRolePolicy %d, CreatePodIdentityAssociation %d, status patches %d; want 1 each",
-			len(f.createCalls), len(f.putInlineCalls), len(fe.createCalls), statusPatches)
+			len(f.CreateCalls), len(f.PutInlineCalls), len(fe.CreateCalls), statusPatches)
 	}
-	if n := len(f.updateAssumeCalls); n != 0 {
+	if n := len(f.UpdateAssumeCalls); n != 0 {
 		t.Errorf("UpdateAssumeRolePolicy calls = %d over three passes; the trust the role was created with is already converged", n)
 	}
 }
@@ -455,25 +458,25 @@ func TestEnsureEvalIdentity_ConvergesThePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f.inline[role][evalReportsPolicyName] = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["*"]}]}`
+	f.Inline[role][evalReportsPolicyName] = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["*"]}]}`
 	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
 	want, _ := evalReportsPolicyDoc("analytics", evalTestBucket, arnScopeFromRole(evalTestRoleARN, "us-west-2"))
-	if !policyDocEqual(f.inline[role][evalReportsPolicyName], want) {
-		t.Errorf("a drifted policy was not rewritten: %s", f.inline[role][evalReportsPolicyName])
+	if !policyDocEqual(f.Inline[role][evalReportsPolicyName], want) {
+		t.Errorf("a drifted policy was not rewritten: %s", f.Inline[role][evalReportsPolicyName])
 	}
 
 	r.Eval.ReportsBucket = "relocated-eval-reports"
 	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	doc := f.inline[role][evalReportsPolicyName]
+	doc := f.Inline[role][evalReportsPolicyName]
 	if !strings.Contains(doc, "arn:aws:s3:::relocated-eval-reports/analytics/runs/*") || strings.Contains(doc, evalTestBucket) {
 		t.Errorf("after the bucket moved the policy still names the old one: %s", doc)
 	}
-	if len(f.createCalls) != 1 {
-		t.Errorf("CreateRole calls = %d; an existing role is converged in place, not recreated", len(f.createCalls))
+	if len(f.CreateCalls) != 1 {
+		t.Errorf("CreateRole calls = %d; an existing role is converged in place, not recreated", len(f.CreateCalls))
 	}
 }
 
@@ -514,9 +517,9 @@ func TestEvalIdentityIsInertWithoutAnEvalRuntime(t *testing.T) {
 	ctx := context.Background()
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
 	r.Eval = EvalIdentityConfig{}
-	f.getReturnsErr = errors.New("GetRole must not be called")
-	f.listReturnsErr = errors.New("ListAttachedRolePolicies must not be called")
-	fe.listReturnsErr = errors.New("ListPodIdentityAssociations must not be called")
+	f.GetReturnsErr = errors.New("GetRole must not be called")
+	f.ListReturnsErr = errors.New("ListAttachedRolePolicies must not be called")
+	fe.ListReturnsErr = errors.New("ListPodIdentityAssociations must not be called")
 	p := newPlatform("analytics", "acme")
 
 	if outcome, err := r.ensureEvalIdentity(ctx, p); err != nil || outcome != evalIdentityUnmanaged {
@@ -542,13 +545,13 @@ func TestEnsureEvalIdentity_DefersWithoutTheRuntimeNamespace(t *testing.T) {
 	r, f, fe, _ := evalIdentityReconciler(t, &interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 		return apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, evalTestNamespace)
 	}})
-	f.getReturnsErr = errors.New("GetRole must not be called")
-	fe.createReturnsErr = errors.New("CreatePodIdentityAssociation must not be called")
+	f.GetReturnsErr = errors.New("GetRole must not be called")
+	fe.CreateReturnsErr = errors.New("CreatePodIdentityAssociation must not be called")
 	if outcome, err := r.ensureEvalIdentity(context.Background(), newPlatform("analytics", "acme")); err != nil || outcome != evalIdentityDeferred {
 		t.Errorf("ensureEvalIdentity = (%v, %v), want (evalIdentityDeferred, nil)", outcome, err)
 	}
-	if len(f.roles) != 0 || len(fe.createCalls) != 0 {
-		t.Errorf("minted AWS identity for an account that does not exist: roles=%v associations=%v", f.roles, fe.createCalls)
+	if len(f.Roles) != 0 || len(fe.CreateCalls) != 0 {
+		t.Errorf("minted AWS identity for an account that does not exist: roles=%v associations=%v", f.Roles, fe.CreateCalls)
 	}
 }
 
@@ -558,7 +561,7 @@ func TestEnsureEvalIdentity_Errors(t *testing.T) {
 	cases := []struct {
 		name   string
 		funcs  *interceptor.Funcs
-		inject func(*fakeIAM, *fakeEKS)
+		inject func(*awsfake.IAM, *awsfake.EKS)
 		want   string
 	}{
 		{
@@ -571,19 +574,21 @@ func TestEnsureEvalIdentity_Errors(t *testing.T) {
 			}},
 			want: "ensure eval ServiceAccount evals/eval-analytics",
 		},
-		{name: "GetRole", inject: func(f *fakeIAM, _ *fakeEKS) { f.getReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval"},
-		{name: "CreateRole", inject: func(f *fakeIAM, _ *fakeEKS) { f.createReturnsErr = boom }, want: "iam CreateRole production-cluster-analytics-eval"},
+		{name: "GetRole", inject: func(f *awsfake.IAM, _ *awsfake.EKS) { f.GetReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval"},
+		{name: "CreateRole", inject: func(f *awsfake.IAM, _ *awsfake.EKS) { f.CreateReturnsErr = boom }, want: "iam CreateRole production-cluster-analytics-eval"},
 		{
 			name:   "CreateRole after a refused read",
-			inject: func(f *fakeIAM, _ *fakeEKS) { f.absentReadsDenied, f.createReturnsErr = true, boom },
+			inject: func(f *awsfake.IAM, _ *awsfake.EKS) { f.AbsentReadsDenied, f.CreateReturnsErr = true, boom },
 			want:   "iam CreateRole production-cluster-analytics-eval",
 		},
 		{
-			name:   "PutRolePolicy",
-			inject: func(f *fakeIAM, _ *fakeEKS) { f.putInlineReturnsErr = map[string]error{evalReportsPolicyName: boom} },
-			want:   "iam PutRolePolicy production-cluster-analytics-eval/eval-reports-access",
+			name: "PutRolePolicy",
+			inject: func(f *awsfake.IAM, _ *awsfake.EKS) {
+				f.PutInlineReturnsErr = map[string]error{evalReportsPolicyName: boom}
+			},
+			want: "iam PutRolePolicy production-cluster-analytics-eval/eval-reports-access",
 		},
-		{name: "CreatePodIdentityAssociation", inject: func(_ *fakeIAM, fe *fakeEKS) { fe.createReturnsErr = boom }, want: "eks CreatePodIdentityAssociation"},
+		{name: "CreatePodIdentityAssociation", inject: func(_ *awsfake.IAM, fe *awsfake.EKS) { fe.CreateReturnsErr = boom }, want: "eks CreatePodIdentityAssociation"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -615,18 +620,18 @@ func TestDeleteEvalIdentity_RemovesEverythingItMinted(t *testing.T) {
 			t.Fatalf("delete pass %d: %v", pass, err)
 		}
 	}
-	if len(fe.associations) != 0 {
-		t.Errorf("associations left behind: %v", fe.associations)
+	if len(fe.Associations) != 0 {
+		t.Errorf("associations left behind: %v", fe.Associations)
 	}
 	err := cl.Get(ctx, types.NamespacedName{Namespace: evalTestNamespace, Name: "eval-analytics"}, &corev1.ServiceAccount{})
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("eval ServiceAccount still present (err=%v)", err)
 	}
-	if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+	if _, ok := f.Roles["production-cluster-analytics-eval"]; ok {
 		t.Error("eval role still present")
 	}
-	if len(f.inline["production-cluster-analytics-eval"]) != 0 {
-		t.Errorf("inline policies left on the deleted role: %v", f.inline["production-cluster-analytics-eval"])
+	if len(f.Inline["production-cluster-analytics-eval"]) != 0 {
+		t.Errorf("inline policies left on the deleted role: %v", f.Inline["production-cluster-analytics-eval"])
 	}
 }
 
@@ -638,11 +643,11 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 	cases := []struct {
 		name   string
 		funcs  *interceptor.Funcs
-		inject func(*fakeIAM, *fakeEKS)
+		inject func(*awsfake.IAM, *awsfake.EKS)
 		want   string
 		record string
 	}{
-		{name: "association", inject: func(_ *fakeIAM, fe *fakeEKS) { fe.listReturnsErr = boom }, want: "eks ListPodIdentityAssociations", record: evalTestRoleARN},
+		{name: "association", inject: func(_ *awsfake.IAM, fe *awsfake.EKS) { fe.ListReturnsErr = boom }, want: "eks ListPodIdentityAssociations", record: evalTestRoleARN},
 		{
 			name: "service account",
 			funcs: &interceptor.Funcs{Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
@@ -651,7 +656,7 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 			want:   "delete eval ServiceAccount evals/eval-analytics",
 			record: evalTestRoleARN,
 		},
-		{name: "role lookup", inject: func(f *fakeIAM, _ *fakeEKS) { f.getReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval", record: evalTestRoleARN},
+		{name: "role lookup", inject: func(f *awsfake.IAM, _ *awsfake.EKS) { f.GetReturnsErr = boom }, want: "iam GetRole production-cluster-analytics-eval", record: evalTestRoleARN},
 		{
 			name: "record",
 			funcs: &interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
@@ -663,7 +668,7 @@ func TestDeleteEvalIdentity_Errors(t *testing.T) {
 			want:   "clear status.evalRoleArn and status.evalNamespace on Platform eks-agent-platform/analytics",
 			record: evalTestRoleARN,
 		},
-		{name: "role", inject: func(f *fakeIAM, _ *fakeEKS) { f.deleteReturnsErr = boom }, want: "iam DeleteRole", record: ""},
+		{name: "role", inject: func(f *awsfake.IAM, _ *awsfake.EKS) { f.DeleteReturnsErr = boom }, want: "iam DeleteRole", record: ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -720,7 +725,7 @@ func TestEvalRoleIsNotTheTenantRole(t *testing.T) {
 func TestEnsureEvalIdentity_NeedsNoGrantOnTheRootPathName(t *testing.T) {
 	ctx := context.Background()
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
-	f.absentReadsDenied = true
+	f.AbsentReadsDenied = true
 	p := storedPlatform(t, cl)
 
 	for pass := 1; pass <= 2; pass++ {
@@ -729,8 +734,8 @@ func TestEnsureEvalIdentity_NeedsNoGrantOnTheRootPathName(t *testing.T) {
 			t.Fatalf("pass %d: ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", pass, outcome, err)
 		}
 	}
-	if len(f.createCalls) != 1 || len(fe.createCalls) != 1 {
-		t.Errorf("CreateRole %d, CreatePodIdentityAssociation %d over two passes; want 1 each", len(f.createCalls), len(fe.createCalls))
+	if len(f.CreateCalls) != 1 || len(fe.CreateCalls) != 1 {
+		t.Errorf("CreateRole %d, CreatePodIdentityAssociation %d over two passes; want 1 each", len(f.CreateCalls), len(fe.CreateCalls))
 	}
 
 	for pass := 1; pass <= 2; pass++ {
@@ -738,7 +743,7 @@ func TestEnsureEvalIdentity_NeedsNoGrantOnTheRootPathName(t *testing.T) {
 			t.Fatalf("delete pass %d: %v", pass, err)
 		}
 	}
-	if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+	if _, ok := f.Roles["production-cluster-analytics-eval"]; ok {
 		t.Error("eval role still present")
 	}
 }
@@ -751,9 +756,9 @@ func TestDeleteEvalIdentity_ReleasesWhenNoRoleWasMinted(t *testing.T) {
 	for _, denied := range []bool{false, true} {
 		t.Run(fmt.Sprintf("absentReadsDenied=%v", denied), func(t *testing.T) {
 			r, f, _, _ := evalIdentityReconciler(t, nil)
-			f.absentReadsDenied = denied
-			f.listReturnsErr = errors.New("ListAttachedRolePolicies called for a role that is not there")
-			f.deleteReturnsErr = errors.New("DeleteRole called for a role that is not there")
+			f.AbsentReadsDenied = denied
+			f.ListReturnsErr = errors.New("ListAttachedRolePolicies called for a role that is not there")
+			f.DeleteReturnsErr = errors.New("DeleteRole called for a role that is not there")
 			if err := r.deleteEvalIdentity(context.Background(), newPlatform("analytics", "acme")); err != nil {
 				t.Errorf("deleteEvalIdentity: %v", err)
 			}
@@ -869,18 +874,18 @@ func TestEvalRoleNotInTheMintedShapeIsNeverHeld(t *testing.T) {
 			role.Arn = aws.String(evalTestRoleARN)
 			role.AssumeRolePolicyDocument = aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000000:root"},"Action":"sts:AssumeRole"}]}`)
 			c.vary(role)
-			f.roles[name] = role
-			f.inline[name] = map[string]string{"someone-elses": `{"Version":"2012-10-17","Statement":[]}`}
-			f.seedAttachment(name, "arn:aws:iam::aws:policy/ReadOnlyAccess")
+			f.Roles[name] = role
+			f.Inline[name] = map[string]string{"someone-elses": `{"Version":"2012-10-17","Statement":[]}`}
+			f.SeedAttachment(name, "arn:aws:iam::aws:policy/ReadOnlyAccess")
 			p := storedPlatform(t, cl)
 
 			outcome, err := r.ensureEvalIdentity(ctx, p)
 			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "only in the shape it creates one in") {
 				t.Fatalf("ensureEvalIdentity = (%v, %v), want a refusal naming %q", outcome, err, c.want)
 			}
-			if len(f.putInlineCalls) != 0 || len(f.updateAssumeCalls) != 0 || len(fe.createCalls) != 0 {
+			if len(f.PutInlineCalls) != 0 || len(f.UpdateAssumeCalls) != 0 || len(fe.CreateCalls) != 0 {
 				t.Errorf("wrote to or bound a role the operator does not hold: PutRolePolicy %d, UpdateAssumeRolePolicy %d, CreatePodIdentityAssociation %d",
-					len(f.putInlineCalls), len(f.updateAssumeCalls), len(fe.createCalls))
+					len(f.PutInlineCalls), len(f.UpdateAssumeCalls), len(fe.CreateCalls))
 			}
 			if got := storedEvalRoleArn(t, cl, p); got != "" || p.Status.EvalRoleArn != "" {
 				t.Errorf("status.evalRoleArn = %q (stored %q), want nothing recorded for a refused role", p.Status.EvalRoleArn, got)
@@ -889,11 +894,11 @@ func TestEvalRoleNotInTheMintedShapeIsNeverHeld(t *testing.T) {
 			if err := r.deleteEvalIdentity(ctx, p); err != nil {
 				t.Fatalf("deleteEvalIdentity: %v", err)
 			}
-			if _, ok := f.roles[name]; !ok {
+			if _, ok := f.Roles[name]; !ok {
 				t.Error("the finalizer deleted a role the operator does not hold")
 			}
-			if len(f.detachCalls) != 0 || len(f.deleteInlineCalls) != 0 {
-				t.Errorf("the finalizer stripped a role it does not hold: DetachRolePolicy %d, DeleteRolePolicy %d", len(f.detachCalls), len(f.deleteInlineCalls))
+			if len(f.DetachCalls) != 0 || len(f.DeleteInlineCalls) != 0 {
+				t.Errorf("the finalizer stripped a role it does not hold: DetachRolePolicy %d, DeleteRolePolicy %d", len(f.DetachCalls), len(f.DeleteInlineCalls))
 			}
 		})
 	}
@@ -910,26 +915,26 @@ func TestEnsureEvalRole_ConvergesTheTrustPolicy(t *testing.T) {
 	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(f.updateAssumeCalls); n != 0 {
+	if n := len(f.UpdateAssumeCalls); n != 0 {
 		t.Fatalf("UpdateAssumeRolePolicy calls = %d on the pass that created the role with its trust", n)
 	}
 
 	const name = "production-cluster-analytics-eval"
-	f.roles[name].AssumeRolePolicyDocument = aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000000:root"},"Action":"sts:AssumeRole"}]}`)
+	f.Roles[name].AssumeRolePolicyDocument = aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000000:root"},"Action":"sts:AssumeRole"}]}`)
 	outcome, err := r.ensureEvalIdentity(ctx, p)
 	if err != nil || outcome != evalIdentityBound {
 		t.Fatalf("ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
 	}
 	trust, _ := assumeRolePolicyForPodIdentity()
-	if len(f.updateAssumeCalls) != 1 || aws.ToString(f.updateAssumeCalls[0].RoleName) != name ||
-		aws.ToString(f.updateAssumeCalls[0].PolicyDocument) != trust {
-		t.Fatalf("UpdateAssumeRolePolicy calls = %+v, want one rewriting %s to the Pod Identity trust", f.updateAssumeCalls, name)
+	if len(f.UpdateAssumeCalls) != 1 || aws.ToString(f.UpdateAssumeCalls[0].RoleName) != name ||
+		aws.ToString(f.UpdateAssumeCalls[0].PolicyDocument) != trust {
+		t.Fatalf("UpdateAssumeRolePolicy calls = %+v, want one rewriting %s to the Pod Identity trust", f.UpdateAssumeCalls, name)
 	}
 
 	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(f.updateAssumeCalls); n != 1 {
+	if n := len(f.UpdateAssumeCalls); n != 1 {
 		t.Errorf("UpdateAssumeRolePolicy calls = %d after a pass over the converged trust, want 1", n)
 	}
 }
@@ -944,9 +949,9 @@ func TestEnsureEvalRole_TrustWriteFailureRecordsTheRole(t *testing.T) {
 	role := heldEvalRole(r.IAMCfg)
 	role.Arn = aws.String(evalTestRoleARN)
 	role.AssumeRolePolicyDocument = aws.String(`{"Version":"2012-10-17","Statement":[]}`)
-	f.roles[name] = role
+	f.Roles[name] = role
 	boom := errors.New("boom")
-	f.updateAssumeErr = boom
+	f.UpdateAssumeErr = boom
 	p := storedPlatform(t, cl)
 
 	outcome, err := r.ensureEvalIdentity(ctx, p)
@@ -956,11 +961,11 @@ func TestEnsureEvalRole_TrustWriteFailureRecordsTheRole(t *testing.T) {
 	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
 		t.Errorf("stored status.evalRoleArn = %q, want the held role %s recorded", got, evalTestRoleARN)
 	}
-	if len(fe.createCalls) != 0 {
+	if len(fe.CreateCalls) != 0 {
 		t.Error("bound the account to a role whose trust was not converged")
 	}
-	if len(f.createCalls) != 0 {
-		t.Errorf("CreateRole calls = %d; a held role is converged in place", len(f.createCalls))
+	if len(f.CreateCalls) != 0 {
+		t.Errorf("CreateRole calls = %d; a held role is converged in place", len(f.CreateCalls))
 	}
 }
 
@@ -970,8 +975,8 @@ func TestEnsureEvalRole_TrustWriteFailureRecordsTheRole(t *testing.T) {
 // both answers.
 func TestEnsureEvalRole_RefusesANameHeldOutOfSight(t *testing.T) {
 	r, f, fe, _ := evalIdentityReconciler(t, nil)
-	f.absentReadsDenied = true
-	f.createReturnsErr = &iamtypes.EntityAlreadyExistsException{Message: aws.String("Role with name production-cluster-analytics-eval already exists.")}
+	f.AbsentReadsDenied = true
+	f.CreateReturnsErr = &iamtypes.EntityAlreadyExistsException{Message: aws.String("Role with name production-cluster-analytics-eval already exists.")}
 
 	_, err := r.ensureEvalIdentity(context.Background(), newPlatform("analytics", "acme"))
 	var taken *iamtypes.EntityAlreadyExistsException
@@ -983,7 +988,7 @@ func TestEnsureEvalRole_RefusesANameHeldOutOfSight(t *testing.T) {
 			t.Errorf("error %q does not carry %q", err, want)
 		}
 	}
-	if len(fe.createCalls) != 0 {
+	if len(fe.CreateCalls) != 0 {
 		t.Error("bound the account to a role the operator could not read")
 	}
 }
@@ -1060,16 +1065,18 @@ func TestEnsureEvalIdentity_RecordsTheRoleItHolds(t *testing.T) {
 	boom := errors.New("boom")
 	cases := []struct {
 		name   string
-		inject func(*fakeIAM, *fakeEKS)
+		inject func(*awsfake.IAM, *awsfake.EKS)
 		want   string
 	}{
-		{"bound", func(*fakeIAM, *fakeEKS) {}, evalTestRoleARN},
-		{"policy write fails", func(f *fakeIAM, _ *fakeEKS) { f.putInlineReturnsErr = map[string]error{evalReportsPolicyName: boom} }, evalTestRoleARN},
-		{"association fails", func(_ *fakeIAM, fe *fakeEKS) { fe.createReturnsErr = boom }, evalTestRoleARN},
-		{"create fails", func(f *fakeIAM, _ *fakeEKS) { f.createReturnsErr = boom }, ""},
-		{"name held under another path", func(f *fakeIAM, _ *fakeEKS) {
-			f.seedRole("production-cluster-analytics-eval", "arn:aws:iam::123456789012:role/production-cluster-analytics-eval")
-			f.roles["production-cluster-analytics-eval"].Path = aws.String("/")
+		{"bound", func(*awsfake.IAM, *awsfake.EKS) {}, evalTestRoleARN},
+		{"policy write fails", func(f *awsfake.IAM, _ *awsfake.EKS) {
+			f.PutInlineReturnsErr = map[string]error{evalReportsPolicyName: boom}
+		}, evalTestRoleARN},
+		{"association fails", func(_ *awsfake.IAM, fe *awsfake.EKS) { fe.CreateReturnsErr = boom }, evalTestRoleARN},
+		{"create fails", func(f *awsfake.IAM, _ *awsfake.EKS) { f.CreateReturnsErr = boom }, ""},
+		{"name held under another path", func(f *awsfake.IAM, _ *awsfake.EKS) {
+			f.SeedRole("production-cluster-analytics-eval", "arn:aws:iam::123456789012:role/production-cluster-analytics-eval")
+			f.Roles["production-cluster-analytics-eval"].Path = aws.String("/")
 		}, ""},
 	}
 	for _, c := range cases {
@@ -1112,23 +1119,23 @@ func TestDeleteEvalRole_HoldsOnARefusedReadOfARecordedRole(t *testing.T) {
 	}
 	const role = "production-cluster-analytics-eval"
 
-	f.getReturnsErr = accessDenied(role)
+	f.GetReturnsErr = accessDenied(role)
 	err := r.deleteEvalIdentity(ctx, p)
 	if err == nil || !isIAMAccessDenied(err) || !strings.Contains(err.Error(), "status.evalRoleArn records "+evalTestRoleARN) {
 		t.Fatalf("deleteEvalIdentity = %v, want the refusal, naming the recorded role", err)
 	}
-	if _, ok := f.roles[role]; !ok || len(f.inline[role]) != 1 {
-		t.Errorf("the role or its policy was removed on a refused read: role present %v, inline %v", ok, f.inline[role])
+	if _, ok := f.Roles[role]; !ok || len(f.Inline[role]) != 1 {
+		t.Errorf("the role or its policy was removed on a refused read: role present %v, inline %v", ok, f.Inline[role])
 	}
 	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
 		t.Errorf("stored status.evalRoleArn = %q, want the record kept while the role is out of reach", got)
 	}
 
-	f.getReturnsErr = nil
+	f.GetReturnsErr = nil
 	if err := r.deleteEvalIdentity(ctx, p); err != nil {
 		t.Fatalf("deleteEvalIdentity once the role is readable: %v", err)
 	}
-	if _, ok := f.roles[role]; ok {
+	if _, ok := f.Roles[role]; ok {
 		t.Error("eval role survived a finalizer that could read it")
 	}
 }
@@ -1147,7 +1154,7 @@ func TestDeleteEvalRole_ClearsTheRecordBeforeDeletingTheRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f.deleteReturnsErr = errors.New("boom")
+	f.DeleteReturnsErr = errors.New("boom")
 	if err := r.deleteEvalIdentity(ctx, p); err == nil {
 		t.Fatal("deleteEvalIdentity reported success over a failed DeleteRole")
 	}
@@ -1158,11 +1165,11 @@ func TestDeleteEvalRole_ClearsTheRecordBeforeDeletingTheRole(t *testing.T) {
 		t.Errorf("stored status.evalNamespace = %q after the role was read; want it cleared with status.evalRoleArn", got)
 	}
 
-	f.deleteReturnsErr = nil
+	f.DeleteReturnsErr = nil
 	if err := r.deleteEvalIdentity(ctx, p); err != nil {
 		t.Fatalf("retried deleteEvalIdentity: %v", err)
 	}
-	if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+	if _, ok := f.Roles["production-cluster-analytics-eval"]; ok {
 		t.Error("eval role survived the retried finalizer")
 	}
 }
@@ -1174,7 +1181,7 @@ func TestDeleteEvalRole_ClearsTheRecordBeforeDeletingTheRole(t *testing.T) {
 func TestDeleteEvalRole_ARetriedFinalizerReleases(t *testing.T) {
 	ctx := context.Background()
 	r, f, _, cl := evalIdentityReconciler(t, nil)
-	f.absentReadsDenied = true
+	f.AbsentReadsDenied = true
 	p := storedPlatform(t, cl)
 	if _, err := r.ensureEvalIdentity(ctx, p); err != nil {
 		t.Fatal(err)
@@ -1202,14 +1209,14 @@ func TestDeleteEvalRole_ARetriedFinalizerReleases(t *testing.T) {
 func TestEnsureEvalIdentity_RebindsAnAssociationToAnotherRole(t *testing.T) {
 	ctx := context.Background()
 	r, _, fe, cl := evalIdentityReconciler(t, nil)
-	fe.seedAssociation(evalTestNamespace, "eval-analytics", "arn:aws:iam::123456789012:role/someone-else", "")
+	fe.SeedAssociation(evalTestNamespace, "eval-analytics", "arn:aws:iam::123456789012:role/someone-else", "")
 	p := storedPlatform(t, cl)
 
 	outcome, err := r.ensureEvalIdentity(ctx, p)
 	if err != nil || outcome != evalIdentityBound {
 		t.Fatalf("ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
 	}
-	if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != evalTestRoleARN {
+	if got := fe.RoleFor(evalTestNamespace, "eval-analytics"); got != evalTestRoleARN {
 		t.Errorf("evals/eval-analytics is bound to %q, want the eval role %s", got, evalTestRoleARN)
 	}
 }
@@ -1240,7 +1247,7 @@ func TestEnsureEvalIdentity_RecordWriteFailureBindsNothing(t *testing.T) {
 	if outcome == evalIdentityBound {
 		t.Error("a pass whose record write failed reported the identity bound")
 	}
-	if len(fe.createCalls) != 0 {
+	if len(fe.CreateCalls) != 0 {
 		t.Error("the role was bound to the account with no record of it on the API server")
 	}
 	if p.Status.EvalRoleArn != evalTestRoleARN {
@@ -1255,8 +1262,8 @@ func TestEnsureEvalIdentity_RecordWriteFailureBindsNothing(t *testing.T) {
 	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
 		t.Errorf("stored status.evalRoleArn = %q after the next pass, want %s", got, evalTestRoleARN)
 	}
-	if len(f.createCalls) != 1 {
-		t.Errorf("CreateRole calls = %d; the next pass records the role it finds rather than minting another", len(f.createCalls))
+	if len(f.CreateCalls) != 1 {
+		t.Errorf("CreateRole calls = %d; the next pass records the role it finds rather than minting another", len(f.CreateCalls))
 	}
 }
 
@@ -1311,7 +1318,7 @@ func TestEnsureEvalIdentity_ClosingStatusWriteLandsOnTheRecord(t *testing.T) {
 // operator cannot read, and the error says which.
 func TestEnsureEvalRole_NamesACreateRace(t *testing.T) {
 	r, f, fe, cl := evalIdentityReconciler(t, nil)
-	f.createReturnsErr = &iamtypes.EntityAlreadyExistsException{Message: aws.String("Role with name production-cluster-analytics-eval already exists.")}
+	f.CreateReturnsErr = &iamtypes.EntityAlreadyExistsException{Message: aws.String("Role with name production-cluster-analytics-eval already exists.")}
 
 	_, err := r.ensureEvalIdentity(context.Background(), storedPlatform(t, cl))
 	var taken *iamtypes.EntityAlreadyExistsException
@@ -1321,7 +1328,7 @@ func TestEnsureEvalRole_NamesACreateRace(t *testing.T) {
 	if !strings.Contains(err.Error(), "created after GetRole answered NoSuchEntity") || strings.Contains(err.Error(), "cannot read") {
 		t.Errorf("error %q does not name the create race, or claims a read was refused", err)
 	}
-	if len(fe.createCalls) != 0 {
+	if len(fe.CreateCalls) != 0 {
 		t.Error("bound the account to a role the pass did not hold")
 	}
 }
@@ -1346,11 +1353,11 @@ func TestDeleteEvalIdentity_TearsDownARecordedRoleOnceTheRuntimeIsUnconfigured(t
 	if err := r.deleteEvalIdentity(ctx, refetched(t, cl, p)); err != nil {
 		t.Fatalf("deleteEvalIdentity: %v", err)
 	}
-	if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+	if _, ok := f.Roles["production-cluster-analytics-eval"]; ok {
 		t.Error("the recorded eval role survived its Platform")
 	}
-	if len(fe.associations) != 0 {
-		t.Errorf("associations left behind: %v", fe.associations)
+	if len(fe.Associations) != 0 {
+		t.Errorf("associations left behind: %v", fe.Associations)
 	}
 	if err := cl.Get(ctx, types.NamespacedName{Namespace: evalTestNamespace, Name: "eval-analytics"}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
 		t.Errorf("eval ServiceAccount still present (err=%v)", err)
@@ -1371,14 +1378,14 @@ func TestDeleteEvalIdentity_HoldsARecordedRoleWithNoClientToRemoveIt(t *testing.
 			}
 			p := newPlatform("analytics", "acme")
 			p.Status.EvalRoleArn = evalTestRoleARN
-			f.seedRole("production-cluster-analytics-eval", evalTestRoleARN)
+			f.SeedRole("production-cluster-analytics-eval", evalTestRoleARN)
 
 			err := r.deleteEvalIdentity(context.Background(), p)
 			if err == nil || !strings.Contains(err.Error(), "status.evalRoleArn records eval role "+evalTestRoleARN) ||
 				!strings.Contains(err.Error(), "the finalizer holds") {
 				t.Fatalf("deleteEvalIdentity = %v, want the finalizer held on the recorded role", err)
 			}
-			if _, ok := f.roles["production-cluster-analytics-eval"]; !ok {
+			if _, ok := f.Roles["production-cluster-analytics-eval"]; !ok {
 				t.Error("the recorded role was removed by a reconciler reporting it could not")
 			}
 		})
@@ -1589,11 +1596,11 @@ func TestDeleteEvalIdentity_TearsDownWhereTheRecordSays(t *testing.T) {
 			if err := r.deleteEvalIdentity(ctx, refetched(t, cl, p)); err != nil {
 				t.Fatalf("deleteEvalIdentity: %v", err)
 			}
-			if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != "" {
+			if got := fe.RoleFor(evalTestNamespace, "eval-analytics"); got != "" {
 				t.Errorf("the association in the recorded namespace %s still binds %s", evalTestNamespace, got)
 			}
-			if len(fe.associations) != 0 {
-				t.Errorf("associations left behind: %v", fe.associations)
+			if len(fe.Associations) != 0 {
+				t.Errorf("associations left behind: %v", fe.Associations)
 			}
 			for _, ns := range []string{evalTestNamespace, c.unrecorded} {
 				if ns != "" && evalAccountExists(t, cl, ns) {
@@ -1603,7 +1610,7 @@ func TestDeleteEvalIdentity_TearsDownWhereTheRecordSays(t *testing.T) {
 			if !suspended(t, cl, evalTestNamespace, "acme-nightly") {
 				t.Error("the schedule in the recorded namespace was left running")
 			}
-			if _, ok := f.roles["production-cluster-analytics-eval"]; ok {
+			if _, ok := f.Roles["production-cluster-analytics-eval"]; ok {
 				t.Error("eval role still present")
 			}
 		})
@@ -1663,10 +1670,10 @@ func TestEnsureEvalIdentity_MovesTheIdentityWithTheRuntimeNamespace(t *testing.T
 	if err != nil || outcome != evalIdentityBound {
 		t.Fatalf("ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
 	}
-	if got := fe.roleFor(moved, "eval-analytics"); got != evalTestRoleARN {
+	if got := fe.RoleFor(moved, "eval-analytics"); got != evalTestRoleARN {
 		t.Errorf("%s/eval-analytics is bound to %q, want %s", moved, got, evalTestRoleARN)
 	}
-	if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != "" {
+	if got := fe.RoleFor(evalTestNamespace, "eval-analytics"); got != "" {
 		t.Errorf("the association in the namespace the identity moved out of still binds %s", got)
 	}
 	if evalAccountExists(t, cl, evalTestNamespace) {
@@ -1684,8 +1691,8 @@ func TestEnsureEvalIdentity_MovesTheIdentityWithTheRuntimeNamespace(t *testing.T
 	if got := storedEvalRoleArn(t, cl, p); got != evalTestRoleARN {
 		t.Errorf("stored status.evalRoleArn = %q, want %s", got, evalTestRoleARN)
 	}
-	if len(f.createCalls) != 1 {
-		t.Errorf("CreateRole calls = %d; the role is the same across the move", len(f.createCalls))
+	if len(f.CreateCalls) != 1 {
+		t.Errorf("CreateRole calls = %d; the role is the same across the move", len(f.CreateCalls))
 	}
 }
 
@@ -1704,7 +1711,7 @@ func TestEnsureEvalIdentity_KeepsTheRecordUntilTheMovedAccountIsGone(t *testing.
 	}
 
 	r.Eval.Namespace = moved
-	fe.deleteReturnsErr = boom
+	fe.DeleteReturnsErr = boom
 	next := refetched(t, cl, p)
 	outcome, err := r.ensureEvalIdentity(ctx, next)
 	if !errors.Is(err, boom) || outcome == evalIdentityBound {
@@ -1713,15 +1720,15 @@ func TestEnsureEvalIdentity_KeepsTheRecordUntilTheMovedAccountIsGone(t *testing.
 	if got := storedEvalNamespace(t, cl, p); got != evalTestNamespace || next.Status.EvalNamespace != evalTestNamespace {
 		t.Errorf("status.evalNamespace = %q (stored %q), want %s kept while its association is there", next.Status.EvalNamespace, got, evalTestNamespace)
 	}
-	if got := fe.roleFor(moved, "eval-analytics"); got != "" {
+	if got := fe.RoleFor(moved, "eval-analytics"); got != "" {
 		t.Errorf("bound %s in %s before the recorded namespace was cleared", got, moved)
 	}
 
-	fe.deleteReturnsErr = nil
+	fe.DeleteReturnsErr = nil
 	if outcome, err := r.ensureEvalIdentity(ctx, refetched(t, cl, p)); err != nil || outcome != evalIdentityBound {
 		t.Fatalf("next pass: ensureEvalIdentity = (%v, %v), want (evalIdentityBound, nil)", outcome, err)
 	}
-	if got := fe.roleFor(evalTestNamespace, "eval-analytics"); got != "" {
+	if got := fe.RoleFor(evalTestNamespace, "eval-analytics"); got != "" {
 		t.Errorf("the association in %s still binds %s after the next pass", evalTestNamespace, got)
 	}
 	if got := storedEvalNamespace(t, cl, p); got != moved {
