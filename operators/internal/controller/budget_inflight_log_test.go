@@ -21,6 +21,7 @@ import (
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // recordedError captures one logr.Error call for assertion.
@@ -68,7 +69,7 @@ func TestReconcileBudget_InflightFailureIsLogged(t *testing.T) {
 	// Athena unset (dev path → CUR spend 0); CloudWatch errors so the in-flight
 	// branch fires.
 	cwErr := errors.New("cloudwatch throttled")
-	r := &BudgetReconciler{Client: cl, CloudWatch: &fakeCloudWatch{err: cwErr}, RequeueInterval: time.Hour, ClusterName: "staging-platform"}
+	r := &BudgetReconciler{Client: cl, CloudWatch: &awsfake.CloudWatch{Err: cwErr}, RequeueInterval: time.Hour, ClusterName: "staging-platform"}
 
 	var captured []recordedError
 	ctx := log.IntoContext(context.Background(), logr.New(recordingSink{errs: &captured}))

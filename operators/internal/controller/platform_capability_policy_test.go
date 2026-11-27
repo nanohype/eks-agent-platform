@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/tools/events"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // platformWithCapabilities builds a Platform declaring the given capabilities
@@ -375,8 +376,8 @@ func TestResolveSESDomain_NoLookupPossible(t *testing.T) {
 // tenant and the policy would still be written — a converged-looking reconcile
 // over a grant that had been revoked by accident.
 func TestEnsureCapabilityPolicy_SESLookupFailurePropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("ssm unavailable")}}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
@@ -584,8 +585,8 @@ func TestTenantQueueResources(t *testing.T) {
 // TestEnsureCapabilityPolicy_SESWritesAndConverges proves the ses reconcile
 // writes the capability-access policy once and no-ops on a converged re-run.
 func TestEnsureCapabilityPolicy_SESWritesAndConverges(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES)
 
@@ -611,8 +612,8 @@ func TestEnsureCapabilityPolicy_SESWritesAndConverges(t *testing.T) {
 // TestEnsureCapabilityPolicy_RemovesWhenEmpty proves a Platform with no
 // capability has the capability-access policy removed.
 func TestEnsureCapabilityPolicy_RemovesWhenEmpty(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f}
 
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
@@ -640,8 +641,8 @@ func TestEnsureCapabilityPolicy_NilIAM(t *testing.T) {
 // capability mints the -scheduler-invoke role (boundaried) with a SendMessage
 // policy scoped to the tenant's own queue datastores.
 func TestEnsureCapabilityPolicy_SchedulerMintsInvokeRole(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f}
 	cfg := capCfg()
 	cfg.TenantPermissionsBoundaryARN = "arn:aws:iam::123456789012:policy/tenant-boundary"
@@ -651,13 +652,13 @@ func TestEnsureCapabilityPolicy_SchedulerMintsInvokeRole(t *testing.T) {
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, p, cfg); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
-	if len(f.createCalls) != 1 || *f.createCalls[0].RoleName != invokeRoleName {
-		t.Fatalf("expected the scheduler-invoke role to be created: %+v", f.createCalls)
+	if len(f.CreateCalls) != 1 || *f.CreateCalls[0].RoleName != invokeRoleName {
+		t.Fatalf("expected the scheduler-invoke role to be created: %+v", f.CreateCalls)
 	}
-	if f.createCalls[0].PermissionsBoundary == nil {
+	if f.CreateCalls[0].PermissionsBoundary == nil {
 		t.Errorf("the invoke role must carry the tenant permissions boundary")
 	}
-	if !strings.Contains(*f.createCalls[0].AssumeRolePolicyDocument, "scheduler.amazonaws.com") {
+	if !strings.Contains(*f.CreateCalls[0].AssumeRolePolicyDocument, "scheduler.amazonaws.com") {
 		t.Errorf("the invoke role must be trusted by the Scheduler service")
 	}
 	send := putsFor(f, schedulerInvokeSendPolicyName)
@@ -735,8 +736,8 @@ func TestSchedulerInvokeTrustPolicy(t *testing.T) {
 // scheduler capability without any queue datastore mints the role but removes
 // the (absent) send policy rather than writing an empty one.
 func TestEnsureCapabilityPolicy_SchedulerNoQueueRemovesSendPolicy(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	r := &PlatformReconciler{IAM: f}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
 
@@ -754,16 +755,16 @@ func TestEnsureCapabilityPolicy_SchedulerNoQueueRemovesSendPolicy(t *testing.T) 
 // TestEnsureCapabilityPolicy_SchedulerRemovedDeletesInvokeRole proves dropping
 // the scheduler capability tears down the invoke role.
 func TestEnsureCapabilityPolicy_SchedulerRemovedDeletesInvokeRole(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
 	invoke := invokeRoleName
-	f.seedRole(invoke, "arn:aws:iam::123456789012:role/"+invoke)
+	f.SeedRole(invoke, "arn:aws:iam::123456789012:role/"+invoke)
 	r := &PlatformReconciler{IAM: f}
 
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN, platformWithCapabilities("myplat"), capCfg()); err != nil {
 		t.Fatalf("ensureCapabilityPolicy: %v", err)
 	}
-	if _, ok := f.roles[invoke]; ok {
+	if _, ok := f.Roles[invoke]; ok {
 		t.Errorf("dropping the scheduler capability must delete the invoke role")
 	}
 }
@@ -771,9 +772,9 @@ func TestEnsureCapabilityPolicy_SchedulerRemovedDeletesInvokeRole(t *testing.T) 
 // TestEnsureCapabilityPolicy_GetErrorPropagates proves a non-NotFound
 // GetRolePolicy failure on the capability-access reconcile surfaces.
 func TestEnsureCapabilityPolicy_GetErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
-	f.getInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
+	f.GetInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
@@ -784,9 +785,9 @@ func TestEnsureCapabilityPolicy_GetErrorPropagates(t *testing.T) {
 // TestEnsureCapabilityPolicy_PutErrorPropagates proves a PutRolePolicy failure
 // on the capability-access write surfaces.
 func TestEnsureCapabilityPolicy_PutErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
-	f.putInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
+	f.PutInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(capClusterName, "myplat")}
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilitySES), capCfg()); err == nil {
@@ -797,10 +798,10 @@ func TestEnsureCapabilityPolicy_PutErrorPropagates(t *testing.T) {
 // TestEnsureCapabilityPolicy_DeleteErrorPropagates proves a non-NotFound
 // DeleteRolePolicy failure on the capability-access removal path surfaces.
 func TestEnsureCapabilityPolicy_DeleteErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
-	f.inline["test-role"] = map[string]string{capabilityPolicyName: "{}"}
-	f.deleteInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
+	f.Inline["test-role"] = map[string]string{capabilityPolicyName: "{}"}
+	f.DeleteInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat"), capCfg()); err == nil {
@@ -811,9 +812,9 @@ func TestEnsureCapabilityPolicy_DeleteErrorPropagates(t *testing.T) {
 // TestEnsureCapabilityPolicy_InvokeRoleGetErrorPropagates proves a non-NotFound
 // GetRole failure while ensuring the invoke role surfaces.
 func TestEnsureCapabilityPolicy_InvokeRoleGetErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
-	f.getReturnsErr = errors.New("boom")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
+	f.GetReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), capCfg()); err == nil {
@@ -824,9 +825,9 @@ func TestEnsureCapabilityPolicy_InvokeRoleGetErrorPropagates(t *testing.T) {
 // TestEnsureCapabilityPolicy_InvokeRoleCreateErrorPropagates proves a
 // CreateRole failure while minting the invoke role surfaces.
 func TestEnsureCapabilityPolicy_InvokeRoleCreateErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
-	f.createReturnsErr = errors.New("boom")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
+	f.CreateReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler), capCfg()); err == nil {
@@ -837,9 +838,9 @@ func TestEnsureCapabilityPolicy_InvokeRoleCreateErrorPropagates(t *testing.T) {
 // TestEnsureCapabilityPolicy_InvokeRoleDeleteErrorPropagates proves a failure
 // tearing down the invoke role (capability dropped) surfaces.
 func TestEnsureCapabilityPolicy_InvokeRoleDeleteErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", capRoleARN)
-	f.listReturnsErr = errors.New("boom")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", capRoleARN)
+	f.ListReturnsErr = errors.New("boom")
 	r := &PlatformReconciler{IAM: f}
 	if _, err := r.ensureCapabilityPolicy(context.Background(), "test-role", capRoleARN,
 		platformWithCapabilities("myplat"), capCfg()); err == nil {
@@ -850,9 +851,9 @@ func TestEnsureCapabilityPolicy_InvokeRoleDeleteErrorPropagates(t *testing.T) {
 // TestEnsureSchedulerInvokeRole_ExistingRoleSkipsCreate proves an existing
 // invoke role is not re-created, only its send policy reconciled.
 func TestEnsureSchedulerInvokeRole_ExistingRoleSkipsCreate(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	invoke := invokeRoleName
-	f.seedRole(invoke, "arn:aws:iam::123456789012:role/"+invoke)
+	f.SeedRole(invoke, "arn:aws:iam::123456789012:role/"+invoke)
 	r := &PlatformReconciler{IAM: f}
 	p := platformWithCapabilities("myplat", platformv1alpha1.CapabilityEventBridgeScheduler)
 	p.Spec.Datastores = []platformv1alpha1.DatastoreSpec{{Name: "nudges", Kind: platformv1alpha1.DatastoreQueue}}
@@ -860,8 +861,8 @@ func TestEnsureSchedulerInvokeRole_ExistingRoleSkipsCreate(t *testing.T) {
 	if err := r.ensureSchedulerInvokeRole(context.Background(), p, capCfg(), testScope()); err != nil {
 		t.Fatalf("ensureSchedulerInvokeRole: %v", err)
 	}
-	if len(f.createCalls) != 0 {
-		t.Errorf("an existing invoke role must not be re-created: %+v", f.createCalls)
+	if len(f.CreateCalls) != 0 {
+		t.Errorf("an existing invoke role must not be re-created: %+v", f.CreateCalls)
 	}
 	if len(putsFor(f, schedulerInvokeSendPolicyName)) != 1 {
 		t.Errorf("the send policy must still be reconciled on an existing role")
@@ -880,8 +881,8 @@ func TestDeleteSchedulerInvokeRole_NilIAM(t *testing.T) {
 // TestEnsureIamRole_CapabilityPolicyError_CreatePath proves ensureIamRole
 // propagates a capability-policy failure on the create path.
 func TestEnsureIamRole_CapabilityPolicyError_CreatePath(t *testing.T) {
-	f := newFakeIAM()
-	f.putInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.PutInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f, SSM: boundSES("production-cluster", "app")}
 	p := newPlatform("app", "tenant")
 	p.Spec.Identity.Capabilities = []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES}
@@ -894,15 +895,15 @@ func TestEnsureIamRole_CapabilityPolicyError_CreatePath(t *testing.T) {
 // TestEnsureIamRole_CapabilityPolicyError_ExistingRolePath proves the same on
 // the existing-role path.
 func TestEnsureIamRole_CapabilityPolicyError_ExistingRolePath(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	cfg := datastoreErrCfg()
 	r := &PlatformReconciler{IAM: f, SSM: boundSES(cfg.ClusterName, "app")}
 	p := newPlatform("app", "tenant")
 	p.Spec.Identity.Capabilities = []platformv1alpha1.Capability{platformv1alpha1.CapabilitySES}
 
 	roleName := tenantRoleName(cfg.ClusterName, p)
-	f.seedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
-	f.putInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
+	f.SeedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
+	f.PutInlineReturnsErr = map[string]error{capabilityPolicyName: errors.New("boom")}
 
 	if _, err := r.ensureIamRole(context.Background(), p, cfg); err == nil {
 		t.Fatalf("expected ensureIamRole to propagate the capability-policy error on the existing-role path")
@@ -913,8 +914,8 @@ func TestEnsureIamRole_CapabilityPolicyError_ExistingRolePath(t *testing.T) {
 // surfaces a failure tearing down the scheduler-invoke role rather than
 // silently deleting the tenant role and leaving the invoke role orphaned.
 func TestDeleteIamRole_SchedulerInvokeCleanupErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.listReturnsErr = errors.New("boom") // fails the invoke-role detachAndDeleteRole
+	f := awsfake.NewIAM()
+	f.ListReturnsErr = errors.New("boom") // fails the invoke-role detachAndDeleteRole
 	r := &PlatformReconciler{IAM: f}      // EKS nil -> pod-identity delete no-ops first
 	p := newPlatform("app", "tenant")
 
@@ -924,11 +925,11 @@ func TestDeleteIamRole_SchedulerInvokeCleanupErrorPropagates(t *testing.T) {
 }
 
 // putsFor returns the PutRolePolicy calls for a given inline-policy name.
-func putsFor(f *fakeIAM, policyName string) []iamPut {
+func putsFor(f *awsfake.IAM, policyName string) []iamPut {
 	var out []iamPut
-	for i := range f.putInlineCalls {
-		if *f.putInlineCalls[i].PolicyName == policyName {
-			out = append(out, iamPut{f.putInlineCalls[i].PolicyName, f.putInlineCalls[i].PolicyDocument})
+	for i := range f.PutInlineCalls {
+		if *f.PutInlineCalls[i].PolicyName == policyName {
+			out = append(out, iamPut{f.PutInlineCalls[i].PolicyName, f.PutInlineCalls[i].PolicyDocument})
 		}
 	}
 	return out
@@ -940,9 +941,9 @@ type iamPut struct {
 }
 
 // deletedInline reports whether a DeleteRolePolicy was issued for a policy name.
-func deletedInline(f *fakeIAM, policyName string) bool {
-	for i := range f.deleteInlineCalls {
-		if *f.deleteInlineCalls[i].PolicyName == policyName {
+func deletedInline(f *awsfake.IAM, policyName string) bool {
+	for i := range f.DeleteInlineCalls {
+		if *f.DeleteInlineCalls[i].PolicyName == policyName {
 			return true
 		}
 	}

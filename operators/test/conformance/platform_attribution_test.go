@@ -19,6 +19,7 @@ import (
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 const attributedOperator = "alice@example.com"
@@ -67,7 +68,7 @@ func TestPlatformReconciler_AttributionGrantIsRevokedWhenRemoved(t *testing.T) {
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	iamFake := newMemIAM()
+	iamFake := awsfake.NewIAM()
 	r := newScopingReconciler(iamFake)
 	p := attributedScopingPlatform(ctx, t)
 	reconcileIAM(ctx, t, r, p)
@@ -92,7 +93,7 @@ func TestPlatformReconciler_AttributionGrantIsRevokedWhenRemoved(t *testing.T) {
 	if sessionARN == "" {
 		t.Fatal("status.sessionRoleArn is empty after a pass that declared attribution")
 	}
-	if !iamFake.hasRole(roleNameFromARN(sessionARN)) {
+	if !iamFake.HasRole(roleNameFromARN(sessionARN)) {
 		t.Fatalf("session role %s was not minted", sessionARN)
 	}
 
@@ -112,7 +113,7 @@ func TestPlatformReconciler_AttributionGrantIsRevokedWhenRemoved(t *testing.T) {
 	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.SessionRoleArn; got != "" {
 		t.Errorf("status.sessionRoleArn = %q after attribution was removed, want empty", got)
 	}
-	if iamFake.hasRole(roleNameFromARN(sessionARN)) {
+	if iamFake.HasRole(roleNameFromARN(sessionARN)) {
 		t.Errorf("session role %s survived the removal of attribution", sessionARN)
 	}
 }

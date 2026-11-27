@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	crconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -412,6 +413,7 @@ func main() {
 			ClusterName:              clusterName,
 			KillSwitchGraceIntervals: killSwitchGraceIntervals,
 			KillSwitchMaxRefires:     killSwitchMaxRefires,
+			Clock:                    clock.RealClock{},
 		}
 		if awsClients != nil {
 			budgetReconciler.Athena = awsClients.Athena

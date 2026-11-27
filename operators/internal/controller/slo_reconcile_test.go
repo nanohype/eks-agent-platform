@@ -15,8 +15,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -28,6 +26,7 @@ import (
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // exprWindowRE pulls the range window back out of a generated query so the fake
@@ -119,7 +118,7 @@ func appProjectWithHold(held bool) *unstructured.Unstructured {
 
 type sloHarness struct {
 	r  *SLOReconciler
-	eb *fakeEventBridge
+	eb *awsfake.EventBridge
 	sp *governancev1alpha1.SLOPolicy
 }
 
@@ -132,7 +131,7 @@ func newSLOHarness(t *testing.T, ratios map[string]float64, objs ...client.Objec
 		WithObjects(all...).
 		WithStatusSubresource(sp).
 		Build()
-	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{}}
+	eb := awsfake.NewEventBridge()
 	r := &SLOReconciler{
 		Client:                 cl,
 		EventBridge:            eb,
@@ -187,8 +186,8 @@ func TestReconcileSLO_HealthyPublishesNothingAndHoldsNothing(t *testing.T) {
 	if reading.severity != "" {
 		t.Errorf("severity = %q, want healthy", reading.severity)
 	}
-	if len(h.eb.calls) != 0 {
-		t.Errorf("a healthy objective must publish nothing, got %d events", len(h.eb.calls))
+	if len(h.eb.Calls) != 0 {
+		t.Errorf("a healthy objective must publish nothing, got %d events", len(h.eb.Calls))
 	}
 	if h.sp.Status.HoldEngagedAt != nil {
 		t.Error("a healthy objective must not engage a hold")
@@ -213,10 +212,10 @@ func TestReconcileSLO_PageBurnPublishesAndEngagesTheHold(t *testing.T) {
 	if reading.severity != severityCritical {
 		t.Fatalf("severity = %q, want critical", reading.severity)
 	}
-	if len(h.eb.calls) != 1 {
-		t.Fatalf("want exactly one published breach, got %d", len(h.eb.calls))
+	if len(h.eb.Calls) != 1 {
+		t.Fatalf("want exactly one published breach, got %d", len(h.eb.Calls))
 	}
-	entry := h.eb.calls[0].Entries[0]
+	entry := h.eb.Calls[0].Entries[0]
 	if got := aws.ToString(entry.Source); got != sloEventSource {
 		t.Errorf("event source = %q, want %q", got, sloEventSource)
 	}
@@ -243,12 +242,12 @@ func TestReconcileSLO_PageBurnPublishesAndEngagesTheHold(t *testing.T) {
 func TestReconcileSLO_SteadyBreachDoesNotRepublish(t *testing.T) {
 	h := newSLOHarness(t, burningRatios())
 	h.run(t)
-	if len(h.eb.calls) != 1 {
-		t.Fatalf("first tick should publish once, got %d", len(h.eb.calls))
+	if len(h.eb.Calls) != 1 {
+		t.Fatalf("first tick should publish once, got %d", len(h.eb.Calls))
 	}
 	h.run(t)
-	if len(h.eb.calls) != 1 {
-		t.Errorf("a steady-state breach must not re-publish; got %d events", len(h.eb.calls))
+	if len(h.eb.Calls) != 1 {
+		t.Errorf("a steady-state breach must not re-publish; got %d events", len(h.eb.Calls))
 	}
 }
 
@@ -261,8 +260,8 @@ func TestReconcileSLO_SeverityEscalationRepublishes(t *testing.T) {
 	if h.sp.Status.Severity != severityWarning {
 		t.Fatalf("first tick severity = %q, want warning", h.sp.Status.Severity)
 	}
-	if len(h.eb.calls) != 1 {
-		t.Fatalf("a ticket-tier breach must publish once, got %d", len(h.eb.calls))
+	if len(h.eb.Calls) != 1 {
+		t.Fatalf("a ticket-tier breach must publish once, got %d", len(h.eb.Calls))
 	}
 
 	h.r.Prometheus = &fakePrometheus{byWindow: burningRatios()}
@@ -270,8 +269,8 @@ func TestReconcileSLO_SeverityEscalationRepublishes(t *testing.T) {
 	if h.sp.Status.Severity != severityCritical {
 		t.Fatalf("second tick severity = %q, want critical", h.sp.Status.Severity)
 	}
-	if len(h.eb.calls) != 2 {
-		t.Errorf("escalating warning→critical must publish again; got %d events", len(h.eb.calls))
+	if len(h.eb.Calls) != 2 {
+		t.Errorf("escalating warning→critical must publish again; got %d events", len(h.eb.Calls))
 	}
 }
 
@@ -338,8 +337,8 @@ func TestReconcileSLO_HoldRolloutCanBeDeclined(t *testing.T) {
 	h.sp.Spec.OnPageTierBreach = "None"
 	h.run(t)
 
-	if len(h.eb.calls) != 1 {
-		t.Errorf("declining the hold must not suppress the page; got %d events", len(h.eb.calls))
+	if len(h.eb.Calls) != 1 {
+		t.Errorf("declining the hold must not suppress the page; got %d events", len(h.eb.Calls))
 	}
 	if h.sp.Status.HoldEngagedAt != nil {
 		t.Error("OnPageTierBreach=None must not engage a hold")
@@ -417,12 +416,8 @@ func TestReconcileSLO_DanglingPlatformRef(t *testing.T) {
 // PutEvents answers 200 even when the entry failed. Treating that as success
 // would drop a page silently.
 func TestFireBurnRateBreach_PartialFailureIsAnError(t *testing.T) {
-	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{
-		FailedEntryCount: 1,
-		Entries: []ebtypes.PutEventsResultEntry{{
-			ErrorCode:    aws.String("ThrottlingException"),
-			ErrorMessage: aws.String("rate exceeded"),
-		}},
+	eb := &awsfake.EventBridge{EntryFailures: map[int]awsfake.EntryFailure{
+		0: {Code: "ThrottlingException", Message: "rate exceeded"},
 	}}
 	r := &SLOReconciler{EventBridge: eb, KillSwitchEventBusName: "acme-killswitch"}
 	reading := sloReading{eval: burnEvaluation{severity: severityCritical, pageRatio: 2, breachedWindow: "1h"}}

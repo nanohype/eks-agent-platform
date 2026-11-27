@@ -47,6 +47,7 @@ operators/
 ├── cmd/                          # manager + agentctl entrypoints
 ├── config/                       # kustomize bases (generated)
 ├── test/conformance/             # envtest reconciler suite
+├── test/awsfake/                 # strict in-memory AWS clients shared by the unit and envtest suites
 ├── hack/                         # boilerplate + crd-ref-docs config
 ├── Dockerfile                    # distroless, nonroot
 ├── Makefile

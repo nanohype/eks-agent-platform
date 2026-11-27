@@ -19,6 +19,7 @@ import (
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // TestPlatformReconciler_PublishesTheGatewayIdentityTheModelGatewayWaitsOn
@@ -37,8 +38,8 @@ func TestPlatformReconciler_PublishesTheGatewayIdentityTheModelGatewayWaitsOn(t 
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	eksFake := newMemEKS()
-	r := newScopingReconciler(newMemIAM())
+	eksFake := awsfake.NewEKS()
+	r := newScopingReconciler(awsfake.NewIAM())
 	r.EKS = eksFake
 	p := scopingPlatform(ctx, t, platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"anthropic"}})
 	reconcileIAM(ctx, t, r, p)
@@ -68,7 +69,7 @@ func TestPlatformReconciler_PublishesTheGatewayIdentityTheModelGatewayWaitsOn(t 
 	if *gw != want {
 		t.Errorf("status.gatewayPodIdentity: got %+v want %+v", *gw, want)
 	}
-	if role, ok := eksFake.roleFor(tenantNS, gatewaySA); !ok || role != got.Status.IamRoleArn {
+	if role, ok := eksFake.BoundRole(tenantNS, gatewaySA); !ok || role != got.Status.IamRoleArn {
 		t.Errorf("EKS association for %s/%s: got (%q, %v) want the tenant role %q", tenantNS, gatewaySA, role, ok, got.Status.IamRoleArn)
 	}
 

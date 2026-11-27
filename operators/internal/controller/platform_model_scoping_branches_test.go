@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // platform_model_scoping.go generates the explicit-Deny document that is the
@@ -139,7 +140,7 @@ func TestEnsureModelScopingPolicyErrorBranches(t *testing.T) {
 	})
 
 	t.Run("an unknown model family fails the reconcile", func(t *testing.T) {
-		r := &PlatformReconciler{IAM: newFakeIAM()}
+		r := &PlatformReconciler{IAM: awsfake.NewIAM()}
 		err := r.ensureModelScopingPolicy(ctx, roleName, roleARN,
 			platformv1alpha1.IdentitySpec{AllowedModelFamilies: []string{"nonesuch"}}, cfg)
 		if err == nil || !strings.Contains(err.Error(), "expand allowed models") {
@@ -151,23 +152,23 @@ func TestEnsureModelScopingPolicyErrorBranches(t *testing.T) {
 		// NoSuchEntity means "write it"; anything else means the current
 		// document is unknown, and writing over an unknown document could
 		// replace a narrower policy with a wider one.
-		f := newFakeIAM()
-		f.seedRole(roleName, roleARN)
-		f.getInlineReturnsErr = map[string]error{modelScopingPolicyName: errors.New("throttled")}
+		f := awsfake.NewIAM()
+		f.SeedRole(roleName, roleARN)
+		f.GetInlineReturnsErr = map[string]error{modelScopingPolicyName: errors.New("throttled")}
 		r := &PlatformReconciler{IAM: f}
 		err := r.ensureModelScopingPolicy(ctx, roleName, roleARN, scoped, cfg)
 		if err == nil || !strings.Contains(err.Error(), "GetRolePolicy") {
 			t.Errorf("hard read error: got %v, want it surfaced", err)
 		}
-		if len(f.putInlineCalls) != 0 {
+		if len(f.PutInlineCalls) != 0 {
 			t.Error("a failed read still wrote the policy")
 		}
 	})
 
 	t.Run("a PutRolePolicy failure is returned", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole(roleName, roleARN)
-		f.putInlineReturnsErr = map[string]error{modelScopingPolicyName: errors.New("limit exceeded")}
+		f := awsfake.NewIAM()
+		f.SeedRole(roleName, roleARN)
+		f.PutInlineReturnsErr = map[string]error{modelScopingPolicyName: errors.New("limit exceeded")}
 		r := &PlatformReconciler{IAM: f}
 		err := r.ensureModelScopingPolicy(ctx, roleName, roleARN, scoped, cfg)
 		if err == nil || !strings.Contains(err.Error(), "PutRolePolicy") {
@@ -194,10 +195,10 @@ func TestDeleteInlinePoliciesSurfacesADeleteFailure(t *testing.T) {
 	// on a role the operator is about to try to delete, and role deletion fails
 	// with a message about the policy rather than about the delete.
 	const roleName = "development-platform-app-tenant"
-	f := newFakeIAM()
-	f.seedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
-	f.inline[roleName] = map[string]string{modelScopingPolicyName: `{"Version":"2012-10-17"}`}
-	f.deleteInlineReturnsErr = map[string]error{modelScopingPolicyName: errors.New("throttled")}
+	f := awsfake.NewIAM()
+	f.SeedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
+	f.Inline[roleName] = map[string]string{modelScopingPolicyName: `{"Version":"2012-10-17"}`}
+	f.DeleteInlineReturnsErr = map[string]error{modelScopingPolicyName: errors.New("throttled")}
 
 	r := &PlatformReconciler{IAM: f}
 	err := r.deleteInlinePolicies(context.Background(), roleName)
@@ -211,20 +212,36 @@ func TestDeleteInlinePoliciesFollowsPagination(t *testing.T) {
 	// only the first page — leaving inline policies on a role whose Platform is
 	// gone, which is a grant outliving the thing that justified it.
 	const roleName = "development-platform-app-tenant"
-	f := newFakeIAM()
-	f.seedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
-	f.inline[roleName] = map[string]string{
+	f := awsfake.NewIAM()
+	f.SeedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
+	f.Inline[roleName] = map[string]string{
 		modelScopingPolicyName: `{"Version":"2012-10-17"}`,
 		"datastore-access":     `{"Version":"2012-10-17"}`,
 		"capability-access":    `{"Version":"2012-10-17"}`,
 	}
-	f.inlinePageSize = 1
+	f.InlinePageSize = 1
 
 	r := &PlatformReconciler{IAM: f}
 	if err := r.deleteInlinePolicies(context.Background(), roleName); err != nil {
 		t.Fatalf("deleteInlinePolicies: %v", err)
 	}
-	if left := len(f.inline[roleName]); left != 0 {
-		t.Errorf("%d inline policies survived a paginated delete: %v", left, f.inline[roleName])
+	if left := len(f.Inline[roleName]); left != 0 {
+		t.Errorf("%d inline policies survived a paginated delete: %v", left, f.Inline[roleName])
+	}
+}
+
+func TestDeleteInlinePoliciesToleratesARoleAlreadyGone(t *testing.T) {
+	// detachAndDeleteRole lists the role's managed policies first and returns
+	// there on NoSuchEntity, so this pass meets an absent role only when the
+	// role is deleted between the two lists: a concurrent finalizer, or an
+	// operator removing it by hand. IAM answers ListRolePolicies with
+	// NoSuchEntity then, and the role being gone is the postcondition.
+	f := awsfake.NewIAM()
+	r := &PlatformReconciler{IAM: f}
+	if err := r.deleteInlinePolicies(context.Background(), "development-platform-app-tenant"); err != nil {
+		t.Errorf("a role already gone: got %v, want a no-op", err)
+	}
+	if n := len(f.DeleteInlineCalls); n != 0 {
+		t.Errorf("DeleteRolePolicy called %d times for a role that is not there", n)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // prodScope is the fully-resolved ARN scope used across the expansion tests —
@@ -310,7 +311,7 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 		Region:                  "us-west-2",
 	}
 
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
@@ -320,9 +321,9 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("ensureIamRole: %v", err)
 	}
-	doc, ok := f.inline[roleName][modelScopingPolicyName]
+	doc, ok := f.Inline[roleName][modelScopingPolicyName]
 	if !ok {
-		t.Fatalf("expected inline policy %s on %s; inline=%v", modelScopingPolicyName, roleName, f.inline)
+		t.Fatalf("expected inline policy %s on %s; inline=%v", modelScopingPolicyName, roleName, f.Inline)
 	}
 	if !strings.Contains(doc, "foundation-model/anthropic.*") || !strings.Contains(doc, "inference-profile/us.anthropic.*") {
 		t.Errorf("scoping doc missing anthropic patterns: %s", doc)
@@ -348,7 +349,7 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("ensureIamRole after spec change: %v", err)
 	}
-	doc = f.inline[roleName][modelScopingPolicyName]
+	doc = f.Inline[roleName][modelScopingPolicyName]
 	if !strings.Contains(doc, "foundation-model/amazon.titan-embed-text-v2*") || strings.Contains(doc, "anthropic") {
 		t.Errorf("scoping doc did not follow the spec change: %s", doc)
 	}
@@ -363,7 +364,7 @@ func TestEnsureIamRole_ReconcilesModelScopingPolicy(t *testing.T) {
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("ensureIamRole after clearing spec: %v", err)
 	}
-	doc = f.inline[roleName][modelScopingPolicyName]
+	doc = f.Inline[roleName][modelScopingPolicyName]
 	if !strings.Contains(doc, "DenyAllBedrockInvoke") || strings.Contains(doc, "NotResource") {
 		t.Errorf("cleared spec must render the deny-all clamp: %s", doc)
 	}
@@ -376,13 +377,13 @@ func TestEnsureIamRole_SuspendedDoesNotTouchModelScopingPolicy(t *testing.T) {
 		Environment:             "production",
 		Region:                  "us-west-2",
 	}
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
 
 	roleName := tenantRoleName(cfg.ClusterName, platform)
-	f.seedRole(roleName, "arn:aws:iam::123:role/"+roleName,
+	f.SeedRole(roleName, "arn:aws:iam::123:role/"+roleName,
 		iamtypes.Tag{Key: aws.String(suspendedTag), Value: aws.String("true")},
 	)
 
@@ -393,11 +394,11 @@ func TestEnsureIamRole_SuspendedDoesNotTouchModelScopingPolicy(t *testing.T) {
 	if !got.Suspended {
 		t.Fatalf("expected Suspended=true")
 	}
-	if len(f.putInlineCalls) != 0 {
-		t.Errorf("suspended role must not receive the model policy: got %d PutRolePolicy calls", len(f.putInlineCalls))
+	if len(f.PutInlineCalls) != 0 {
+		t.Errorf("suspended role must not receive the model policy: got %d PutRolePolicy calls", len(f.PutInlineCalls))
 	}
-	if len(f.deleteInlineCalls) != 0 {
-		t.Errorf("operator is observe-only while suspended: got %d DeleteRolePolicy calls", len(f.deleteInlineCalls))
+	if len(f.DeleteInlineCalls) != 0 {
+		t.Errorf("operator is observe-only while suspended: got %d DeleteRolePolicy calls", len(f.DeleteInlineCalls))
 	}
 }
 
@@ -407,7 +408,7 @@ func TestDeleteIamRole_RemovesInlinePoliciesBeforeRoleDelete(t *testing.T) {
 		ClusterName:             "production-cluster",
 		Environment:             "production",
 	}
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
@@ -416,17 +417,17 @@ func TestDeleteIamRole_RemovesInlinePoliciesBeforeRoleDelete(t *testing.T) {
 		t.Fatalf("ensureIamRole: %v", err)
 	}
 	roleName := tenantRoleName(cfg.ClusterName, platform)
-	if _, ok := f.inline[roleName][modelScopingPolicyName]; !ok {
+	if _, ok := f.Inline[roleName][modelScopingPolicyName]; !ok {
 		t.Fatalf("precondition: scoping policy should exist")
 	}
 
 	if err := r.deleteIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("deleteIamRole: %v", err)
 	}
-	if len(f.inline[roleName]) != 0 {
-		t.Errorf("inline policies must be deleted with the role: %v", f.inline[roleName])
+	if len(f.Inline[roleName]) != 0 {
+		t.Errorf("inline policies must be deleted with the role: %v", f.Inline[roleName])
 	}
-	if _, ok := f.roles[roleName]; ok {
+	if _, ok := f.Roles[roleName]; ok {
 		t.Errorf("role should be deleted")
 	}
 
@@ -443,7 +444,7 @@ func TestEnsureSessionRole_CarriesModelScopingPolicy(t *testing.T) {
 		Environment:             "production",
 		Region:                  "us-west-2",
 	}
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	platform := newPlatform("slack-knowledge-bot", "workplace")
 	platform.Spec.Identity.AllowedModelFamilies = []string{"anthropic"}
@@ -454,9 +455,9 @@ func TestEnsureSessionRole_CarriesModelScopingPolicy(t *testing.T) {
 		t.Fatalf("ensureSessionRole: %v", err)
 	}
 	sessionName := sessionRoleName(cfg.ClusterName, platform)
-	doc, ok := f.inline[sessionName][modelScopingPolicyName]
+	doc, ok := f.Inline[sessionName][modelScopingPolicyName]
 	if !ok {
-		t.Fatalf("session role must carry the model scoping clamp; inline=%v", f.inline)
+		t.Fatalf("session role must carry the model scoping clamp; inline=%v", f.Inline)
 	}
 	if !strings.Contains(doc, "foundation-model/anthropic.*") {
 		t.Errorf("session scoping doc missing anthropic patterns: %s", doc)
@@ -464,11 +465,11 @@ func TestEnsureSessionRole_CarriesModelScopingPolicy(t *testing.T) {
 
 	// Suspended: the session reconcile detaches the baseline and leaves the
 	// scoping policy alone (no re-put).
-	puts := len(f.putInlineCalls)
+	puts := len(f.PutInlineCalls)
 	if _, err := r.ensureSessionRole(context.Background(), platform, tenantARN, true, cfg); err != nil {
 		t.Fatalf("ensureSessionRole (suspended): %v", err)
 	}
-	if len(f.putInlineCalls) != puts {
-		t.Errorf("suspended session role must not receive policy writes: got %d new puts", len(f.putInlineCalls)-puts)
+	if len(f.PutInlineCalls) != puts {
+		t.Errorf("suspended session role must not receive policy writes: got %d new puts", len(f.PutInlineCalls)-puts)
 	}
 }

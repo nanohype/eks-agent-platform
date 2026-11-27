@@ -21,6 +21,7 @@ import (
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 func testScope() arnScope {
@@ -292,8 +293,8 @@ func TestDatastorePolicy_RelationalSecretDeduped(t *testing.T) {
 // TestEnsureDatastorePolicy_WritesAndConverges proves the reconcile writes the
 // inline datastore-access policy once and then no-ops on a converged re-run.
 func TestEnsureDatastorePolicy_WritesAndConverges(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{Environment: "development", Region: "us-west-2"}
 	p := platformWithDatastores("myplat", platformv1alpha1.DatastoreSpec{Name: "obj", Kind: platformv1alpha1.DatastoreObjectStore})
@@ -301,13 +302,13 @@ func TestEnsureDatastorePolicy_WritesAndConverges(t *testing.T) {
 	if err := r.ensureDatastorePolicy(context.Background(), "test-role", "arn:aws:iam::123456789012:role/test-role", p, cfg); err != nil {
 		t.Fatalf("ensureDatastorePolicy: %v", err)
 	}
-	if len(f.putInlineCalls) != 1 {
-		t.Fatalf("PutRolePolicy calls: got %d want 1", len(f.putInlineCalls))
+	if len(f.PutInlineCalls) != 1 {
+		t.Fatalf("PutRolePolicy calls: got %d want 1", len(f.PutInlineCalls))
 	}
-	if got := *f.putInlineCalls[0].PolicyName; got != datastorePolicyName {
+	if got := *f.PutInlineCalls[0].PolicyName; got != datastorePolicyName {
 		t.Errorf("policy name: got %q want %q", got, datastorePolicyName)
 	}
-	if doc := *f.putInlineCalls[0].PolicyDocument; !strings.Contains(doc, "development-myplat-obj-123456789012") {
+	if doc := *f.PutInlineCalls[0].PolicyDocument; !strings.Contains(doc, "development-myplat-obj-123456789012") {
 		t.Errorf("policy document not scoped to the datastore's bucket: %s", doc)
 	}
 
@@ -315,8 +316,8 @@ func TestEnsureDatastorePolicy_WritesAndConverges(t *testing.T) {
 	if err := r.ensureDatastorePolicy(context.Background(), "test-role", "arn:aws:iam::123456789012:role/test-role", p, cfg); err != nil {
 		t.Fatalf("ensureDatastorePolicy re-run: %v", err)
 	}
-	if len(f.putInlineCalls) != 1 {
-		t.Errorf("converged re-run must not re-write: got %d PutRolePolicy calls", len(f.putInlineCalls))
+	if len(f.PutInlineCalls) != 1 {
+		t.Errorf("converged re-run must not re-write: got %d PutRolePolicy calls", len(f.PutInlineCalls))
 	}
 }
 
@@ -324,19 +325,19 @@ func TestEnsureDatastorePolicy_WritesAndConverges(t *testing.T) {
 // IAM-needing datastore has the inline policy removed, so a cleared declaration
 // leaves no stale grant.
 func TestEnsureDatastorePolicy_RemovesWhenEmpty(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{Environment: "development", Region: "us-west-2"}
 
 	if err := r.ensureDatastorePolicy(context.Background(), "test-role", "arn:aws:iam::123456789012:role/test-role", platformWithDatastores("myplat"), cfg); err != nil {
 		t.Fatalf("ensureDatastorePolicy: %v", err)
 	}
-	if len(f.putInlineCalls) != 0 {
-		t.Errorf("no datastores must write no policy: got %d PutRolePolicy calls", len(f.putInlineCalls))
+	if len(f.PutInlineCalls) != 0 {
+		t.Errorf("no datastores must write no policy: got %d PutRolePolicy calls", len(f.PutInlineCalls))
 	}
-	if len(f.deleteInlineCalls) != 1 || *f.deleteInlineCalls[0].PolicyName != datastorePolicyName {
-		t.Errorf("no datastores must delete the datastore-access policy: got %+v", f.deleteInlineCalls)
+	if len(f.DeleteInlineCalls) != 1 || *f.DeleteInlineCalls[0].PolicyName != datastorePolicyName {
+		t.Errorf("no datastores must delete the datastore-access policy: got %+v", f.DeleteInlineCalls)
 	}
 }
 
@@ -355,9 +356,9 @@ func TestEnsureDatastorePolicy_NilIAM(t *testing.T) {
 // DeleteRolePolicy failure on the removal path surfaces rather than being
 // swallowed.
 func TestEnsureDatastorePolicy_DeleteErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("role", "arn:aws:iam::123456789012:role/role")
-	f.deleteInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.SeedRole("role", "arn:aws:iam::123456789012:role/role")
+	f.DeleteInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
 	// No datastores -> the reconcile deletes the inline policy; the injected
 	// error must propagate.
@@ -370,9 +371,9 @@ func TestEnsureDatastorePolicy_DeleteErrorPropagates(t *testing.T) {
 // TestEnsureDatastorePolicy_PutErrorPropagates proves a PutRolePolicy failure on
 // the write path surfaces.
 func TestEnsureDatastorePolicy_PutErrorPropagates(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("role", "arn:aws:iam::123456789012:role/role")
-	f.putInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.SeedRole("role", "arn:aws:iam::123456789012:role/role")
+	f.PutInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
 	if err := r.ensureDatastorePolicy(context.Background(), "role", "arn:aws:iam::123456789012:role/role",
 		platformWithDatastores("myplat", platformv1alpha1.DatastoreSpec{Name: "obj", Kind: platformv1alpha1.DatastoreObjectStore}),
@@ -394,8 +395,8 @@ func datastoreErrCfg() IAMConfig {
 // propagates a datastore-policy failure on the create path (the model-scoping
 // reconcile still succeeds — only datastore-access errs).
 func TestEnsureIamRole_DatastorePolicyError_CreatePath(t *testing.T) {
-	f := newFakeIAM()
-	f.getInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
+	f := awsfake.NewIAM()
+	f.GetInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
 	r := &PlatformReconciler{IAM: f}
 	p := newPlatform("app", "tenant")
 	p.Spec.Datastores = []platformv1alpha1.DatastoreSpec{{Name: "obj", Kind: platformv1alpha1.DatastoreObjectStore}}
@@ -408,15 +409,15 @@ func TestEnsureIamRole_DatastorePolicyError_CreatePath(t *testing.T) {
 // TestEnsureIamRole_DatastorePolicyError_ExistingRolePath proves the same on the
 // existing-role path (role already present, not suspended).
 func TestEnsureIamRole_DatastorePolicyError_ExistingRolePath(t *testing.T) {
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	cfg := datastoreErrCfg()
 	r := &PlatformReconciler{IAM: f}
 	p := newPlatform("app", "tenant")
 	p.Spec.Datastores = []platformv1alpha1.DatastoreSpec{{Name: "obj", Kind: platformv1alpha1.DatastoreObjectStore}}
 
 	roleName := tenantRoleName(cfg.ClusterName, p)
-	f.seedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
-	f.getInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
+	f.SeedRole(roleName, "arn:aws:iam::123456789012:role/"+roleName)
+	f.GetInlineReturnsErr = map[string]error{datastorePolicyName: errors.New("boom")}
 
 	if _, err := r.ensureIamRole(context.Background(), p, cfg); err == nil {
 		t.Fatalf("expected ensureIamRole to propagate the datastore-policy error on the existing-role path")
@@ -718,8 +719,8 @@ func TestResolveRelationalSecretARNs(t *testing.T) {
 // policy. The tenant is degraded — no database credential — not broken, and it
 // converges on its own once the substrate applies.
 func TestEnsureDatastorePolicy_UnresolvedSecretStillWritesOtherGrants(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{params: map[string]string{}}}
 	cfg := IAMConfig{Environment: "development", Region: "us-west-2", ClusterName: "development-platform"}
 	p := platformWithDatastores("myplat",
@@ -730,10 +731,10 @@ func TestEnsureDatastorePolicy_UnresolvedSecretStillWritesOtherGrants(t *testing
 	if err := r.ensureDatastorePolicy(context.Background(), "test-role", "arn:aws:iam::123456789012:role/test-role", p, cfg); err != nil {
 		t.Fatalf("an unpublished secret must not fail the whole policy: %v", err)
 	}
-	if len(f.putInlineCalls) != 1 {
-		t.Fatalf("PutRolePolicy calls: got %d want 1", len(f.putInlineCalls))
+	if len(f.PutInlineCalls) != 1 {
+		t.Fatalf("PutRolePolicy calls: got %d want 1", len(f.PutInlineCalls))
 	}
-	doc := *f.putInlineCalls[0].PolicyDocument
+	doc := *f.PutInlineCalls[0].PolicyDocument
 	if !strings.Contains(doc, "development-myplat-obj-123456789012") {
 		t.Errorf("the object store grant should still be written: %s", doc)
 	}
@@ -747,8 +748,8 @@ func TestEnsureDatastorePolicy_UnresolvedSecretStillWritesOtherGrants(t *testing
 // published", which would quietly strip a working tenant's database grant on the
 // next converge.
 func TestEnsureDatastorePolicy_SSMFailureIsNotSilent(t *testing.T) {
-	f := newFakeIAM()
-	f.seedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
+	f := awsfake.NewIAM()
+	f.SeedRole("test-role", "arn:aws:iam::123456789012:role/test-role")
 	r := &PlatformReconciler{IAM: f, SSM: &stubSSM{err: errors.New("throttled")}}
 	cfg := IAMConfig{Environment: "development", Region: "us-west-2", ClusterName: "development-platform"}
 	p := platformWithDatastores("myplat",
@@ -757,7 +758,7 @@ func TestEnsureDatastorePolicy_SSMFailureIsNotSilent(t *testing.T) {
 	if err := r.ensureDatastorePolicy(context.Background(), "test-role", "arn:aws:iam::123456789012:role/test-role", p, cfg); err == nil {
 		t.Error("an SSM failure must surface, not degrade the tenant silently")
 	}
-	if len(f.putInlineCalls) != 0 {
-		t.Errorf("no policy should be written when the lookup failed, got %d writes", len(f.putInlineCalls))
+	if len(f.PutInlineCalls) != 0 {
+		t.Errorf("no policy should be written when the lookup failed, got %d writes", len(f.PutInlineCalls))
 	}
 }
