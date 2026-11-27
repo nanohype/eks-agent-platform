@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 func vclusterHostScheme(t *testing.T) *runtime.Scheme {
@@ -59,8 +60,8 @@ func vclusterPlatform() *platformv1alpha1.Platform {
 // syncer rewrites synced pods to the translated name. Binding tenant-runtime
 // would resolve nothing.
 func TestEnsureIamRole_VClusterTier_BindsSyncedSA(t *testing.T) {
-	f := newFakeIAM()
-	fe := newFakeEKS()
+	f := awsfake.NewIAM()
+	fe := awsfake.NewEKS()
 	platform := vclusterPlatform()
 
 	host := fake.NewClientBuilder().
@@ -81,13 +82,13 @@ func TestEnsureIamRole_VClusterTier_BindsSyncedSA(t *testing.T) {
 
 	// Two associations: the synced tenant SA, and the gateway's Envoy SA, which
 	// lives on the host in the tenant namespace on this tier too.
-	if len(fe.createCalls) != 2 {
-		t.Fatalf("expected exactly two Pod Identity associations, got %d", len(fe.createCalls))
+	if len(fe.CreateCalls) != 2 {
+		t.Fatalf("expected exactly two Pod Identity associations, got %d", len(fe.CreateCalls))
 	}
-	if gw := aws.ToString(fe.createCalls[1].ServiceAccount); gw != gatewayServiceAccountName(platform) {
+	if gw := aws.ToString(fe.CreateCalls[1].ServiceAccount); gw != gatewayServiceAccountName(platform) {
 		t.Errorf("second association SA: got %q want the gateway's %q", gw, gatewayServiceAccountName(platform))
 	}
-	got := aws.ToString(fe.createCalls[0].ServiceAccount)
+	got := aws.ToString(fe.CreateCalls[0].ServiceAccount)
 	wantSynced := syncedHostSAName(PlatformNamespace(platform), vclusterInstanceName)
 	if got != wantSynced {
 		t.Errorf("association SA: got %q want synced host name %q", got, wantSynced)
@@ -118,8 +119,8 @@ func TestEnsureIamRole_VClusterTier_BindsSyncedSA(t *testing.T) {
 // the tenant's synced SA; here we prove no association targets the syncer/control-
 // plane SA name or any SA other than the tenant's synced one.
 func TestEnsureIamRole_VClusterTier_NeverBindsSyncerSA(t *testing.T) {
-	f := newFakeIAM()
-	fe := newFakeEKS()
+	f := awsfake.NewIAM()
+	fe := awsfake.NewEKS()
 	platform := vclusterPlatform()
 	host := fake.NewClientBuilder().
 		WithScheme(vclusterHostScheme(t)).
@@ -136,7 +137,7 @@ func TestEnsureIamRole_VClusterTier_NeverBindsSyncerSA(t *testing.T) {
 	}
 
 	wantSynced := syncedHostSAName(PlatformNamespace(platform), vclusterInstanceName)
-	for _, c := range fe.createCalls {
+	for _, c := range fe.CreateCalls {
 		sa := aws.ToString(c.ServiceAccount)
 		switch sa {
 		case vclusterInstanceName:
@@ -196,18 +197,18 @@ func TestDiscoverSyncedHostSA_FailsLoudOnNamingMismatch(t *testing.T) {
 // SA itself is gone. The full finalizer ordering is covered in the conformance
 // suite (where the ArgoCD CRDs are installed).
 func TestVClusterTeardown_DeletesSyncedSAAssociation(t *testing.T) {
-	fe := newFakeEKS()
+	fe := awsfake.NewEKS()
 	platform := vclusterPlatform()
 	cfg := IAMConfig{ClusterName: "production-cluster"}
 	syncedSA := syncedHostSAName(PlatformNamespace(platform), vclusterInstanceName)
-	fe.associations[PlatformNamespace(platform)+"/"+syncedSA] = "a-1"
+	fe.Associations[PlatformNamespace(platform)+"/"+syncedSA] = "a-1"
 	r := &PlatformReconciler{EKS: fe}
 
 	if err := r.deletePodIdentityAssociation(context.Background(), cfg, PlatformNamespace(platform), syncedSA); err != nil {
 		t.Fatalf("delete synced-SA association: %v", err)
 	}
-	if len(fe.deleteCalls) != 1 {
-		t.Fatalf("expected the synced-SA Pod Identity association to be deleted once, got %d deletes", len(fe.deleteCalls))
+	if len(fe.DeleteCalls) != 1 {
+		t.Fatalf("expected the synced-SA Pod Identity association to be deleted once, got %d deletes", len(fe.DeleteCalls))
 	}
 }
 

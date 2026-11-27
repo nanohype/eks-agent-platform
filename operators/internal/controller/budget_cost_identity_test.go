@@ -14,13 +14,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
-	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
-	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -51,36 +49,6 @@ import (
 // read the total as their own, and at killSwitchBreachPercent the loser is
 // suspended for traffic it never made.
 
-// recordingCloudWatch captures the dimensions of the GetMetricData request so the
-// dimension the reconciler actually queries can be asserted, rather than the
-// value a test passed into a helper.
-type recordingCloudWatch struct {
-	dimensions []cloudwatchtypes.Dimension
-	namespace  string
-	metricName string
-}
-
-func (f *recordingCloudWatch) GetMetricData(_ context.Context, in *cloudwatch.GetMetricDataInput, _ ...func(*cloudwatch.Options)) (*cloudwatch.GetMetricDataOutput, error) {
-	if len(in.MetricDataQueries) > 0 && in.MetricDataQueries[0].MetricStat != nil {
-		m := in.MetricDataQueries[0].MetricStat.Metric
-		f.dimensions = m.Dimensions
-		f.namespace = aws.ToString(m.Namespace)
-		f.metricName = aws.ToString(m.MetricName)
-	}
-	return &cloudwatch.GetMetricDataOutput{MetricDataResults: []cloudwatchtypes.MetricDataResult{{
-		Id: aws.String("inflight"), Values: []float64{1.5},
-	}}}, nil
-}
-
-func (f *recordingCloudWatch) dimension(name string) string {
-	for _, d := range f.dimensions {
-		if aws.ToString(d.Name) == name {
-			return aws.ToString(d.Value)
-		}
-	}
-	return ""
-}
-
 const (
 	identityCluster  = "staging-platform"
 	identityPlatform = "acme"
@@ -97,7 +65,7 @@ func tagValue(tags []iamtypes.Tag, key string) string {
 
 // reconcileForIdentity runs a full budget reconcile against recording fakes and
 // returns what the two read paths asked AWS for.
-func reconcileForIdentity(t *testing.T) (query string, cw *recordingCloudWatch) {
+func reconcileForIdentity(t *testing.T) (query string, cw *awsfake.CloudWatch) {
 	t.Helper()
 	ctx := context.Background()
 	platform := &platformv1alpha1.Platform{
@@ -113,7 +81,7 @@ func reconcileForIdentity(t *testing.T) (query string, cw *recordingCloudWatch) 
 	}
 
 	athena := succeededAthena(curRollupResultSet("12.500000"))
-	cw = &recordingCloudWatch{}
+	cw = awsfake.NewCloudWatch(1.5)
 	r := &BudgetReconciler{
 		Client:          cl,
 		Athena:          athena,
@@ -125,7 +93,7 @@ func reconcileForIdentity(t *testing.T) (query string, cw *recordingCloudWatch) 
 	if _, err := r.reconcileBudget(ctx, bp); err != nil {
 		t.Fatalf("reconcileBudget: %v", err)
 	}
-	return athena.lastQuery, cw
+	return athena.LastQuery, cw
 }
 
 func TestCostIdentity_EveryReaderAndWriterUsesOneValue(t *testing.T) {
@@ -153,7 +121,7 @@ func TestCostIdentity_EveryReaderAndWriterUsesOneValue(t *testing.T) {
 	got := map[string]string{
 		"tenant role PlatformId tag":  tenantTag,
 		"session role PlatformId tag": sessionTag,
-		"CloudWatch PlatformId dim":   cw.dimension("PlatformId"),
+		"CloudWatch PlatformId dim":   cw.Dimension("PlatformId"),
 	}
 	for where, v := range got {
 		if v != want {
@@ -181,7 +149,7 @@ func TestCostIdentity_IsNotTheBarePlatformName(t *testing.T) {
 			"    account-wide — so both tenants' datastores would carry an identical tag and\n"+
 			"    each operator would read the pair's combined spend as its own.", v)
 	}
-	if v := cw.dimension("PlatformId"); v == identityPlatform {
+	if v := cw.Dimension("PlatformId"); v == identityPlatform {
 		t.Errorf("the CloudWatch dimension is the bare Platform name %q — agents/Bedrock is an\n"+
 			"    account+region-global namespace, so same-named Platforms share one series.", v)
 	}
@@ -213,7 +181,7 @@ func TestCostIdentity_RefusesToAttributeWithoutTheDiscriminator(t *testing.T) {
 	}
 	athena := succeededAthena(curRollupResultSet("12.500000"))
 	r := &BudgetReconciler{
-		Client: cl, Athena: athena, CloudWatch: &recordingCloudWatch{},
+		Client: cl, Athena: athena, CloudWatch: awsfake.NewCloudWatch(1.5),
 		RequeueInterval: time.Hour,
 		AthenaCfg:       AthenaConfig{Workgroup: "cost_wg", Database: "cost_db", CURTableName: "cur_t"},
 		// ClusterName deliberately unset.
@@ -226,8 +194,8 @@ func TestCostIdentity_RefusesToAttributeWithoutTheDiscriminator(t *testing.T) {
 	if after := testutil.ToFloat64(budgetSpendUnreadableTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name)); after != before+1 {
 		t.Errorf("the refusal must be counted: %v -> %v", before, after)
 	}
-	if athena.lastQuery != "" {
-		t.Errorf("no query may be issued without the discriminator, got: %s", athena.lastQuery)
+	if athena.LastQuery != "" {
+		t.Errorf("no query may be issued without the discriminator, got: %s", athena.LastQuery)
 	}
 }
 
@@ -300,18 +268,18 @@ func TestKillSwitchEventCarriesTheBarePlatformName(t *testing.T) {
 			PlatformRef: commonv1alpha1.LocalRef{Name: identityPlatform}, MonthlyUsd: "100.00",
 		},
 	}
-	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{FailedEntryCount: 0}}
+	eb := awsfake.NewEventBridge()
 	r := &BudgetReconciler{EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", ClusterName: identityCluster}
 	if err := r.fireKillSwitch(context.Background(), bp, "150.00", 150); err != nil {
 		t.Fatalf("fireKillSwitch: %v", err)
 	}
-	if len(eb.calls) != 1 {
-		t.Fatalf("want one PutEvents call, got %d", len(eb.calls))
+	if len(eb.Calls) != 1 {
+		t.Fatalf("want one PutEvents call, got %d", len(eb.Calls))
 	}
 	var detail struct {
 		PlatformID string `json:"platformId"`
 	}
-	if err := json.Unmarshal([]byte(aws.ToString(eb.calls[0].Entries[0].Detail)), &detail); err != nil {
+	if err := json.Unmarshal([]byte(aws.ToString(eb.Calls[0].Entries[0].Detail)), &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
 	if detail.PlatformID != identityPlatform {
@@ -358,14 +326,14 @@ func TestCostIdentity_CloudWatchSeriesIsUnchangedOtherwise(t *testing.T) {
 	// ADR 0005; only the dimension VALUE moved. Pinned so a future edit to the
 	// identity cannot quietly relocate the series the publisher writes to.
 	_, cw := reconcileForIdentity(t)
-	if cw.namespace != "agents/Bedrock" {
-		t.Errorf("namespace: got %q want agents/Bedrock", cw.namespace)
+	if cw.Namespace != "agents/Bedrock" {
+		t.Errorf("namespace: got %q want agents/Bedrock", cw.Namespace)
 	}
-	if cw.metricName != bedrockInvocationCostMetric {
-		t.Errorf("metric: got %q want %q", cw.metricName, bedrockInvocationCostMetric)
+	if cw.MetricName != bedrockInvocationCostMetric {
+		t.Errorf("metric: got %q want %q", cw.MetricName, bedrockInvocationCostMetric)
 	}
-	if len(cw.dimensions) != 1 {
+	if len(cw.Dimensions) != 1 {
 		t.Errorf("the publisher dimensions EstimatedInvocationCostUsd on PlatformId alone; "+
-			"querying %d dimensions matches nothing", len(cw.dimensions))
+			"querying %d dimensions matches nothing", len(cw.Dimensions))
 	}
 }

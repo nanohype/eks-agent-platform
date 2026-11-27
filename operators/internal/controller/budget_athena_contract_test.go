@@ -18,12 +18,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
 	athenatypes "github.com/aws/aws-sdk-go-v2/service/athena/types"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
-	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -38,55 +37,6 @@ import (
 // MetricDataResults[].Values) surfaces here as a test failure rather than as a
 // silently-wrong spend number in production.
 
-// fakeAthena drives the query lifecycle: StartQueryExecution → a scripted
-// sequence of GetQueryExecution states → GetQueryResults. It records the query
-// string so the CUR-rollup contract can be asserted.
-type fakeAthena struct {
-	states    []athenatypes.QueryExecutionState // returned in order across GetQueryExecution calls
-	stateIdx  int
-	results   *athena.GetQueryResultsOutput
-	failure   string
-	startErr  error
-	getErr    error
-	resultErr error
-
-	lastQuery string
-	stopped   bool
-}
-
-func (f *fakeAthena) StartQueryExecution(_ context.Context, in *athena.StartQueryExecutionInput, _ ...func(*athena.Options)) (*athena.StartQueryExecutionOutput, error) {
-	if f.startErr != nil {
-		return nil, f.startErr
-	}
-	f.lastQuery = aws.ToString(in.QueryString)
-	return &athena.StartQueryExecutionOutput{QueryExecutionId: aws.String("qid-1")}, nil
-}
-
-func (f *fakeAthena) GetQueryExecution(_ context.Context, _ *athena.GetQueryExecutionInput, _ ...func(*athena.Options)) (*athena.GetQueryExecutionOutput, error) {
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-	state := f.states[f.stateIdx]
-	if f.stateIdx < len(f.states)-1 {
-		f.stateIdx++
-	}
-	return &athena.GetQueryExecutionOutput{QueryExecution: &athenatypes.QueryExecution{
-		Status: &athenatypes.QueryExecutionStatus{State: state, StateChangeReason: aws.String(f.failure)},
-	}}, nil
-}
-
-func (f *fakeAthena) GetQueryResults(_ context.Context, _ *athena.GetQueryResultsInput, _ ...func(*athena.Options)) (*athena.GetQueryResultsOutput, error) {
-	if f.resultErr != nil {
-		return nil, f.resultErr
-	}
-	return f.results, nil
-}
-
-func (f *fakeAthena) StopQueryExecution(_ context.Context, _ *athena.StopQueryExecutionInput, _ ...func(*athena.Options)) (*athena.StopQueryExecutionOutput, error) {
-	f.stopped = true
-	return &athena.StopQueryExecutionOutput{}, nil
-}
-
 // curRollupResultSet is the recorded shape of a CUR month-to-date rollup:
 // a header row (the SELECT alias) followed by one data row carrying the summed
 // unblended cost as a VarCharValue string (Athena returns all values as strings).
@@ -97,11 +47,15 @@ func curRollupResultSet(spend string) *athena.GetQueryResultsOutput {
 	}}}
 }
 
-func succeededAthena(results *athena.GetQueryResultsOutput) *fakeAthena {
-	return &fakeAthena{states: []athenatypes.QueryExecutionState{athenatypes.QueryExecutionStateSucceeded}, results: results}
+// succeededAthena is an Athena whose query succeeds on the first poll with
+// results.
+func succeededAthena(results *athena.GetQueryResultsOutput) *awsfake.Athena {
+	a := awsfake.NewAthena(athenatypes.QueryExecutionStateSucceeded)
+	a.Results = results
+	return a
 }
 
-func budgetReconciler(a *fakeAthena) *BudgetReconciler {
+func budgetReconciler(a *awsfake.Athena) *BudgetReconciler {
 	return &BudgetReconciler{
 		Athena:          a,
 		RequeueInterval: time.Minute,
@@ -138,8 +92,8 @@ func TestQuerySpendFromAthena_ContractHappyPath(t *testing.T) {
 		"line_item_unblended_cost",
 		"date_trunc('month'",
 	} {
-		if !strings.Contains(a.lastQuery, want) {
-			t.Errorf("CUR rollup query missing %q:\n%s", want, a.lastQuery)
+		if !strings.Contains(a.LastQuery, want) {
+			t.Errorf("CUR rollup query missing %q:\n%s", want, a.LastQuery)
 		}
 	}
 }
@@ -195,16 +149,16 @@ func TestCurRollupQueryOnlyNamesColumnsTheTableDeclares(t *testing.T) {
 
 	// Every CUR column the query names by bare identifier. The tag map is reached through
 	// element_at() and is checked separately below.
-	named := regexp.MustCompile(`line_item_[a-z_]+`).FindAllString(a.lastQuery, -1)
+	named := regexp.MustCompile(`line_item_[a-z_]+`).FindAllString(a.LastQuery, -1)
 	if len(named) == 0 {
-		t.Fatalf("the CUR rollup query names no line_item column at all:\n%s", a.lastQuery)
+		t.Fatalf("the CUR rollup query names no line_item column at all:\n%s", a.LastQuery)
 	}
 	for _, col := range named {
 		if _, ok := declared[col]; !ok {
 			t.Errorf("the CUR rollup query reads %q, which %s does not declare on the CUR table.\n"+
 				"Athena fails the query rather than returning null for an undeclared column, and a failed\n"+
 				"query is recorded as unreadable spend. Declare the column there or stop reading it here.\n"+
-				"query:\n%s", col, decl, a.lastQuery)
+				"query:\n%s", col, decl, a.LastQuery)
 		}
 	}
 
@@ -243,7 +197,7 @@ func TestFetchAthenaResultDecimal_ContractShapes(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			r.Athena = &fakeAthena{results: c.out}
+			r.Athena = &awsfake.Athena{Results: c.out}
 			got, err := r.fetchAthenaResultDecimal(context.Background(), "qid")
 			if err != nil {
 				t.Fatalf("fetchAthenaResultDecimal: %v", err)
@@ -257,19 +211,19 @@ func TestFetchAthenaResultDecimal_ContractShapes(t *testing.T) {
 
 func TestQuerySpendFromAthena_ErrorPaths(t *testing.T) {
 	t.Run("query failed terminal", func(t *testing.T) {
-		a := &fakeAthena{states: []athenatypes.QueryExecutionState{athenatypes.QueryExecutionStateFailed}, failure: "SYNTAX_ERROR"}
+		a := &awsfake.Athena{States: []athenatypes.QueryExecutionState{athenatypes.QueryExecutionStateFailed}, Failure: "SYNTAX_ERROR"}
 		if _, err := budgetReconciler(a).querySpendFromAthena(context.Background(), "acme"); err == nil {
 			t.Fatal("a FAILED query must surface as an error")
 		}
 	})
 	t.Run("start error", func(t *testing.T) {
-		a := &fakeAthena{startErr: errors.New("denied")}
+		a := &awsfake.Athena{StartErr: errors.New("denied")}
 		if _, err := budgetReconciler(a).querySpendFromAthena(context.Background(), "acme"); err == nil {
 			t.Fatal("a StartQueryExecution error must propagate")
 		}
 	})
 	t.Run("get-execution error", func(t *testing.T) {
-		a := &fakeAthena{states: []athenatypes.QueryExecutionState{athenatypes.QueryExecutionStateRunning}, getErr: errors.New("boom")}
+		a := &awsfake.Athena{States: []athenatypes.QueryExecutionState{athenatypes.QueryExecutionStateRunning}, GetErr: errors.New("boom")}
 		if _, err := budgetReconciler(a).querySpendFromAthena(context.Background(), "acme"); err == nil {
 			t.Fatal("a GetQueryExecution error must propagate")
 		}
@@ -294,32 +248,10 @@ func TestQuerySpendFromAthena_ErrorPaths(t *testing.T) {
 	})
 }
 
-// fakeCloudWatch returns a recorded GetMetricData response: per-minute Sum
-// datapoints of EstimatedInvocationCostUsd, the shape queryInflightCost folds
-// into a single decimal.
-type fakeCloudWatch struct {
-	values []float64
-	err    error
-	empty  bool
-}
-
-func (f *fakeCloudWatch) GetMetricData(_ context.Context, _ *cloudwatch.GetMetricDataInput, _ ...func(*cloudwatch.Options)) (*cloudwatch.GetMetricDataOutput, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	if f.empty {
-		return &cloudwatch.GetMetricDataOutput{}, nil
-	}
-	return &cloudwatch.GetMetricDataOutput{MetricDataResults: []cloudwatchtypes.MetricDataResult{{
-		Id:     aws.String("inflight"),
-		Values: f.values,
-	}}}, nil
-}
-
 func TestQueryInflightCost_ContractAndBranches(t *testing.T) {
 	since := time.Now().Add(-time.Hour)
 	t.Run("sums the per-minute datapoints", func(t *testing.T) {
-		r := &BudgetReconciler{CloudWatch: &fakeCloudWatch{values: []float64{0.25, 0.5, 1.25}}}
+		r := &BudgetReconciler{CloudWatch: awsfake.NewCloudWatch(0.25, 0.5, 1.25)}
 		got, err := r.queryInflightCost(context.Background(), "acme", since)
 		if err != nil {
 			t.Fatalf("queryInflightCost: %v", err)
@@ -329,7 +261,7 @@ func TestQueryInflightCost_ContractAndBranches(t *testing.T) {
 		}
 	})
 	t.Run("no datapoints yields zero", func(t *testing.T) {
-		r := &BudgetReconciler{CloudWatch: &fakeCloudWatch{empty: true}}
+		r := &BudgetReconciler{CloudWatch: &awsfake.CloudWatch{Empty: true}}
 		if got, _ := r.queryInflightCost(context.Background(), "acme", since); got != "0" {
 			t.Errorf("empty results must yield 0, got %q", got)
 		}
@@ -340,13 +272,13 @@ func TestQueryInflightCost_ContractAndBranches(t *testing.T) {
 		}
 	})
 	t.Run("future since yields zero", func(t *testing.T) {
-		r := &BudgetReconciler{CloudWatch: &fakeCloudWatch{values: []float64{1}}}
+		r := &BudgetReconciler{CloudWatch: awsfake.NewCloudWatch(1)}
 		if got, _ := r.queryInflightCost(context.Background(), "acme", time.Now().Add(time.Hour)); got != "0" {
 			t.Errorf("a since after now must yield 0, got %q", got)
 		}
 	})
 	t.Run("error yields zero and the error", func(t *testing.T) {
-		r := &BudgetReconciler{CloudWatch: &fakeCloudWatch{err: errors.New("throttled")}}
+		r := &BudgetReconciler{CloudWatch: &awsfake.CloudWatch{Err: errors.New("throttled")}}
 		if _, err := r.queryInflightCost(context.Background(), "acme", since); err == nil {
 			t.Fatal("a GetMetricData error must propagate")
 		}

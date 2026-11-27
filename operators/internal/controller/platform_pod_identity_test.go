@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 const (
@@ -23,15 +25,15 @@ const (
 // TestEnsurePodIdentityAssociation_ConvergedWritesNothing: an association that
 // already hands the account the role's own credentials is kept as it is.
 func TestEnsurePodIdentityAssociation_ConvergedWritesNothing(t *testing.T) {
-	fe := newFakeEKS()
-	fe.seedAssociation("ns", "sa", podIdentityTestRole, "")
+	fe := awsfake.NewEKS()
+	fe.SeedAssociation("ns", "sa", podIdentityTestRole, "")
 	r := &PlatformReconciler{EKS: fe}
 	if err := r.ensurePodIdentityAssociation(context.Background(), IAMConfig{ClusterName: "c"}, "ns", "sa", podIdentityTestRole); err != nil {
 		t.Fatal(err)
 	}
-	if len(fe.createCalls) != 0 || len(fe.deleteCalls) != 0 {
+	if len(fe.CreateCalls) != 0 || len(fe.DeleteCalls) != 0 {
 		t.Errorf("a converged binding was rewritten: CreatePodIdentityAssociation %d, DeletePodIdentityAssociation %d",
-			len(fe.createCalls), len(fe.deleteCalls))
+			len(fe.CreateCalls), len(fe.DeleteCalls))
 	}
 }
 
@@ -52,19 +54,19 @@ func TestEnsurePodIdentityAssociation_ReplacesAnyOtherBinding(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fe := newFakeEKS()
-			id := fe.seedAssociation("ns", "sa", c.role, c.target)
+			fe := awsfake.NewEKS()
+			id := fe.SeedAssociation("ns", "sa", c.role, c.target)
 			if c.undescribed {
-				fe.bound[id] = nil
+				fe.Bound[id] = nil
 			}
 			r := &PlatformReconciler{EKS: fe}
 			if err := r.ensurePodIdentityAssociation(context.Background(), IAMConfig{ClusterName: "c"}, "ns", "sa", podIdentityTestRole); err != nil {
 				t.Fatal(err)
 			}
-			if len(fe.deleteCalls) != 1 || aws.ToString(fe.deleteCalls[0].AssociationId) != id {
-				t.Errorf("DeletePodIdentityAssociation calls %+v, want the one for %s", fe.deleteCalls, id)
+			if len(fe.DeleteCalls) != 1 || aws.ToString(fe.DeleteCalls[0].AssociationId) != id {
+				t.Errorf("DeletePodIdentityAssociation calls %+v, want the one for %s", fe.DeleteCalls, id)
 			}
-			a := fe.bound[fe.associations["ns/sa"]]
+			a := fe.Bound[fe.Associations["ns/sa"]]
 			if !bindsExactly(a, podIdentityTestRole) {
 				t.Errorf("ns/sa is bound to %+v, want %s and no target role", a, podIdentityTestRole)
 			}
@@ -78,32 +80,32 @@ func TestEnsurePodIdentityAssociation_ConvergenceErrors(t *testing.T) {
 		name         string
 		role, target string
 		undescribed  bool
-		inject       func(*fakeEKS)
+		inject       func(*awsfake.EKS)
 		want         string
 	}{
-		{name: "describe", role: podIdentityTestRole, inject: func(fe *fakeEKS) { fe.describeReturnsErr = boom }, want: "eks DescribePodIdentityAssociation a-1"},
+		{name: "describe", role: podIdentityTestRole, inject: func(fe *awsfake.EKS) { fe.DescribeReturnsErr = boom }, want: "eks DescribePodIdentityAssociation a-1"},
 		{
 			name: "replacing another role", role: podIdentityTestOther,
-			inject: func(fe *fakeEKS) { fe.deleteReturnsErr = boom },
+			inject: func(fe *awsfake.EKS) { fe.DeleteReturnsErr = boom },
 			want:   "eks DeletePodIdentityAssociation a-1 (bound to " + podIdentityTestOther + ", not " + podIdentityTestRole + ")",
 		},
 		{
 			name: "replacing a chain", role: podIdentityTestRole, target: podIdentityTestOther,
-			inject: func(fe *fakeEKS) { fe.deleteReturnsErr = boom },
+			inject: func(fe *awsfake.EKS) { fe.DeleteReturnsErr = boom },
 			want:   "(bound to " + podIdentityTestRole + " chaining to " + podIdentityTestOther + ", not " + podIdentityTestRole + ")",
 		},
 		{
 			name: "replacing an undescribed association", undescribed: true,
-			inject: func(fe *fakeEKS) { fe.deleteReturnsErr = boom },
+			inject: func(fe *awsfake.EKS) { fe.DeleteReturnsErr = boom },
 			want:   "(bound to an undescribed role, not " + podIdentityTestRole + ")",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fe := newFakeEKS()
-			id := fe.seedAssociation("ns", "sa", c.role, c.target)
+			fe := awsfake.NewEKS()
+			id := fe.SeedAssociation("ns", "sa", c.role, c.target)
 			if c.undescribed {
-				fe.bound[id] = nil
+				fe.Bound[id] = nil
 			}
 			c.inject(fe)
 			r := &PlatformReconciler{EKS: fe}
@@ -111,7 +113,7 @@ func TestEnsurePodIdentityAssociation_ConvergenceErrors(t *testing.T) {
 			if err == nil || !errors.Is(err, boom) || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("got %v, want an error wrapping boom that names %q", err, c.want)
 			}
-			if len(fe.createCalls) != 0 {
+			if len(fe.CreateCalls) != 0 {
 				t.Error("created a binding while another still held the account")
 			}
 		})
@@ -122,15 +124,15 @@ func TestEnsurePodIdentityAssociation_ConvergenceErrors(t *testing.T) {
 // tenant role as the account's binding, so an association naming another role
 // is replaced before that is published.
 func TestEnsureIamRole_RebindsTheTenantAssociation(t *testing.T) {
-	f, fe := newFakeIAM(), newFakeEKS()
+	f, fe := awsfake.NewIAM(), awsfake.NewEKS()
 	platform := newPlatform("analytics", "acme")
-	fe.seedAssociation(PlatformNamespace(platform), tenantSAName, podIdentityTestOther, "")
+	fe.SeedAssociation(PlatformNamespace(platform), tenantSAName, podIdentityTestOther, "")
 	r := &PlatformReconciler{IAM: f, EKS: fe}
 	got, err := r.ensureIamRole(context.Background(), platform, IAMConfig{ClusterName: "production-cluster", Environment: "production"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound := fe.roleFor(PlatformNamespace(platform), tenantSAName); bound != got.RoleARN || got.PodIdentity.RoleArn != got.RoleARN {
+	if bound := fe.RoleFor(PlatformNamespace(platform), tenantSAName); bound != got.RoleARN || got.PodIdentity.RoleArn != got.RoleARN {
 		t.Errorf("tenant-runtime is bound to %q and reported as %q, want the tenant role %s", bound, got.PodIdentity.RoleArn, got.RoleARN)
 	}
 }
@@ -161,21 +163,21 @@ func TestEnsureIamRole_GatewayBindingFailureIsReported(t *testing.T) {
 	}
 
 	t.Run("fresh role", func(t *testing.T) {
-		fe := newFakeEKS()
-		fe.createReturnsErr, fe.failOnlyFor = boom, gatewaySA
-		r := &PlatformReconciler{IAM: newFakeIAM(), EKS: fe}
+		fe := awsfake.NewEKS()
+		fe.CreateReturnsErr, fe.FailOnlyFor = boom, gatewaySA
+		r := &PlatformReconciler{IAM: awsfake.NewIAM(), EKS: fe}
 		got, err := r.ensureIamRole(context.Background(), platform, cfg)
 		check(t, got, err)
 	})
 
 	t.Run("existing role", func(t *testing.T) {
-		fe := newFakeEKS()
-		r := &PlatformReconciler{IAM: newFakeIAM(), EKS: fe}
+		fe := awsfake.NewEKS()
+		r := &PlatformReconciler{IAM: awsfake.NewIAM(), EKS: fe}
 		if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 			t.Fatalf("first pass: %v", err)
 		}
-		delete(fe.associations, PlatformNamespace(platform)+"/"+gatewaySA)
-		fe.createReturnsErr, fe.failOnlyFor = boom, gatewaySA
+		delete(fe.Associations, PlatformNamespace(platform)+"/"+gatewaySA)
+		fe.CreateReturnsErr, fe.FailOnlyFor = boom, gatewaySA
 		got, err := r.ensureIamRole(context.Background(), platform, cfg)
 		check(t, got, err)
 	})
@@ -188,17 +190,17 @@ func TestEnsureIamRole_GatewayBindingFailureIsReported(t *testing.T) {
 func TestDeleteIamRole_GatewayAssociationFailureHoldsTheFinalizer(t *testing.T) {
 	boom := errors.New("boom")
 	platform := newPlatform("analytics", "acme")
-	f, fe := newFakeIAM(), newFakeEKS()
+	f, fe := awsfake.NewIAM(), awsfake.NewEKS()
 	r := &PlatformReconciler{IAM: f, EKS: fe}
 	cfg := IAMConfig{ClusterName: "production-cluster", Environment: "production"}
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatal(err)
 	}
-	fe.listReturnsErr, fe.failOnlyFor = boom, gatewayServiceAccountName(platform)
+	fe.ListReturnsErr, fe.FailOnlyFor = boom, gatewayServiceAccountName(platform)
 	if err := r.deleteIamRole(context.Background(), platform, cfg); !errors.Is(err, boom) {
 		t.Fatalf("got %v, want the gateway association's error", err)
 	}
-	if fe.roleFor(PlatformNamespace(platform), gatewayServiceAccountName(platform)) == "" {
+	if fe.RoleFor(PlatformNamespace(platform), gatewayServiceAccountName(platform)) == "" {
 		t.Error("the gateway association is gone although its removal failed")
 	}
 }

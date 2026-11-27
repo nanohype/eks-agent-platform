@@ -12,13 +12,10 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/eks"
-	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
@@ -29,8 +26,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
-	"github.com/nanohype/eks-agent-platform/operators/internal/awsclients"
 	"github.com/nanohype/eks-agent-platform/operators/internal/controller"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 // evalRuntimeNs is the eval runtime namespace these tests hand the reconciler,
@@ -44,127 +41,9 @@ const (
 	evalRoleARNPrefix     = "arn:aws:iam::123456789012:role/eks-agent-platform/tenants/"
 )
 
-// memEKS is an in-memory awsclients.EKS holding Pod Identity associations by
-// (namespace, serviceAccount), the key ListPodIdentityAssociations filters on.
-// The list summary carries no role ARN, so the bound role is kept beside it and
-// returned by DescribePodIdentityAssociation.
-type memEKS struct {
-	mu     sync.Mutex
-	assocs map[string]ekstypes.PodIdentityAssociationSummary
-	roles  map[string]string
-	next   int
-}
-
-func newMemEKS() *memEKS {
-	return &memEKS{assocs: map[string]ekstypes.PodIdentityAssociationSummary{}, roles: map[string]string{}}
-}
-
-func (m *memEKS) ListPodIdentityAssociations(_ context.Context, p *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := &eks.ListPodIdentityAssociationsOutput{}
-	if a, ok := m.assocs[aws.ToString(p.Namespace)+"/"+aws.ToString(p.ServiceAccount)]; ok {
-		out.Associations = append(out.Associations, a)
-	}
-	return out, nil
-}
-
-func (m *memEKS) CreatePodIdentityAssociation(_ context.Context, p *eks.CreatePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.next++
-	key := aws.ToString(p.Namespace) + "/" + aws.ToString(p.ServiceAccount)
-	m.assocs[key] = ekstypes.PodIdentityAssociationSummary{
-		AssociationId:  aws.String(fmt.Sprintf("a-%d", m.next)),
-		ClusterName:    p.ClusterName,
-		Namespace:      p.Namespace,
-		ServiceAccount: p.ServiceAccount,
-	}
-	m.roles[key] = aws.ToString(p.RoleArn)
-	return &eks.CreatePodIdentityAssociationOutput{}, nil
-}
-
-func (m *memEKS) DeletePodIdentityAssociation(_ context.Context, p *eks.DeletePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DeletePodIdentityAssociationOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for k, a := range m.assocs {
-		if aws.ToString(a.AssociationId) == aws.ToString(p.AssociationId) {
-			delete(m.assocs, k)
-			delete(m.roles, k)
-		}
-	}
-	return &eks.DeletePodIdentityAssociationOutput{}, nil
-}
-
-func (m *memEKS) DescribePodIdentityAssociation(_ context.Context, p *eks.DescribePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DescribePodIdentityAssociationOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for k, a := range m.assocs {
-		if aws.ToString(a.AssociationId) == aws.ToString(p.AssociationId) {
-			return &eks.DescribePodIdentityAssociationOutput{Association: &ekstypes.PodIdentityAssociation{
-				AssociationId:  a.AssociationId,
-				Namespace:      a.Namespace,
-				ServiceAccount: a.ServiceAccount,
-				RoleArn:        aws.String(m.roles[k]),
-			}}, nil
-		}
-	}
-	return nil, &ekstypes.ResourceNotFoundException{Message: aws.String("no association " + aws.ToString(p.AssociationId))}
-}
-
-// rebind points the (namespace, serviceAccount) association at another role,
-// the way an edit made outside the operator would.
-func (m *memEKS) rebind(namespace, serviceAccount, roleARN string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.roles[namespace+"/"+serviceAccount] = roleARN
-}
-
-// roleFor returns the role a (namespace, serviceAccount) is bound to.
-func (m *memEKS) roleFor(namespace, serviceAccount string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	role, ok := m.roles[namespace+"/"+serviceAccount]
-	return role, ok
-}
-
-var _ awsclients.EKS = (*memEKS)(nil)
-
-func (m *memIAM) inlinePolicy(role, name string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	doc, ok := m.inline[role][name]
-	return doc, ok
-}
-
-func (m *memIAM) setInlinePolicy(role, name, doc string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.inline[role][name] = doc
-}
-
-func (m *memIAM) hasRole(name string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.roles[name]
-	return ok
-}
-
-func (m *memIAM) trustUpdateCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.trustUpdates
-}
-
-func (m *memIAM) putCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.puts
-}
-
 // newEvalIdentityReconciler is the scoping reconciler with an EKS client and
 // an eval runtime wired, so a reconcile mints the eval identity.
-func newEvalIdentityReconciler(iamFake *memIAM, eksFake *memEKS, bucket string) *controller.PlatformReconciler {
+func newEvalIdentityReconciler(iamFake *awsfake.IAM, eksFake *awsfake.EKS, bucket string) *controller.PlatformReconciler {
 	r := newScopingReconciler(iamFake)
 	r.EKS = eksFake
 	r.Eval = controller.EvalIdentityConfig{Namespace: evalRuntimeNs, ReportsBucket: bucket}
@@ -266,9 +145,9 @@ func assertEvalIdentityCondition(ctx context.Context, t *testing.T, p *platformv
 	}
 }
 
-func assertEvalPolicy(t *testing.T, iamFake *memIAM, p *platformv1alpha1.Platform, bucket string) {
+func assertEvalPolicy(t *testing.T, iamFake *awsfake.IAM, p *platformv1alpha1.Platform, bucket string) {
 	t.Helper()
-	doc, ok := iamFake.inlinePolicy(evalRoleFor(p), evalPolicyName)
+	doc, ok := iamFake.InlinePolicy(evalRoleFor(p), evalPolicyName)
 	if !ok {
 		t.Fatalf("no %s policy on %s", evalPolicyName, evalRoleFor(p))
 	}
@@ -282,7 +161,7 @@ func TestPlatformReconciler_MintsAPerPlatformEvalIdentity(t *testing.T) {
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	a, b := evalPlatform(ctx, t, "a"), evalPlatform(ctx, t, "b")
 	reconcileIAM(ctx, t, r, a)
@@ -297,11 +176,11 @@ func TestPlatformReconciler_MintsAPerPlatformEvalIdentity(t *testing.T) {
 		if sa.Labels[controller.LabelPlatform] != p.Name {
 			t.Errorf("%s: ServiceAccount labels %v do not name the Platform", p.Name, sa.Labels)
 		}
-		if !iamFake.hasRole(evalRoleFor(p)) {
+		if !iamFake.HasRole(evalRoleFor(p)) {
 			t.Fatalf("%s: no role %s", p.Name, evalRoleFor(p))
 		}
 		assertEvalPolicy(t, iamFake, p, evalBucket)
-		role, ok := eksFake.roleFor(evalRuntimeNs, saName)
+		role, ok := eksFake.BoundRole(evalRuntimeNs, saName)
 		if !ok || role != evalRoleARNPrefix+evalRoleFor(p) {
 			t.Errorf("%s: %s/%s is bound to %q (bound=%v), want its own eval role", p.Name, evalRuntimeNs, saName, role, ok)
 		}
@@ -316,7 +195,7 @@ func TestPlatformReconciler_MintsAPerPlatformEvalIdentity(t *testing.T) {
 	}
 
 	// Neither Platform's grant names the other's prefix.
-	docA, _ := iamFake.inlinePolicy(evalRoleFor(a), evalPolicyName)
+	docA, _ := iamFake.InlinePolicy(evalRoleFor(a), evalPolicyName)
 	if strings.Contains(docA, "/"+b.Name+"/") {
 		t.Errorf("%s's eval policy reaches %s's prefix: %s", a.Name, b.Name, docA)
 	}
@@ -330,22 +209,22 @@ func TestPlatformReconciler_EvalIdentityConvergesOnUpdate(t *testing.T) {
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	p := evalPlatform(ctx, t, "p")
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
 
 	// A converged pass writes nothing.
-	puts, trusts := iamFake.putCount(), iamFake.trustUpdateCount()
+	puts, trusts := iamFake.PutCount(), iamFake.TrustUpdateCount()
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
-	if got := iamFake.putCount(); got != puts {
+	if got := iamFake.PutCount(); got != puts {
 		t.Errorf("a converged reconcile made %d PutRolePolicy calls", got-puts)
 	}
-	if got := iamFake.trustUpdateCount(); got != trusts {
+	if got := iamFake.TrustUpdateCount(); got != trusts {
 		t.Errorf("a converged reconcile made %d UpdateAssumeRolePolicy calls", got-trusts)
 	}
 
 	// A policy widened out of band is narrowed back.
-	iamFake.setInlinePolicy(evalRoleFor(p), evalPolicyName,
+	iamFake.SetInlinePolicy(evalRoleFor(p), evalPolicyName,
 		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["*"]}]}`)
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
 	assertEvalPolicy(t, iamFake, p, evalBucket)
@@ -366,17 +245,17 @@ func TestPlatformReconciler_EvalRoleNotInTheMintedShapeIsLeftAlone(t *testing.T)
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	p := evalPlatform(ctx, t, "p")
-	iamFake.seedRole(evalRoleFor(p))
+	iamFake.SeedRoleAtPath(tenantIAMPath, evalRoleFor(p))
 	reconcileIAM(ctx, t, r, p)
 
 	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionFalse, "ReconcileFailed", `is tagged ManagedBy="", not "eks-agent-platform"`)
-	if _, ok := iamFake.inlinePolicy(evalRoleFor(p), evalPolicyName); ok {
+	if _, ok := iamFake.InlinePolicy(evalRoleFor(p), evalPolicyName); ok {
 		t.Error("the eval grant was written onto a role the operator does not hold")
 	}
-	if _, ok := eksFake.roleFor(evalRuntimeNs, controller.EvalServiceAccountName(p)); ok {
+	if _, ok := eksFake.BoundRole(evalRuntimeNs, controller.EvalServiceAccountName(p)); ok {
 		t.Error("the eval account was bound to a role the operator does not hold")
 	}
 	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalRoleArn; got != "" {
@@ -389,7 +268,7 @@ func TestPlatformReconciler_EvalRoleNotInTheMintedShapeIsLeftAlone(t *testing.T)
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}); err != nil {
 		t.Fatalf("finalizer reconcile: %v", err)
 	}
-	if !iamFake.hasRole(evalRoleFor(p)) {
+	if !iamFake.HasRole(evalRoleFor(p)) {
 		t.Errorf("the finalizer deleted %s, a role the operator does not hold", evalRoleFor(p))
 	}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: p.Namespace}, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
@@ -402,12 +281,12 @@ func TestPlatformReconciler_EvalIdentityRemovedOnDelete(t *testing.T) {
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	p := evalPlatform(ctx, t, "p")
 	reconcileIAM(ctx, t, r, p)
 	saName := controller.EvalServiceAccountName(p)
-	if _, ok := eksFake.roleFor(evalRuntimeNs, saName); !ok {
+	if _, ok := eksFake.BoundRole(evalRuntimeNs, saName); !ok {
 		t.Fatal("precondition: the eval identity was never bound")
 	}
 
@@ -422,13 +301,13 @@ func TestPlatformReconciler_EvalIdentityRemovedOnDelete(t *testing.T) {
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("eval ServiceAccount survived the Platform (err=%v)", err)
 	}
-	if _, ok := eksFake.roleFor(evalRuntimeNs, saName); ok {
+	if _, ok := eksFake.BoundRole(evalRuntimeNs, saName); ok {
 		t.Error("the Pod Identity association survived the Platform")
 	}
-	if iamFake.hasRole(evalRoleFor(p)) {
+	if iamFake.HasRole(evalRoleFor(p)) {
 		t.Errorf("role %s survived the Platform", evalRoleFor(p))
 	}
-	if iamFake.hasRole(tenantRoleFor(p)) {
+	if iamFake.HasRole(tenantRoleFor(p)) {
 		t.Errorf("tenant role %s survived the Platform", tenantRoleFor(p))
 	}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.Name, Namespace: p.Namespace}, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
@@ -444,9 +323,9 @@ func TestPlatformReconciler_EvalIdentityHoldsWhileSuspended(t *testing.T) {
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	p := evalPlatform(ctx, t, "p")
-	iamFake.seedRole(tenantRoleFor(p),
+	iamFake.SeedRoleAtPath(tenantIAMPath, tenantRoleFor(p),
 		iamtypes.Tag{Key: aws.String("platform.nanohype.dev/suspended"), Value: aws.String("true")},
 		iamtypes.Tag{Key: aws.String("platform.nanohype.dev/suspended-reason"), Value: aws.String("budget-exceeded")},
 	)
@@ -455,11 +334,11 @@ func TestPlatformReconciler_EvalIdentityHoldsWhileSuspended(t *testing.T) {
 	if got := getPlatform(ctx, t, p.Namespace, p.Name); got.Status.Phase != phaseSuspended {
 		t.Fatalf("precondition: phase %q, want Suspended", got.Status.Phase)
 	}
-	if _, ok := iamFake.inlinePolicy(tenantRoleFor(p), scopingPolicyName); ok {
+	if _, ok := iamFake.InlinePolicy(tenantRoleFor(p), scopingPolicyName); ok {
 		t.Error("precondition: the suspended tenant role was written to")
 	}
 	assertEvalPolicy(t, iamFake, p, evalBucket)
-	if _, ok := eksFake.roleFor(evalRuntimeNs, controller.EvalServiceAccountName(p)); !ok {
+	if _, ok := eksFake.BoundRole(evalRuntimeNs, controller.EvalServiceAccountName(p)); !ok {
 		t.Error("a suspended Platform's eval identity was not bound")
 	}
 }
@@ -472,7 +351,7 @@ func TestPlatformReconciler_EvalIdentityWaitsForTheRuntimeNamespace(t *testing.T
 	ctx := context.Background()
 	ensureNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	p := evalPlatform(ctx, t, "p")
 	absentNs := "eval-late-" + strings.TrimPrefix(p.Name, "ev-")
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
@@ -486,10 +365,10 @@ func TestPlatformReconciler_EvalIdentityWaitsForTheRuntimeNamespace(t *testing.T
 	if got := getPlatform(ctx, t, p.Namespace, p.Name); got.Status.Phase != phaseReady {
 		t.Fatalf("phase %q with no eval runtime namespace, want Ready", got.Status.Phase)
 	}
-	if iamFake.hasRole(evalRoleFor(p)) {
+	if iamFake.HasRole(evalRoleFor(p)) {
 		t.Errorf("role %s minted with no namespace for its ServiceAccount", evalRoleFor(p))
 	}
-	if _, ok := eksFake.roleFor(absentNs, saName); ok {
+	if _, ok := eksFake.BoundRole(absentNs, saName); ok {
 		t.Error("an association was created for a ServiceAccount that cannot exist")
 	}
 	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionFalse, "RuntimeNamespaceAbsent", absentNs)
@@ -500,7 +379,7 @@ func TestPlatformReconciler_EvalIdentityWaitsForTheRuntimeNamespace(t *testing.T
 		t.Fatalf("eval ServiceAccount after the namespace arrived: %v", err)
 	}
 	assertEvalPolicy(t, iamFake, p, evalBucket)
-	if role, ok := eksFake.roleFor(absentNs, saName); !ok || role != evalRoleARNPrefix+evalRoleFor(p) {
+	if role, ok := eksFake.BoundRole(absentNs, saName); !ok || role != evalRoleARNPrefix+evalRoleFor(p) {
 		t.Errorf("%s/%s is bound to %q (bound=%v), want its eval role", absentNs, saName, role, ok)
 	}
 	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", saName)
@@ -525,8 +404,8 @@ func TestPlatformReconciler_EvalIdentityFailureLeavesThePlatformReady(t *testing
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
-	iamFake.createErr = evalCreateDenied
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
+	iamFake.CreateErr = evalCreateDenied
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	p := evalPlatform(ctx, t, "p")
 	reconcileIAM(ctx, t, r, p)
@@ -538,15 +417,15 @@ func TestPlatformReconciler_EvalIdentityFailureLeavesThePlatformReady(t *testing
 	if apimeta.FindStatusCondition(got.Status.Conditions, condModelAccessScoped) == nil {
 		t.Error("the Platform's own conditions were not written")
 	}
-	if !iamFake.hasRole(tenantRoleFor(p)) {
+	if !iamFake.HasRole(tenantRoleFor(p)) {
 		t.Errorf("tenant role %s not minted", tenantRoleFor(p))
 	}
 	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionFalse, "ReconcileFailed", "AccessDenied")
-	if _, ok := eksFake.roleFor(evalRuntimeNs, controller.EvalServiceAccountName(p)); ok {
+	if _, ok := eksFake.BoundRole(evalRuntimeNs, controller.EvalServiceAccountName(p)); ok {
 		t.Error("an association was created for a role that was never minted")
 	}
 
-	iamFake.createErr = nil
+	iamFake.CreateErr = nil
 	reconcileIAM(ctx, t, r, p)
 	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleFor(p))
 	assertEvalPolicy(t, iamFake, p, evalBucket)
@@ -561,10 +440,10 @@ func TestPlatformReconciler_EvalIdentityFailureKeepsSuspensionReported(t *testin
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
-	iamFake.createErr = evalCreateDenied
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
+	iamFake.CreateErr = evalCreateDenied
 	p := evalPlatform(ctx, t, "p")
-	iamFake.seedRole(tenantRoleFor(p),
+	iamFake.SeedRoleAtPath(tenantIAMPath, tenantRoleFor(p),
 		iamtypes.Tag{Key: aws.String("platform.nanohype.dev/suspended"), Value: aws.String("true")},
 		iamtypes.Tag{Key: aws.String("platform.nanohype.dev/suspended-reason"), Value: aws.String("budget-exceeded")},
 	)
@@ -590,8 +469,8 @@ func TestPlatformReconciler_EvalIdentityNeedsNoRootPathGrant(t *testing.T) {
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
-	iamFake.deniedAbsentSuffix = "-eval"
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
+	iamFake.DeniedAbsentSuffix = "-eval"
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 
 	minted := evalPlatform(ctx, t, "minted")
@@ -604,7 +483,7 @@ func TestPlatformReconciler_EvalIdentityNeedsNoRootPathGrant(t *testing.T) {
 	late := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	late.Eval.Namespace = "eval-never-" + strings.TrimPrefix(deferred.Name, "ev-")
 	reconcileIAM(ctx, t, late, deferred)
-	if iamFake.hasRole(evalRoleFor(deferred)) {
+	if iamFake.HasRole(evalRoleFor(deferred)) {
 		t.Fatalf("precondition: role %s was minted", evalRoleFor(deferred))
 	}
 
@@ -622,7 +501,7 @@ func TestPlatformReconciler_EvalIdentityNeedsNoRootPathGrant(t *testing.T) {
 			t.Errorf("%s: the finalizer was not released (err=%v)", c.p.Name, err)
 		}
 	}
-	if iamFake.hasRole(evalRoleFor(minted)) {
+	if iamFake.HasRole(evalRoleFor(minted)) {
 		t.Errorf("role %s survived its Platform", evalRoleFor(minted))
 	}
 }
@@ -638,8 +517,8 @@ func TestPlatformReconciler_EvalRoleOutOfReachHoldsTheFinalizer(t *testing.T) {
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
-	iamFake.deniedAbsentSuffix = "-eval"
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
+	iamFake.DeniedAbsentSuffix = "-eval"
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	p := evalPlatform(ctx, t, "p")
 	reconcileIAM(ctx, t, r, p)
@@ -648,9 +527,9 @@ func TestPlatformReconciler_EvalRoleOutOfReachHoldsTheFinalizer(t *testing.T) {
 		t.Fatalf("precondition: status.evalRoleArn = %q, want %s", got, evalRoleARNPrefix+role)
 	}
 
-	iamFake.mu.Lock()
-	iamFake.refusedReads = map[string]bool{role: true}
-	iamFake.mu.Unlock()
+	iamFake.Lock()
+	iamFake.RefusedReads = map[string]bool{role: true}
+	iamFake.Unlock()
 	if err := k8sClient.Delete(ctx, p); err != nil {
 		t.Fatalf("delete platform: %v", err)
 	}
@@ -658,20 +537,20 @@ func TestPlatformReconciler_EvalRoleOutOfReachHoldsTheFinalizer(t *testing.T) {
 	if _, err := r.Reconcile(ctx, req); err == nil || !strings.Contains(err.Error(), "status.evalRoleArn records") {
 		t.Fatalf("finalizer reconcile = %v, want it held on the recorded role", err)
 	}
-	if !iamFake.hasRole(role) {
+	if !iamFake.HasRole(role) {
 		t.Fatalf("role %s was lost while the operator could not read it", role)
 	}
 	if got := getPlatform(ctx, t, p.Namespace, p.Name); len(got.Finalizers) == 0 {
 		t.Fatal("the finalizer was released over a role the operator could not read")
 	}
 
-	iamFake.mu.Lock()
-	iamFake.refusedReads = nil
-	iamFake.mu.Unlock()
+	iamFake.Lock()
+	iamFake.RefusedReads = nil
+	iamFake.Unlock()
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatalf("finalizer reconcile once the role is readable: %v", err)
 	}
-	if iamFake.hasRole(role) {
+	if iamFake.HasRole(role) {
 		t.Errorf("role %s survived its Platform", role)
 	}
 	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
@@ -688,15 +567,15 @@ func TestPlatformReconciler_EvalIdentityRebindsADriftedAssociation(t *testing.T)
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	p := evalPlatform(ctx, t, "p")
 	reconcileIAM(ctx, t, r, p)
 	saName := controller.EvalServiceAccountName(p)
 
-	eksFake.rebind(evalRuntimeNs, saName, "arn:aws:iam::123456789012:role/someone-else")
+	eksFake.Rebind(evalRuntimeNs, saName, "arn:aws:iam::123456789012:role/someone-else")
 	reconcileIAM(ctx, t, r, p)
-	if role, _ := eksFake.roleFor(evalRuntimeNs, saName); role != evalRoleARNPrefix+evalRoleFor(p) {
+	if role, _ := eksFake.BoundRole(evalRuntimeNs, saName); role != evalRoleARNPrefix+evalRoleFor(p) {
 		t.Errorf("%s/%s is bound to %q, want %s", evalRuntimeNs, saName, role, evalRoleARNPrefix+evalRoleFor(p))
 	}
 	assertEvalIdentityCondition(ctx, t, p, metav1.ConditionTrue, "Bound", evalRoleARNPrefix+evalRoleFor(p))
@@ -722,8 +601,8 @@ func TestPlatformReconciler_EvalRoleRecordSurvivesAnEarlyReturn(t *testing.T) {
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
-	iamFake.createErr = evalSessionCreateDenied
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
+	iamFake.CreateErr = evalSessionCreateDenied
 	r := newEvalIdentityReconciler(iamFake, eksFake, evalBucket)
 	p := evalPlatform(ctx, t, "p")
 	latest := getPlatform(ctx, t, p.Namespace, p.Name)
@@ -741,36 +620,36 @@ func TestPlatformReconciler_EvalRoleRecordSurvivesAnEarlyReturn(t *testing.T) {
 		t.Fatalf("Reconcile = %v, want the session role's CreateRole failure", err)
 	}
 	role := evalRoleFor(p)
-	if !iamFake.hasRole(role) {
+	if !iamFake.HasRole(role) {
 		t.Fatalf("precondition: the failing pass never minted %s", role)
 	}
 	if got := getPlatform(ctx, t, p.Namespace, p.Name).Status.EvalRoleArn; got != evalRoleARNPrefix+role {
 		t.Fatalf("status.evalRoleArn = %q after a pass that returned early, want %s", got, evalRoleARNPrefix+role)
 	}
 
-	iamFake.mu.Lock()
-	iamFake.refusedReads = map[string]bool{role: true}
-	iamFake.mu.Unlock()
+	iamFake.Lock()
+	iamFake.RefusedReads = map[string]bool{role: true}
+	iamFake.Unlock()
 	if err := k8sClient.Delete(ctx, p); err != nil {
 		t.Fatalf("delete platform: %v", err)
 	}
 	if _, err := r.Reconcile(ctx, req); err == nil || !strings.Contains(err.Error(), "status.evalRoleArn records") {
 		t.Fatalf("finalizer reconcile = %v, want it held on the recorded role", err)
 	}
-	if !iamFake.hasRole(role) {
+	if !iamFake.HasRole(role) {
 		t.Fatalf("role %s was lost while the operator could not read it", role)
 	}
 	if got := getPlatform(ctx, t, p.Namespace, p.Name); len(got.Finalizers) == 0 {
 		t.Fatal("the finalizer was released over a role the operator could not read")
 	}
 
-	iamFake.mu.Lock()
-	iamFake.refusedReads = nil
-	iamFake.mu.Unlock()
+	iamFake.Lock()
+	iamFake.RefusedReads = nil
+	iamFake.Unlock()
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatalf("finalizer reconcile once the role is readable: %v", err)
 	}
-	if iamFake.hasRole(role) {
+	if iamFake.HasRole(role) {
 		t.Errorf("role %s survived its Platform", role)
 	}
 	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
@@ -789,11 +668,11 @@ func TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured(t *t
 	ensureNs(ctx, t)
 	ensureEvalRuntimeNs(ctx, t)
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	p := evalPlatform(ctx, t, "p")
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
 	saName := controller.EvalServiceAccountName(p)
-	if _, ok := eksFake.roleFor(evalRuntimeNs, saName); !ok {
+	if _, ok := eksFake.BoundRole(evalRuntimeNs, saName); !ok {
 		t.Fatal("precondition: the eval identity was never bound")
 	}
 
@@ -806,10 +685,10 @@ func TestPlatformReconciler_EvalIdentityRemovedOnceTheRuntimeIsUnconfigured(t *t
 	if _, err := unconfigured.Reconcile(ctx, req); err != nil {
 		t.Fatalf("finalizer reconcile: %v", err)
 	}
-	if iamFake.hasRole(evalRoleFor(p)) {
+	if iamFake.HasRole(evalRoleFor(p)) {
 		t.Errorf("role %s survived its Platform", evalRoleFor(p))
 	}
-	if _, ok := eksFake.roleFor(evalRuntimeNs, saName); ok {
+	if _, ok := eksFake.BoundRole(evalRuntimeNs, saName); ok {
 		t.Error("the Pod Identity association survived the Platform")
 	}
 	err := k8sClient.Get(ctx, types.NamespacedName{Namespace: evalRuntimeNs, Name: saName}, &corev1.ServiceAccount{})
@@ -835,7 +714,7 @@ func TestPlatformReconciler_EvalIdentityFollowsAMovedRuntimeNamespace(t *testing
 		t.Fatalf("create moved eval runtime namespace: %v", err)
 	}
 
-	iamFake, eksFake := newMemIAM(), newMemEKS()
+	iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 	p := evalPlatform(ctx, t, "p")
 	reconcileIAM(ctx, t, newEvalIdentityReconciler(iamFake, eksFake, evalBucket), p)
 	saName := controller.EvalServiceAccountName(p)
@@ -848,10 +727,10 @@ func TestPlatformReconciler_EvalIdentityFollowsAMovedRuntimeNamespace(t *testing
 	reconcileIAM(ctx, t, moved, p)
 
 	want := evalRoleARNPrefix + evalRoleFor(p)
-	if role, ok := eksFake.roleFor(movedNs, saName); !ok || role != want {
+	if role, ok := eksFake.BoundRole(movedNs, saName); !ok || role != want {
 		t.Errorf("%s/%s is bound to %q (bound=%v), want %s", movedNs, saName, role, ok, want)
 	}
-	if role, ok := eksFake.roleFor(evalRuntimeNs, saName); ok {
+	if role, ok := eksFake.BoundRole(evalRuntimeNs, saName); ok {
 		t.Errorf("the association in %s still binds %s after the move", evalRuntimeNs, role)
 	}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: evalRuntimeNs, Name: saName}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
@@ -871,13 +750,13 @@ func TestPlatformReconciler_EvalIdentityFollowsAMovedRuntimeNamespace(t *testing
 	if _, err := unconfigured.Reconcile(ctx, req); err != nil {
 		t.Fatalf("finalizer reconcile: %v", err)
 	}
-	if role, ok := eksFake.roleFor(movedNs, saName); ok {
+	if role, ok := eksFake.BoundRole(movedNs, saName); ok {
 		t.Errorf("the association in %s survived the Platform, still binding %s", movedNs, role)
 	}
 	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: movedNs, Name: saName}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
 		t.Errorf("eval ServiceAccount survived the Platform in %s (err=%v)", movedNs, err)
 	}
-	if iamFake.hasRole(evalRoleFor(p)) {
+	if iamFake.HasRole(evalRoleFor(p)) {
 		t.Errorf("role %s survived its Platform", evalRoleFor(p))
 	}
 	if err := k8sClient.Get(ctx, req.NamespacedName, &platformv1alpha1.Platform{}); !apierrors.IsNotFound(err) {
@@ -898,19 +777,19 @@ func TestPlatformReconciler_NoEvalIdentityConditionWhileNoneIsMinted(t *testing.
 
 	cases := []struct {
 		name      string
-		unmanaged func(*memIAM, *memEKS) *controller.PlatformReconciler
+		unmanaged func(*awsfake.IAM, *awsfake.EKS) *controller.PlatformReconciler
 	}{
-		{"no eval runtime", func(i *memIAM, e *memEKS) *controller.PlatformReconciler {
+		{"no eval runtime", func(i *awsfake.IAM, e *awsfake.EKS) *controller.PlatformReconciler {
 			r := newEvalIdentityReconciler(i, e, "")
 			r.Eval = controller.EvalIdentityConfig{}
 			return r
 		}},
-		{"no EKS client", func(i *memIAM, e *memEKS) *controller.PlatformReconciler {
+		{"no EKS client", func(i *awsfake.IAM, e *awsfake.EKS) *controller.PlatformReconciler {
 			r := newEvalIdentityReconciler(i, e, evalBucket)
 			r.EKS = nil
 			return r
 		}},
-		{"no IAM client", func(i *memIAM, e *memEKS) *controller.PlatformReconciler {
+		{"no IAM client", func(i *awsfake.IAM, e *awsfake.EKS) *controller.PlatformReconciler {
 			r := newEvalIdentityReconciler(i, e, evalBucket)
 			r.IAM = nil
 			return r
@@ -918,7 +797,7 @@ func TestPlatformReconciler_NoEvalIdentityConditionWhileNoneIsMinted(t *testing.
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			iamFake, eksFake := newMemIAM(), newMemEKS()
+			iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
 			unmanaged := c.unmanaged(iamFake, eksFake)
 
 			fresh := evalPlatform(ctx, t, "fresh")

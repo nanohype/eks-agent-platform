@@ -285,6 +285,9 @@ func (r *BudgetReconciler) querySpendFromAthena(ctx context.Context, platformID 
 		}
 	}()
 
+	// The deadline is on the wall clock, not r.Clock: sleepCtx below waits on a
+	// real timer, and a deadline read from a clock that does not advance with
+	// that timer would never arrive.
 	deadline := time.Now().Add(r.queryTimeout())
 	for time.Now().Before(deadline) {
 		getOut, err := r.Athena.GetQueryExecution(ctx, &athena.GetQueryExecutionInput{
@@ -342,7 +345,7 @@ func (r *BudgetReconciler) queryInflightCost(ctx context.Context, platformID str
 	if r.CloudWatch == nil {
 		return "0", nil
 	}
-	end := time.Now().UTC()
+	end := r.now().UTC()
 	if !since.Before(end) {
 		return "0", nil
 	}
@@ -489,7 +492,7 @@ func (r *BudgetReconciler) fireKillSwitch(ctx context.Context, bp *governancev1a
 			Source:       aws.String(budgetEventSource),
 			DetailType:   aws.String(budgetEventDetailType),
 			Detail:       aws.String(string(payload)),
-			Time:         aws.Time(time.Now().UTC()),
+			Time:         aws.Time(r.now().UTC()),
 		}},
 	})
 	if err != nil {
@@ -665,7 +668,7 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 	//
 	// This only became reachable when the in-flight leg started returning a number
 	// at all; while it read a permanent zero the window could not be wrong.
-	since := inflightWindowStart(time.Now().UTC())
+	since := inflightWindowStart(r.now().UTC())
 	spendInflight, err := r.queryInflightCost(ctx, costID, since)
 	if err != nil {
 		// CloudWatch outage shouldn't block the entire reconciler; we log
@@ -709,7 +712,7 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 			// platform being Suspended is. Verify the effect; if the
 			// suspension path is broken, re-publish (bounded) and flag it so
 			// the latch can't record a false success.
-			eff := r.killSwitchEffect(bp, platformSuspended, time.Now())
+			eff := r.killSwitchEffect(bp, platformSuspended, r.now())
 			if eff.unrouted {
 				unrouted = true
 				killSwitchUnroutedTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name).Inc()
@@ -741,7 +744,7 @@ func (r *BudgetReconciler) reconcileBudget(ctx context.Context, bp *governancev1
 func (r *BudgetReconciler) applyBudgetStatus(ctx context.Context, bp *governancev1alpha1.BudgetPolicy, reading budgetReading) error {
 	bp.Status.CurrentSpendUsd = reading.spendUsd
 	bp.Status.PercentOfBudget = reading.pct
-	now := metav1.Now()
+	now := metav1.NewTime(r.now())
 	bp.Status.LastReconciled = &now
 
 	condType := "BudgetReconciled"
@@ -840,7 +843,7 @@ func (r *BudgetReconciler) applyBudgetStatusError(ctx context.Context, bp *gover
 		Status:             metav1.ConditionFalse,
 		Reason:             reason,
 		Message:            cause.Error(),
-		LastTransitionTime: metav1.Now(),
+		LastTransitionTime: metav1.NewTime(r.now()),
 		ObservedGeneration: bp.Generation,
 	})
 	return r.Status().Update(ctx, bp)

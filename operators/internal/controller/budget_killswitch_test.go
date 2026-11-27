@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,19 +21,8 @@ import (
 	commonv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/common/v1alpha1"
 	governancev1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/governance/v1alpha1"
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
-
-// fakeEventBridge is a minimal in-memory awsclients.EventBridge that returns a
-// canned PutEvents result so the partial-failure branch can be asserted.
-type fakeEventBridge struct {
-	out   *eventbridge.PutEventsOutput
-	calls []eventbridge.PutEventsInput
-}
-
-func (f *fakeEventBridge) PutEvents(_ context.Context, params *eventbridge.PutEventsInput, _ ...func(*eventbridge.Options)) (*eventbridge.PutEventsOutput, error) {
-	f.calls = append(f.calls, *params)
-	return f.out, nil
-}
 
 func newBudgetPolicy() *governancev1alpha1.BudgetPolicy {
 	return &governancev1alpha1.BudgetPolicy{
@@ -48,27 +35,23 @@ func newBudgetPolicy() *governancev1alpha1.BudgetPolicy {
 }
 
 func TestFireKillSwitch_SuccessReturnsNil(t *testing.T) {
-	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{FailedEntryCount: 0}}
+	eb := awsfake.NewEventBridge()
 	r := &BudgetReconciler{EventBridge: eb, KillSwitchEventBusName: "killswitch-bus"}
 
 	if err := r.fireKillSwitch(context.Background(), newBudgetPolicy(), "150.00", 150); err != nil {
 		t.Fatalf("fireKillSwitch on a clean PutEvents must return nil, got %v", err)
 	}
-	if len(eb.calls) != 1 {
-		t.Fatalf("want exactly 1 PutEvents call, got %d", len(eb.calls))
+	if len(eb.Calls) != 1 {
+		t.Fatalf("want exactly 1 PutEvents call, got %d", len(eb.Calls))
 	}
-	if got := aws.ToString(eb.calls[0].Entries[0].EventBusName); got != "killswitch-bus" {
+	if got := aws.ToString(eb.Calls[0].Entries[0].EventBusName); got != "killswitch-bus" {
 		t.Errorf("event bus = %q, want killswitch-bus", got)
 	}
 }
 
 func TestFireKillSwitch_PartialFailureIsRetryableError(t *testing.T) {
-	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{
-		FailedEntryCount: 1,
-		Entries: []ebtypes.PutEventsResultEntry{{
-			ErrorCode:    aws.String("ThrottlingException"),
-			ErrorMessage: aws.String("rate exceeded"),
-		}},
+	eb := &awsfake.EventBridge{EntryFailures: map[int]awsfake.EntryFailure{
+		0: {Code: "ThrottlingException", Message: "rate exceeded"},
 	}}
 	r := &BudgetReconciler{EventBridge: eb, KillSwitchEventBusName: "killswitch-bus"}
 
@@ -202,7 +185,7 @@ func TestReconcileBudget_UnroutedRefiresAndAlerts(t *testing.T) {
 		},
 		Status: governancev1alpha1.BudgetPolicyStatus{KillSwitchFiredAt: &firedAt},
 	}
-	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{FailedEntryCount: 0}}
+	eb := awsfake.NewEventBridge()
 	r := &BudgetReconciler{Client: cl, EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", RequeueInterval: time.Hour, ClusterName: "staging-platform"}
 
 	before := testutil.ToFloat64(killSwitchUnroutedTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name))
@@ -216,10 +199,10 @@ func TestReconcileBudget_UnroutedRefiresAndAlerts(t *testing.T) {
 	if !reading.killSwitchRefired {
 		t.Error("reading.killSwitchRefired = false; want true (should re-publish the breach)")
 	}
-	if len(eb.calls) != 1 {
-		t.Fatalf("want exactly 1 re-fire PutEvents, got %d", len(eb.calls))
+	if len(eb.Calls) != 1 {
+		t.Fatalf("want exactly 1 re-fire PutEvents, got %d", len(eb.Calls))
 	}
-	if got := aws.ToString(eb.calls[0].Entries[0].Source); got != budgetEventSource {
+	if got := aws.ToString(eb.Calls[0].Entries[0].Source); got != budgetEventSource {
 		t.Errorf("re-fire source = %q, want %q", got, budgetEventSource)
 	}
 	after := testutil.ToFloat64(killSwitchUnroutedTotal.WithLabelValues(bp.Namespace, bp.Name, platform.Name))
@@ -247,7 +230,7 @@ func TestReconcileBudget_SuspensionObservedSettles(t *testing.T) {
 		},
 		Status: governancev1alpha1.BudgetPolicyStatus{KillSwitchFiredAt: &firedAt},
 	}
-	eb := &fakeEventBridge{out: &eventbridge.PutEventsOutput{FailedEntryCount: 0}}
+	eb := awsfake.NewEventBridge()
 	r := &BudgetReconciler{Client: cl, EventBridge: eb, KillSwitchEventBusName: "killswitch-bus", RequeueInterval: time.Hour, ClusterName: "staging-platform"}
 
 	reading, err := r.reconcileBudget(ctx, bp)
@@ -263,7 +246,7 @@ func TestReconcileBudget_SuspensionObservedSettles(t *testing.T) {
 	if !reading.platformSuspended {
 		t.Error("reading.platformSuspended = false; want true")
 	}
-	if len(eb.calls) != 0 {
-		t.Errorf("want 0 PutEvents once suspended, got %d", len(eb.calls))
+	if len(eb.Calls) != 0 {
+		t.Errorf("want 0 PutEvents once suspended, got %d", len(eb.Calls))
 	}
 }

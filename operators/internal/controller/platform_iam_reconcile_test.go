@@ -8,21 +8,16 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/eks"
-	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
-	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/aws/smithy-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	platformv1alpha1 "github.com/nanohype/eks-agent-platform/operators/api/platform/v1alpha1"
+	"github.com/nanohype/eks-agent-platform/operators/test/awsfake"
 )
 
 func newPlatform(name, tenant string) *platformv1alpha1.Platform {
@@ -38,291 +33,6 @@ func newPlatform(name, tenant string) *platformv1alpha1.Platform {
 	}
 }
 
-// fakeIAM is a minimal in-memory implementation of awsclients.IAM used to
-// cover policy-attachment reconcile logic without spinning up LocalStack.
-// Only the methods the reconciler actually calls are populated; the rest
-// panic so adding a new SDK call without test coverage is loud.
-type fakeIAM struct {
-	roles    map[string]*iamtypes.Role
-	attached map[string]map[string]struct{} // roleName -> set of policy ARNs
-	inline   map[string]map[string]string   // roleName -> policyName -> document
-
-	listCalls         int
-	attachCalls       []iam.AttachRolePolicyInput
-	createCalls       []iam.CreateRoleInput
-	updateAssumeCalls []iam.UpdateAssumeRolePolicyInput
-	detachCalls       []iam.DetachRolePolicyInput
-	putInlineCalls    []iam.PutRolePolicyInput
-	deleteInlineCalls []iam.DeleteRolePolicyInput
-	listReturnsErr    error
-	attachReturnsErr  map[string]error // policyARN -> err
-	pageBoundary      int              // if > 0, paginate ListAttached at this size
-
-	// Error-injection hooks for the finalizer / error-branch coverage tests.
-	// All default nil (no error); set per-test to drive a specific failure.
-	getReturnsErr        error // GetRole returns this instead of NoSuchEntity/role
-	createReturnsErr     error // CreateRole
-	detachReturnsErr     error // DetachRolePolicy
-	deleteReturnsErr     error // DeleteRole
-	updateAssumeErr      error // UpdateAssumeRolePolicy
-	listInlineReturnsErr error // ListRolePolicies
-	// getInlineReturnsErr injects a GetRolePolicy error keyed by policy name, so
-	// a test can fail one inline-policy reconcile (e.g. datastore-access) while
-	// the others (e.g. bedrock-model-scoping) still succeed.
-	getInlineReturnsErr map[string]error
-	// deleteInlineReturnsErr injects a DeleteRolePolicy error keyed by policy
-	// name (the datastore-access removal path when a declaration is cleared).
-	deleteInlineReturnsErr map[string]error
-	// putInlineReturnsErr injects a PutRolePolicy error keyed by policy name.
-	putInlineReturnsErr map[string]error
-	// absentReadsDenied answers GetRole on a name no role holds with
-	// AccessDenied instead of NoSuchEntity — what IAM returns to an identity
-	// whose read grant covers the tenant path but not the root-path name.
-	absentReadsDenied bool
-	// inlinePageSize, when > 0, paginates ListRolePolicies at that size so a
-	// test can drive the marker-following branch of deleteInlinePolicies. A
-	// loop that ignores the marker deletes only the first page, which on the
-	// finalizer path leaves grants on a role whose Platform is gone.
-	inlinePageSize int
-}
-
-func newFakeIAM() *fakeIAM {
-	return &fakeIAM{
-		roles:            map[string]*iamtypes.Role{},
-		attached:         map[string]map[string]struct{}{},
-		inline:           map[string]map[string]string{},
-		attachReturnsErr: map[string]error{},
-	}
-}
-
-func (f *fakeIAM) seedRole(name, arn string, tags ...iamtypes.Tag) {
-	f.roles[name] = &iamtypes.Role{
-		RoleName: aws.String(name),
-		Arn:      aws.String(arn),
-		Tags:     tags,
-	}
-	if _, ok := f.attached[name]; !ok {
-		f.attached[name] = map[string]struct{}{}
-	}
-}
-
-func (f *fakeIAM) seedAttachment(roleName, policyARN string) { //nolint:unparam // test fake seed helper
-	if _, ok := f.attached[roleName]; !ok {
-		f.attached[roleName] = map[string]struct{}{}
-	}
-	f.attached[roleName][policyARN] = struct{}{}
-}
-
-func (f *fakeIAM) attachmentsFor(roleName string) []string {
-	out := make([]string, 0, len(f.attached[roleName]))
-	for arn := range f.attached[roleName] {
-		out = append(out, arn)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func (f *fakeIAM) CreateRole(_ context.Context, params *iam.CreateRoleInput, _ ...func(*iam.Options)) (*iam.CreateRoleOutput, error) {
-	if f.createReturnsErr != nil {
-		return nil, f.createReturnsErr
-	}
-	f.createCalls = append(f.createCalls, *params)
-	name := aws.ToString(params.RoleName)
-	arn := "arn:aws:iam::123456789012:role/" + name
-	f.seedRole(name, arn, params.Tags...)
-	role := f.roles[name]
-	role.Path = params.Path
-	// GetRole returns the trust policy URL-encoded, as IAM does.
-	role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(params.AssumeRolePolicyDocument)))
-	if params.PermissionsBoundary != nil {
-		role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{
-			PermissionsBoundaryArn:  params.PermissionsBoundary,
-			PermissionsBoundaryType: iamtypes.PermissionsBoundaryAttachmentTypePolicy,
-		}
-	}
-	return &iam.CreateRoleOutput{Role: role}, nil
-}
-
-func (f *fakeIAM) GetRole(_ context.Context, params *iam.GetRoleInput, _ ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
-	if f.getReturnsErr != nil {
-		return nil, f.getReturnsErr
-	}
-	name := aws.ToString(params.RoleName)
-	role, ok := f.roles[name]
-	if !ok && f.absentReadsDenied {
-		return nil, &smithy.GenericAPIError{Code: "AccessDenied", Message: "not authorized to perform: iam:GetRole on resource: role " + name}
-	}
-	if !ok {
-		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role: " + name)}
-	}
-	return &iam.GetRoleOutput{Role: role}, nil
-}
-
-func (f *fakeIAM) DeleteRole(_ context.Context, params *iam.DeleteRoleInput, _ ...func(*iam.Options)) (*iam.DeleteRoleOutput, error) {
-	if f.deleteReturnsErr != nil {
-		return nil, f.deleteReturnsErr
-	}
-	name := aws.ToString(params.RoleName)
-	delete(f.roles, name)
-	delete(f.attached, name)
-	return &iam.DeleteRoleOutput{}, nil
-}
-
-func (f *fakeIAM) TagRole(_ context.Context, _ *iam.TagRoleInput, _ ...func(*iam.Options)) (*iam.TagRoleOutput, error) {
-	return &iam.TagRoleOutput{}, nil
-}
-
-func (f *fakeIAM) UpdateAssumeRolePolicy(_ context.Context, params *iam.UpdateAssumeRolePolicyInput, _ ...func(*iam.Options)) (*iam.UpdateAssumeRolePolicyOutput, error) {
-	if f.updateAssumeErr != nil {
-		return nil, f.updateAssumeErr
-	}
-	f.updateAssumeCalls = append(f.updateAssumeCalls, *params)
-	if role, ok := f.roles[aws.ToString(params.RoleName)]; ok {
-		role.AssumeRolePolicyDocument = aws.String(url.QueryEscape(aws.ToString(params.PolicyDocument)))
-	}
-	return &iam.UpdateAssumeRolePolicyOutput{}, nil
-}
-
-func (f *fakeIAM) AttachRolePolicy(_ context.Context, params *iam.AttachRolePolicyInput, _ ...func(*iam.Options)) (*iam.AttachRolePolicyOutput, error) {
-	arn := aws.ToString(params.PolicyArn)
-	if err, ok := f.attachReturnsErr[arn]; ok && err != nil {
-		return nil, err
-	}
-	f.attachCalls = append(f.attachCalls, *params)
-	roleName := aws.ToString(params.RoleName)
-	if _, ok := f.attached[roleName]; !ok {
-		f.attached[roleName] = map[string]struct{}{}
-	}
-	f.attached[roleName][arn] = struct{}{}
-	return &iam.AttachRolePolicyOutput{}, nil
-}
-
-func (f *fakeIAM) DetachRolePolicy(_ context.Context, params *iam.DetachRolePolicyInput, _ ...func(*iam.Options)) (*iam.DetachRolePolicyOutput, error) {
-	if f.detachReturnsErr != nil {
-		return nil, f.detachReturnsErr
-	}
-	f.detachCalls = append(f.detachCalls, *params)
-	roleName := aws.ToString(params.RoleName)
-	delete(f.attached[roleName], aws.ToString(params.PolicyArn))
-	return &iam.DetachRolePolicyOutput{}, nil
-}
-
-func (f *fakeIAM) GetRolePolicy(_ context.Context, params *iam.GetRolePolicyInput, _ ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
-	roleName := aws.ToString(params.RoleName)
-	policyName := aws.ToString(params.PolicyName)
-	if err := f.getInlineReturnsErr[policyName]; err != nil {
-		return nil, err
-	}
-	doc, ok := f.inline[roleName][policyName]
-	if !ok {
-		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role policy: " + roleName + "/" + policyName)}
-	}
-	return &iam.GetRolePolicyOutput{
-		RoleName:       params.RoleName,
-		PolicyName:     params.PolicyName,
-		PolicyDocument: aws.String(doc),
-	}, nil
-}
-
-func (f *fakeIAM) PutRolePolicy(_ context.Context, params *iam.PutRolePolicyInput, _ ...func(*iam.Options)) (*iam.PutRolePolicyOutput, error) {
-	f.putInlineCalls = append(f.putInlineCalls, *params)
-	if err := f.putInlineReturnsErr[aws.ToString(params.PolicyName)]; err != nil {
-		return nil, err
-	}
-	roleName := aws.ToString(params.RoleName)
-	if _, ok := f.inline[roleName]; !ok {
-		f.inline[roleName] = map[string]string{}
-	}
-	f.inline[roleName][aws.ToString(params.PolicyName)] = aws.ToString(params.PolicyDocument)
-	return &iam.PutRolePolicyOutput{}, nil
-}
-
-func (f *fakeIAM) DeleteRolePolicy(_ context.Context, params *iam.DeleteRolePolicyInput, _ ...func(*iam.Options)) (*iam.DeleteRolePolicyOutput, error) {
-	f.deleteInlineCalls = append(f.deleteInlineCalls, *params)
-	roleName := aws.ToString(params.RoleName)
-	policyName := aws.ToString(params.PolicyName)
-	if err := f.deleteInlineReturnsErr[policyName]; err != nil {
-		return nil, err
-	}
-	if _, ok := f.inline[roleName][policyName]; !ok {
-		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role policy: " + roleName + "/" + policyName)}
-	}
-	delete(f.inline[roleName], policyName)
-	return &iam.DeleteRolePolicyOutput{}, nil
-}
-
-func (f *fakeIAM) ListRolePolicies(_ context.Context, params *iam.ListRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error) {
-	if f.listInlineReturnsErr != nil {
-		return nil, f.listInlineReturnsErr
-	}
-	roleName := aws.ToString(params.RoleName)
-	if _, ok := f.roles[roleName]; !ok {
-		return nil, &iamtypes.NoSuchEntityException{Message: aws.String("no such role: " + roleName)}
-	}
-	names := make([]string, 0, len(f.inline[roleName]))
-	for n := range f.inline[roleName] {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	if f.inlinePageSize <= 0 || len(names) <= f.inlinePageSize {
-		return &iam.ListRolePoliciesOutput{PolicyNames: names}, nil
-	}
-	// Resume from the caller's marker, which the real API sets to the last name
-	// it returned.
-	start := 0
-	if m := aws.ToString(params.Marker); m != "" {
-		for i, n := range names {
-			if n == m {
-				start = i + 1
-				break
-			}
-		}
-	}
-	end := start + f.inlinePageSize
-	if end >= len(names) {
-		return &iam.ListRolePoliciesOutput{PolicyNames: names[start:]}, nil
-	}
-	page := names[start:end]
-	return &iam.ListRolePoliciesOutput{
-		PolicyNames: page,
-		IsTruncated: true,
-		Marker:      aws.String(page[len(page)-1]),
-	}, nil
-}
-
-func (f *fakeIAM) ListAttachedRolePolicies(_ context.Context, params *iam.ListAttachedRolePoliciesInput, _ ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error) {
-	f.listCalls++
-	if f.listReturnsErr != nil {
-		return nil, f.listReturnsErr
-	}
-	roleName := aws.ToString(params.RoleName)
-	all := []iamtypes.AttachedPolicy{}
-	for arn := range f.attached[roleName] {
-		all = append(all, iamtypes.AttachedPolicy{
-			PolicyArn:  aws.String(arn),
-			PolicyName: aws.String(arn),
-		})
-	}
-	sort.Slice(all, func(i, j int) bool {
-		return aws.ToString(all[i].PolicyArn) < aws.ToString(all[j].PolicyArn)
-	})
-	if f.pageBoundary <= 0 || len(all) <= f.pageBoundary {
-		return &iam.ListAttachedRolePoliciesOutput{AttachedPolicies: all}, nil
-	}
-	// Two-page pagination: first call returns first page + truncation marker;
-	// second call (Marker non-nil) returns the rest.
-	if params.Marker == nil {
-		return &iam.ListAttachedRolePoliciesOutput{
-			AttachedPolicies: all[:f.pageBoundary],
-			IsTruncated:      true,
-			Marker:           aws.String("page-2"),
-		}, nil
-	}
-	return &iam.ListAttachedRolePoliciesOutput{
-		AttachedPolicies: all[f.pageBoundary:],
-	}, nil
-}
-
 func TestReconcileManagedPolicies(t *testing.T) {
 	const role = "production-acme-tenant"
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
@@ -332,15 +42,15 @@ func TestReconcileManagedPolicies(t *testing.T) {
 	}
 
 	t.Run("fresh role: attaches baseline + every extra", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole(role, "arn:aws:iam::123:role/"+role)
+		f := awsfake.NewIAM()
+		f.SeedRole(role, "arn:aws:iam::123:role/"+role)
 		r := &PlatformReconciler{IAM: f}
 
 		if err := r.reconcileManagedPolicies(context.Background(), role, baseline, extras); err != nil {
 			t.Fatalf("reconcileManagedPolicies: %v", err)
 		}
 
-		got := f.attachmentsFor(role)
+		got := f.AttachmentsFor(role)
 		want := []string{baseline, extras[0], extras[1]}
 		sort.Strings(want)
 		if len(got) != len(want) {
@@ -354,52 +64,52 @@ func TestReconcileManagedPolicies(t *testing.T) {
 	})
 
 	t.Run("idempotent: re-run is a no-op when baseline + extras are already attached", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole(role, "arn:aws:iam::123:role/"+role)
-		f.seedAttachment(role, baseline)
-		f.seedAttachment(role, extras[0])
-		f.seedAttachment(role, extras[1])
+		f := awsfake.NewIAM()
+		f.SeedRole(role, "arn:aws:iam::123:role/"+role)
+		f.SeedAttachment(role, baseline)
+		f.SeedAttachment(role, extras[0])
+		f.SeedAttachment(role, extras[1])
 		r := &PlatformReconciler{IAM: f}
 
 		if err := r.reconcileManagedPolicies(context.Background(), role, baseline, extras); err != nil {
 			t.Fatalf("reconcileManagedPolicies: %v", err)
 		}
-		if len(f.attachCalls) != 0 {
-			t.Errorf("attach calls: got %d want 0 (no diff)", len(f.attachCalls))
+		if len(f.AttachCalls) != 0 {
+			t.Errorf("attach calls: got %d want 0 (no diff)", len(f.AttachCalls))
 		}
 	})
 
 	t.Run("partial state: only attaches the missing entries", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole(role, "arn:aws:iam::123:role/"+role)
-		f.seedAttachment(role, baseline)  // already there
-		f.seedAttachment(role, extras[0]) // already there
+		f := awsfake.NewIAM()
+		f.SeedRole(role, "arn:aws:iam::123:role/"+role)
+		f.SeedAttachment(role, baseline)  // already there
+		f.SeedAttachment(role, extras[0]) // already there
 		// extras[1] missing — should be the only attach
 		r := &PlatformReconciler{IAM: f}
 
 		if err := r.reconcileManagedPolicies(context.Background(), role, baseline, extras); err != nil {
 			t.Fatalf("reconcileManagedPolicies: %v", err)
 		}
-		if len(f.attachCalls) != 1 {
-			t.Fatalf("attach calls: got %d want 1", len(f.attachCalls))
+		if len(f.AttachCalls) != 1 {
+			t.Fatalf("attach calls: got %d want 1", len(f.AttachCalls))
 		}
-		if aws.ToString(f.attachCalls[0].PolicyArn) != extras[1] {
-			t.Errorf("attached the wrong policy: got %s want %s", aws.ToString(f.attachCalls[0].PolicyArn), extras[1])
+		if aws.ToString(f.AttachCalls[0].PolicyArn) != extras[1] {
+			t.Errorf("attached the wrong policy: got %s want %s", aws.ToString(f.AttachCalls[0].PolicyArn), extras[1])
 		}
 	})
 
 	t.Run("does NOT detach attachments that aren't in the desired set", func(t *testing.T) {
 		// Operator team may have attached a policy out-of-band (e.g.
 		// emergency break-glass). The reconciler must not fight them.
-		f := newFakeIAM()
-		f.seedRole(role, "arn:aws:iam::123:role/"+role)
-		f.seedAttachment(role, "arn:aws:iam::123:policy/operator-break-glass") // foreign
+		f := awsfake.NewIAM()
+		f.SeedRole(role, "arn:aws:iam::123:role/"+role)
+		f.SeedAttachment(role, "arn:aws:iam::123:policy/operator-break-glass") // foreign
 		r := &PlatformReconciler{IAM: f}
 
 		if err := r.reconcileManagedPolicies(context.Background(), role, baseline, nil); err != nil {
 			t.Fatalf("reconcileManagedPolicies: %v", err)
 		}
-		got := f.attachmentsFor(role)
+		got := f.AttachmentsFor(role)
 		want := []string{"arn:aws:iam::123:policy/operator-break-glass", baseline}
 		sort.Strings(want)
 		if len(got) != len(want) {
@@ -413,30 +123,30 @@ func TestReconcileManagedPolicies(t *testing.T) {
 	})
 
 	t.Run("empty baseline + empty extras: no-op (dev/test mode)", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole(role, "arn:aws:iam::123:role/"+role)
+		f := awsfake.NewIAM()
+		f.SeedRole(role, "arn:aws:iam::123:role/"+role)
 		r := &PlatformReconciler{IAM: f}
 
 		if err := r.reconcileManagedPolicies(context.Background(), role, "", nil); err != nil {
 			t.Fatalf("reconcileManagedPolicies: %v", err)
 		}
-		if f.listCalls != 0 {
-			t.Errorf("list calls: got %d want 0 (should short-circuit)", f.listCalls)
+		if f.ListCalls != 0 {
+			t.Errorf("list calls: got %d want 0 (should short-circuit)", f.ListCalls)
 		}
-		if len(f.attachCalls) != 0 {
-			t.Errorf("attach calls: got %d want 0", len(f.attachCalls))
+		if len(f.AttachCalls) != 0 {
+			t.Errorf("attach calls: got %d want 0", len(f.AttachCalls))
 		}
 	})
 
 	t.Run("empty strings in extras are filtered before attach", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole(role, "arn:aws:iam::123:role/"+role)
+		f := awsfake.NewIAM()
+		f.SeedRole(role, "arn:aws:iam::123:role/"+role)
 		r := &PlatformReconciler{IAM: f}
 
 		if err := r.reconcileManagedPolicies(context.Background(), role, baseline, []string{"", extras[0], ""}); err != nil {
 			t.Fatalf("reconcileManagedPolicies: %v", err)
 		}
-		got := f.attachmentsFor(role)
+		got := f.AttachmentsFor(role)
 		want := []string{baseline, extras[0]}
 		sort.Strings(want)
 		if len(got) != len(want) {
@@ -445,8 +155,8 @@ func TestReconcileManagedPolicies(t *testing.T) {
 	})
 
 	t.Run("paginates the attachment list", func(t *testing.T) {
-		f := newFakeIAM()
-		f.seedRole(role, "arn:aws:iam::123:role/"+role)
+		f := awsfake.NewIAM()
+		f.SeedRole(role, "arn:aws:iam::123:role/"+role)
 		// 5 pre-existing attachments + page boundary of 2 → 3 pages
 		for i, arn := range []string{
 			"arn:aws:iam::123:policy/x1",
@@ -456,9 +166,9 @@ func TestReconcileManagedPolicies(t *testing.T) {
 			extras[0],
 		} {
 			_ = i
-			f.seedAttachment(role, arn)
+			f.SeedAttachment(role, arn)
 		}
-		f.pageBoundary = 2
+		f.PageBoundary = 2
 		r := &PlatformReconciler{IAM: f}
 
 		if err := r.reconcileManagedPolicies(context.Background(), role, baseline, extras); err != nil {
@@ -466,11 +176,11 @@ func TestReconcileManagedPolicies(t *testing.T) {
 		}
 		// baseline + extras[0] already attached; only extras[1] should
 		// be attached after the paginated scan.
-		if len(f.attachCalls) != 1 {
-			t.Fatalf("attach calls: got %d want 1", len(f.attachCalls))
+		if len(f.AttachCalls) != 1 {
+			t.Fatalf("attach calls: got %d want 1", len(f.AttachCalls))
 		}
-		if aws.ToString(f.attachCalls[0].PolicyArn) != extras[1] {
-			t.Errorf("attached the wrong policy: got %s", aws.ToString(f.attachCalls[0].PolicyArn))
+		if aws.ToString(f.AttachCalls[0].PolicyArn) != extras[1] {
+			t.Errorf("attached the wrong policy: got %s", aws.ToString(f.AttachCalls[0].PolicyArn))
 		}
 	})
 }
@@ -482,7 +192,7 @@ func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 		"arn:aws:iam::123:policy/slack-knowledge-bot-tenant-bedrock",
 	}
 
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: baseline,
@@ -501,7 +211,7 @@ func TestEnsureIamRole_AttachesExtraPolicyArns(t *testing.T) {
 	}
 
 	roleName := tenantRoleName(cfg.ClusterName, platform)
-	attachments := f.attachmentsFor(roleName)
+	attachments := f.AttachmentsFor(roleName)
 	wantSet := map[string]bool{baseline: true, extras[0]: true, extras[1]: true}
 	if len(attachments) != len(wantSet) {
 		t.Fatalf("attachments: got %v want %v", attachments, wantSet)
@@ -517,7 +227,7 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 	const baseline = "arn:aws:iam::aws:policy/EksAgentBaseline"
 	extras := []string{"arn:aws:iam::123:policy/slack-knowledge-bot-tenant"}
 
-	f := newFakeIAM()
+	f := awsfake.NewIAM()
 	r := &PlatformReconciler{IAM: f}
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: baseline,
@@ -530,7 +240,7 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 	// Seed the role with the suspension marker so ensureIamRole's GetRole
 	// branch returns suspended=true and skips reconcileManagedPolicies.
 	roleName := tenantRoleName(cfg.ClusterName, platform)
-	f.seedRole(roleName, "arn:aws:iam::123:role/"+roleName,
+	f.SeedRole(roleName, "arn:aws:iam::123:role/"+roleName,
 		iamtypes.Tag{Key: aws.String(suspendedTag), Value: aws.String("true")},
 		iamtypes.Tag{Key: aws.String(suspendedReasonTag), Value: aws.String("budget-exceeded")},
 	)
@@ -545,121 +255,14 @@ func TestEnsureIamRole_SkipsAttachmentsWhenSuspended(t *testing.T) {
 	if got.Reason != "budget-exceeded" {
 		t.Errorf("Reason: got %q want budget-exceeded", got.Reason)
 	}
-	if len(f.attachCalls) != 0 {
-		t.Errorf("expected no attach calls when suspended, got %d", len(f.attachCalls))
+	if len(f.AttachCalls) != 0 {
+		t.Errorf("expected no attach calls when suspended, got %d", len(f.AttachCalls))
 	}
-}
-
-// fakeEKS is a minimal in-memory awsclients.EKS covering the Pod Identity
-// associations the operator binds a Platform's ServiceAccounts with.
-type fakeEKS struct {
-	associations map[string]string // "namespace/serviceAccount" -> association id
-	// bound is what DescribePodIdentityAssociation returns, by association id.
-	// CreatePodIdentityAssociation records the role it was handed; a test seeds
-	// another role, or a target role, to stand for an association made out of
-	// band.
-	bound       map[string]*ekstypes.PodIdentityAssociation
-	createCalls []eks.CreatePodIdentityAssociationInput
-	deleteCalls []eks.DeletePodIdentityAssociationInput
-	nextID      int
-
-	// Error-injection hooks (default nil = no error).
-	listReturnsErr     error
-	createReturnsErr   error
-	deleteReturnsErr   error
-	describeReturnsErr error
-	// failOnlyFor narrows listReturnsErr and createReturnsErr to calls naming
-	// this ServiceAccount, so a test can fail one of a Platform's two
-	// associations and not the other. Empty fails every call.
-	failOnlyFor string
-}
-
-// failsFor reports whether an injected error applies to a call naming
-// serviceAccount.
-func (f *fakeEKS) failsFor(serviceAccount *string) bool {
-	return f.failOnlyFor == "" || f.failOnlyFor == aws.ToString(serviceAccount)
-}
-
-func newFakeEKS() *fakeEKS {
-	return &fakeEKS{associations: map[string]string{}, bound: map[string]*ekstypes.PodIdentityAssociation{}}
-}
-
-// seedAssociation stands for an association made out of band: the
-// (namespace, serviceAccount) bound to roleARN, chaining to targetRoleARN when
-// that is set.
-func (f *fakeEKS) seedAssociation(namespace, serviceAccount, roleARN, targetRoleARN string) string {
-	f.nextID++
-	id := fmt.Sprintf("a-%d", f.nextID)
-	f.associations[namespace+"/"+serviceAccount] = id
-	a := &ekstypes.PodIdentityAssociation{AssociationId: aws.String(id), RoleArn: aws.String(roleARN)}
-	if targetRoleARN != "" {
-		a.TargetRoleArn = aws.String(targetRoleARN)
-	}
-	f.bound[id] = a
-	return id
-}
-
-// roleFor returns the role the (namespace, serviceAccount) association names.
-func (f *fakeEKS) roleFor(namespace, serviceAccount string) string {
-	a := f.bound[f.associations[namespace+"/"+serviceAccount]]
-	if a == nil {
-		return ""
-	}
-	return aws.ToString(a.RoleArn)
-}
-
-func (f *fakeEKS) DescribePodIdentityAssociation(_ context.Context, params *eks.DescribePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DescribePodIdentityAssociationOutput, error) {
-	if f.describeReturnsErr != nil {
-		return nil, f.describeReturnsErr
-	}
-	return &eks.DescribePodIdentityAssociationOutput{Association: f.bound[aws.ToString(params.AssociationId)]}, nil
-}
-
-func (f *fakeEKS) ListPodIdentityAssociations(_ context.Context, params *eks.ListPodIdentityAssociationsInput, _ ...func(*eks.Options)) (*eks.ListPodIdentityAssociationsOutput, error) {
-	if f.listReturnsErr != nil && f.failsFor(params.ServiceAccount) {
-		return nil, f.listReturnsErr
-	}
-	key := aws.ToString(params.Namespace) + "/" + aws.ToString(params.ServiceAccount)
-	out := &eks.ListPodIdentityAssociationsOutput{}
-	if id, ok := f.associations[key]; ok {
-		out.Associations = []ekstypes.PodIdentityAssociationSummary{{
-			AssociationId:  aws.String(id),
-			Namespace:      params.Namespace,
-			ServiceAccount: params.ServiceAccount,
-		}}
-	}
-	return out, nil
-}
-
-func (f *fakeEKS) CreatePodIdentityAssociation(_ context.Context, params *eks.CreatePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.CreatePodIdentityAssociationOutput, error) {
-	if f.createReturnsErr != nil && f.failsFor(params.ServiceAccount) {
-		return nil, f.createReturnsErr
-	}
-	f.createCalls = append(f.createCalls, *params)
-	f.nextID++
-	id := fmt.Sprintf("a-%d", f.nextID)
-	f.associations[aws.ToString(params.Namespace)+"/"+aws.ToString(params.ServiceAccount)] = id
-	f.bound[id] = &ekstypes.PodIdentityAssociation{AssociationId: aws.String(id), RoleArn: params.RoleArn}
-	return &eks.CreatePodIdentityAssociationOutput{}, nil
-}
-
-func (f *fakeEKS) DeletePodIdentityAssociation(_ context.Context, params *eks.DeletePodIdentityAssociationInput, _ ...func(*eks.Options)) (*eks.DeletePodIdentityAssociationOutput, error) {
-	if f.deleteReturnsErr != nil {
-		return nil, f.deleteReturnsErr
-	}
-	f.deleteCalls = append(f.deleteCalls, *params)
-	for k, id := range f.associations {
-		if id == aws.ToString(params.AssociationId) {
-			delete(f.associations, k)
-		}
-	}
-	delete(f.bound, aws.ToString(params.AssociationId))
-	return &eks.DeletePodIdentityAssociationOutput{}, nil
 }
 
 func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
-	f := newFakeIAM()
-	fe := newFakeEKS()
+	f := awsfake.NewIAM()
+	fe := awsfake.NewEKS()
 	r := &PlatformReconciler{IAM: f, EKS: fe}
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
@@ -674,10 +277,10 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 	}
 
 	// The role trusts the EKS Pod Identity service principal, not an OIDC provider.
-	if len(f.createCalls) != 1 {
-		t.Fatalf("expected one CreateRole, got %d", len(f.createCalls))
+	if len(f.CreateCalls) != 1 {
+		t.Fatalf("expected one CreateRole, got %d", len(f.CreateCalls))
 	}
-	trust := aws.ToString(f.createCalls[0].AssumeRolePolicyDocument)
+	trust := aws.ToString(f.CreateCalls[0].AssumeRolePolicyDocument)
 	if !strings.Contains(trust, "pods.eks.amazonaws.com") {
 		t.Errorf("trust policy missing pods.eks.amazonaws.com principal: %s", trust)
 	}
@@ -687,10 +290,10 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 
 	// A Pod Identity association binds the tenant SA (tenant-runtime) to the
 	// role, and a second binds the ModelGateway's Envoy SA to the same role.
-	if len(fe.createCalls) != 2 {
-		t.Fatalf("expected two CreatePodIdentityAssociation calls (tenant-runtime, gateway), got %d", len(fe.createCalls))
+	if len(fe.CreateCalls) != 2 {
+		t.Fatalf("expected two CreatePodIdentityAssociation calls (tenant-runtime, gateway), got %d", len(fe.CreateCalls))
 	}
-	assoc := fe.createCalls[0]
+	assoc := fe.CreateCalls[0]
 	if aws.ToString(assoc.ClusterName) != "production-cluster" {
 		t.Errorf("association cluster: got %q", aws.ToString(assoc.ClusterName))
 	}
@@ -719,7 +322,7 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 		t.Errorf("published binding does not match the association created:\n got %+v\nwant %+v", *got.PodIdentity, want)
 	}
 
-	gw := fe.createCalls[1]
+	gw := fe.CreateCalls[1]
 	wantGW := platformv1alpha1.PodIdentityStatus{
 		ClusterName:    "production-cluster",
 		Namespace:      PlatformNamespace(platform),
@@ -743,8 +346,8 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 	if _, err := r.ensureIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("second ensureIamRole: %v", err)
 	}
-	if len(fe.createCalls) != 2 {
-		t.Errorf("association creation not idempotent: got %d creates", len(fe.createCalls))
+	if len(fe.CreateCalls) != 2 {
+		t.Errorf("association creation not idempotent: got %d creates", len(fe.CreateCalls))
 	}
 
 	// deleteIamRole removes both associations before the role, so neither
@@ -752,11 +355,11 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 	if err := r.deleteIamRole(context.Background(), platform, cfg); err != nil {
 		t.Fatalf("deleteIamRole: %v", err)
 	}
-	if len(fe.deleteCalls) != 2 {
-		t.Errorf("expected two DeletePodIdentityAssociation calls, got %d", len(fe.deleteCalls))
+	if len(fe.DeleteCalls) != 2 {
+		t.Errorf("expected two DeletePodIdentityAssociation calls, got %d", len(fe.DeleteCalls))
 	}
-	if len(fe.associations) != 0 {
-		t.Errorf("associations survived deleteIamRole: %v", fe.associations)
+	if len(fe.Associations) != 0 {
+		t.Errorf("associations survived deleteIamRole: %v", fe.Associations)
 	}
 }
 
@@ -766,7 +369,7 @@ func TestEnsureIamRole_CreatesPodIdentityAssociation(t *testing.T) {
 // no association behind it) would tell a reader the tenant is bound when nothing
 // vends it credentials.
 func TestEnsureIamRole_NoEKSClient_PublishesNoBinding(t *testing.T) {
-	r := &PlatformReconciler{IAM: newFakeIAM()}
+	r := &PlatformReconciler{IAM: awsfake.NewIAM()}
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
 		ClusterName:             "production-cluster",
@@ -791,7 +394,7 @@ func TestEnsureIamRole_NoEKSClient_PublishesNoBinding(t *testing.T) {
 // association that does not exist. An EKS client with no ClusterName is the
 // cheapest way to make the association fail.
 func TestEnsureIamRole_AssociationFailure_PublishesNoBinding(t *testing.T) {
-	r := &PlatformReconciler{IAM: newFakeIAM(), EKS: newFakeEKS()}
+	r := &PlatformReconciler{IAM: awsfake.NewIAM(), EKS: awsfake.NewEKS()}
 	cfg := IAMConfig{
 		TenantBaselinePolicyARN: "arn:aws:iam::aws:policy/EksAgentBaseline",
 		Environment:             "production",
@@ -807,7 +410,7 @@ func TestEnsureIamRole_AssociationFailure_PublishesNoBinding(t *testing.T) {
 }
 
 func TestEnsurePodIdentityAssociation_RequiresClusterName(t *testing.T) {
-	r := &PlatformReconciler{EKS: newFakeEKS()}
+	r := &PlatformReconciler{EKS: awsfake.NewEKS()}
 	err := r.ensurePodIdentityAssociation(context.Background(), IAMConfig{}, "tenants-x", tenantSAName, "arn:aws:iam::123:role/x")
 	if err == nil {
 		t.Fatal("expected an error when ClusterName is empty and the EKS client is wired")
@@ -818,14 +421,14 @@ func TestEnsurePodIdentityAssociation_RequiresClusterName(t *testing.T) {
 }
 
 func TestDeletePodIdentityAssociation_ToleratesMissing(t *testing.T) {
-	fe := newFakeEKS()
+	fe := awsfake.NewEKS()
 	r := &PlatformReconciler{EKS: fe}
 	// No association seeded — the finalizer delete must be a safe no-op so re-runs
 	// (and Platforms whose association was never created) don't error.
 	if err := r.deletePodIdentityAssociation(context.Background(), IAMConfig{ClusterName: "production-cluster"}, "tenants-x", tenantSAName); err != nil {
 		t.Fatalf("delete with no association should be a no-op: %v", err)
 	}
-	if len(fe.deleteCalls) != 0 {
-		t.Errorf("expected no DeletePodIdentityAssociation calls, got %d", len(fe.deleteCalls))
+	if len(fe.DeleteCalls) != 0 {
+		t.Errorf("expected no DeletePodIdentityAssociation calls, got %d", len(fe.DeleteCalls))
 	}
 }
